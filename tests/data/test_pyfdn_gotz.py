@@ -10,17 +10,22 @@ import pytest
 
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_gotz_fdn_build
 from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_FEEDBACK_GIVENS_ANGLES_NAME,
     PYFDN_FEEDBACK_SKEW_NAME,
-    skew_to_orthogonal,
     PYFDN_GEQ_BAND_GAIN_DB_NAME,
     PYFDN_GEQ_GAIN_DB_NAME,
     PYFDN_GOTZ_DELAYS,
+    PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_GIVENS_PARAM_SPEC,
     PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_PARAM_SPEC,
+    PYFDN_GOTZ_N8_MONO_LEARNED_DELAYS_GIVENS_PARAM_SPEC,
     PYFDN_GOTZ_N8_MONO_LEARNED_DELAYS_PARAM_SPEC,
     PYFDN_TONE_GEQ_GAIN_DB_NAME,
     PyFDNGotzParamSpec,
+    givens_to_orthogonal,
+    skew_to_orthogonal,
 )
 from synth_setter.data.vst.param_spec import (
+    AngleArrayParameter,
     ContinuousArrayParameter,
     DiscreteArrayParameter,
     ParameterValues,
@@ -34,6 +39,8 @@ from synth_setter.synth_spec import SYNTHS, SynthName
 _NOTES: ParameterValues = {"pitch": 0, "note_start_and_end": (0.0, 0.0)}
 _FIXED = PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_PARAM_SPEC
 _LEARNED = PYFDN_GOTZ_N8_MONO_LEARNED_DELAYS_PARAM_SPEC
+_FIXED_GIVENS = PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_GIVENS_PARAM_SPEC
+_LEARNED_GIVENS = PYFDN_GOTZ_N8_MONO_LEARNED_DELAYS_GIVENS_PARAM_SPEC
 _PAPER_DELAYS = np.array([809, 877, 937, 1049, 1151, 1249, 1373, 1499], dtype=np.int64)
 
 
@@ -77,6 +84,71 @@ def test_gotz_learned_delays_spec_layout_prepends_delays() -> None:
     assert _LEARNED.encoded_width == 152
     assert layout[:2] == [("delays", 0, 8), ("feedback_skew", 8, 36)]
     assert layout[-1] == ("input.tone_geq.command_gain_db", 141, 152)
+
+
+def test_givens_single_plane_quarter_turn_uses_documented_sign_convention() -> None:
+    """The first angle rotates the (0, 1) plane with block [cos,-sin;sin,cos]."""
+    angles = np.zeros((28,), dtype=np.float64)
+    angles[0] = np.pi / 2
+
+    feedback = givens_to_orthogonal(angles)
+
+    expected = np.eye(8)
+    expected[:2, :2] = [[0.0, -1.0], [1.0, 0.0]]
+    np.testing.assert_allclose(feedback, expected, atol=1e-15)
+
+
+def test_givens_noncommuting_planes_multiply_in_lexicographic_order() -> None:
+    """Angles (0,1) then (0,2) produce G01 @ G02, not the reversed product."""
+    angles = np.zeros((28,), dtype=np.float64)
+    angles[:2] = [np.pi / 3, np.pi / 4]
+    g01 = np.eye(8)
+    g01[:2, :2] = [
+        [np.cos(angles[0]), -np.sin(angles[0])],
+        [np.sin(angles[0]), np.cos(angles[0])],
+    ]
+    g02 = np.eye(8)
+    indices = np.ix_([0, 2], [0, 2])
+    g02[indices] = [
+        [np.cos(angles[1]), -np.sin(angles[1])],
+        [np.sin(angles[1]), np.cos(angles[1])],
+    ]
+
+    feedback = givens_to_orthogonal(angles)
+
+    np.testing.assert_allclose(feedback, g01 @ g02, atol=1e-15)
+    assert not np.allclose(feedback, g02 @ g01)
+
+
+def test_givens_angles_are_periodic_by_two_pi() -> None:
+    """Adding full turns to native angles leaves the feedback matrix unchanged."""
+    angles = np.linspace(-np.pi, np.pi, 28, endpoint=False)
+    turns = 2 * np.pi * np.arange(28)
+
+    np.testing.assert_allclose(
+        givens_to_orthogonal(angles + turns), givens_to_orthogonal(angles), atol=2e-14
+    )
+
+
+def test_gotz_givens_sampled_matrices_are_special_orthogonal() -> None:
+    """Every sampled Givens product lies in SO(8)."""
+    for seed in range(5):
+        params, _ = _FIXED_GIVENS.sample(np.random.default_rng(seed))
+        feedback = cast(np.ndarray, params["feedback_matrix"])
+        np.testing.assert_allclose(feedback.T @ feedback, np.eye(8), atol=1e-12)
+        np.testing.assert_allclose(np.linalg.det(feedback), 1.0, atol=1e-12)
+
+
+def test_gotz_givens_angle_codec_round_trips_and_projects_model_pairs() -> None:
+    """The real Givens codec preserves angles and normalizes model-space pairs."""
+    angles = cast(AngleArrayParameter, _FIXED_GIVENS.synth_params[0])
+    native = np.linspace(-np.pi, np.pi, 28, endpoint=False)
+    encoded = angles.encode(native)
+    decoded = angles.decode(encoded)
+    model = (encoded * 2.0 - 1.0) * 3.0
+
+    np.testing.assert_allclose(np.exp(1j * decoded), np.exp(1j * native), atol=1e-7)
+    np.testing.assert_allclose(angles.model_to_encoded(model), encoded, atol=1e-7)
 
 
 def test_gotz_learned_delays_bounds_cover_the_paper_delays() -> None:
@@ -309,7 +381,12 @@ def test_gotz_build_rejects_positive_attenuation_gain() -> None:
 
 @pytest.mark.parametrize(
     ("name", "width"),
-    [("pyfdn_gotz_n8_mono_fixed_delays", 144), ("pyfdn_gotz_n8_mono_learned_delays", 152)],
+    [
+        ("pyfdn_gotz_n8_mono_fixed_delays", 144),
+        ("pyfdn_gotz_n8_mono_learned_delays", 152),
+        ("pyfdn_gotz_n8_mono_fixed_delays_givens", 172),
+        ("pyfdn_gotz_n8_mono_learned_delays_givens", 180),
+    ],
 )
 def test_gotz_identities_are_registered(name: str, width: int) -> None:
     """Both variants resolve through the ParamSpec registry and the synth table.
@@ -321,6 +398,63 @@ def test_gotz_identities_are_registered(name: str, width: int) -> None:
 
     assert (synth.plugin_path, synth.param_spec_name) == ("pyfdn", name)
     assert param_specs[name].encoded_width == width
+
+
+@pytest.mark.parametrize(
+    ("renderer_name", "patch_spec"),
+    [
+        ("pyfdn_gotz_n8_mono_fixed_delays_givens", _FIXED),
+        ("pyfdn_gotz_n8_mono_fixed_delays", _FIXED_GIVENS),
+    ],
+)
+def test_gotz_renderer_rejects_patch_from_other_feedback_codec(
+    renderer_name: str, patch_spec: PyFDNGotzParamSpec
+) -> None:
+    """Distinct synth identities cannot silently reuse incompatible codec rows.
+
+    :param renderer_name: Renderer identity selecting one feedback coordinate system.
+    :param patch_spec: Spec producing a patch from the other coordinate system.
+    """
+    params, _ = patch_spec.sample(np.random.default_rng(13))
+
+    with pytest.raises(ValueError, match="gotz params must contain exactly"):
+        PyFDNRenderer(param_spec_name=ParamSpecName(renderer_name)).render(params)
+
+
+def test_gotz_givens_build_rejects_inconsistent_feedback_matrix() -> None:
+    """A native Givens patch cannot carry a matrix from different angles."""
+    params, _ = _FIXED_GIVENS.sample(np.random.default_rng(17))
+    params["feedback_matrix"] = np.eye(8, dtype=np.float64)
+
+    with pytest.raises(ValueError, match="encoded by feedback_givens_angles"):
+        params_to_gotz_fdn_build(
+            params,
+            sample_rate=44_100.0,
+            fixed_delays=PYFDN_GOTZ_DELAYS,
+            feedback_parameter=PYFDN_FEEDBACK_GIVENS_ANGLES_NAME,
+        )
+
+
+@pytest.mark.parametrize(
+    ("name", "spec"),
+    [
+        ("pyfdn_gotz_n8_mono_fixed_delays_givens", _FIXED_GIVENS),
+        ("pyfdn_gotz_n8_mono_learned_delays_givens", _LEARNED_GIVENS),
+    ],
+)
+def test_gotz_givens_delay_variants_render_real_audio(name: str, spec: PyFDNGotzParamSpec) -> None:
+    """Both Givens delay identities dispatch through the distinct Götz renderer.
+
+    :param name: Registered fixed- or learned-delay Givens identity.
+    :param spec: Matching Götz ParamSpec used to sample a native patch.
+    """
+    params, _ = spec.sample(np.random.default_rng(23))
+
+    audio = PyFDNRenderer(param_spec_name=ParamSpecName(name)).render(params)
+
+    assert audio.shape == (1, 176_400)
+    assert audio.dtype == np.dtype(np.float32)
+    assert np.isfinite(audio).all()
 
 
 def test_gotz_renderer_sampled_fixed_patch_returns_finite_decaying_response() -> None:

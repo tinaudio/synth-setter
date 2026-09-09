@@ -1123,6 +1123,8 @@ def test_from_hydra_surgepy_experiment_writes_consumable_shard(
         ("pyfdn_pitchshift_n8_mono_householder", 45),
         ("pyfdn_gotz_n8_mono_fixed_delays", 144),
         ("pyfdn_gotz_n8_mono_learned_delays", 152),
+        ("pyfdn_gotz_n8_mono_fixed_delays_givens", 172),
+        ("pyfdn_gotz_n8_mono_learned_delays_givens", 180),
     ],
 )
 def test_from_hydra_pyfdn_identity_writes_shard_at_spec_width(

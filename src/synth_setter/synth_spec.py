@@ -132,8 +132,20 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "",
         "0.4.2",
     ),
+    "pyfdn_gotz_n8_mono_fixed_delays_givens": (
+        "pyfdn_gotz_n8_mono_fixed_delays_givens",
+        "pyfdn",
+        "",
+        "0.4.2",
+    ),
     "pyfdn_gotz_n8_mono_learned_delays": (
         "pyfdn_gotz_n8_mono_learned_delays",
+        "pyfdn",
+        "",
+        "0.4.2",
+    ),
+    "pyfdn_gotz_n8_mono_learned_delays_givens": (
+        "pyfdn_gotz_n8_mono_learned_delays_givens",
         "pyfdn",
         "",
         "0.4.2",

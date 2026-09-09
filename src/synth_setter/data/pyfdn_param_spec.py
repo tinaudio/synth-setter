@@ -47,6 +47,7 @@ PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME = "post_delay.pitch_shift.active_channels"
 # Götz et al., arXiv:2510.23158 §2.2.2: coprime, log-spaced lengths kept verbatim in samples.
 PYFDN_GOTZ_DELAYS = np.array([809, 877, 937, 1049, 1151, 1249, 1373, 1499], dtype=np.int64)
 PYFDN_FEEDBACK_SKEW_NAME = "feedback_skew"
+PYFDN_FEEDBACK_GIVENS_ANGLES_NAME = "feedback_givens_angles"
 PYFDN_FEEDBACK_SKEW_SIZE = PYFDN_ORDER * (PYFDN_ORDER - 1) // 2
 PYFDN_FEEDBACK_SKEW_MAX = np.pi
 PYFDN_GEQ_SECTIONS = 11
@@ -325,6 +326,32 @@ def skew_to_orthogonal(skew: np.ndarray) -> np.ndarray:
     return np.asarray(expm(upper - upper.T), dtype=np.float64)
 
 
+def givens_to_orthogonal(angles: np.ndarray) -> np.ndarray:
+    """Build an SO(8) matrix from a fixed product of 28 Givens rotations.
+
+    Planes are ordered lexicographically as ``(0, 1), (0, 2), ..., (6, 7)``. Starting
+    from identity, each rotation is multiplied on the right, so the result is
+    ``G_01 @ G_02 @ ... @ G_67``. On plane ``(i, j)``, ``G_ij`` carries the block
+    ``[[cos(theta), -sin(theta)], [sin(theta), cos(theta)]]``.
+
+    :param angles: One angle in radians for each lexicographically ordered plane.
+    :returns: Float64 special orthogonal matrix shaped ``(PYFDN_ORDER, PYFDN_ORDER)``.
+    :raises ValueError: The array is not finite with shape ``(28,)``.
+    """
+    values = np.asarray(angles, dtype=np.float64)
+    expected_shape = (PYFDN_FEEDBACK_SKEW_SIZE,)
+    if values.shape != expected_shape or not np.isfinite(values).all():
+        raise ValueError(f"givens angles must be finite with shape {expected_shape}")
+    feedback = np.eye(PYFDN_ORDER, dtype=np.float64)
+    planes = zip(*np.triu_indices(PYFDN_ORDER, k=1), strict=True)
+    for theta, (i, j) in zip(values, planes, strict=True):
+        cos, sin = np.cos(theta), np.sin(theta)
+        rotation = np.eye(PYFDN_ORDER, dtype=np.float64)
+        rotation[np.ix_([i, j], [i, j])] = [[cos, -sin], [sin, cos]]
+        feedback = feedback @ rotation
+    return feedback
+
+
 def _skew_feedback_from_params(synth_params: ParameterValues) -> np.ndarray:
     """Read the Götz §2.2.2 skew coordinates off one decoded patch.
 
@@ -332,6 +359,15 @@ def _skew_feedback_from_params(synth_params: ParameterValues) -> np.ndarray:
     :returns: The special orthogonal feedback matrix those coordinates describe.
     """
     return skew_to_orthogonal(np.asarray(synth_params[PYFDN_FEEDBACK_SKEW_NAME]))
+
+
+def _givens_feedback_from_params(synth_params: ParameterValues) -> np.ndarray:
+    """Read the alternative Givens angles off one decoded patch.
+
+    :param synth_params: Decoded fields carrying one angle per order-8 coordinate plane.
+    :returns: The special orthogonal feedback matrix those angles describe.
+    """
+    return givens_to_orthogonal(np.asarray(synth_params[PYFDN_FEEDBACK_GIVENS_ANGLES_NAME]))
 
 
 class PyFDNGotzParamSpec(PyFDNParamSpec):
@@ -379,18 +415,14 @@ class PyFDNGotzParamSpec(PyFDNParamSpec):
         return self._restore_delays(synth_params), note_params
 
 
-def _gotz_parameters() -> list[Parameter]:
-    """Build fresh Götz-topology parameters shared by both delay variants.
+def _gotz_parameters(feedback_parameter: Parameter) -> list[Parameter]:
+    """Build fresh Götz-topology parameters around one feedback coordinate system.
 
-    :returns: Skew feedback coordinates, B/C/D gains, per-line attenuation, and tone GEQ.
+    :param feedback_parameter: Skew coordinates or periodic Givens angles.
+    :returns: Feedback coordinates, B/C/D gains, per-line attenuation, and tone GEQ.
     """
     return [
-        ContinuousArrayParameter(
-            name=PYFDN_FEEDBACK_SKEW_NAME,
-            shape=(PYFDN_FEEDBACK_SKEW_SIZE,),
-            min=-PYFDN_FEEDBACK_SKEW_MAX,
-            max=PYFDN_FEEDBACK_SKEW_MAX,
-        ),
+        feedback_parameter,
         *_fdn_io_parameters(),
         ContinuousArrayParameter(
             name=PYFDN_GEQ_GAIN_DB_NAME,
@@ -413,22 +445,69 @@ def _gotz_parameters() -> list[Parameter]:
     ]
 
 
+def _gotz_skew_parameter() -> Parameter:
+    """Build the paper's continuous upper-triangle feedback coordinates.
+
+    :returns: The bounded 28-coordinate skew parameter.
+    """
+    return ContinuousArrayParameter(
+        name=PYFDN_FEEDBACK_SKEW_NAME,
+        shape=(PYFDN_FEEDBACK_SKEW_SIZE,),
+        min=-PYFDN_FEEDBACK_SKEW_MAX,
+        max=PYFDN_FEEDBACK_SKEW_MAX,
+    )
+
+
+def _gotz_givens_parameter() -> Parameter:
+    """Build the alternative periodic Givens feedback coordinates.
+
+    :returns: One seam-aware angle for each order-8 coordinate plane.
+    """
+    return AngleArrayParameter(
+        name=PYFDN_FEEDBACK_GIVENS_ANGLES_NAME,
+        shape=(PYFDN_FEEDBACK_SKEW_SIZE,),
+    )
+
+
+def _gotz_learned_delays_parameter() -> Parameter:
+    """Build the delay parameter shared by learned-delay Götz identities.
+
+    :returns: Eight integer delays spanning the paper's minimum and maximum lengths.
+    """
+    return DiscreteArrayParameter(
+        name="delays",
+        shape=(PYFDN_ORDER,),
+        min=int(PYFDN_GOTZ_DELAYS.min()),
+        max=int(PYFDN_GOTZ_DELAYS.max()),
+    )
+
+
 PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_PARAM_SPEC = PyFDNGotzParamSpec(
-    synth_params=_gotz_parameters(),
+    synth_params=_gotz_parameters(_gotz_skew_parameter()),
     feedback_matrix=_skew_feedback_from_params,
     fixed_delays=PYFDN_GOTZ_DELAYS,
 )
 
 PYFDN_GOTZ_N8_MONO_LEARNED_DELAYS_PARAM_SPEC = PyFDNGotzParamSpec(
     synth_params=[
-        DiscreteArrayParameter(
-            name="delays",
-            shape=(PYFDN_ORDER,),
-            min=int(PYFDN_GOTZ_DELAYS.min()),
-            max=int(PYFDN_GOTZ_DELAYS.max()),
-        ),
-        *_gotz_parameters(),
+        _gotz_learned_delays_parameter(),
+        *_gotz_parameters(_gotz_skew_parameter()),
     ],
     feedback_matrix=_skew_feedback_from_params,
+    fixed_delays=None,
+)
+
+PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_GIVENS_PARAM_SPEC = PyFDNGotzParamSpec(
+    synth_params=_gotz_parameters(_gotz_givens_parameter()),
+    feedback_matrix=_givens_feedback_from_params,
+    fixed_delays=PYFDN_GOTZ_DELAYS,
+)
+
+PYFDN_GOTZ_N8_MONO_LEARNED_DELAYS_GIVENS_PARAM_SPEC = PyFDNGotzParamSpec(
+    synth_params=[
+        _gotz_learned_delays_parameter(),
+        *_gotz_parameters(_gotz_givens_parameter()),
+    ],
+    feedback_matrix=_givens_feedback_from_params,
     fixed_delays=None,
 )

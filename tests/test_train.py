@@ -796,6 +796,8 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
         ("pyfdn_pitchshift_n8_mono_householder", 45),
         ("pyfdn_gotz_n8_mono_fixed_delays", 144),
         ("pyfdn_gotz_n8_mono_learned_delays", 152),
+        ("pyfdn_gotz_n8_mono_fixed_delays_givens", 172),
+        ("pyfdn_gotz_n8_mono_learned_delays_givens", 180),
     ],
 )
 def test_train_pyfdn_identity_uses_spec_width_batches(

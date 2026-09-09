@@ -373,7 +373,9 @@ def _run_test_epoch(param_spec: str, per_param_mse: torch.Tensor) -> dict[str, f
     [
         "obxf",
         "pyfdn_gotz_n8_mono_fixed_delays",
+        "pyfdn_gotz_n8_mono_fixed_delays_givens",
         "pyfdn_gotz_n8_mono_learned_delays",
+        "pyfdn_gotz_n8_mono_learned_delays_givens",
         "pyfdn_n8_mono_householder",
         "pyfdn_pitchshift_n8_mono_householder",
         "surge_4",

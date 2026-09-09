@@ -26,6 +26,7 @@ from pyFDN.td import PitchShift, SOSBank, Series
 
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_DIRECT_DELAY_SAMPLES,
+    PYFDN_FEEDBACK_GIVENS_ANGLES_NAME,
     PYFDN_FEEDBACK_SKEW_NAME,
     PYFDN_FEEDBACK_SKEW_SIZE,
     PYFDN_GEQ_BAND_GAIN_DB_MAX,
@@ -56,6 +57,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_RT_NYQUIST_NAME,
     PYFDN_TONE_GEQ_GAIN_DB_MAX,
     PYFDN_TONE_GEQ_GAIN_DB_NAME,
+    givens_to_orthogonal,
     householder_feedback_matrix,
     kronecker_feedback_matrix,
     skew_to_orthogonal,
@@ -85,13 +87,21 @@ _PLAIN_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_householder")
 _KRONECKER_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_kronecker")
 _HOUSEHOLDER_VECTOR_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_householder_vector")
 _PITCHSHIFT_PARAM_SPEC = ParamSpecName("pyfdn_pitchshift_n8_mono_householder")
-_GOTZ_FIXED_DELAYS_PARAM_SPEC = ParamSpecName("pyfdn_gotz_n8_mono_fixed_delays")
-_GOTZ_PARAM_SPECS = frozenset(
-    {_GOTZ_FIXED_DELAYS_PARAM_SPEC, ParamSpecName("pyfdn_gotz_n8_mono_learned_delays")}
-)
+_GOTZ_PARAM_SPECS = {
+    ParamSpecName("pyfdn_gotz_n8_mono_fixed_delays"): (PYFDN_FEEDBACK_SKEW_NAME, True),
+    ParamSpecName("pyfdn_gotz_n8_mono_learned_delays"): (PYFDN_FEEDBACK_SKEW_NAME, False),
+    ParamSpecName("pyfdn_gotz_n8_mono_fixed_delays_givens"): (
+        PYFDN_FEEDBACK_GIVENS_ANGLES_NAME,
+        True,
+    ),
+    ParamSpecName("pyfdn_gotz_n8_mono_learned_delays_givens"): (
+        PYFDN_FEEDBACK_GIVENS_ANGLES_NAME,
+        False,
+    ),
+}
 _GOTZ_GEQ_SOS_SHAPE = (PYFDN_GEQ_SECTIONS, 6, PYFDN_ORDER)
-# Tolerance for a feedback matrix regenerated from float32-encoded skew coordinates.
-_FEEDBACK_SKEW_ATOL = 1e-6
+# Float32 codec round-trips perturb derived matrix values at this scale.
+_FEEDBACK_DERIVATION_ATOL = 1e-6
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
     ("input_matrix", (PYFDN_ORDER, _CHANNELS), np.dtype(np.float64)),
@@ -150,14 +160,17 @@ _PITCHSHIFT_REQUIRED_KEYS = _BASE_KEYS.union(
         PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME,
     }
 )
-_GOTZ_REQUIRED_KEYS = _BASE_KEYS.union(
+_GOTZ_SHARED_REQUIRED_KEYS = _BASE_KEYS.union(
     {
-        PYFDN_FEEDBACK_SKEW_NAME,
         PYFDN_GEQ_GAIN_DB_NAME,
         PYFDN_GEQ_BAND_GAIN_DB_NAME,
         PYFDN_TONE_GEQ_GAIN_DB_NAME,
     }
 )
+_GOTZ_FEEDBACK_BUILDERS: dict[str, Callable[[np.ndarray], np.ndarray]] = {
+    PYFDN_FEEDBACK_SKEW_NAME: skew_to_orthogonal,
+    PYFDN_FEEDBACK_GIVENS_ANGLES_NAME: givens_to_orthogonal,
+}
 
 
 def _require_array(
@@ -507,39 +520,43 @@ def params_to_gotz_fdn_build(
     *,
     sample_rate: float,
     fixed_delays: np.ndarray | None = None,
+    feedback_parameter: str = PYFDN_FEEDBACK_SKEW_NAME,
 ) -> FDNBuild:
-    """Build the Götz et al. (arXiv:2510.23158) order-8 FDN with per-line GEQ attenuation.
+    """Build a Götz-topology order-8 FDN with per-line GEQ attenuation.
 
-    :param params: Mapping containing the shared A/B/C/D arrays and int64 delays,
-        ``feedback_skew`` float64 ``(28,)``, a flat per-line gain float64 ``(8,)`` in
-        -20–-0.3 dB, band gains float64 ``(10, 8)`` in -6–0 dB, and tone-correction
-        command gains float64 ``(11,)`` within ±12 dB.
+    :param params: Mapping containing A/B/C/D arrays, int64 delays, the selected feedback
+        controls, per-line attenuation gains, and tone-correction command gains.
     :param sample_rate: Processing rate in Hz; exactly ``44100.0``.
     :param fixed_delays: Int64 delays ``(8,)`` the mapping must carry, or ``None`` when
         delays are learned.
-    :returns: Native build whose feedback matrix is regenerated from ``feedback_skew``
-        and whose ``post_delay`` is the per-line attenuation bank; the tone GEQ and
-        delayed direct path are applied by the renderer outside the build.
-    :raises ValueError: Keys, shapes, values, delays, or sample rate violate the
-        contract, or ``feedback_matrix`` disagrees with ``feedback_skew``.
+    :param feedback_parameter: Exact feedback control key selected by the synth identity.
+    :returns: Native build whose feedback matrix is regenerated from its selected controls.
+    :raises ValueError: Keys, shapes, values, delays, sample rate, or derived matrix violate
+        the selected identity's contract.
     """
+    if feedback_parameter not in _GOTZ_FEEDBACK_BUILDERS:
+        raise ValueError(f"unsupported Götz feedback parameter {feedback_parameter!r}")
     arrays = _validate_base_params(
         params,
-        required_keys=_GOTZ_REQUIRED_KEYS,
+        required_keys=_GOTZ_SHARED_REQUIRED_KEYS.union({feedback_parameter}),
         sample_rate=sample_rate,
         topology="gotz",
     )
     if fixed_delays is not None and not np.array_equal(arrays["delays"], fixed_delays):
         raise ValueError(f"delays must equal the fixed lengths {fixed_delays.tolist()}")
-    skew = _require_array(
-        PYFDN_FEEDBACK_SKEW_NAME,
-        params[PYFDN_FEEDBACK_SKEW_NAME],
+    controls = _require_array(
+        feedback_parameter,
+        params[feedback_parameter],
         shape=(PYFDN_FEEDBACK_SKEW_SIZE,),
         dtype=np.dtype(np.float64),
     )
-    feedback = skew_to_orthogonal(skew)
-    if not np.allclose(arrays["feedback_matrix"], feedback, rtol=0.0, atol=_FEEDBACK_SKEW_ATOL):
-        raise ValueError("feedback_matrix must be the orthogonal matrix encoded by feedback_skew")
+    feedback = _GOTZ_FEEDBACK_BUILDERS[feedback_parameter](controls)
+    if not np.allclose(
+        arrays["feedback_matrix"], feedback, rtol=0.0, atol=_FEEDBACK_DERIVATION_ATOL
+    ):
+        raise ValueError(
+            f"feedback_matrix must be the orthogonal matrix encoded by {feedback_parameter}"
+        )
     post_delay = _gotz_attenuation_sos(params, sample_rate)
     _require_tone_gain_db(params)
     return FDNBuild(
@@ -814,14 +831,12 @@ class PyFDNRenderer(AudioRenderer):
         """
         del midi_note, velocity, note_start_and_end, warmup
         if self._param_spec_name in _GOTZ_PARAM_SPECS:
+            feedback_parameter, has_fixed_delays = _GOTZ_PARAM_SPECS[self._param_spec_name]
             build = params_to_gotz_fdn_build(
                 params,
                 sample_rate=_SAMPLE_RATE,
-                fixed_delays=(
-                    PYFDN_GOTZ_DELAYS
-                    if self._param_spec_name == _GOTZ_FIXED_DELAYS_PARAM_SPEC
-                    else None
-                ),
+                fixed_delays=PYFDN_GOTZ_DELAYS if has_fixed_delays else None,
+                feedback_parameter=feedback_parameter,
             )
             output_array = _render_gotz(build, params, self._impulse_or_chirp())
         elif self._param_spec_name == _PITCHSHIFT_PARAM_SPEC:
