@@ -1171,10 +1171,10 @@ leaves `num_sub_vectors` null to let each spec's default apply.
 Sketch extraction is batch-vectorized torch and runs on the configured device
 (auto-CUDA, ~6.5× CPU on a consumer GPU; the CPU path already saturates
 multiple cores via torch intra-op threading, so a process pool would add
-contention, not throughput). `sketch_encode_chunk` caps rows per extractor
+contention, not throughput). `sketch_encode_batch` caps rows per extractor
 invocation: the default 32 bounds CPU RSS (#2707), while a large GPU may need a
-bigger chunk to saturate — benchmark per #3131 before a large backfill. The
-resolved device and chunk are logged at encoder load, so a silently-CPU run is
+bigger batch to saturate — benchmark per #3131 before a large backfill. The
+resolved device and batch are logged at encoder load, so a silently-CPU run is
 visible in the first log lines. Because co-resident encoders share one Lance
 UDF pass and run serially per batch, launch CPU-bound and GPU-bound encoders as
 separate `add-embeddings` runs so neither idles while the other works.

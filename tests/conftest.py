@@ -1869,7 +1869,7 @@ def augment_lance_splits_with_embedding(dataset_root: Path, embedding: str) -> P
                 lance_uri=str(dataset_root / f"{split}.lance"),
                 embeddings=(embedding,),
                 device="cpu",
-                batch_size=1,
+                lance_batch_size=1,
                 build_index=False,
             )
         )
@@ -1922,7 +1922,7 @@ def augment_lance_splits_with_ssondo(dataset_root: Path, checkpoint: str) -> Pat
             embeddings=("ssondo",),
             checkpoints={"ssondo": checkpoint},
             device="cpu",
-            batch_size=1,
+            lance_batch_size=1,
             build_index=False,
         )
     )

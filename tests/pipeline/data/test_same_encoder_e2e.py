@@ -91,7 +91,7 @@ def test_same_hydra_main_writes_legacy_matching_lance_column(
             f"embeddings=[{model_name}]",
             f"checkpoints.{model_name}={checkpoint_dir}",
             "device=cpu",
-            "batch_size=2",
+            "lance_batch_size=2",
             "build_index=false",
             f"paths.log_dir={tmp_path}",
             f"hydra.run.dir={tmp_path / 'hydra'}",

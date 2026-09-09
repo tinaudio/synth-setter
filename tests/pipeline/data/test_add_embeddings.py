@@ -541,7 +541,7 @@ def test_add_embeddings_config_composition_surfaces_registry_defaults() -> None:
         assert list(cfg.embeddings) == ["clap", "m2l"]
         assert dict(cfg.checkpoints) == {}
         assert cfg.device is None
-        assert cfg.batch_size == DEFAULT_LANCE_BATCH_SIZE
+        assert cfg.lance_batch_size == DEFAULT_LANCE_BATCH_SIZE
         assert cfg.build_index is True
         assert cfg.num_partitions is None
         assert cfg.num_sub_vectors is None
@@ -912,7 +912,7 @@ def test_write_columns_with_nonpositive_batch_size_raises(tmp_path: Path) -> Non
     """
     uri = tmp_path / "bad-batch.lance"
     _audio_dataset(uri, rows=2)
-    config = AddEmbeddingsConfig(lance_uri=str(uri)).model_copy(update={"batch_size": 0})
+    config = AddEmbeddingsConfig(lance_uri=str(uri)).model_copy(update={"lance_batch_size": 0})
 
     with pytest.raises(ValueError, match="batch_size must be >= 1, got 0"):
         _write_columns(lance.dataset(str(uri)), [_fake_spec("m2l")], _SAMPLE_RATE, config)
@@ -1150,7 +1150,7 @@ def test_add_embeddings_with_recreated_source_rejects_stale_resume_batches(
     config = AddEmbeddingsConfig(
         lance_uri=str(uri),
         embeddings=("m2l",),
-        batch_size=1,
+        lance_batch_size=1,
         resume_cache=resume_cache,
         build_index=False,
     )
@@ -1228,7 +1228,7 @@ def test_write_columns_with_resume_cache_skips_completed_batches_after_interrupt
     config = AddEmbeddingsConfig(
         lance_uri=str(uri),
         embeddings=(name,),
-        batch_size=2,
+        lance_batch_size=2,
         resume_cache=resume_cache,
         build_index=False,
     )
@@ -1357,7 +1357,7 @@ def test_write_columns_with_debug_logs_progress_and_versions(
             lance.dataset(str(uri)),
             [_fake_spec("m2l")],
             _SAMPLE_RATE,
-            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), batch_size=2, debug=True),
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), lance_batch_size=2, debug=True),
         )
 
     progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
@@ -3026,7 +3026,7 @@ def test_add_embeddings_main_creates_offline_wandb_run_with_config_and_command(
         f"lance_uri={uri}",
         "embeddings=[clap]",
         "build_index=false",
-        "batch_size=7",
+        "lance_batch_size=7",
         "logger.wandb.offline=true",
         f"logger.wandb.save_dir={tmp_path}",
         "logger.wandb.project=add-embeddings-test",
@@ -3046,7 +3046,7 @@ def test_add_embeddings_main_creates_offline_wandb_run_with_config_and_command(
     )
     assert json.loads(run_config["lance_uri"]) == str(uri)
     assert json.loads(run_config["embeddings"]) == ["clap"]
-    assert json.loads(run_config["batch_size"]) == 7
+    assert json.loads(run_config["lance_batch_size"]) == 7
     assert json.loads(run_config["command"]) == " ".join(argv)
     assert read_run_exit_code(Path(run_files[0])) == 0
     assert CLAP_FIELD in lance.dataset(str(uri)).schema.names
@@ -3767,10 +3767,10 @@ def test_sketch_encode_never_exceeds_extraction_batch_cap(
     assert all(size <= SKETCH_ENCODE_MAX_BATCH for size in seen_sizes)
 
 
-def test_sketch_encode_with_custom_chunk_caps_extractor_batches(
+def test_sketch_encode_with_custom_max_batch_caps_extractor_batches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A configured chunk overrides the default extraction cap.
+    """A configured max batch overrides the default extraction cap.
 
     :param monkeypatch: Fixture recording extractor input batch sizes.
     """
@@ -3787,32 +3787,32 @@ def test_sketch_encode_with_custom_chunk_caps_extractor_batches(
     monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
     audio = np.zeros((20, 1, _FIXTURE_SAMPLES), dtype=np.float32)
 
-    controls = _sketch_encode(audio, _SAMPLE_RATE, chunk=8)
+    controls = _sketch_encode(audio, _SAMPLE_RATE, max_batch=8)
 
     assert len(controls) == 20
     assert seen_sizes == [8, 8, 4]
 
 
-def test_add_embeddings_config_with_non_positive_sketch_chunk_raises() -> None:
-    """The sketch extraction chunk validates as a positive row count."""
+def test_add_embeddings_config_with_non_positive_sketch_batch_raises() -> None:
+    """The sketch extraction batch validates as a positive row count."""
     with pytest.raises(ValidationError):
-        AddEmbeddingsConfig(lance_uri=_LANCE_URI, sketch_encode_chunk=0)
+        AddEmbeddingsConfig(lance_uri=_LANCE_URI, sketch_encode_batch=0)
 
 
-def test_add_embeddings_config_composition_overrides_sketch_encode_chunk() -> None:
-    """The shipped Hydra config exposes the sketch extraction chunk as a tunable."""
-    cfg = _compose_add_embeddings("sketch_encode_chunk=128")
+def test_add_embeddings_config_composition_overrides_sketch_encode_batch() -> None:
+    """The shipped Hydra config exposes the sketch extraction batch as a tunable."""
+    cfg = _compose_add_embeddings("sketch_encode_batch=128")
     try:
         config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
     finally:
         GlobalHydra.instance().clear()
-    assert config.sketch_encode_chunk == 128
+    assert config.sketch_encode_batch == 128
 
 
-def test_sketch_spec_encoder_binds_config_chunk_and_logs_device(
+def test_sketch_spec_encoder_binds_config_batch_and_logs_device(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The registry loader threads the configured chunk and logs the resolved device.
+    """The registry loader threads the configured max batch and logs the resolved device.
 
     :param monkeypatch: Fixture stubbing PESTO load and recording extractor batch sizes.
     """
@@ -3832,7 +3832,7 @@ def test_sketch_spec_encoder_binds_config_chunk_and_logs_device(
     monkeypatch.setattr(sketch_controls, "load_pesto_model", lambda *args, **kwargs: None)
     monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
     config = AddEmbeddingsConfig(
-        lance_uri=_LANCE_URI, embeddings=("sketch",), device="cpu", sketch_encode_chunk=4
+        lance_uri=_LANCE_URI, embeddings=("sketch",), device="cpu", sketch_encode_batch=4
     )
 
     with capture_logs() as logs:
@@ -3840,12 +3840,12 @@ def test_sketch_spec_encoder_binds_config_chunk_and_logs_device(
     encode(np.zeros((10, 1, _FIXTURE_SAMPLES), dtype=np.float32), _SAMPLE_RATE)
 
     assert seen_sizes == [4, 4, 2]
-    assert any(log.get("device") == "cpu" and log.get("encode_chunk") == 4 for log in logs)
+    assert any(log.get("device") == "cpu" and log.get("encode_batch") == 4 for log in logs)
 
 
 @pytest.mark.slow
-def test_sketch_encode_chunked_batch_matches_single_pass() -> None:
-    """Memory-capped chunking preserves control values within float32 kernel jitter.
+def test_sketch_encode_sub_batched_matches_single_pass() -> None:
+    """Memory-capped sub-batching preserves control values within float32 kernel jitter.
 
     Torch reduction kernels can vary by batch shape at approximately 1e-6.
     """
