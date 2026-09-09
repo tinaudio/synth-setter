@@ -119,9 +119,12 @@ only; with `logger=wandb` they go to W&B only.
 and snaps categorical and integral fields to the values used for rendering
 before scoring them against the targets. `ValAudioProbe`'s keys mirror §2i's `audio/*`
 metric set under the `val_audio/` prefix. pyFDN probes additionally log
-`val_audio/octave_rt60_log_rmse_{mean,std}` and
-`val_audio/octave_edc_rmse_db_{mean,std}` from their impulse responses. The
-wav/spectrogram snapshot goes to R2, not W&B (free-tier storage budget).
+`val_audio/octave_rt60_log_rmse_{mean,std}`,
+`val_audio/octave_edc_rmse_db_{mean,std}`, `val_audio/t30_mape_{mean,std}`,
+`val_audio/c50_mae_db_{mean,std}` and the per-band
+`val_audio/<param>_pcc_<fc>hz_{mean,std}` rows (std is NaN: Pearson is
+dataset-level) from their impulse responses. The wav/spectrogram snapshot goes
+to R2, not W&B (free-tier storage budget).
 
 ### 2d. Callbacks — Non-W&B
 

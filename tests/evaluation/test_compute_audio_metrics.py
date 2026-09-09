@@ -787,12 +787,35 @@ def test_compute_metrics_on_dir_pyfdn_adds_reverb_metrics(tmp_path: Path) -> Non
         "mss",
         "octave_edc_rmse_db",
         "octave_rt60_log_rmse",
+        "t30_mape",
+        "c50_mae_db",
         "rms",
         "sot",
         "wmfcc",
+        *cam.ACOUSTIC_PARAMETER_COLUMNS,
     }
     assert metrics["octave_edc_rmse_db"] == pytest.approx(0.0, abs=1e-7)
     assert metrics["octave_rt60_log_rmse"] == pytest.approx(0.0, abs=1e-12)
+    assert metrics["t30_mape"] == pytest.approx(0.0, abs=1e-12)
+    assert metrics["c50_mae_db"] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_compute_metrics_on_dir_pyfdn_records_per_band_parameters(tmp_path: Path) -> None:
+    """Raw per-band T30/C50 of both sides are kept so PCC can be computed across samples.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    rng = np.random.default_rng(23)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    # exp(-20 t) decays 60 dB in 6.91 / 20 ≈ 0.35 s.
+    decay = (rng.standard_normal(_SR).astype(np.float32) * np.exp(-20.0 * time))[None, :]
+    sample_dir = _make_sample_dir(tmp_path, "0", decay, decay)
+
+    metrics = compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
+
+    assert metrics["acoustic_param/t30/1000hz/target"] == pytest.approx(0.35, abs=0.05)
+    assert metrics["acoustic_param/t30/1000hz/pred"] == metrics["acoustic_param/t30/1000hz/target"]
+    assert metrics["acoustic_param/c50/1000hz/pred"] == metrics["acoustic_param/c50/1000hz/target"]
 
 
 def test_compute_metrics_on_dir_uses_wav_sample_rate(tmp_path: Path) -> None:
@@ -938,6 +961,182 @@ def test_main_pyfdn_writes_reverb_aggregate_rows(
     aggregate = pd.read_csv(metrics_dir / "aggregated_metrics.csv", index_col=0)
     assert aggregate.loc["octave_rt60_log_rmse", "mean"] == pytest.approx(0.3)
     assert aggregate.loc["octave_edc_rmse_db", "mean"] == pytest.approx(2.0)
+
+
+def _decaying_noise(rt60: float, seed: int) -> np.ndarray:
+    """Return a 1 s mono noise impulse response with the given RT60.
+
+    :param rt60: Reverberation time in seconds of the exponential envelope.
+    :param seed: RNG seed for the noise carrier.
+    :return: ``(1, samples)`` float32 array.
+    """
+    rng = np.random.default_rng(seed)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    return (rng.standard_normal(_SR).astype(np.float32) * np.exp(-6.91 * time / rt60))[None, :]
+
+
+def test_main_pyfdn_end_to_end_writes_pcc_rows_from_raw_parameters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per-band Pearson rows land in the aggregate; raw parameter columns stay per-sample.
+
+    Predictions equal their targets and the RT60 varies across samples, so every per-band
+    correlation is exactly one.
+
+    :param tmp_path: Pytest fixture providing isolated input and output directories.
+    :param monkeypatch: Replaces process isolation with threads for xdist-safe coverage.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    for index, rt60 in enumerate((0.3, 0.5, 0.8)):
+        decay = _decaying_noise(rt60, seed=index)
+        _make_sample_dir(audio_root, str(index), decay, decay)
+    metrics_dir = tmp_path / "metrics"
+    monkeypatch.setattr(cam, "ProcessPoolExecutor", ThreadPoolExecutor)
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1", "--renderer-backend", "pyfdn"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    per_sample = pd.read_csv(metrics_dir / "metrics.csv", index_col=0)
+    assert "acoustic_param/t30/125hz/target" in per_sample.columns
+    aggregate = pd.read_csv(metrics_dir / "aggregated_metrics.csv", index_col=0)
+    pcc_rows = aggregate.loc[aggregate.index.str.contains("_pcc_")]
+    assert list(pcc_rows.index) == [
+        "t30_pcc_125hz",
+        "t30_pcc_250hz",
+        "t30_pcc_500hz",
+        "t30_pcc_1000hz",
+        "t30_pcc_2000hz",
+        "t30_pcc_4000hz",
+        "t30_pcc_8000hz",
+        "c50_pcc_125hz",
+        "c50_pcc_250hz",
+        "c50_pcc_500hz",
+        "c50_pcc_1000hz",
+        "c50_pcc_2000hz",
+        "c50_pcc_4000hz",
+        "c50_pcc_8000hz",
+    ]
+    assert pcc_rows["mean"].to_numpy() == pytest.approx(np.ones(14))
+    assert pcc_rows["std"].isna().all()
+    assert aggregate.loc["t30_mape", "mean"] == pytest.approx(0.0)
+    assert not aggregate.index.str.startswith("acoustic_param/").any()
+
+
+def _fake_level_encoder(mono: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Return a two-dimensional level embedding per row — a stand-in for CLAP.
+
+    :param mono: ``(B, T)`` mono audio batch.
+    :param sample_rate: Unused; matches the CLAP encoder signature.
+    :return: ``(B, 2)`` array of ``[mean |x|, std x]`` per row.
+    """
+    return np.stack([np.abs(mono).mean(axis=1), mono.std(axis=1)], axis=1)
+
+
+def test_compute_fad_identical_sets_returns_zero(tmp_path: Path) -> None:
+    """Prediction and target sets with identical audio have zero Fréchet distance.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    dirs = [
+        _make_sample_dir(
+            tmp_path,
+            str(index),
+            _sine(seconds=0.2, amplitude=amp),
+            _sine(seconds=0.2, amplitude=amp),
+        )
+        for index, amp in enumerate((0.1, 0.4, 0.7))
+    ]
+
+    assert cam.compute_fad(dirs, _fake_level_encoder) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_compute_fad_louder_predictions_is_positive(tmp_path: Path) -> None:
+    """Predictions that are systematically louder than targets score a positive distance.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    dirs = [
+        _make_sample_dir(
+            tmp_path,
+            str(index),
+            _sine(seconds=0.2, amplitude=amp),
+            _sine(seconds=0.2, amplitude=2 * amp),
+        )
+        for index, amp in enumerate((0.1, 0.2, 0.3))
+    ]
+
+    assert cam.compute_fad(dirs, _fake_level_encoder) > 0.0
+
+
+def test_main_fad_option_writes_fad_clap_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--fad`` adds a dataset-level ``fad_clap`` row to the aggregate.
+
+    :param tmp_path: Pytest fixture providing isolated input and output directories.
+    :param monkeypatch: Swaps the CLAP checkpoint load for a cheap level encoder.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    for index, amp in enumerate((0.1, 0.4, 0.7)):
+        _make_sample_dir(
+            audio_root,
+            str(index),
+            _sine(seconds=0.2, amplitude=amp),
+            _sine(seconds=0.2, amplitude=amp),
+        )
+    metrics_dir = tmp_path / "metrics"
+    monkeypatch.setattr(cam, "ProcessPoolExecutor", ThreadPoolExecutor)
+    monkeypatch.setattr(cam, "_load_fad_encoder", lambda: _fake_level_encoder)
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1", "--fad"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    aggregate = pd.read_csv(metrics_dir / "aggregated_metrics.csv", index_col=0)
+    assert aggregate.loc["fad_clap", "mean"] == pytest.approx(0.0, abs=1e-9)
+    assert np.isnan(aggregate.loc["fad_clap", "std"])
+
+
+@pytest.mark.slow
+def test_main_fad_option_with_real_clap_loader_writes_finite_row(tmp_path: Path) -> None:
+    """``--fad`` through the real CLAP checkpoint loader yields a finite, non-negative row.
+
+    Guards the loader/encoder contract the fake-encoder tests cannot: the checkpoint
+    resolves, the encoder accepts the CLI's mono ``(1, T)`` batches, and the
+    embeddings feed the Fréchet distance.
+
+    :param tmp_path: Pytest fixture providing isolated input and output directories.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    for index, freq in enumerate((220.0, 440.0)):
+        _make_sample_dir(
+            audio_root,
+            str(index),
+            _sine(seconds=0.5, freq=freq),
+            _sine(seconds=0.5, freq=2 * freq),
+        )
+    metrics_dir = tmp_path / "metrics"
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1", "--fad"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    aggregate = pd.read_csv(metrics_dir / "aggregated_metrics.csv", index_col=0)
+    assert np.isfinite(aggregate.loc["fad_clap", "mean"])
+    assert aggregate.loc["fad_clap", "mean"] >= 0.0
 
 
 @pytest.mark.slow
