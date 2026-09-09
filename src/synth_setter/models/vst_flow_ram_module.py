@@ -73,8 +73,8 @@ def _validate_ram_settings(
     :param time_power_law_alpha: Exponent of the flow-time law.
     :param reward: Scorer, which must declare ``target_key``.
     :param base_kwargs: Remaining :class:`VSTFlowMatchingModule` arguments.
-    :raises ValueError: Any setting is out of range, the reward declares no target, or the
-        base run carries a term the RAM loss cannot combine with.
+    :raises ValueError: Any setting is out of range, parameterization is not velocity, the
+        reward declares no target, or the base run carries an incompatible term.
     """
     if num_samples_per_row < 2:
         raise ValueError(
@@ -103,6 +103,8 @@ def _validate_ram_settings(
         raise ValueError(
             f"time_power_law_alpha must be finite and non-negative, got {time_power_law_alpha}"
         )
+    if base_kwargs.get("parameterization", "velocity") != "velocity":
+        raise ValueError("RAM requires parameterization='velocity'")
     if base_kwargs.get("audio_loss") is not None:
         raise ValueError(
             "audio_loss cannot be combined with RAM; the reward carries the audio term"

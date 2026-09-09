@@ -697,6 +697,11 @@ def test_train_surge_flow_ram_post_trains_a_trained_flow_through_surgepy(
         assert values, f"no {prefix} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
     assert torch.isfinite(metric_dict["val/param_mse"]).all()
+    checkpoint_callback = object_dict["trainer"].checkpoint_callback
+    assert isinstance(checkpoint_callback, ValidationAlignedModelCheckpoint)
+    best_checkpoint = Path(checkpoint_callback.best_model_path)
+    assert best_checkpoint.is_file()
+    assert best_checkpoint.stat().st_size > 0
     assert (tmp_path / "ram" / "checkpoints" / "last.ckpt").is_file()
 
 

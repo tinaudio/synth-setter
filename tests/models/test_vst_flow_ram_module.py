@@ -156,6 +156,15 @@ def test_ram_module_from_base_checkpoint_seeds_all_policy_copies(
         _assert_same(_state(field), _state(base.vector_field))
 
 
+def test_ram_module_with_endpoint_parameterization_raises(tmp_path: Path) -> None:
+    """RAM rejects endpoint prediction even when its pretrained base is valid velocity.
+
+    :param tmp_path: Directory for the velocity-parameterized base checkpoint.
+    """
+    with pytest.raises(ValueError, match="RAM requires parameterization='velocity'"):
+        _ram(_base_checkpoint(tmp_path), {"parameterization": "endpoint"})
+
+
 def test_ram_module_with_mismatched_checkpoint_raises(tmp_path: Path) -> None:
     """A checkpoint carrying a key this model has no slot for is refused, not silently dropped.
 

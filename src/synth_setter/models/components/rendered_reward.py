@@ -82,6 +82,7 @@ class RenderedAudioReward(nn.Module):
         :param target_audio: Observed audio shaped ``(batch, signal_length)``.
         :returns: Per-row reward, higher for renders closer to the target.
         """
+        # Reversed endpoint predictions remain degenerate until onset/bounded-duration timing (#2995).
         params = differentiable_decode(theta.detach())
         # The grad renderer, not the dataset one: it aligns every row to the noise chunk the
         # targets were rendered with, so a row's reward cannot depend on its batch position.
