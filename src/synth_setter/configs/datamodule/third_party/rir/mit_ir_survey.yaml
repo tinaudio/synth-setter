@@ -1,0 +1,11 @@
+defaults:
+  - /datamodule/third_party/base@_here_
+  - _self_
+
+# Every row is one mono WAV impulse response (Traer and McDermott, 2016).
+dataset_uri: r2://experiments/third_party/MITIRSurvey/all.lance
+dataset_version: 1
+audio_column: source_bytes
+row_filter: "audio_decodable = true"
+downmix: true
+peak_normalize: true

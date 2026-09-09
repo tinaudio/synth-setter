@@ -9,6 +9,7 @@ postprocessing argv in ``test_eval_postprocessing``, metric IO in
 """
 
 import hashlib
+import io
 import json
 import math
 import os
@@ -26,7 +27,9 @@ from unittest.mock import MagicMock, patch
 import lance
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pytest
+import soundfile as sf
 import torch
 import wandb
 from click.testing import CliRunner
@@ -2426,11 +2429,13 @@ _THIRD_PARTY_MODEL_OVERRIDES = (
 def _save_third_party_checkpoint(
     path: Path,
     experiment: str = "surge/flow_simple",
+    extra_overrides: tuple[str, ...] = (),
 ) -> None:
-    """Save a real surge-simple flow checkpoint from a shipped Hydra config.
+    """Save a real flow checkpoint from a shipped Hydra config.
 
     :param path: Destination checkpoint path.
     :param experiment: Experiment whose model architecture is serialized.
+    :param extra_overrides: Experiment-specific overrides the model needs to compose.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -2439,6 +2444,7 @@ def _save_third_party_checkpoint(
                 f"experiment={experiment}",
                 "trainer=cpu",
                 *_THIRD_PARTY_MODEL_OVERRIDES,
+                *extra_overrides,
             ],
         )
     trainer = Trainer(
@@ -2478,6 +2484,7 @@ def _run_third_party_eval(
     output_dir: Path,
     experiment: str = "surge/flow_simple",
     datamodule: str = "third_party/nsynth_test",
+    render: str = "vst",
     extra_overrides: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     """Run the public eval CLI over a third-party corpus with no ground-truth patch.
@@ -2487,6 +2494,7 @@ def _run_third_party_eval(
     :param output_dir: Eval output root.
     :param experiment: Experiment config exercised by the subprocess.
     :param datamodule: Third-party datamodule config exercised by the subprocess.
+    :param render: Render config group the predictions are rendered through.
     :param extra_overrides: Scenario-specific Hydra overrides.
     :returns: The completed CLI process.
     """
@@ -2498,7 +2506,7 @@ def _run_third_party_eval(
             "synth_setter.cli.eval",
             f"experiment={experiment}",
             f"datamodule={datamodule}",
-            "render=vst",
+            f"render={render}",
             f"seed={_THIRD_PARTY_TEST_SEED}",
             f"datamodule.dataset_uri={corpus}",
             "datamodule.use_saved_mean_and_variance=false",
@@ -2624,6 +2632,94 @@ def test_nsynth_sketch_eval_entrypoint_writes_prediction(
 
 
 @pytest.mark.requires_vst
+def _write_rir_corpus(path: Path) -> None:
+    """Write a corpus in the published RIR shape: float WAV rows beside a non-audio row.
+
+    Row 1 is a text object flagged ``audio_decodable=false``; the two WAV rows peak
+    at 2.0, above the storage range, as measured float impulse responses do.
+
+    :param path: Destination Lance dataset.
+    """
+    rate = _THIRD_PARTY_SOURCE_SAMPLE_RATE
+    impulse = np.zeros(rate, dtype=np.float32)
+    impulse[0] = 2.0
+    impulse[rate // 2] = -1.0
+    wav = io.BytesIO()
+    sf.write(wav, impulse, rate, format="WAV", subtype="FLOAT")
+    fields = [
+        pa.field(
+            "source_bytes",
+            pa.large_binary(),
+            nullable=False,
+            metadata={b"lance-encoding:blob": b"true"},
+        ),
+        pa.field("source_path", pa.string(), nullable=False),
+        pa.field("audio_decodable", pa.bool_(), nullable=False),
+    ]
+    table = pa.table(
+        {
+            "source_bytes": pa.array(
+                [wav.getvalue(), b"licence text", wav.getvalue()], pa.large_binary()
+            ),
+            "source_path": pa.array(["Audio/ir-0.wav", "LICENSE.txt", "Audio/ir-2.wav"]),
+            "audio_decodable": pa.array([True, False, True]),
+        },
+        schema=pa.schema(fields),
+    )
+    lance.write_dataset(table, path, mode="create", data_storage_version="2.1")
+
+
+@pytest.mark.slow
+def test_pyfdn_rir_eval_experiment_entrypoint_renders_only_impulse_responses(
+    tmp_path: Path,
+) -> None:
+    """``experiment=pyfdn/eval_flow_rir`` serves filtered, peak-normalized RIRs through pyFDN.
+
+    The non-audio row must be skipped, each served target must arrive at unit peak, and every
+    prediction must render through the pyFDN backend; a dropped filter, an unnormalized float
+    source, or a broken pyFDN wiring fails this test.
+
+    :param tmp_path: Isolated corpus, checkpoint, and output directories.
+    """
+    corpus = tmp_path / "corpus.lance"
+    _write_rir_corpus(corpus)
+    checkpoint = tmp_path / "pyfdn_flow.ckpt"
+    # The pyFDN experiment schedules its LR against the GPU trainer's step budget.
+    _save_third_party_checkpoint(
+        checkpoint, experiment="pyfdn/flow", extra_overrides=("++trainer.max_steps=1",)
+    )
+    output_dir = tmp_path / "output"
+
+    result = _run_third_party_eval(
+        corpus=corpus,
+        checkpoint=checkpoint,
+        output_dir=output_dir,
+        experiment="pyfdn/eval_flow_rir",
+        datamodule="third_party/rir/mit_ir_survey",
+        render="pyfdn",
+        extra_overrides=(
+            "datamodule.batch_size=1",
+            "datamodule.mel_stats_sha256=null",
+            "evaluation.render_vst=true",
+            "evaluation.compute_metrics=false",
+            "logger=csv",
+            "++trainer.max_steps=1",
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    samples = sorted(path.name for path in (output_dir / "audio").glob("sample_*"))
+    assert samples == ["sample_0", "sample_1"]
+    with AudioFile(str(output_dir / "audio" / "sample_0" / "target.wav")) as handle:
+        target = handle.read(handle.frames)
+    assert target.shape[0] == 1
+    assert float(np.abs(target).max()) == pytest.approx(1.0, abs=1e-3)
+    with AudioFile(str(output_dir / "audio" / "sample_1" / "pred.wav")) as handle:
+        rendered = handle.read(handle.frames)
+    assert rendered.shape == (1, 176_400)
+    assert np.isfinite(rendered).all()
+
+
 @pytest.mark.slow
 def test_third_party_corpus_no_params_renders_against_dataset_audio(tmp_path: Path) -> None:
     """The ``no_params`` render branch scores predictions against the corpus's own audio.
