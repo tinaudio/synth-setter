@@ -793,6 +793,15 @@ docs:
       - pattern: ".github/workflows/claude.yml"
         covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
 
+  # ── Growing Lance runbook ────────────────────────────────────────
+  - doc: docs/operations/growing-lance-runbook.md
+    description: Operator commands and failure behavior for bounded Lance train growth
+    sources:
+      - pattern: "src/synth_setter/cli/growing_lance.py"
+        covers: "init/grow/generate/materialize command surface, poll semantics, capacity exit"
+      - pattern: "src/synth_setter/pipeline/data/growing_lance.py"
+        covers: "Append/activation invariants the failure-behavior section documents"
+
   # ── RIR corpus publication runbook ───────────────────────────────
   - doc: docs/operations/rir-corpora-publication.md
     description: Third-party RIR corpus publication procedure and invariants

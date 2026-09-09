@@ -7,12 +7,30 @@ import pytest
 import torch
 from hydra import compose, initialize_config_module
 from omegaconf import DictConfig
+from torch.utils.data import Dataset
 
 from synth_setter.models.slap_module import SLAPModule
 from tests.helpers.run_if import RunIf
 
 _SLAP_EXPERIMENTS = ("surge/slap_ast_audio_vst_ff_param",)
 _AST_TARGET = "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
+
+
+class _FixedPairDataset(Dataset):
+    """Keep synthetic modalities and row identities paired through Lightning collation."""
+
+    def __init__(self, batch: dict[str, torch.Tensor]) -> None:
+        """Store a fixed paired batch.
+
+        :param batch: Modality tensors and row identities sharing their leading dimension.
+        """
+        self.batch = batch
+
+    def __len__(self) -> int:
+        return len(self.batch["sample_id"])
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        return {name: value[index] for name, value in self.batch.items()}
 
 
 def _compose_slap_experiment(experiment: str) -> DictConfig:
@@ -101,33 +119,75 @@ def test_slap_param_arm_frozen_weights_are_only_unused_inverse_projection() -> N
 @RunIf(min_gpus=1)
 @pytest.mark.slow
 @pytest.mark.parametrize("experiment", _SLAP_EXPERIMENTS)
-def test_slap_model_overfits_one_batch(experiment: str) -> None:
-    """Check fixed-batch loss reduction with frozen target arms.
+def test_slap_fixed_batch_lightning_learns_distinct_pairs(experiment: str) -> None:
+    """Learn four synthetic pairs with one-layer backbones and production EMA updates.
 
-    Manual optimizer steps bypass EMA updates; the reduction threshold is a smoke check, not
-    evidence of full memorization, non-collapse, or a nonzero cosine-loss floor.
+    This bounded capacity smoke test is not full-model or held-out sound-matching quality.
 
     :param experiment: Shipped SLAP experiment name.
     """
+    from lightning.pytorch import Trainer
+    from torch.utils.data import DataLoader
+
+    from synth_setter.evaluation.paired_retrieval import paired_retrieval_metrics
+
     torch.manual_seed(7)
     cfg = _compose_slap_experiment(experiment)
-    cfg.model.audio_encoder.encoder._args_[0].n_layers = 1
+    _shrink_ast_layers(cfg)
+    cfg.model.optimizer.lr = 1e-3
     model = hydra.utils.instantiate(cfg.model).cuda()
     batch = {
-        "audio": None,
-        "mel": torch.randn(4, 2, 128, 401, device="cuda"),
-        "params": torch.rand(4, 7, device="cuda"),
+        "mel": torch.randn(4, 2, 128, 401),
+        "params": 2 * torch.rand(4, 7) - 1,
+        "sample_id": torch.arange(4),
     }
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    initial_loss = model._losses(batch)["total_loss"].detach()
-
-    for _ in range(30):
-        optimizer.zero_grad()
-        loss = model._losses(batch)["total_loss"]
-        loss.backward()
-        optimizer.step()
-
-    assert loss < 0.5 * initial_loss
+    device_batch = {name: value.cuda() for name, value in batch.items()}
+    initial_targets = {
+        name: value.detach().clone()
+        for name, value in model.named_parameters()
+        if name.startswith(("audio_ema.", "param_ema."))
+    }
+    model.eval()
+    with torch.inference_mode():
+        initial_loss = model._losses(device_batch)["total_loss"]
+    trainer = Trainer(
+        accelerator="gpu",
+        devices=1,
+        precision="32-true",
+        max_steps=1000,
+        max_epochs=-1,
+        limit_val_batches=0,
+        num_sanity_val_steps=0,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+    )
+    trainer.fit(model, train_dataloaders=DataLoader(_FixedPairDataset(batch), batch_size=4))
+    model.cuda()
+    assert model._ema_optimizer_steps.item() == trainer.global_step == 1000
+    current_parameters = dict(model.named_parameters())
+    for prefix in ("audio_ema.", "param_ema."):
+        assert any(
+            not torch.equal(value, current_parameters[name])
+            for name, value in initial_targets.items()
+            if name.startswith(prefix)
+        )
+    model.eval()
+    with torch.inference_mode():
+        loss = model._losses(device_batch)["total_loss"]
+        audio = model.audio_encoder(device_batch["mel"])[2]
+        params = model.param_encoder(device_batch["params"])[2]
+        permutation = torch.tensor([2, 0, 3, 1], device="cuda")
+        reordered = model.audio_encoder(device_batch["mel"][permutation])[2]
+    torch.testing.assert_close(reordered, audio[permutation], rtol=1e-5, atol=1e-6)
+    metrics = paired_retrieval_metrics(audio, params, batch["sample_id"].tolist())
+    assert loss < 0.5 * initial_loss, (float(initial_loss), float(loss), metrics)
+    assert metrics["audio/embedding_variance"] > 0
+    assert metrics["param/embedding_variance"] > 0
+    assert metrics["matched_similarity"] > metrics["mismatched_similarity"], metrics
+    assert metrics["audio_to_param/recall_at_1"] >= 0.75, metrics
+    assert metrics["param_to_audio/recall_at_1"] >= 0.75, metrics
 
 
 @pytest.mark.gpu

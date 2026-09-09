@@ -46,6 +46,11 @@ from pydantic import ValidationError
 from synth_setter.cli.finalize_dataset import finalize_tracked
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
+from synth_setter.evaluation.oracle_probe import (
+    OracleProbeProvenance,
+    new_oracle_probe_launch_id,
+    upload_oracle_probe,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.constants import (
@@ -906,7 +911,7 @@ def _render_one_owned_shard(
 ) -> tuple[bool, bool, RenderRejectionMetrics]:
     """Render+stage one owned shard, or skip if it is already staged.
 
-    Encapsulates the staging skip-probe + ``_render_and_upload_shard`` invocation
+    Encapsulates the staging skip-probe + ``render_and_upload_shard`` invocation
     so the serial and parallel dispatch arms share one callable. Emits one
     ``shard/bytes`` + ``shard/render_seconds`` history row per call —
     ``render_seconds == 0.0`` on the skip branch, wall-clock from subprocess
@@ -936,7 +941,7 @@ def _render_one_owned_shard(
         )
         return False, True, RenderRejectionMetrics()
     t0 = time.monotonic()
-    byte_size, rejections = _render_and_upload_shard(spec, shard, work_dir, loggers=loggers)
+    byte_size, rejections = render_and_upload_shard(spec, shard, work_dir, loggers=loggers)
     logger.info(
         "shard {} render rejections: clipped={} non_finite={} silent={}",
         shard_id,
@@ -994,12 +999,14 @@ def _is_badwindow_x_get_property_failure(error: subprocess.CalledProcessError) -
     return _BADWINDOW_SIGNATURE in output and _X_GET_PROPERTY_SIGNATURE in output
 
 
-def _render_and_upload_shard(
+def render_and_upload_shard(
     spec: DatasetSpec,
     shard: ShardSpec,
     work_dir: Path,
     *,
     loggers: list[Logger],
+    target_lance_uri: str | None = None,
+    attempt_staging_dir_uri: str | None = None,
 ) -> tuple[int, RenderRejectionMetrics]:
     """Render a single shard and stage it to R2.
 
@@ -1011,6 +1018,8 @@ def _render_and_upload_shard(
     :param shard: Shard to render; names the output dataset and seeds the renderer.
     :param work_dir: Hydra per-run output dir the shard is written under.
     :param loggers: Receive a metric before a recognized X11 failure propagates.
+    :param target_lance_uri: Growing branch URI receiving uncommitted fragment data.
+    :param attempt_staging_dir_uri: Branch-specific growing sidecar directory.
     :returns: Local shard byte size and validated renderer rejection counts.
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
@@ -1022,7 +1031,13 @@ def _render_and_upload_shard(
     attempt_uuid = uuid4().hex
     # Attempt start marker — append-only; orphaned without a .valid it is
     # the observable evidence of a crashed attempt (#1776).
-    write_rendering_marker(spec, shard.shard_id, worker_id=worker_id, attempt_uuid=attempt_uuid)
+    write_rendering_marker(
+        spec,
+        shard.shard_id,
+        worker_id=worker_id,
+        attempt_uuid=attempt_uuid,
+        attempt_staging_dir_uri=attempt_staging_dir_uri,
+    )
     # Zipped wheels extract the wrapper to a temp file that only lives while
     # ``as_file()`` is open; ``ExitStack`` keeps it on disk across the retry
     # loop, and skips materialization on non-Linux.
@@ -1066,14 +1081,34 @@ def _render_and_upload_shard(
     # Worker-side validation gates staging — corrupt renders never earn a
     # .valid marker (design §7.3 shard write protocol).
     with _FULL_SHARD_VALIDATION_LOCK:
-        shard_errors = validate_shard(shard_path, spec)
+        uses_explicit_identity = target_lance_uri is not None or shard.shard_id >= spec.num_shards
+        shard_errors = (
+            validate_shard(shard_path, spec, expected_shard=shard)
+            if uses_explicit_identity
+            else validate_shard(shard_path, spec)
+        )
     if shard_errors:
         raise RuntimeError(
             f"shard {shard.filename} failed local validation: {'; '.join(shard_errors)}"
         )
-    stage_lance_shard_attempt(
-        spec, shard, shard_path, worker_id=worker_id, attempt_uuid=attempt_uuid
-    )
+    if target_lance_uri is None:
+        stage_lance_shard_attempt(
+            spec,
+            shard,
+            shard_path,
+            worker_id=worker_id,
+            attempt_uuid=attempt_uuid,
+        )
+    else:
+        stage_lance_shard_attempt(
+            spec,
+            shard,
+            shard_path,
+            worker_id=worker_id,
+            attempt_uuid=attempt_uuid,
+            target_lance_uri=target_lance_uri,
+            attempt_staging_dir_uri=attempt_staging_dir_uri,
+        )
     logger.info(
         "shard staged: {} -> {}",
         shard.filename,
@@ -1257,8 +1292,8 @@ def main(cfg: DictConfig) -> None:
 
     :param cfg: Hydra-composed dataset cfg.
     :raises ValueError: ``oracle_eval_inline=true`` without
-        ``finalize_inline=true``, or with a zero-size train / val / test split
-        (the eval datamodule opens all three split files unconditionally).
+        ``finalize_inline=true``, with a zero-size train / val / test split,
+        or with a non-boolean ``oracle_eval.upload`` value.
     """
     extras(cfg)
     render_cfg = cfg.get("render")
@@ -1278,6 +1313,7 @@ def main(cfg: DictConfig) -> None:
     if sky_cfg.compute is None:
         ensure_dawdreamer_runtime(spec.render.renderer_backend)
 
+    upload_oracle_evals = False
     if sky_cfg.compute is None and cfg.oracle_eval_inline:
         if not cfg.finalize_inline:
             raise ValueError(
@@ -1290,6 +1326,12 @@ def main(cfg: DictConfig) -> None:
                 "oracle_eval_inline=true requires all of "
                 f"train_val_test_sizes > 0; got {tuple(spec.train_val_test_sizes)}. "
                 "VSTDataModule opens train.lance / val.lance / test.lance unconditionally."
+            )
+        upload_oracle_evals = OmegaConf.select(cfg, "oracle_eval.upload", default=False)
+        if not isinstance(upload_oracle_evals, bool):
+            raise ValueError(
+                f"oracle_eval.upload must be a boolean, got {upload_oracle_evals!r}; a quoted "
+                '"false" would otherwise upload probe artifacts'
             )
 
     spec_path = write_spec_locally(spec, Path(cfg.paths.output_dir))
@@ -1329,19 +1371,35 @@ def main(cfg: DictConfig) -> None:
                 r2_io.download_dir_no_overwrite(
                     spec.r2.split_lance_uri(split), output_dir / f"{split}.lance"
                 )
+            oracle_probe_launch_id = new_oracle_probe_launch_id() if upload_oracle_evals else None
             for split in splits:
                 # test stays bare; train/val are namespaced so the shared run
                 # keeps one summary key per split (see _run_oracle_eval_subprocess).
                 metric_prefix = "" if split == "test" else f"{split}/"
+                eval_dir = output_dir / "oracle_eval" / split / spec.run_id
                 _run_oracle_eval_subprocess(
                     output_dir,
-                    output_dir / "oracle_eval" / split / spec.run_id,
+                    eval_dir,
                     spec.run_id,
                     render=spec.render,
                     num_workers=cfg.datamodule.num_workers,
                     predict_file=output_dir / f"{split}.lance",
                     metric_prefix=metric_prefix,
                 )
+                if oracle_probe_launch_id is not None:
+                    upload_oracle_probe(
+                        eval_dir,
+                        r2=spec.r2,
+                        launch_id=oracle_probe_launch_id,
+                        provenance=OracleProbeProvenance(
+                            source_dataset_uri=spec.r2.split_lance_uri(split),
+                            source_dataset_task=spec.task_name,
+                            source_split=split,
+                            source_run_id=spec.run_id,
+                            source_render=spec.render,
+                            candidate_render=spec.render,
+                        ),
+                    )
         return
 
     if cfg.finalize_inline or cfg.oracle_eval_inline:
