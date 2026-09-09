@@ -15,6 +15,8 @@ import pytest
 
 import tests.conftest as conftest_module
 
+PYTEST_COLLECTION_COLD_START_TIMEOUT_SECONDS = 120
+
 
 class _FakeConfig:
     """Minimal pytest config double exposing the marker expression."""
@@ -86,27 +88,24 @@ def test_same_e2e_marker_expression_excluding_vst_collects_encoder_tests(
     monkeypatch.setenv("SYNTH_SETTER_PLUGIN_PATH", str(tmp_path / "absent.vst3"))
     repo_root = Path(__file__).parents[2]
 
-    try:
-        result = subprocess.run(  # noqa: S603 — interpreter and arguments are test-controlled
-            [
-                sys.executable,
-                "-m",
-                "pytest",
-                "--collect-only",
-                "-q",
-                "-m",
-                "same_e2e and not requires_vst",
-                "tests/pipeline/data/test_same_encoder_e2e.py",
-                "tests/test_eval.py",
-            ],
-            cwd=repo_root,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-    except subprocess.TimeoutExpired:
-        pytest.xfail("#3332: full-suite load can exceed the collection subprocess timeout")
+    result = subprocess.run(  # noqa: S603 — interpreter and arguments are test-controlled
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "-m",
+            "same_e2e and not requires_vst",
+            "tests/pipeline/data/test_same_encoder_e2e.py",
+            "tests/test_eval.py",
+        ],
+        cwd=repo_root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=PYTEST_COLLECTION_COLD_START_TIMEOUT_SECONDS,
+    )
 
     assert result.returncode == 0, result.stderr
     assert "test_same_hydra_main_writes_legacy_matching_lance_column[same_s-12]" in result.stdout
