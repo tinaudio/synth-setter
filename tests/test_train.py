@@ -1204,6 +1204,45 @@ def test_train_surge_simple_flow_default_width_matches_fake_batch(
 
 
 @pytest.mark.slow
+def test_train_cardinal_mixed_endpoint_loss_overfits_fixed_batch(tmp_path: Path) -> None:
+    """The production mixed endpoint model overfits one deterministic batch.
+
+    :param tmp_path: Hydra output and log directory; no dataset is read.
+    """
+    cfg = build_fake_train_cfg(
+        tmp_path,
+        param_spec_name="cardinal",
+        model_group="vst_flow",
+    )
+    with open_dict(cfg):
+        cfg.model.compile = False
+        cfg.model.endpoint_loss = "mixed"
+        cfg.model.parameterization = "endpoint"
+        cfg.model.encoder.d_model = 16
+        cfg.model.encoder.n_heads = 1
+        cfg.model.encoder.n_layers = 1
+        cfg.model.encoder.n_conditioning_outputs = 2
+        cfg.model.encoder.patch_size = 128
+        cfg.model.encoder.patch_stride = 127
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 16
+        cfg.model.vector_field.num_heads = 1
+        cfg.model.vector_field.d_ff = 16
+        cfg.model.vector_field.projection.num_tokens = 2
+        cfg.model.cfg_dropout_rate = 0.0
+        cfg.model.optimizer.lr = 0.01
+        cfg.datamodule.repeat_first_batch = True
+        cfg.trainer.max_steps = 200
+        cfg.test = False
+
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step == 200
+    assert metric_dict["train/loss_step"].item() < 0.05
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize("experiment", ["surge/ffn_simple", "surge/flow_simple"])
 @pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
 def test_train_runpod_experiment_default_datamodule_advances(
