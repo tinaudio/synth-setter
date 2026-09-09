@@ -263,6 +263,11 @@ def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
     assert row["csv_r2_uri"] == ""
 
 
+@pytest.mark.xfail(
+    sys.platform == "darwin",
+    reason="#2915: heavyweight CLI cold imports can exceed 30 seconds on macOS CI",
+    strict=False,
+)
 def test_console_script_is_installed_and_callable() -> None:
     """The documented executable is installed by the package entrypoint."""
     executable = Path(sys.executable).with_name("synth-setter-clap")
