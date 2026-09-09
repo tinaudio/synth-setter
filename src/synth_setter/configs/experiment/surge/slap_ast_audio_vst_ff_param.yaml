@@ -15,6 +15,10 @@ datamodule:
   conditioning: mel
   download_dataset_root_uri: r2://experiments/data/surge-4-lance-50k-2k-2k/surge-4-lance-50k-2k-2k-20260717T042205123Z/
   ot: false
+  eval_sample_ids: true
+
+model:
+  retrieval_eval: true
 
 # The evaluation workflow owns held-out testing after training.
 test: false

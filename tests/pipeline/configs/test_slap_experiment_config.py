@@ -1,5 +1,7 @@
 """Hydra contract tests for shipped SLAP training experiments."""
 
+from pathlib import Path
+
 import hydra
 import pytest
 import torch
@@ -45,6 +47,8 @@ def test_slap_experiment_instantiates_complete_model(experiment: str) -> None:
     assert cfg.datamodule.conditioning == "mel"
     assert cfg.datamodule.ot is False
     assert cfg.model.audio_input_key == "mel"
+    assert cfg.model.retrieval_eval is True
+    assert cfg.datamodule.eval_sample_ids is True
 
 
 @pytest.mark.parametrize("experiment", _SLAP_EXPERIMENTS)
@@ -124,3 +128,81 @@ def test_slap_model_overfits_one_batch(experiment: str) -> None:
         optimizer.step()
 
     assert loss < 0.5 * initial_loss
+
+
+@pytest.mark.gpu
+@RunIf(min_gpus=1)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_slap_gpu_ragged_batch_duplicate_predictions_accept_roundoff(dtype: torch.dtype) -> None:
+    """The shipped online arms tolerate the same row inferred in different batch shapes.
+
+    :param dtype: Float32 or the shipped bf16 mixed-precision inference mode.
+    """
+    from synth_setter.evaluation.paired_retrieval import paired_retrieval_metrics
+
+    torch.manual_seed(23)
+    cfg = _compose_slap_experiment("surge/slap_ast_audio_vst_ff_param")
+    model = hydra.utils.instantiate(cfg.model).cuda().eval()
+    mel = torch.randn(3, 2, 128, 401, device="cuda")
+    params = torch.rand(3, 7, device="cuda")
+    with (
+        torch.inference_mode(),
+        torch.autocast("cuda", dtype=dtype, enabled=dtype != torch.float32),
+    ):
+        audio_full = model.audio_encoder(mel)[2]
+        params_full = model.param_encoder(params)[2]
+        audio_single = model.audio_encoder(mel[:1])[2]
+        params_single = model.param_encoder(params[:1])[2]
+    result = paired_retrieval_metrics(
+        torch.cat((audio_full, audio_single)),
+        torch.cat((params_full, params_single)),
+        [0, 1, 2, 0],
+    )
+    assert result["gallery_size"] == 3
+
+
+def test_slap_real_lance_fit_sanity_and_checkpoint_test_score_full_gallery(tmp_path: Path) -> None:
+    """A real train-produced checkpoint scores all rows after Lance collation.
+
+    :param tmp_path: Local Lance split and checkpoint destination.
+    """
+    import numpy as np
+    from lightning.pytorch import Trainer
+
+    from tests.helpers.lance_fixtures import make_shard_columns, write_lance_shard
+
+    cfg = _compose_slap_experiment("surge/slap_ast_audio_vst_ff_param")
+    cfg.datamodule.dataset_root = str(tmp_path)
+    cfg.datamodule.download_dataset_root_uri = None
+    cfg.datamodule.use_saved_mean_and_variance = False
+    cfg.datamodule.batch_size = 2
+    cfg.datamodule.num_workers = 0
+    cfg.datamodule.val_num_workers = 0
+    rng = np.random.default_rng(4)
+    for split in ("train", "val", "test"):
+        columns = make_shard_columns(3, num_params=7)
+        columns["mel_spec"] = rng.standard_normal((3, 2, 128, 401)).astype(np.float32)
+        write_lance_shard(tmp_path / f"{split}.lance", columns)
+    module = hydra.utils.instantiate(cfg.datamodule)
+    model = hydra.utils.instantiate(cfg.model)
+    trainer = Trainer(
+        default_root_dir=tmp_path,
+        accelerator="cpu",
+        max_epochs=1,
+        num_sanity_val_steps=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+    )
+    trainer.fit(model, datamodule=module)
+    assert trainer.callback_metrics["retrieval/val/gallery_size"] == 3
+    assert torch.isfinite(trainer.callback_metrics["retrieval/val/audio_to_param/mrr"])
+    checkpoint = tmp_path / "slap.ckpt"
+    trainer.save_checkpoint(checkpoint)
+    restored = hydra.utils.instantiate(cfg.model)
+    result = trainer.test(restored, datamodule=module, ckpt_path=checkpoint)[0]
+    assert result["retrieval/test/gallery_size"] == 3
+    assert result["retrieval/test/audio/embedding_variance"] > 0
+    assert result["retrieval/test/param/embedding_variance"] > 0
+    assert "loss/test/total_loss" in result
