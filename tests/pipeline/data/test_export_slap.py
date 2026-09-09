@@ -1411,6 +1411,9 @@ def test_export_slap_cli_trained_checkpoint_supports_ann_search_and_source_join(
     assert exported.list_indices()[0]["fields"] == ["slap"]
 
 
+@pytest.mark.xfail(
+    reason="SLAP smoke cases reference removed model groups; see #3294", strict=True
+)
 @pytest.mark.parametrize("model", ["slap_ast_audio_mlp_param", "slap_ast_audio_transformer_param"])
 def test_export_slap_cli_shipped_model_resolves_parameter_dimensions(model: str) -> None:
     """Shipped model groups resolve synth-dependent construction settings.
