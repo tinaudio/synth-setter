@@ -658,7 +658,7 @@ docs:
         scope: "tart"
 
   - doc: docs/guides/surgepy-browser-evaluation.md
-    description: Browser ONNX inference, native SurgePy evaluation, and production E2E playbook
+    description: Browser-to-SurgePy evaluation playbook
     sources:
       - pattern: "src/synth_setter/cli/sketch_render.py"
         covers: "Browser runtime selection and evaluation artifacts"

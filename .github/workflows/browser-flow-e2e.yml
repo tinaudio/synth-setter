@@ -66,9 +66,9 @@ jobs:
           install-rclone: "true"
       - name: Verify real prerequisites
         run: |
-          test -n "${RCLONE_CONFIG_R2_ACCESS_KEY_ID}"
-          test -n "${RCLONE_CONFIG_R2_SECRET_ACCESS_KEY}"
-          test -n "${RCLONE_CONFIG_R2_ENDPOINT}"
+          [[ -n "${RCLONE_CONFIG_R2_ACCESS_KEY_ID}" ]]
+          [[ -n "${RCLONE_CONFIG_R2_SECRET_ACCESS_KEY}" ]]
+          [[ -n "${RCLONE_CONFIG_R2_ENDPOINT}" ]]
           uv run --extra cpu python -c "import surgepy; import onnxruntime"
           rclone lsd --checksum r2:experiments/browser-evaluation >/dev/null
       - name: Run browser sampler unit contracts
