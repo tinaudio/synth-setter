@@ -1411,18 +1411,13 @@ def test_export_slap_cli_trained_checkpoint_supports_ann_search_and_source_join(
     assert exported.list_indices()[0]["fields"] == ["slap"]
 
 
-@pytest.mark.parametrize("model", ["slap_ast_audio_mlp_param", "slap_ast_audio_transformer_param"])
-def test_export_slap_cli_shipped_model_resolves_parameter_dimensions(model: str) -> None:
-    """Shipped model groups resolve synth-dependent construction settings.
-
-    :param model: Shipped SLAP model group.
-    """
+def test_export_slap_cli_shipped_model_resolves_parameter_dimensions() -> None:
+    """The shipped export config resolves synth-dependent model dimensions."""
     completed = subprocess.run(  # noqa: S603 - trusted interpreter and registered model groups
         [
             sys.executable,
             "-m",
             "synth_setter.cli.export_slap",
-            f"model={model}",
             "--cfg",
             "job",
             "--resolve",

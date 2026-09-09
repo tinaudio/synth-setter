@@ -170,7 +170,7 @@ def test_evaluate_slap_experiment_checkpoint_end_to_end(
         cfg_slap_train_lance.trainer.devices = 1
         cfg_slap_train_lance.trainer.precision = "32-true"
     HydraConfig().set_config(cfg_slap_train_lance)
-    _, train_objects = train(cfg_slap_train_lance)
+    train_metrics, train_objects = train(cfg_slap_train_lance)
     checkpoint_path = train_objects["trainer"].checkpoint_callback.best_model_path
 
     GlobalHydra.instance().clear()
@@ -192,17 +192,36 @@ def test_evaluate_slap_experiment_checkpoint_end_to_end(
         cfg.logger = None
         cfg.ckpt_path = checkpoint_path
         cfg.mode = "test"
-        cfg.trainer.limit_test_batches = 1
+        cfg.trainer.limit_test_batches = 1.0
+        cfg.trainer.precision = "32-true"
         cfg.trainer.enable_model_summary = False
     HydraConfig().set_config(cfg)
 
     metric_dict, object_dict = evaluate(cfg)
     GlobalHydra.instance().clear()
 
-    assert isinstance(object_dict["model"], SLAPModule)
+    model = object_dict["model"]
+    assert isinstance(model, SLAPModule)
+    assert model._ema_optimizer_steps.item() == train_objects["trainer"].global_step == 1
     assert torch.isfinite(metric_dict["loss/test/total_loss"])
+    assert metric_dict["retrieval/test/gallery_size"] == 4
+    for modality in ("audio", "param"):
+        assert metric_dict[f"retrieval/test/{modality}/embedding_variance"] > 0
+    for direction in ("audio_to_param", "param_to_audio"):
+        assert 0 < metric_dict[f"retrieval/test/{direction}/mrr"] <= 1
+        assert 0 <= metric_dict[f"retrieval/test/{direction}/recall_at_1"] <= 1
+    for name, value in model.state_dict().items():
+        if name.startswith(("audio_ema.", "param_ema.")):
+            torch.testing.assert_close(
+                value.cpu(), train_objects["model"].state_dict()[name].cpu(), rtol=0, atol=0
+            )
     metrics_path = Path(cfg.paths.output_dir) / "metrics" / "metrics.json"
-    assert math.isfinite(json.loads(metrics_path.read_text())["loss/test/total_loss"])
+    saved_metrics = json.loads(metrics_path.read_text())
+    for name, value in metric_dict.items():
+        if name.startswith(("retrieval/test/", "loss/test/")):
+            # Same fp32 checkpoint and gallery: allow only floating-point reduction roundoff.
+            assert float(value) == pytest.approx(float(train_metrics[name]), rel=1e-5, abs=1e-7)
+            assert saved_metrics[name] == pytest.approx(float(value), rel=1e-5, abs=1e-7)
 
 
 @pytest.mark.slow
@@ -1350,6 +1369,70 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
         abs(train_metric_dict["test/param_mse"].item() - test_metric_dict["test/param_mse"].item())
         < 0.001
     )
+
+
+@pytest.mark.slow
+def test_evaluate_loads_mixed_endpoint_checkpoint_and_samples(tmp_path: Path) -> None:
+    """Evaluation loads a mixed-endpoint checkpoint and runs the production sampler.
+
+    :param tmp_path: Checkpoint and evaluation output directory.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/fake_oracle",
+                "synth=cardinal",
+                "trainer=cpu",
+                "model=vst_flow",
+            ],
+        )
+    checkpoint_path = tmp_path / "mixed.ckpt"
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.mode = "test"
+        cfg.model.compile = False
+        cfg.model.endpoint_loss = "mixed"
+        cfg.model.parameterization = "endpoint"
+        cfg.model.encoder.d_model = 16
+        cfg.model.encoder.n_heads = 1
+        cfg.model.encoder.n_layers = 1
+        cfg.model.encoder.n_conditioning_outputs = 2
+        cfg.model.encoder.patch_size = 128
+        cfg.model.encoder.patch_stride = 127
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 16
+        cfg.model.vector_field.num_heads = 1
+        cfg.model.vector_field.d_ff = 16
+        cfg.model.vector_field.projection.num_tokens = 2
+        cfg.model.test_sample_steps = 2
+        cfg.datamodule.fake = True
+        cfg.datamodule.batch_size = 2
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.use_saved_mean_and_variance = False
+        cfg.trainer.limit_test_batches = 1
+        cfg.logger = None
+        cfg.ckpt_path = str(checkpoint_path)
+
+    trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+    )
+    trainer.strategy.connect(instantiate(cfg.model))
+    trainer.save_checkpoint(checkpoint_path)
+
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = evaluate(cfg)
+
+    assert torch.isfinite(metric_dict["test/param_mse"])
+    assert object_dict["model"].hparams.endpoint_loss == "mixed"
 
 
 def test_evaluate_loads_compiled_cpu_training_checkpoint(
@@ -2920,7 +3003,13 @@ def test_pyfdn_rir_eval_experiment_entrypoint_renders_only_impulse_responses(
     assert np.isfinite(rendered).all()
 
 
+@pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.xfail(
+    not Path(os.environ.get("SYNTH_SETTER_PLUGIN_PATH", "plugins/Surge XT.vst3")).exists(),
+    reason="#3299: the non-VST CPU slow lane does not install Surge XT",
+    strict=True,
+)
 def test_third_party_corpus_no_params_renders_against_dataset_audio(tmp_path: Path) -> None:
     """The ``no_params`` render branch scores predictions against the corpus's own audio.
 

@@ -190,6 +190,9 @@ def test_plot_learnt_projection_logs_assignment_and_similarity_figures() -> None
 @pytest.mark.gpu
 def test_plot_learnt_projection_on_cuda_logs_cpu_backed_figures() -> None:
     """CUDA projection tensors convert to matplotlib-compatible plot inputs."""
+    if not torch.cuda.is_available():
+        pytest.xfail("#3343: the CPU Docker image build currently selects GPU-marked tests")
+
     logger = _RecordingTensorBoardLogger()
     trainer = _trainer([logger])
     projection = LearntProjection(

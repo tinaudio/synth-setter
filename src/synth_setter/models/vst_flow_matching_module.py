@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, MutableMapping
+from collections.abc import Callable, Iterator, MutableMapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 import torch
 from beartype import beartype
@@ -18,12 +18,6 @@ from synth_setter.conditioning import (
     SketchControls,
     conditioning_batch_key,
     resolve_sketch_controls,
-)
-from synth_setter.data.vst.param_spec import (
-    CategoricalParameter,
-    DiscreteLiteralParameter,
-    Parameter,
-    ParamSpec,
 )
 from synth_setter.metrics import (
     BestSwapParamMSE,
@@ -171,22 +165,33 @@ type _FieldTransform = Callable[
 type _TimeField = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
+@runtime_checkable
+class _ParamSpecLike(Protocol):
+    """Parameter layout contract needed by mixed endpoint objectives."""
+
+    @jaxtyped(typechecker=beartype)
+    def encoded_slices(self) -> Iterator[tuple[object, slice]]:
+        """Yield each logical parameter with its encoded span.
+
+        :returns: Logical parameters paired with their encoded slices.
+        """
+        ...
+
+
 @jaxtyped(typechecker=beartype)
-def _uses_onehot_classification(parameter: Parameter) -> bool:
+def _uses_onehot_classification(parameter: object) -> bool:
     """Return whether a parameter span represents one categorical draw.
 
     :param parameter: Typed logical parameter.
     :returns: True only for one-hot categorical or integer-literal spans.
     """
-    return isinstance(parameter, (CategoricalParameter, DiscreteLiteralParameter)) and (
-        parameter.encoding == "onehot"
-    )
+    return getattr(parameter, "encoding", None) == "onehot"
 
 
 @jaxtyped(typechecker=beartype)
 def endpoint_prediction_to_model(
     prediction: Float[torch.Tensor, "batch params"],
-    param_spec: ParamSpec,
+    param_spec: _ParamSpecLike,
 ) -> Float[torch.Tensor, "batch params"]:
     """Convert one-hot logits to model-space probabilities without changing numerical spans.
 
@@ -205,7 +210,7 @@ def endpoint_prediction_to_model(
 def mixed_endpoint_row_loss(
     prediction: Float[torch.Tensor, "batch params"],
     target: Float[torch.Tensor, "batch params"],
-    param_spec: ParamSpec,
+    param_spec: _ParamSpecLike,
 ) -> Float[torch.Tensor, "batch 1"]:
     """Average one classification or regression term per logical parameter and row.
 
@@ -306,28 +311,32 @@ def build_guided_velocity(
     :param sketch_cfg_strength: Guidance scale for sketch controls; defaults to
         ``cfg_strength`` for joint-CFG compatibility.
     :param control_tokens: Complete full-sketch and PE-only control-token state.
-    :param output_transform: Optional branch-local conversion applied before guidance.
+    :param output_transform: Optional conversion applied after combining guidance branches.
     :returns: Two-argument guided velocity field.
     """
     if control_tokens is None:
-        return joint_cfg_velocity(
-            _bind_branch(field, conditioning, None, output_transform),
-            _bind_branch(field, None, None, output_transform),
+        guided = joint_cfg_velocity(
+            _bind_branch(field, conditioning, None),
+            _bind_branch(field, None, None),
             cfg_strength,
         )
-
-    sketch_strength = cfg_strength if sketch_cfg_strength is None else sketch_cfg_strength
-    unconditional = _bind_branch(field, None, control_tokens.unconditional, output_transform)
-    sketch = _bind_branch(field, None, control_tokens.conditional, output_transform)
-    if conditioning is None:
-        return joint_cfg_velocity(sketch, unconditional, sketch_strength)
-    return multi_cfg_velocity(
-        unconditional,
-        sketch,
-        _bind_branch(field, conditioning, control_tokens.conditional, output_transform),
-        sketch_cfg_strength=sketch_strength,
-        content_cfg_strength=cfg_strength,
-    )
+    else:
+        sketch_strength = cfg_strength if sketch_cfg_strength is None else sketch_cfg_strength
+        unconditional = _bind_branch(field, None, control_tokens.unconditional)
+        sketch = _bind_branch(field, None, control_tokens.conditional)
+        if conditioning is None:
+            guided = joint_cfg_velocity(sketch, unconditional, sketch_strength)
+        else:
+            guided = multi_cfg_velocity(
+                unconditional,
+                sketch,
+                _bind_branch(field, conditioning, control_tokens.conditional),
+                sketch_cfg_strength=sketch_strength,
+                content_cfg_strength=cfg_strength,
+            )
+    if output_transform is None:
+        return guided
+    return lambda x, t: output_transform(guided(x, t))
 
 
 @jaxtyped(typechecker=beartype)
@@ -335,7 +344,6 @@ def _bind_branch(
     field: torch.nn.Module,
     conditioning: Shaped[torch.Tensor, "batch ..."] | None,
     control_tokens: Float[torch.Tensor, "batch tokens d_model"] | None,
-    output_transform: _FieldTransform | None = None,
 ) -> _TimeField:
     """Bind one CFG branch's conditioning into a two-argument time field.
 
@@ -346,7 +354,6 @@ def _bind_branch(
     :param conditioning: Encoded content conditioning, or ``None`` for the
         unconditional branch.
     :param control_tokens: This branch's control tokens, or ``None`` without sketch support.
-    :param output_transform: Optional conversion applied to this branch's raw output.
     :returns: Two-argument velocity field over parameter state and time.
     """
 
@@ -355,18 +362,17 @@ def _bind_branch(
         x: Shaped[torch.Tensor, "batch ..."],
         t: Shaped[torch.Tensor, "batch 1"],
     ) -> Shaped[torch.Tensor, "batch ..."]:
-        """Evaluate and optionally convert one bound guidance branch.
+        """Evaluate one bound guidance branch.
 
         :param x: Shared trajectory point.
         :param t: Shared flow time.
-        :returns: Raw or converted field output.
+        :returns: Raw field output.
         """
-        output = (
+        return (
             field(x, t, conditioning)
             if control_tokens is None
             else field(x, t, conditioning, control_tokens=control_tokens)
         )
-        return output if output_transform is None else output_transform(output)
 
     return evaluate
 
