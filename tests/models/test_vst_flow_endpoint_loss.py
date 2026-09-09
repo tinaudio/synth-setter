@@ -660,6 +660,7 @@ def test_mixed_endpoint_multi_cfg_converts_guided_logits_once() -> None:
 
     expected_endpoint = 2 * torch.softmax(torch.tensor([3.5, -2.5]), dim=0) - 1
     torch.testing.assert_close(velocity[0, 8:10], expected_endpoint / 0.5)
+    assert torch.all(expected_endpoint.abs() <= 1.0)
 
 
 def test_sample_mixed_endpoint_finishes_on_typed_endpoint_without_sampling_classes() -> None:

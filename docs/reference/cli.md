@@ -128,7 +128,6 @@ Use a compatible experiment for the dataset and its columns; for example,
 [training experiments](../../src/synth_setter/configs/experiment/), and the selected
 [datamodule config](../../src/synth_setter/configs/datamodule/).
 
-<<<<<<< HEAD
 To derive tonal interval vectors from each waveform during training instead of
 reading a stored sketch column:
 
@@ -174,7 +173,7 @@ synth-setter-create-wandb-parameter-workspace \
 The command prints the saved workspace URL. Its run set has no synth-name filter, so the same
 panels cover Surge, pyFDN, TorchSynth, OB-Xf, Faust, Cardinal, and KR-106 runs. It creates a new
 saved view each time; retain the printed URL instead of rerunning it for the same project.
-=======
+
 For a controlled endpoint-loss A/B run, keep the finalized dataset, one-hot parameter schema,
 and seed identical. All four combinations require endpoint parameterization:
 
@@ -187,7 +186,6 @@ synth-setter-train experiment=surge/flow_simple seed=12345 model.parameterizatio
 
 These commands define comparable configurations; they do not establish a measured quality
 improvement for either objective or weighting.
->>>>>>> 3f6143a9ef (internal-feat(training): add endpoint time weighting)
 
 ## Launch with SkyPilot
 
