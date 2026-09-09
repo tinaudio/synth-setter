@@ -253,7 +253,13 @@ dev = [
   "ruff",
   { include-group = "docs" },
   { include-group = "notebooks" },
+  { include-group = "onnx" },
   { include-group = "runtime" },
+]
+onnx = [
+    "onnx>=1.17",
+    "onnxruntime>=1.20",
+    "onnxscript>=0.3",
 ]
 
 [tool.uv]

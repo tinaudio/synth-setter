@@ -28,6 +28,8 @@ def pool_sketch_controls(
     :param output_frames: Frames retained along the pooled time axis.
     :returns: Controls with averaged tracks and maximum-pooled pitch activations.
     """
+    if controls.shape[-1] == output_frames:
+        return controls
     tracks = F.adaptive_avg_pool1d(controls[:, : SKETCH_PITCH_SLICE.start], output_frames)
     pitch = F.adaptive_max_pool1d(controls[:, SKETCH_PITCH_SLICE], output_frames)
     return torch.cat((tracks, pitch), dim=1)
