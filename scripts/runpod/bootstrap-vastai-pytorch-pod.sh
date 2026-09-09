@@ -86,6 +86,14 @@ die()  { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 sha_check() { echo "$1  $2" | sha256sum -c - >/dev/null || die "checksum mismatch for $2"; }
 
+# Every external download goes through one retrying fetch so a transient reset
+# or 5xx does not abort provisioning under `set -e`: 5 attempts, 3 s apart.
+fetch() { curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors "$@"; }
+
+# Idempotent `git remote add`: a rerun after a failed fetch finds the remote
+# already registered, which `remote add` treats as an error.
+git_set_origin() { git -C "$1" remote set-url origin "$2" 2>/dev/null || git -C "$1" remote add origin "$2"; }
+
 # apt package names drift between 22.04 and 24.04; install what exists and
 # report the rest instead of failing the whole step on one rename. `apt-cache
 # policy` is the reliable probe: pure-virtual packages (libasound2 on 24.04)
@@ -178,7 +186,7 @@ fi
 apt_install btop bubblewrap emacs-nox fd-find ripgrep tmux
 [[ -e /usr/local/bin/fd ]] || ln -s /usr/bin/fdfind /usr/local/bin/fd
 if ! command -v gh >/dev/null; then
-  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  fetch https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     -o /usr/share/keyrings/githubcli-archive-keyring.gpg
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
     > /etc/apt/sources.list.d/github-cli.list
@@ -189,7 +197,7 @@ apt-get clean
 # ------------------------------------------------------ 2. uv + python ----
 log "2/12 uv ${UV_VERSION} + CPython ${PYTHON_VERSION}"
 if [[ "$(uv --version 2>/dev/null | awk '{print $2}')" != "$UV_VERSION" ]]; then
-  curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" \
+  fetch "https://astral.sh/uv/${UV_VERSION}/install.sh" \
     | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh
 fi
 uv python install "$PYTHON_VERSION"
@@ -200,7 +208,7 @@ git config --global --add safe.directory "$SS_REPO_DIR" 2>/dev/null || true
 if [[ ! -d "$SS_REPO_DIR/.git" ]]; then
   mkdir -p "$SS_REPO_DIR"
   git -C "$SS_REPO_DIR" init
-  git -C "$SS_REPO_DIR" remote add origin https://github.com/tinaudio/synth-setter.git
+  git_set_origin "$SS_REPO_DIR" https://github.com/tinaudio/synth-setter.git
 fi
 git -C "$SS_REPO_DIR" fetch origin
 if git -C "$SS_REPO_DIR" show-ref --verify -q "refs/heads/$SS_GIT_REF"; then
@@ -232,8 +240,8 @@ python -c "import torch, sys; print('torch', torch.__version__, 'cuda', torch.cu
 log "5/12 Node ${NODE_VERSION} (studiorack + agent CLIs)"
 if [[ "$(node --version 2>/dev/null)" != "v${NODE_VERSION}" ]]; then
   tarball="node-v${NODE_VERSION}-linux-x64.tar.xz"
-  curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${tarball}" -o "/tmp/${tarball}"
-  curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" \
+  fetch "https://nodejs.org/dist/v${NODE_VERSION}/${tarball}" -o "/tmp/${tarball}"
+  fetch "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" \
     | grep " ${tarball}\$" | (cd /tmp && sha256sum -c -) || die "node tarball checksum mismatch"
   tar -xJf "/tmp/${tarball}" -C /usr/local --strip-components=1 \
     --exclude='CHANGELOG.md' --exclude='LICENSE' --exclude='README.md'
@@ -270,7 +278,7 @@ if [[ ! -d "$VST3_DIR/Ultramaster KR-106.vst3" ]]; then
   mkdir -p "$src"
   if ! git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
     git -C "$src" init
-    git -C "$src" remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git
+    git_set_origin "$src" https://github.com/kayrockscreenprinting/ultramaster_kr106.git
   fi
   git -C "$src" fetch --depth 1 origin "$KR106_GIT_REF"
   git -C "$src" checkout --detach FETCH_HEAD
@@ -299,8 +307,8 @@ done
 log "7/12 pueue ${PUEUE_VERSION}"
 if ! pueue --version 2>/dev/null | grep -q "${PUEUE_VERSION#v}"; then
   base="https://github.com/Nukesor/pueue/releases/download/${PUEUE_VERSION}"
-  wget -q -O /usr/local/bin/pueue  "${base}/pueue-x86_64-unknown-linux-musl"
-  wget -q -O /usr/local/bin/pueued "${base}/pueued-x86_64-unknown-linux-musl"
+  fetch -o /usr/local/bin/pueue  "${base}/pueue-x86_64-unknown-linux-musl"
+  fetch -o /usr/local/bin/pueued "${base}/pueued-x86_64-unknown-linux-musl"
   sha_check "$PUEUE_SHA256" /usr/local/bin/pueue
   sha_check "$PUEUED_SHA256" /usr/local/bin/pueued
   chmod +x /usr/local/bin/pueue /usr/local/bin/pueued
@@ -309,7 +317,7 @@ fi
 # ------------------------------------------------- 8. zellij + infisical ----
 log "8/12 zellij ${ZELLIJ_VERSION} + infisical ${INFISICAL_VERSION}"
 if ! zellij --version 2>/dev/null | grep -q "${ZELLIJ_VERSION#v}"; then
-  wget -q -O /tmp/zellij.tar.gz \
+  fetch -o /tmp/zellij.tar.gz \
     "https://github.com/zellij-org/zellij/releases/download/${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz"
   sha_check "$ZELLIJ_SHA256" /tmp/zellij.tar.gz
   tar -xzf /tmp/zellij.tar.gz -C /usr/local/bin zellij && chmod +x /usr/local/bin/zellij
@@ -317,7 +325,7 @@ if ! zellij --version 2>/dev/null | grep -q "${ZELLIJ_VERSION#v}"; then
 fi
 if ! infisical --version 2>/dev/null | grep -q "$INFISICAL_VERSION"; then
   package="infisical_${INFISICAL_VERSION}_linux_amd64.deb"
-  curl -fsSL "https://dl.cloudsmith.io/public/infisical/infisical-cli/deb/debian/pool/any-version/main/i/in/infisical_${INFISICAL_VERSION}/${package}" -o "/tmp/${package}"
+  fetch "https://dl.cloudsmith.io/public/infisical/infisical-cli/deb/debian/pool/any-version/main/i/in/infisical_${INFISICAL_VERSION}/${package}" -o "/tmp/${package}"
   sha_check "$INFISICAL_SHA256" "/tmp/${package}"
   dpkg -i "/tmp/${package}" && rm "/tmp/${package}"
 fi
@@ -330,7 +338,7 @@ if [[ "${SS_SKIP_AGENT_TOOLS:-0}" != 1 ]]; then
   npm cache clean --force
   codex --version && claude --version && pi --version
   if ! command -v hermes >/dev/null; then
-    curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_GIT_REF}/scripts/install.sh" -o /tmp/hermes-install.sh
+    fetch "https://raw.githubusercontent.com/NousResearch/hermes-agent/${HERMES_GIT_REF}/scripts/install.sh" -o /tmp/hermes-install.sh
     sha_check "$HERMES_INSTALLER_SHA256" /tmp/hermes-install.sh
     env -u VIRTUAL_ENV -u UV_PYTHON_INSTALL_DIR bash /tmp/hermes-install.sh \
       --branch "$HERMES_GIT_REF" --commit "$HERMES_GIT_SHA" --skip-browser \
@@ -338,7 +346,7 @@ if [[ "${SS_SKIP_AGENT_TOOLS:-0}" != 1 ]]; then
     rm -f /tmp/hermes-install.sh
   fi
   if ! command -v agy >/dev/null && [[ ! -x "$HOME/.local/bin/agy" ]]; then
-    { curl -fsSL https://antigravity.google/cli/install.sh -o /tmp/agy-install.sh \
+    { fetch https://antigravity.google/cli/install.sh -o /tmp/agy-install.sh \
       && bash /tmp/agy-install.sh; } || warn "agy install failed (non-fatal)"
     rm -f /tmp/agy-install.sh
   fi
@@ -353,7 +361,7 @@ if [[ "${SS_SKIP_DOOM:-0}" != 1 ]]; then
   if [[ ! -x "$emacs_dir/bin/doom" ]]; then
     mkdir -p "$emacs_dir" "$HOME/.local/bin"
     git -C "$emacs_dir" init
-    git -C "$emacs_dir" remote add origin https://github.com/doomemacs/doomemacs.git
+    git_set_origin "$emacs_dir" https://github.com/doomemacs/doomemacs.git
     git -C "$emacs_dir" fetch --depth 1 origin "$DOOM_EMACS_GIT_SHA"
     git -C "$emacs_dir" checkout --detach "$DOOM_EMACS_GIT_SHA"
     git -C "$emacs_dir" submodule update --init --recursive
@@ -398,12 +406,17 @@ unset __ss_root
 EOF
 fi
 # Land interactive logins in the checkout with its venv active, like the
-# image's WORKDIR. Appended after the image's own `cd ${WORKSPACE}` line so it
-# wins; interactive-only so scp/rsync/non-login commands keep their cwd.
+# image's WORKDIR. Appended after the image's own `cd ${WORKSPACE}` and
+# `/venv/main` activation lines so it wins; the vastai bashrc leaves
+# VIRTUAL_ENV=/venv/main behind, so replace any non-project venv rather than
+# only filling an empty one. Interactive-only so scp/rsync keep their cwd.
 grep -qs "ss-login-landing" "$HOME/.bashrc" || cat >>"$HOME/.bashrc" <<EOF
 # ss-login-landing
 if [[ \$- == *i* && -d "${IMAGE_WORKDIR}" ]]; then cd "${IMAGE_WORKDIR}"; fi
-[[ -z "\${VIRTUAL_ENV:-}" && -f "${SS_VENV}/bin/activate" ]] && source "${SS_VENV}/bin/activate"
+if [[ "\${VIRTUAL_ENV:-}" != "${SS_VENV}" && -f "${SS_VENV}/bin/activate" ]]; then
+  unset VIRTUAL_ENV
+  source "${SS_VENV}/bin/activate"
+fi
 EOF
 # History persistence mirrors the Dockerfile's devcontainer-tools stage; the
 # agent autonomy defaults below mirror post-create.sh.
