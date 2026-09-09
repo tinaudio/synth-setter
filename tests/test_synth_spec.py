@@ -153,7 +153,8 @@ class TestSynthsTable:
         ).is_file()
 
         assert packaged == (
-            synth.param_spec_name in {"cardinal", "surge_4", "surge_simple", "surge_xt"}
+            synth.param_spec_name
+            in {"cardinal", "surge_4", "surge_simple", "surge_xt", "ultramaster_kr106"}
         )
 
     @pytest.mark.parametrize(

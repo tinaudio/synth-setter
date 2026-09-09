@@ -199,13 +199,48 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("cfg_pyfdn_train", ["pyfdn/flow_ast_online"], indirect=True)
+@pytest.mark.parametrize(
+    ("cfg_pyfdn_train", "width", "control"),
+    [
+        (("pyfdn/flow", "pyfdn_n8_mono_kronecker"), 36, "kronecker_angles"),
+        (("pyfdn/flow", "pyfdn_n8_mono_householder_vector"), 35, "householder_vector"),
+    ],
+    indirect=["cfg_pyfdn_train"],
+)
+def test_train_pyfdn_derived_feedback_one_step_predicts_widened_row(
+    cfg_pyfdn_train: DictConfig, width: int, control: str
+) -> None:
+    """Selecting a derived-feedback synth widens the model head and its per-param metrics.
+
+    :param cfg_pyfdn_train: One-step configuration for the selected pyFDN identity.
+    :param width: Encoded row width the model head must predict.
+    :param control: Learned feedback-control group that must appear in the metrics.
+    """
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.trainer.limit_val_batches = 1
+        cfg_pyfdn_train.trainer.val_check_interval = 1
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    metrics, objects = train(cfg_pyfdn_train)
+
+    assert cfg_pyfdn_train.model.num_params == width
+    assert objects["trainer"].global_step == 1
+    assert torch.isfinite(metrics[f"train/per_param_flow_mse/{control}"])
+    assert torch.isfinite(metrics[f"val/per_param_mse_spec_quantized/{control}"])
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "cfg_pyfdn_train",
+    ["pyfdn/flow_ast_online", "pyfdn/flow_cepstrum_online"],
+    indirect=True,
+)
 def test_train_pyfdn_online_ast_one_step_uses_waveforms(
     cfg_pyfdn_train: DictConfig,
 ) -> None:
-    """Train the online-AST comparison from stored pyFDN waveforms.
+    """Train each waveform-in AST front end from stored pyFDN waveforms.
 
-    :param cfg_pyfdn_train: One-step online-AST pyFDN configuration.
+    :param cfg_pyfdn_train: One-step online-AST or cepstral-AST pyFDN configuration.
     """
     HydraConfig().set_config(cfg_pyfdn_train)
 
