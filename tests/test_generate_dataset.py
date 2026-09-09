@@ -1991,6 +1991,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
                 "-m",
                 "synth_setter.cli.generate_dataset",
                 "experiment=generate_dataset/smoke-shard-with-oracle-eval",
+                "oracle_eval.upload=true",
                 f"r2.prefix_root={prefix_root}",
                 f"run_id={run_id}",
                 f"hydra.run.dir={run_dir}",

@@ -54,8 +54,8 @@ finalize_inline: false
 # finalize_inline=true. Local-run only.
 oracle_eval_inline: false
 oracle_eval:
-  # Operative only when oracle_eval_inline=true; false keeps eval artifacts local.
-  upload: true
+  # Opt-in archival applies only when oracle_eval_inline=true.
+  upload: false
 
 # Null default: ``DatasetSpec._drop_null_run_id`` mode='before' validator pops
 # a ``None`` ``run_id`` so the field's ``default_factory`` (``_default_run_id``)
