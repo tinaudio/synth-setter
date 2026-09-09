@@ -13,6 +13,7 @@ from hydra import compose, initialize_config_module
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
+    ContinuousParameter,
     DiscreteLiteralParameter,
     decode_model_output,
 )
