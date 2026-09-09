@@ -380,7 +380,8 @@ if [[ -f "${SS_REPO_DIR}/.env" ]]; then set -a; . "${SS_REPO_DIR}/.env"; set +a;
 EOF
 grep -qs "$PROFILE" "$HOME/.bashrc" || printf '\n. %s\n' "$PROFILE" >> "$HOME/.bashrc"
 
-# Per-worktree venv isolation, verbatim from .devcontainer/post-create.sh (#1339).
+# Per-worktree venv isolation, functionally identical to the block
+# .devcontainer/post-create.sh appends (#1339).
 if ! grep -qs 'Per-worktree venv isolation' "$HOME/.bashrc"; then
   cat >>"$HOME/.bashrc" <<'EOF'
 
@@ -404,7 +405,8 @@ grep -qs "ss-login-landing" "$HOME/.bashrc" || cat >>"$HOME/.bashrc" <<EOF
 if [[ \$- == *i* && -d "${IMAGE_WORKDIR}" ]]; then cd "${IMAGE_WORKDIR}"; fi
 [[ -z "\${VIRTUAL_ENV:-}" && -f "${SS_VENV}/bin/activate" ]] && source "${SS_VENV}/bin/activate"
 EOF
-# Persisted history + agent autonomy defaults, as post-create.sh seeds them.
+# History persistence mirrors the Dockerfile's devcontainer-tools stage; the
+# agent autonomy defaults below mirror post-create.sh.
 if ! grep -qs 'HISTFILE=/commandhistory' "$HOME/.bashrc"; then
   mkdir -p /commandhistory && touch /commandhistory/.bash_history
   printf '%s\n' "export PROMPT_COMMAND='history -a'" "export HISTFILE=/commandhistory/.bash_history" >> "$HOME/.bashrc"
