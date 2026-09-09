@@ -373,9 +373,9 @@ def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
     assert predicted.shape == target.shape == (176_400,)
     assert np.isfinite(predicted).all() and np.any(predicted)
     assert np.isfinite(target).all() and np.any(target)
-    mean_metrics = {key: value for key, value in audio_metrics.items() if key.endswith("_mean")}
-    assert mean_metrics
-    assert all(math.isfinite(float(value)) for value in mean_metrics.values())
+    assert math.isfinite(audio_metrics["audio/mss_mean"])
+    assert math.isfinite(audio_metrics["audio/pyfdn_match_impulse_response_mean"])
+    assert math.isfinite(audio_metrics["audio/pyfdn_match_energy_decay_mean"])
 
 
 @pytest.mark.slow
