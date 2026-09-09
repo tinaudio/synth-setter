@@ -36,7 +36,6 @@ from lightning.pytorch import Trainer
 from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationKeyError
 from PIL import Image
-from wandb.sdk.lib.service.service_token import WandbServiceConnectionError
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
@@ -110,6 +109,8 @@ NUM_STEREO_AUDIO_METRICS = 6
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
 _ORACLE_EXPERIMENT = "surge/fake_oracle"
+# The MPS-only threshold preserves the CPU oracle envelope; see #3354.
+_MPS_ORACLE_MLDR_MAX = 6.0
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
 
 
@@ -1570,9 +1571,12 @@ def test_train_eval_surge_xt(
             f"oracle rms too low: {per_sample['rms'].tolist()}"
         )
         max_mldr = per_sample["mldr"].max()
-        if cfg_surge_real_train.trainer.accelerator == "mps" and max_mldr >= bounds.mldr_max:
-            pytest.xfail("#3354: MPS Surge render jitter can exceed the oracle MLDR bound")
-        assert max_mldr < bounds.mldr_max, f"oracle mldr too high: {per_sample['mldr'].tolist()}"
+        mldr_max = (
+            _MPS_ORACLE_MLDR_MAX
+            if cfg_surge_real_train.trainer.accelerator == "mps"
+            else bounds.mldr_max
+        )
+        assert max_mldr < mldr_max, f"oracle mldr too high: {per_sample['mldr'].tolist()}"
 
 
 @pytest.mark.requires_vst
@@ -1854,11 +1858,6 @@ def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
         object_dict["datamodule"].test_dataloader()
 
 
-@pytest.mark.xfail(
-    raises=WandbServiceConnectionError,
-    reason="#2564: shared offline W&B service sockets can disappear during the full suite",
-    strict=False,
-)
 def test_train_experiment_labels_offline_run_preserves_display_metadata(
     cfg_train_wandb_labels: DictConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:

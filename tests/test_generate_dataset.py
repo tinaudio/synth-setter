@@ -50,7 +50,6 @@ import pytest
 from lance.file import LanceFileReader
 from omegaconf import DictConfig, OmegaConf, open_dict
 from pedalboard.io import AudioFile
-from wandb.sdk.lib.service.service_token import WandbServiceConnectionError
 
 from synth_setter.cli.finalize_dataset import finalize_lance
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
@@ -88,6 +87,7 @@ from tests.helpers.wandb_offline import read_history_rows, read_run_labels, read
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
 # only keys in ``metrics.json`` (see ``synth_setter.evaluation.compute_audio_metrics``).
 _ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms", "mldr")
+_ORACLE_EVAL_SUBPROCESS_TIMEOUT_SECONDS = 1200
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _REAL_PLUGIN_VST3 = (
@@ -360,11 +360,6 @@ def test_cfg_dataset_default_plugin_reload_cadence_is_once(
 
 
 @pytest.mark.fake_vst
-@pytest.mark.xfail(
-    raises=WandbServiceConnectionError,
-    reason="#2564: shared offline W&B service sockets can disappear during the full suite",
-    strict=False,
-)
 @pytest.mark.parametrize(
     ("project_env", "expected_project"),
     [(None, "synth-setter-generate-dataset"), ("synth-setter-citest", "synth-setter-citest")],
@@ -442,7 +437,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         Path(cfg_dataset.paths.output_dir).glob("wandb/offline-run-*/run-*.wandb")
     )
     if not wandb_binaries:
-        pytest.xfail("#2564: the shared offline W&B service produced no run artifact")
+        pytest.xfail("#2954: offline W&B run discovery can be empty under the full suite")
     assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
     wandb_binary = wandb_binaries[0]
     actual_project = read_run_project(wandb_binary)
@@ -512,9 +507,6 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     assert renderer_invocations == 0, (
         f"resume re-rendered {renderer_invocations} shard(s) already present in R2"
     )
-    if project_env is None:
-        pytest.xfail("#3290: the default W&B project case retains a hard-coded CI assertion")
-    assert actual_project == "synth-setter-citest"
 
 
 @pytest.mark.fake_vst
@@ -2093,26 +2085,23 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
         "SYNTH_SETTER_WORKSPACE": str(tmp_path),
     }
     try:
-        try:
-            result = subprocess.run(  # noqa: S603 — args are test-controlled literals
-                [
-                    sys.executable,
-                    "-m",
-                    "synth_setter.cli.generate_dataset",
-                    "experiment=generate_dataset/smoke-shard-with-oracle-eval",
-                    "oracle_eval.upload=true",
-                    f"r2.prefix_root={prefix_root}",
-                    f"run_id={run_id}",
-                    f"hydra.run.dir={run_dir}",
-                ],
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=600,
-            )
-        except subprocess.TimeoutExpired:
-            pytest.xfail("#2947: inline oracle evaluation can exceed 600 seconds in CI")
+        result = subprocess.run(  # noqa: S603 — args are test-controlled literals
+            [
+                sys.executable,
+                "-m",
+                "synth_setter.cli.generate_dataset",
+                "experiment=generate_dataset/smoke-shard-with-oracle-eval",
+                "oracle_eval.upload=true",
+                f"r2.prefix_root={prefix_root}",
+                f"run_id={run_id}",
+                f"hydra.run.dir={run_dir}",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_ORACLE_EVAL_SUBPROCESS_TIMEOUT_SECONDS,
+        )
         assert result.returncode == 0, (
             f"generate-dataset CLI exited {result.returncode}\n"
             f"--- STDOUT (tail) ---\n{result.stdout[-2000:]}\n"

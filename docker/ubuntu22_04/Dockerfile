@@ -531,8 +531,8 @@ RUN ln -s /artifacts/studiorack/node_modules node_modules
 # needed here; the `devcontainer-tools` stage adds them for the Codex CLI.
 COPY --from=node:22-bullseye-slim /usr/local/bin/node /usr/local/bin/node
 
-# Run not-slow unit tests after the managed plugins pass their load checks.
-RUN pytest -k "not slow" -v
+# Run CPU unit tests after the managed plugins pass their load checks.
+RUN pytest -m "not slow and not gpu and not mps" -v
 
 # No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with
 # `dockerArgs: "bash -c '<base64-setup>'"`, and a baked-in ENTRYPOINT would
