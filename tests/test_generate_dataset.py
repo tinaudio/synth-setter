@@ -1973,6 +1973,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
     prefix_root = (
         f"test-runs/test_oracle_eval_inline_writes_bounded_audio_metrics/{uuid.uuid4().hex[:12]}"
     )
+    run_id = f"oracle-probe-test-{uuid.uuid4().hex}"
     run_dir = tmp_path / "hydra_run"
     worktree_src = Path(__file__).resolve().parents[1] / "src"
     # Prepend this worktree's src so the subprocess imports the same
@@ -1991,6 +1992,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
                 "synth_setter.cli.generate_dataset",
                 "experiment=generate_dataset/smoke-shard-with-oracle-eval",
                 f"r2.prefix_root={prefix_root}",
+                f"run_id={run_id}",
                 f"hydra.run.dir={run_dir}",
             ],
             env=env,
@@ -2004,7 +2006,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             f"--- STDOUT (tail) ---\n{result.stdout[-2000:]}\n"
             f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
         )
-        assert result.stderr.count("oracle probe uploaded -> r2://") == 3
+        assert result.stderr.count("oracle_probe_uploaded") == 3
 
         eval_configs = list(run_dir.glob("oracle_eval/*/*/.hydra/config.yaml"))
         assert len(eval_configs) == 3
@@ -2052,6 +2054,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
         eval_run_ids = {path.parents[1].name for path in eval_configs}
         assert len(eval_run_ids) == 1
         eval_run_id = eval_run_ids.pop()
+        assert eval_run_id == run_id
         probe_run_uri = (
             f"r2://{cfg_dataset.r2.bucket}/probes/dataset-oracle/smoke-shard/{eval_run_id}/"
         )

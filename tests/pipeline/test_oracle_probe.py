@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import uuid
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -16,6 +16,7 @@ from synth_setter.evaluation.oracle_probe import (
 )
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
+from synth_setter.utils.logging_utils import resolve_git_sha
 
 
 def _write_eval_artifacts(eval_dir: Path) -> None:
@@ -56,7 +57,7 @@ def _provenance(spec: DatasetSpec, split: Split = "test") -> OracleProbeProvenan
 def test_upload_oracle_probe_materializes_only_probe_artifacts(
     tmp_path: Path,
     fake_r2_remote: Path,
-    valid_dataset_spec_kwargs: dict[str, Any],
+    valid_dataset_spec_kwargs: dict[str, object],
 ) -> None:
     """Real rclone upload keeps config, audio, metrics, and strict provenance only.
 
@@ -64,7 +65,7 @@ def test_upload_oracle_probe_materializes_only_probe_artifacts(
     :param fake_r2_remote: Local rclone remote root.
     :param valid_dataset_spec_kwargs: Valid source dataset fields.
     """
-    spec = DatasetSpec(**valid_dataset_spec_kwargs)
+    spec = DatasetSpec.model_validate(valid_dataset_spec_kwargs)
     eval_dir = tmp_path / "eval"
     _write_eval_artifacts(eval_dir)
 
@@ -99,7 +100,56 @@ def test_upload_oracle_probe_materializes_only_probe_artifacts(
     ]
     payload = json.loads((landed / "provenance.json").read_text())
     assert OracleProbeProvenance.model_validate(payload) == _provenance(spec)
+    assert payload["evaluation_git_sha"] == resolve_git_sha()
     assert payload["source_render"] == payload["candidate_render"]
+
+
+def test_upload_oracle_probe_payload_failure_leaves_no_provenance_record(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    valid_dataset_spec_kwargs: dict[str, object],
+) -> None:
+    """A partial payload transfer cannot publish the provenance commit record.
+
+    :param tmp_path: Temporary eval-run root.
+    :param fake_r2_remote: Local rclone remote root.
+    :param monkeypatch: Patches only the payload-failure seam.
+    :param valid_dataset_spec_kwargs: Valid source dataset fields.
+    """
+    spec = DatasetSpec.model_validate(valid_dataset_spec_kwargs)
+    eval_dir = tmp_path / "eval"
+    _write_eval_artifacts(eval_dir)
+    landed = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / "probes"
+        / "dataset-oracle"
+        / spec.task_name
+        / spec.run_id
+        / "launch-failed"
+        / "test"
+    )
+
+    real_upload_dir = r2_io.upload_dir
+
+    def upload_payload_then_report_failure(
+        local_dir: Path, destination: str, *, exclude: str | None = None
+    ) -> None:
+        real_upload_dir(local_dir, destination, exclude=exclude)
+        raise subprocess.CalledProcessError(returncode=1, cmd="rclone copy")
+
+    monkeypatch.setattr(r2_io, "upload_dir", upload_payload_then_report_failure)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        upload_oracle_probe(
+            eval_dir,
+            r2=spec.r2,
+            launch_id="launch-failed",
+            provenance=_provenance(spec),
+        )
+
+    assert not (landed / "provenance.json").exists()
 
 
 def test_new_oracle_probe_launch_id_returns_unique_names() -> None:
@@ -111,7 +161,7 @@ def test_new_oracle_probe_launch_id_returns_unique_names() -> None:
 @pytest.mark.r2
 def test_upload_oracle_probe_real_r2_round_trip(
     tmp_path: Path,
-    valid_dataset_spec_kwargs: dict[str, Any],
+    valid_dataset_spec_kwargs: dict[str, object],
 ) -> None:
     """A probe uploaded to real R2 can be downloaded with its provenance intact.
 
@@ -121,7 +171,7 @@ def test_upload_oracle_probe_real_r2_round_trip(
     nonce = uuid.uuid4().hex
     valid_dataset_spec_kwargs["task_name"] = f"oracle-probe-test-{nonce}"
     valid_dataset_spec_kwargs["run_id"] = f"run-{nonce}"
-    spec = DatasetSpec(**valid_dataset_spec_kwargs)
+    spec = DatasetSpec.model_validate(valid_dataset_spec_kwargs)
     eval_dir = tmp_path / "eval"
     _write_eval_artifacts(eval_dir)
     launch_id = new_oracle_probe_launch_id()
