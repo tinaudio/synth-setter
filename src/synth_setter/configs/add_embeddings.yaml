@@ -2,6 +2,7 @@
 defaults:
   - paths: default
   - hydra: default
+  - logger: wandb
   # Unselected by default — only re-rendering embeddings need a renderer. Select the
   # pair together, e.g. `render=torchsynth synth=torchsynth_adsr` (#2565).
   - render: null

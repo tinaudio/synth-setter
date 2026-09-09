@@ -709,16 +709,16 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
 
 
 @pytest.fixture(scope="function")
-def cfg_dataset_kr106_2m(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose the production-scale KR-106 dataset experiment with temporary paths.
+def cfg_dataset_kr106_smoke(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the KR-106 smoke experiment with temporary paths.
 
     :param tmp_path: Per-test output/work/log root.
-    :yields DictConfig: KR-106 cfg with ``tmp_path``-pinned paths.
+    :yields DictConfig: KR-106 smoke cfg with ``tmp_path``-pinned paths.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
-            overrides=["experiment=generate_dataset/ultramaster-kr106-lance-2m-40k-10k"],
+            overrides=["experiment=generate_dataset/ultramaster-kr106-lance-smoke"],
         )
         with open_dict(cfg):
             _set_workspace_root(cfg)
@@ -1835,6 +1835,7 @@ def augment_lance_splits_with_all_embeddings(
         sys.executable,
         "-m",
         "synth_setter.pipeline.data.add_embeddings",
+        "logger=[]",
         f"lance_uri={train_uri}",
         f"embeddings=[{','.join(_EMBEDDING_KEYS)}]",
         f"param_spec_name={param_spec_name}",
@@ -2583,15 +2584,18 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 # Lance datamodule smoke fixtures.
 
 _PYFDN_LANCE_SMOKE_MEL_SHAPE = (1, 128, 401)
-_PYFDN_LANCE_SMOKE_NUM_PARAMS = len(param_specs["pyfdn_n8_mono_householder"])
+_PYFDN_LANCE_SMOKE_SYNTH = "pyfdn_n8_mono_householder"
 
 
-def _write_pyfdn_lance_smoke_split(path: Path, *, seed: int, include_sketch: bool) -> None:
-    """Write one fixed-Householder pyFDN split for entrypoint tests.
+def _write_pyfdn_lance_smoke_split(
+    path: Path, *, seed: int, include_sketch: bool, num_params: int
+) -> None:
+    """Write one pyFDN split for entrypoint tests.
 
     :param path: Output ``.lance`` split.
     :param seed: RNG seed distinguishing splits.
     :param include_sketch: Whether to persist the temporal reverb profile.
+    :param num_params: Encoded width of the selected pyFDN spec.
     """
     from synth_setter.conditioning import PYFDN_SKETCH_CONTROLS
     from synth_setter.pipeline.data.lance_shard import (
@@ -2604,7 +2608,7 @@ def _write_pyfdn_lance_smoke_split(path: Path, *, seed: int, include_sketch: boo
     columns = {
         "audio": rng.uniform(-1.0, 1.0, (1, 1, 176_400)).astype(np.float16),
         "mel_spec": rng.standard_normal((1, *_PYFDN_LANCE_SMOKE_MEL_SHAPE)).astype(np.float32),
-        "param_array": rng.random((1, _PYFDN_LANCE_SMOKE_NUM_PARAMS)).astype(np.float32),
+        "param_array": rng.random((1, num_params)).astype(np.float32),
     }
     batch = shard_record_batch(columns)
     if include_sketch:
@@ -2616,13 +2620,15 @@ def _write_pyfdn_lance_smoke_split(path: Path, *, seed: int, include_sketch: boo
 
 @pytest.fixture
 def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfig:
-    """Compose a one-step pyFDN flow run over fixed-Householder Lance rows.
+    """Compose a one-step pyFDN flow run over synthetic Lance rows.
 
     :param tmp_path: Per-test dataset and output root.
-    :param request: Optional indirect experiment-name parameter.
+    :param request: Optional indirect parameter: an experiment name, or an
+        ``(experiment, synth)`` pair selecting a non-default pyFDN identity.
     :returns: Ready-to-run training configuration.
     """
-    experiment = getattr(request, "param", "pyfdn/flow")
+    param = getattr(request, "param", "pyfdn/flow")
+    experiment, synth = (param, _PYFDN_LANCE_SMOKE_SYNTH) if isinstance(param, str) else param
     dataset_root = tmp_path / "pyfdn-lance-data"
     dataset_root.mkdir()
     for seed, split in enumerate(("train", "val", "test")):
@@ -2630,6 +2636,7 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
             dataset_root / f"{split}.lance",
             seed=seed,
             include_sketch="sketch" in experiment,
+            num_params=len(param_specs[synth]),
         )
     np.savez(
         dataset_root / "stats.npz",
@@ -2642,7 +2649,7 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=[f"experiment={experiment}", "trainer=cpu"],
+            overrides=[f"experiment={experiment}", f"synth={synth}", "trainer=cpu"],
         )
         with open_dict(cfg):
             cfg.paths.root_dir = str(operator_workspace())
@@ -2665,9 +2672,7 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
             cfg.datamodule.pin_memory = False
             cfg.model.compile = False
             cfg.model.scheduler = None
-            encoder = (
-                cfg.model.encoder.backbone if "ast_online" in experiment else cfg.model.encoder
-            )
+            encoder = cfg.model.encoder.backbone if "_online" in experiment else cfg.model.encoder
             encoder.d_model = 16
             encoder.n_heads = 1
             encoder.n_layers = 1

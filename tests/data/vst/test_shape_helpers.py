@@ -28,6 +28,7 @@ from synth_setter.data.vst.shapes import (
     mel_dataset_shape,
     mel_hop_length,
     mel_n_frames_from_samples,
+    stft_n_frames_from_samples,
     mel_n_fft,
     mel_n_frames,
     param_array_dataset_shape,
@@ -115,6 +116,25 @@ def test_mel_n_frames_matches_legacy_inline_calc() -> None:
     assert mel_n_frames(16000, 4.0) == 401
     # 44.1k * 4s = 176400 samples, hop = 441 -> 1 + 176400 // 441 = 401.
     assert mel_n_frames(44100, 4.0) == 401
+
+
+def test_stft_n_frames_from_samples_matches_centered_frame_count() -> None:
+    """``1 + samples // hop`` frames, the count ``center=True`` transforms produce."""
+    assert stft_n_frames_from_samples(176_400, 11_025) == 17
+    assert stft_n_frames_from_samples(44_100, 11_025) == 5
+
+
+@pytest.mark.parametrize(("num_samples", "hop_length"), [(176_400, 0), (176_400, -1), (-1, 441)])
+def test_stft_n_frames_from_samples_invalid_geometry_raises(
+    num_samples: int, hop_length: int
+) -> None:
+    """A non-positive hop or negative length fails loudly at resolver time.
+
+    :param num_samples: Waveform length under test.
+    :param hop_length: Frame stride under test.
+    """
+    with pytest.raises(ValueError):
+        stft_n_frames_from_samples(num_samples, hop_length)
 
 
 def test_audio_dataset_shape_matches_legacy_inline_calc() -> None:

@@ -110,12 +110,10 @@ groups, and `uv pip` only with an explicit `--group`, so a plain
 
 Lite CI jobs install with a bare `pip install -e .` (no `--no-deps`, no
 hand-picked deps) plus an import smoke-guard. Full installs that cannot honor
-`[tool.uv.sources]` (plain pip / conda) drive the heavy stack through uv groups:
+`[tool.uv.sources]` (plain pip) drive the heavy stack through uv groups:
 
 - `Makefile`'s `make install` → `uv pip install --group dev -e .`.
 - `scripts/sync_worker_checkout.sh` (SkyPilot worker) → `uv pip install --group runtime -e .`.
-- `environment.yaml` + `.github/workflows/test-conda.yml` (Conda) → conda owns
-  torch; `uv pip install --group dev -e .` pulls the rest.
 - `.github/workflows/docs.yml` (mkdocs build) → `uv pip install --group dev`/`--group docs --group runtime`.
 - `.github/workflows/test-dataset-finalization.yml` (oracle smoke) → `uv pip install --group dev -e .`.
 

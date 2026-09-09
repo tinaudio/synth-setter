@@ -218,6 +218,7 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
             id="datamodule",
         ),
         pytest.param("train.yaml", ["experiment=pyfdn/flow"], id="train"),
+        pytest.param("train.yaml", ["experiment=pyfdn/flow_cepstrum_online"], id="cepstrum"),
         pytest.param(
             "eval.yaml",
             ["experiment=pyfdn/flow", "ckpt_path=null"],
@@ -239,6 +240,18 @@ def test_pyfdn_configs_compose_without_external_source(
     assert "source_audio_path" not in cfg.datamodule
     assert "source_audio_sha256" not in cfg.datamodule
     assert cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.LanceVSTDataModule"
+
+
+def test_pyfdn_cepstrum_online_experiment_sizes_ast_to_quefrency_grid() -> None:
+    """The cepstral AST's patch grid follows the front end's quefrency window and hop."""
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow_cepstrum_online"])
+
+    frontend = cfg.model.encoder.frontend
+    assert frontend._target_.endswith("CepstrogramFrontend")
+    assert frontend.in_dim == 176_400
+    assert list(cfg.model.encoder.backbone.spec_shape) == [2_500, 17]
+    assert cfg.model.conditioning == "audio"
+    assert cfg.datamodule.conditioning == "audio"
 
 
 @pytest.mark.parametrize(
@@ -602,6 +615,7 @@ def _conditioning_profile_names() -> list[str]:
 _WAVEFORM_CONDITIONING_PROFILES = frozenset(
     {
         "ast_online",
+        "cepstrum_online",
         "clap_online",
         "log_mel",
         "pupujepa_large_online",
