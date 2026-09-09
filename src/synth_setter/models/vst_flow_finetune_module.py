@@ -13,7 +13,6 @@ Typical usage:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -28,6 +27,10 @@ from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
 )
+from synth_setter.models.components.pretrained_flow import (
+    PretrainedBaseMixin,
+    load_pretrained_flow,
+)
 from synth_setter.models.components.simulator_control import (
     DEFAULT_CONTROL_T_MIN,
     ControlledFlow,
@@ -36,8 +39,6 @@ from synth_setter.models.components.simulator_control import (
     learned_control_signal,
 )
 from synth_setter.models.vst_flow_matching_module import (
-    _LEGACY_PARAMETERIZATION,
-    _PARAMETERIZATION_KEY,
     ControlTokenBranches,
     TrainStepOutputs,
     VSTFlowMatchingModule,
@@ -49,7 +50,6 @@ logger = logging.getLogger(__name__)
 
 type ControlMode = Literal["gradient_spectral", "learned_audio", "null"]
 
-_FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 _BATCH_PARAMS_SHAPE = "batch params"
 _BATCH_AUDIO_SHAPE = "batch samples"
 _BATCH_TIME_SHAPE = "batch 1"
@@ -120,7 +120,7 @@ def _validate_arm(
         validate_audio_feedback_runtime(compiled=True, world_size=1)
 
 
-class VSTFlowFinetuneModule(VSTFlowMatchingModule):
+class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
     """Pretrained flow whose velocity a simulator-fed control network learns to correct."""
 
     @jaxtyped(typechecker=beartype)
@@ -131,7 +131,7 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         optimizer: Callable[..., torch.optim.Optimizer],
         scheduler: Callable[..., object] | None,
         *,
-        base_checkpoint: str | Path,
+        base_checkpoint: str | Path | None,
         num_params: int,
         sample_rate: int,
         signal_length: int,
@@ -149,7 +149,8 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         :param vector_field: Velocity field of the same shape the base run trained.
         :param optimizer: ``functools.partial``-style optimizer factory.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
-        :param base_checkpoint: Checkpoint holding the pretrained flow to refine.
+        :param base_checkpoint: Checkpoint holding the pretrained flow to refine, or ``None``
+            when a Lightning checkpoint of this finetune supplies every weight (eval, resume).
         :param num_params: Parameter-vector width the field operates on.
         :param sample_rate: Render sample rate in Hz.
         :param signal_length: Rendered samples per row; must match the target audio.
@@ -187,7 +188,9 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         # get deep-copied; the group admits large weight-normalized pretrained encoders.
         self.save_hyperparameters(ignore=["cost", "control_encoder"], logger=False)
         self.num_params = num_params
-        self._load_pretrained(base_checkpoint)
+        self.base_checkpoint_sha256 = (
+            load_pretrained_flow(self, base_checkpoint) if base_checkpoint is not None else None
+        )
         self.requires_grad_(False)
 
         self.control_mode: ControlMode = control_mode
@@ -236,44 +239,6 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         """Hold the pretrained encoder and field in eval mode."""
         self.encoder.eval()
         self.vector_field.flow.eval()
-
-    @jaxtyped(typechecker=beartype)
-    def _load_pretrained(self, checkpoint: str | Path) -> None:
-        """Restore every pretrained weight, refusing a checkpoint that does not fit.
-
-        Runs before the control is attached, so the module's own shape is exactly the base
-        run's: any missing or unexpected key means the wrong checkpoint, and a silent
-        ``strict=False`` here would "finetune" a randomly initialised field.
-
-        :param checkpoint: Path to a Lightning checkpoint of the base run.
-        :raises ValueError: The payload has no ``state_dict``, or its keys do not match.
-        """
-        digest = hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()
-        # The config records a mutable path, so without this two arms started from
-        # different flows would still read as comparable runs.
-        logger.info("base_checkpoint path=%s sha256=%s", checkpoint, digest)
-        payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-        state = payload.get("state_dict") if isinstance(payload, dict) else None
-        if not isinstance(state, dict):
-            raise ValueError(f"{checkpoint} holds no Lightning state_dict")
-        # Loaded through load_state_dict, so the base module's own load hook never sees
-        # the stamp; endpoint weights have velocity shapes and would freeze as velocities.
-        stamped = payload.get(_PARAMETERIZATION_KEY, _LEGACY_PARAMETERIZATION)
-        if stamped != "velocity":
-            raise ValueError(
-                f"{checkpoint} trained parameterization={stamped!r}; simulator feedback "
-                "requires a velocity base"
-            )
-        result = self.load_state_dict(state, strict=False)
-        # A frozen pretrained backbone is stripped on save and re-resolved from its own
-        # weights, so its absence is expected; nothing else may be.
-        missing = [k for k in result.missing_keys if not k.startswith(_FROZEN_BACKBONE_PREFIX)]
-        if missing or result.unexpected_keys:
-            raise ValueError(
-                f"{checkpoint} does not match this model: "
-                f"{len(missing)} missing key(s) {missing[:5]}, "
-                f"{len(result.unexpected_keys)} unexpected key(s) {result.unexpected_keys[:5]}"
-            )
 
     @jaxtyped(typechecker=beartype)
     def _control_signal_width(self) -> int:

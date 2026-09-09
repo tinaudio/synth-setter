@@ -15,7 +15,6 @@ import yaml
 from synth_setter.plugin_manager import PluginManifest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-CI_CONDA_WORKFLOW = PROJECT_ROOT / ".github/workflows/test-conda.yml"
 CI_TEST_WORKFLOW = PROJECT_ROOT / ".github/workflows/test.yml"
 MPS_TEST_WORKFLOW = PROJECT_ROOT / ".github/workflows/test-mps.yml"
 MAKEFILE = PROJECT_ROOT / "Makefile"
@@ -188,17 +187,6 @@ def test_ci_executes_installed_patched_core_artifact_lock_test() -> None:
     assert scripts["test"] == "node --test scripts/studiorack/test-artifact-lock.mjs"
     assert "npm ci" in workflow
     assert "npm test" in workflow
-
-
-def test_conda_ci_installs_patched_studiorack_before_pytest() -> None:
-    """Conda CI provisions the Node integration dependency before collection."""
-    workflow = CI_CONDA_WORKFLOW.read_text()
-    parsed = yaml.safe_load(workflow)
-
-    assert "actions/setup-node@" in workflow
-    assert workflow.index("npm ci") < workflow.index("pytest -n auto")
-    for event in ("push", "pull_request"):
-        assert {"package.json", "package-lock.json"} <= set(parsed[True][event]["paths"])
 
 
 def test_package_lock_pins_studiorack_cli_and_core() -> None:

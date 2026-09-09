@@ -853,7 +853,7 @@ Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are 
 
 W&B serves as a lightweight observability layer for the pipeline — a few key metrics and the dataset as a first-class artifact. It is not a monitoring dashboard or a log aggregator. W&B is an index and lineage tracker, not the authoritative dataset store. R2 holds the data; `dataset.json` holds the metadata; W&B points to both.
 
-The finalize stage initializes W&B with `wandb.init(project="synth-setter", job_type="data-generation")`.
+The finalize stage opens its own W&B run (`id={spec.run_id}-finalize`, `job_type=finalize`) rather than resuming the data-generation run; see [storage-provenance-spec.md §7](storage-provenance-spec.md#7-job_type-values) for the authoritative `job_type` list.
 
 ### Metadata Placement
 
