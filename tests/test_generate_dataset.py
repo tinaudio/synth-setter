@@ -436,29 +436,37 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     wandb_binaries = list(
         Path(cfg_dataset.paths.output_dir).glob("wandb/offline-run-*/run-*.wandb")
     )
-    if not wandb_binaries:
-        pytest.xfail("#2954: offline W&B run discovery can be empty under the full suite")
-    assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
-    wandb_binary = wandb_binaries[0]
-    actual_project = read_run_project(wandb_binary)
-    assert read_run_labels(wandb_binary) == (
-        "generate-dataset-smoke-shard",
-        ("generate_dataset", "smoke-shard"),
-    )
-    assert actual_project == expected_project
-    rows = read_history_rows(
-        wandb_binary,
-        until=lambda scanned: (
-            sum("shard/samples_rejected_clipped" in row for row in scanned) == 3
-            and any("generation/samples_rejected_clipped" in row for row in scanned)
-        ),
-    )
-    shard_rows = [row for row in rows if "shard/samples_rejected_clipped" in row]
-    assert [json.loads(row["shard/samples_rejected_clipped"]) for row in shard_rows] == [2, 2, 2]
-    assert [json.loads(row["shard/samples_rejected_silent"]) for row in shard_rows] == [3, 3, 3]
-    summary = next(row for row in rows if "generation/samples_rejected_clipped" in row)
-    assert json.loads(summary["generation/samples_rejected_clipped"]) == 6
-    assert json.loads(summary["generation/samples_rejected_silent"]) == 9
+    wandb_run_missing = not wandb_binaries
+    if wandb_binaries:
+        assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
+        wandb_binary = wandb_binaries[0]
+        actual_project = read_run_project(wandb_binary)
+        assert read_run_labels(wandb_binary) == (
+            "generate-dataset-smoke-shard",
+            ("generate_dataset", "smoke-shard"),
+        )
+        assert actual_project == expected_project
+        rows = read_history_rows(
+            wandb_binary,
+            until=lambda scanned: (
+                sum("shard/samples_rejected_clipped" in row for row in scanned) == 3
+                and any("generation/samples_rejected_clipped" in row for row in scanned)
+            ),
+        )
+        shard_rows = [row for row in rows if "shard/samples_rejected_clipped" in row]
+        assert [json.loads(row["shard/samples_rejected_clipped"]) for row in shard_rows] == [
+            2,
+            2,
+            2,
+        ]
+        assert [json.loads(row["shard/samples_rejected_silent"]) for row in shard_rows] == [
+            3,
+            3,
+            3,
+        ]
+        summary = next(row for row in rows if "generation/samples_rejected_clipped" in row)
+        assert json.loads(summary["generation/samples_rejected_clipped"]) == 6
+        assert json.loads(summary["generation/samples_rejected_silent"]) == 9
 
     # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
@@ -507,6 +515,8 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     assert renderer_invocations == 0, (
         f"resume re-rendered {renderer_invocations} shard(s) already present in R2"
     )
+    if wandb_run_missing:
+        pytest.xfail("#2954: offline W&B run discovery can be empty under the full suite")
 
 
 @pytest.mark.fake_vst
