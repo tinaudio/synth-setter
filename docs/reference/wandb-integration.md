@@ -1,6 +1,6 @@
 # W&B Integration Reference
 
-> **Code version**: `5b785f1` (2026-07-15, `feat/val-audio-probe`)
+> **Code version**: `3949374` (2026-09-09, `internal-feat/endpoint-parameterization`)
 > **PyTorch**: see `pyproject.toml` (`[dependency-groups].torch`) · **Lightning**: see `pyproject.toml` (`[dependency-groups].torch`)
 > **Tracking**: #252, #263
 
@@ -98,7 +98,10 @@ when the encoder returns more than one conditioning slot; it is the mean off-dia
 similarity between those slots, so a value approaching one means they have collapsed to one read.
 All three are step-only metrics and have no epoch aggregate.
 `train/per_param_flow_mse/{name}` is the weighted velocity-field objective grouped by ParamSpec
-parameter; it is distinct from `val/per_param_mse/{name}`, which measures sampled endpoint error.
+parameter; `train/per_param_endpoint_mse/{name}` is the same objective when
+`model.parameterization=endpoint` scores the predicted `x1` directly, logged under its own key so
+the two are never overlaid. Both are distinct from `val/per_param_mse/{name}`, which measures
+sampled endpoint error under either parameterization.
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 
