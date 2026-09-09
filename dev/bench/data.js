@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788309517009,
+  "lastUpdate": 1788933316796,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -14946,6 +14946,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.037602126598358154,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "42fe3966d263547dc84b5c364d1d4744d092859b",
+          "message": "internal-feat(evaluation): add MLDR loudness dynamic range audio metric (#3199)\n\n* internal-feat(evaluation): add MLDR loudness dynamic range audio metric\n\nAdd compute_mldr, the DiffVox (arXiv:2504.14735, eq. 14-15) loss, as a\nper-sample \"mldr\" column: L1 distance of the log ratio between a short and a\ndelayed long one-pole energy envelope, summed over the (50 ms, 1 s) and\n(100 ms, 2 s) scales. Constants (torchcomp ms2coef, 1e-8 energy floor,\ncircular alignment roll) mirror the reference implementation so values are\ncomparable to the paper.\n\nEvery consumer that enumerates the metric column set (interactive tool,\nsketch-render CSV, pin snapshots, e2e tests, docs) now carries five metrics.\n\nRefs #3196\n\n* test(evaluation): carry mldr through eval fakes and the metric-list docs\n\nThe shared eval fakes and the fake-plugin train->eval test still modelled\nfour aggregated rows; widen them to the five compute_audio_metrics now\nemits. Also list SOT in the module docstring and MLDR in the glossary.\n\nRefs #3196\n\n* internal-fix(evaluation): pin compute_mldr to DiffVox and check shapes\n\nAddress review: a frozen MLDRLoss value now pins the envelope coefficients,\nhalf-gap alignment, and reduction; a mono target against a stereo prediction\nraises instead of broadcasting; two comments that restated their literals are\ntrimmed.\n\nRefs #3196\n\n* test(evaluation): bound oracle mldr and use distinct stereo channels\n\nAddress review: ORACLE_AUDIO_METRIC_BOUNDS gains mldr_max (4.0, ~3.5x the\nobserved Surge XT oracle maximum) asserted at every oracle gate, and the\nstereo test now feeds different left/right signals so a flattened alignment\nroll cannot pass it.\n\nRefs #3196",
+          "timestamp": "2026-09-09T00:26:03-04:00",
+          "tree_id": "260c01d5565ba0d21ebf7b809ba27aa7c9bb8071",
+          "url": "https://github.com/tinaudio/synth-setter/commit/42fe3966d263547dc84b5c364d1d4744d092859b"
+        },
+        "date": 1788933314624,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.5366389751434326,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.334922555438243,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02196739986538887,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.016051888465881348,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.0138633251190186,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.922895372583298,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.536269664764404,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.567545164525509,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.032376132905483246,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.04223906993865967,
             "unit": "1-cos"
           },
           {
