@@ -184,6 +184,12 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "presets/ultramaster_kr106-base.vstpreset",
         "2.5.13",
     ),
+    "ultramaster_kr106_onehot": (
+        "ultramaster_kr106_onehot",
+        "plugins/Ultramaster KR-106.vst3",
+        "presets/ultramaster_kr106-base.vstpreset",
+        "2.5.13",
+    ),
 }
 
 SYNTHS: Mapping[SynthName, SynthSpec] = MappingProxyType(

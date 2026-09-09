@@ -2941,6 +2941,11 @@ def test_pyfdn_rir_eval_experiment_entrypoint_renders_only_impulse_responses(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.xfail(
+    not Path(os.environ.get("SYNTH_SETTER_PLUGIN_PATH", "plugins/Surge XT.vst3")).exists(),
+    reason="#3299: the non-VST CPU slow lane does not install Surge XT",
+    strict=True,
+)
 def test_third_party_corpus_no_params_renders_against_dataset_audio(tmp_path: Path) -> None:
     """The ``no_params`` render branch scores predictions against the corpus's own audio.
 
