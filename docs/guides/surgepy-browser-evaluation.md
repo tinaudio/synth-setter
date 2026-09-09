@@ -32,7 +32,7 @@ rclone lsd --checksum r2:experiments/browser-evaluation
 ```
 
 The headless Chromium installation is needed for the automated E2E test. For
-interactive use, open the printed URL in a local modern browser. ONNX Runtime
+interactive use, open the printed URL in a local Chromium-based browser. ONNX Runtime
 Web uses its CPU/WASM execution provider; WebGPU is not required or enabled.
 
 R2 must be configured with read access to the fixture prefix. See
@@ -85,8 +85,8 @@ shapes are fixed to the supplied pair.
 
 ## 3. Supply audio, or produce a real SurgePy input
 
-To exercise the whole path without an external recording, generate one real
-four-second stereo clip using the production renderer:
+To exercise both input roles without external recordings, generate two real
+four-second stereo clips with different pitch and timing:
 
 ```bash
 mkdir -p logs/browser-demo
@@ -96,14 +96,18 @@ from synth_setter.data.vst.core import write_wav
 from synth_setter.renderer_factory import make_audio_renderer
 
 render = load_render_config()
-audio = make_audio_renderer(render).render(
-    {}, midi_note=60, velocity=100, note_start_and_end=(0.0, 2.0)
-)
-write_wav(audio, "logs/browser-demo/input.wav", render.sample_rate, render.channels)
+for name, note, velocity, window in (
+    ("sketch", 60, 100, (0.0, 2.0)),
+    ("content", 72, 80, (0.5, 1.5)),
+):
+    audio = make_audio_renderer(render).render(
+        {}, midi_note=note, velocity=velocity, note_start_and_end=window
+    )
+    write_wav(audio, f"logs/browser-demo/{name}.wav", render.sample_rate, render.channels)
 PY
 ```
 
-Alternatively, use separate `sketch.wav` and `content.wav` files. The sketch
+Alternatively, substitute your own `sketch.wav` and `content.wav` files. The sketch
 supplies timing/pitch; the content supplies timbre. The CLI decodes, resamples,
 and pads/crops both to the checkpoint's 44.1 kHz, stereo, four-second grid, then
 applies the pinned statistics and production sketch extraction.
@@ -112,11 +116,11 @@ applies the pinned statistics and production sketch extraction.
 
 ```bash
 uv run --extra cpu synth-setter-sketch \
-  logs/browser-demo/input.wav logs/browser-demo/input.wav \
+  logs/browser-demo/sketch.wav logs/browser-demo/content.wav \
   --checkpoint "$CHECKPOINT" --checkpoint-sha256 "$CHECKPOINT_SHA" \
   --stats "$STATS" --stats-sha256 "$STATS_SHA" \
-  --inference-runtime browser --browser-port 8765 \
-  --content-cfg 2 --sketch-cfg 2 --sample-steps 8 --seed 17 \
+  --inference-runtime browser --browser-port 8765 --device cpu \
+  --content-cfg 2 --sketch-cfg 3 --sample-steps 8 --seed 17 \
   --output-dir logs/browser-demo/evaluation --no-upload
 ```
 
@@ -134,6 +138,11 @@ For a remote devcontainer, forward port 8765 to the same local port and open
 public web deployment. It rejects non-bundle paths and cross-origin prediction
 requests. A session expires after ten minutes without a valid prediction.
 
+The CLI reports CPU preprocessing/export separately from browser WASM inference.
+Browser mode accepts `--device auto` or `--device cpu`; explicit CUDA/MPS settings
+are rejected rather than silently overridden. Runtime assets are checked before
+checkpoint/audio loading.
+
 Eight steps keep the smoke test small. The normal model setting is 200 steps;
 choose the step count explicitly for an experiment. Browser sampling supports
 1–1000 steps and never silently falls back to Python inference. Use a fresh
@@ -145,19 +154,24 @@ overwritten. Multiple CFG arms run as sequential browser sessions.
 The command above produces:
 
 ```text
-logs/browser-demo/evaluation/arms/cfg-c2-s2/
+logs/browser-demo/evaluation/arms/cfg-c2-s3/
 ├── browser/
 │   ├── conditioning.onnx
 │   ├── velocity.onnx
 │   ├── input.json          # normalized inputs, noise, guidance, steps
 │   ├── prediction.json     # accepted browser parameter vector
-│   └── provenance.json    # checkpoint/stats digests, renderer, seed
+│   └── provenance.json     # artifact digests, source revision, renderer, seed
 ├── sketch.wav
 ├── target.wav
 ├── pred.wav
 ├── params.csv
 └── metrics.csv
 ```
+
+`provenance.json` records the producing source checkout's `git_revision`, captured
+before preprocessing. A `-dirty` suffix covers staged, unstaged, and untracked
+changes; installations without their own source checkout report `git-unavailable`
+rather than borrowing the operator's current repository.
 
 `metrics.csv` contains MSS, weighted MFCC, spectral optimal transport, RMS
 similarity, MLDR, and mid/side MLDR. Finite metrics and audible output establish
@@ -174,22 +188,31 @@ same input files, checkpoint, statistics, seed, guidance, and step count.
 ```bash
 mkdir -p logs
 npm test --prefix src/synth_setter/web
-uv run --extra cpu pytest tests/integration/test_browser_surgepy_e2e.py -v \
+uv run --extra cpu pytest tests/models/test_flow_onnx.py \
+  tests/evaluation/test_browser_flow.py tests/evaluation/test_browser_http.py \
+  tests/test_sketch_render.py \
+  tests/integration/test_browser_surgepy_e2e.py -v \
   --basetemp=logs/browser-e2e --junitxml=logs/browser-e2e.xml \
   --cov=synth_setter.evaluation.browser_flow --cov=synth_setter.models.flow_onnx \
-  --cov-report=xml:coverage.xml
+  --cov=synth_setter.cli.sketch_render --cov-report=xml:coverage.xml
 ```
 
-The test generates real SurgePy audio, invokes the real installed CLI, drives
+The E2E test generates distinct real SurgePy inputs, invokes the installed CLI, drives
 Chromium through the shipped UI, and consumes its prediction with the real
 renderer and metric implementations. It also rejects malformed browser output
 and non-bundle file access. There are no mocks, fakes, synthetic checkpoints,
 intercepted requests, or substitute models on this path.
 
-Assertions cover browser/PyTorch parity with identical saved inputs/noise
-(`rtol=atol=2e-4`), parameter width, stereo sample preservation, finite non-silent
-predicted audio, and all six finite metrics. The archived checkpoint is a real
-training output, not a randomly initialized smoke model.
+The native reference independently reconstructs preprocessing from the original
+files and noise from the CLI seed, rather than trusting the browser payload.
+Assertions cover transported input/noise fidelity, asymmetric CFG (content 2,
+sketch 3), browser/PyTorch parameter parity (`rtol=atol=2e-4`), source revision,
+input-role audio fidelity within one PCM16 quantization step, stereo dimensions,
+finite non-silent prediction audio, and all six finite metrics. The checkpoint is
+a real training output, not a randomly initialized smoke model.
+
+The adjacent fast tests cover export/input contracts, direct HTTP rejection and
+authentication behavior, source provenance, and multi-step time-dependent RK4.
 
 [Browser SurgePy flow E2E](../../.github/workflows/browser-flow-e2e.yml) runs this
 same command on trusted PRs and `main` with CPU PyTorch. It installs the real
@@ -202,10 +225,6 @@ WAVs, parameter/metric CSVs, input/prediction/provenance JSON, JUnit report, and
 coverage. Large ONNX graphs are reproducible from the checkpoint and are not
 uploaded as CI artifacts.
 
-The local CPU-wheel production test passed before adding the CI lane. A local
-same-input probe measured maximum browser/PyTorch parameter error of
-`1.84e-6`; this is an observed result, not a tighter portable acceptance bound.
-
 ## Troubleshooting
 
 - **Missing runtime assets:** run `npm ci --prefix src/synth_setter/web`.
@@ -214,7 +233,8 @@ same-input probe measured maximum browser/PyTorch parameter error of
 - **Digest mismatch:** stop and verify artifact provenance; do not disable the
   check or substitute a random-weight model.
 - **Port already in use:** omit `--browser-port` for dynamic allocation, or
-  choose another port and update your forwarding rule.
+  choose another port and update your forwarding rule. Binding failures name the
+  port; retain any exported bundle for diagnosis and use a fresh output directory.
 - **Browser error/timeout:** inspect the page status and terminal; keep the
   generated bundle for diagnosis. No failed prediction is sent to rendering.
 - **Existing arm:** choose a new `--output-dir`; do not mix graph generations.

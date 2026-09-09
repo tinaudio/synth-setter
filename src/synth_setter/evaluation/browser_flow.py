@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 import click
 import torch
-from pydantic import BaseModel, Field, FiniteFloat, ValidationError
+from pydantic import BaseModel, Field, FiniteFloat
 
 from synth_setter.models.flow_onnx import export_flow_onnx
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
@@ -125,6 +125,15 @@ def sample_in_browser(
     return _receive_prediction(routes, token=token, width=width, output_dir=output_dir, port=port)
 
 
+def _browser_origin(port: int) -> str:
+    """Match browser serialization of the loopback HTTP origin.
+
+    :param port: Bound server port.
+    :returns: Loopback origin with HTTP's default port omitted.
+    """
+    return "http://127.0.0.1" + (f":{port}" if port != 80 else "")
+
+
 def _receive_prediction(
     routes: dict[str, Path], *, token: str, width: int, output_dir: Path, port: int
 ) -> torch.Tensor:
@@ -137,6 +146,7 @@ def _receive_prediction(
     :param port: Loopback listening port, or zero for dynamic allocation.
     :returns: Validated float32 prediction row.
     :raises TimeoutError: The browser did not finish within ten minutes.
+    :raises click.ClickException: The requested loopback port cannot be bound.
     """
     prediction: torch.Tensor | None = None
     origin = ""
@@ -196,8 +206,8 @@ def _receive_prediction(
                 result = torch.tensor([response.params], dtype=torch.float32)
                 if not torch.isfinite(result).all():
                     raise ValueError("prediction overflows float32")
-            except (ValueError, ValidationError, TimeoutError) as exc:
-                self.send_error(400, str(exc))
+            except (ValueError, TimeoutError):
+                self.send_error(400, "Invalid browser prediction")
                 return
             (output_dir / "prediction.json").write_text(response.model_dump_json())
             self.send_response(200)
@@ -205,9 +215,13 @@ def _receive_prediction(
             self.end_headers()
             prediction = result
 
-    with HTTPServer(("127.0.0.1", port), Handler) as server:
+    try:
+        server = HTTPServer(("127.0.0.1", port), Handler)
+    except OSError as exc:
+        raise click.ClickException(f"Cannot bind browser port {port}: {exc.strerror}") from exc
+    with server:
         server.timeout = 1
-        origin = f"http://127.0.0.1:{server.server_port}"
+        origin = _browser_origin(server.server_port)
         click.echo(f"Browser evaluation: {origin}")
         deadline = time.monotonic() + 600
         while prediction is None and time.monotonic() < deadline:
