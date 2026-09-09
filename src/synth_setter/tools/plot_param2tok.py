@@ -324,9 +324,10 @@ def plot_assignment(proj: LearntProjection, spec: str):
 
 
 def cosine_self_sim(x: np.ndarray) -> np.ndarray:
-    dot_prod = np.einsum("ik,jk->ij", x, x)
-    norm = np.einsum("ik,ik->i", x, x)
-    return dot_prod / norm
+    vectors = x.astype(np.float64)
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    normalized = np.divide(vectors, norms, out=np.zeros_like(vectors), where=norms != 0)
+    return normalized @ normalized.T
 
 
 def plot_embeds(proj: LearntProjection, spec: str):

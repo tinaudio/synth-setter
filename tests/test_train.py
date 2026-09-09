@@ -26,11 +26,13 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+import wandb
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch import Trainer
 from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationKeyError
+from PIL import Image
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
@@ -44,7 +46,7 @@ from synth_setter.models.components.pretrained_encoder import (
 )
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
-from synth_setter.models.components.transformer import ApproxEquivTransformer
+from synth_setter.models.components.transformer import ApproxEquivTransformer, LearntProjection
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
@@ -87,6 +89,7 @@ from tests.helpers.noise_capture import NoiseCaptureCallback
 from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _RecordingWandbLogger
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
+from tests.helpers.wandb_offline import read_history_rows
 
 NUM_AUDIO_METRICS = 5
 
@@ -1135,6 +1138,83 @@ def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) 
 
     encoder = object_dict["model"].encoder
     assert isinstance(encoder, PretrainedASTEncoder)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.parametrize("accelerator", ["cpu"], indirect=True)
+@pytest.mark.parametrize("param_spec_name", ["surge_4"], indirect=True)
+@pytest.mark.parametrize("experiment_name", ["surge/flow_simple"], indirect=True)
+@pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)
+def test_train_flow_persists_projection_images_to_wandb(
+    cfg_surge_real_train: DictConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real flow fit persists both projection plots as decodable W&B media.
+
+    :param cfg_surge_real_train: One-step flow config over a real Surge XT render.
+    :param tmp_path: Isolated W&B run and media directory.
+    :param monkeypatch: Pins W&B to hermetic offline storage.
+    """
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    with open_dict(cfg_surge_real_train):
+        cfg_surge_real_train.model.compile = False
+        cfg_surge_real_train.model.vector_field.d_model = 32
+        cfg_surge_real_train.model.vector_field.d_ff = 32
+        cfg_surge_real_train.model.vector_field.num_layers = 1
+        cfg_surge_real_train.model.vector_field.projection.num_tokens = 8
+        cfg_surge_real_train.trainer.fast_dev_run = False
+        cfg_surge_real_train.trainer.limit_val_batches = 0
+        cfg_surge_real_train.trainer.enable_checkpointing = False
+        cfg_surge_real_train.callbacks = {
+            "plot_proj_ii": {
+                "_target_": "synth_setter.utils.callbacks.PlotLearntProjection",
+                "after_val": False,
+                "every_n_steps": 1,
+            }
+        }
+        cfg_surge_real_train.logger = {
+            "wandb": {
+                "_target_": "lightning.pytorch.loggers.wandb.WandbLogger",
+                "offline": True,
+                "save_dir": str(tmp_path),
+                "project": "plot-learnt-projection-test",
+                "id": "plot-learnt-projection",
+            }
+        }
+
+    HydraConfig().set_config(cfg_surge_real_train)
+    _, object_dict = train(cfg_surge_real_train)
+    wandb.finish()
+
+    model = object_dict["model"]
+    assert isinstance(model, VSTFlowMatchingModule)
+    assert isinstance(model.vector_field.projection, LearntProjection)
+    run_dir = next((tmp_path / "wandb").glob("offline-run-*-plot-learnt-projection"))
+    wandb_binary = next(run_dir.glob("run-*.wandb"))
+    rows = read_history_rows(
+        wandb_binary,
+        until=lambda history: all(
+            any(f"{key}/filenames" in row for row in history) for key in ("assignment", "value")
+        ),
+    )
+    for key in ("assignment", "value"):
+        row = next(row for row in rows if f"{key}/filenames" in row)
+        assert json.loads(row[f"{key}/_type"]) == "images/separated"
+        filename = json.loads(row[f"{key}/filenames"])[0]
+        with Image.open(run_dir / "files" / filename) as image:
+            image.load()
+            assert image.format == "PNG"
+            assert image.width == json.loads(row[f"{key}/width"])
+            assert image.height == json.loads(row[f"{key}/height"])
+            assert image.width > 0
+            assert image.height > 0
 
 
 @pytest.mark.requires_vst
