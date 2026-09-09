@@ -123,6 +123,28 @@ def test_export_nonfinite_input_rejected_before_writing(
     assert not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize("missing_key", ["mel", "sketch_ctrl"])
+def test_export_missing_conditioning_input_rejected_before_writing(
+    tmp_path: Path, flow_model: VSTFlowMatchingModule, missing_key: str
+) -> None:
+    """Incomplete conditioning must fail without creating an export destination.
+
+    :param tmp_path: Parent of the absent export destination.
+    :param flow_model: CPU evaluation architecture requiring both conditioning inputs.
+    :param missing_key: Required conditioning input removed from the batch.
+    """
+    assert flow_model.sketch_tokens is not None
+    batch = {
+        "mel": torch.zeros(1, 2, 8, 8),
+        "sketch_ctrl": torch.zeros(1, flow_model.sketch_tokens.layout.num_controls, 4),
+    }
+    batch.pop(missing_key)
+    destination = tmp_path / "bundle"
+    with pytest.raises(ValueError, match="mel and sketch_ctrl"):
+        export_flow_onnx(flow_model, batch, destination)
+    assert not destination.exists()
+
+
 def test_export_nonempty_destination_preserves_existing_artifacts(
     tmp_path: Path, flow_model: VSTFlowMatchingModule
 ) -> None:
