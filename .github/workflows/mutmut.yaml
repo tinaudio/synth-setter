@@ -32,6 +32,7 @@ jobs:
           - name: evaluation-metrics
             patterns:
               - synth_setter.evaluation.compute_audio_metrics.*
+              - synth_setter.evaluation.paired_retrieval.*
           - name: evaluation-response
             patterns:
               - synth_setter.evaluation.joint_transport.*

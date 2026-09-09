@@ -1,0 +1,43 @@
+# @package _global_
+
+# Evaluate a pyFDN flow checkpoint on a selected real-RIR corpus (#3236).
+# Override datamodule=third_party/rir/<corpus> and ckpt_path at launch.
+defaults:
+  - /experiment/pyfdn/flow
+  - override /callbacks: eval_vst
+  - override /datamodule: third_party/rir/mit_ir_survey
+  - override /logger: wandb
+  - _self_
+
+experiment_name: pyfdn-rir-eval
+run_name: flow-rir
+tags: [pyfdn, flow, rir, third_party]
+mode: predict
+evaluation_only: true
+seed: 3407
+
+# A checkpoint is chosen per launch; its training statistics are pinned below.
+ckpt_path: ???
+
+logger:
+  wandb:
+    group: pyfdn-rir-eval
+
+model:
+  compile: false
+
+datamodule:
+  batch_size: 16
+  num_workers: 4
+  row_limit: null
+  # Statistics of the pyFDN householder corpus every pyfdn/flow checkpoint trains on.
+  mel_stats_uri: r2://experiments/data/pyfdn-householder-lance-131k-616k-8k-256/pyfdn-householder-lance-131k-616k-8k-256-20260904T065718759Z/stats.npz
+  mel_stats_sha256: db418cbe3e8fa29bfeb1d13a9f64e87352277ab1c1dc5f6bae896ee8f4f34ebc
+
+evaluation:
+  compute_metrics: true
+  no_params: true
+  num_workers: 8
+  render_vst: true
+  rerender_target: false
+  upload_output_dir_uri: null

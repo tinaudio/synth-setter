@@ -45,7 +45,7 @@ def _model(
 ) -> SLAPModule:
     return SLAPModule(
         audio_encoder=_arm(5, batch_norm=batch_norm),
-        text_encoder=_arm(2, batch_norm=batch_norm),
+        param_encoder=_arm(2, batch_norm=batch_norm),
         loss_fn=loss_fn or BYOLLoss(),
         optimizer=partial(torch.optim.SGD, lr=0.1),
         scheduler=None,
@@ -56,6 +56,143 @@ def _model(
             update_method="lin",
         ),
     )
+
+
+def test_canonical_param_arm_receives_gradients_and_has_no_legacy_state_keys() -> None:
+    """The canonical arm trains without registering duplicate compatibility state."""
+    model = SLAPModule(
+        audio_encoder=_arm(5),
+        param_encoder=_arm(2),
+        loss_fn=BYOLLoss(),
+        optimizer=partial(torch.optim.SGD, lr=0.1),
+    )
+
+    model.training_step(next(iter(_loader(1))), 0).backward()
+
+    assert cast(nn.Sequential, model.param_encoder.encoder)[0].weight.grad is not None
+    assert not any(key.startswith(("text_encoder.", "text_ema.")) for key in model.state_dict())
+
+
+def test_constructor_both_param_names_rejects_ambiguous_architecture() -> None:
+    """Conflicting constructor names cannot select a backbone implicitly."""
+    with pytest.raises(ValueError, match="exactly one"):
+        SLAPModule(
+            audio_encoder=_arm(5),
+            param_encoder=_arm(2),
+            text_encoder=_arm(7),
+            loss_fn=BYOLLoss(),
+            optimizer=partial(torch.optim.SGD, lr=0.1),
+        )
+
+
+@pytest.mark.parametrize("compiled", [False, True])
+def test_legacy_checkpoint_reload_preserves_encoder_architecture_and_outputs(
+    tmp_path: Path,
+    compiled: bool,
+) -> None:
+    """Reload serialized legacy modules and reproduce their EMA projections.
+
+    :param tmp_path: Checkpoint destination.
+    :param compiled: Whether the saved state uses compiled arm prefixes.
+    """
+    import lightning
+
+    model = _model().eval()
+    audio_arm, param_arm = model.audio_encoder, model.param_encoder
+    params = torch.randn(2, 2)
+    expected = model.text_ema(params)[1]
+    if compiled:
+        model.audio_encoder = torch.compile(model.audio_encoder, backend="eager")
+        model.param_encoder = torch.compile(model.param_encoder, backend="eager")
+        model.audio_ema = torch.compile(model.audio_ema, backend="eager")
+        model.param_ema = torch.compile(model.param_ema, backend="eager")
+    checkpoint_path = tmp_path / "legacy.ckpt"
+    torch.save(
+        {
+            "pytorch-lightning_version": lightning.__version__,
+            "state_dict": {
+                key.replace("param_encoder.", "text_encoder.").replace(
+                    "param_ema.", "text_ema."
+                ): value
+                for key, value in model.state_dict().items()
+            },
+            "hyper_parameters": {
+                "audio_encoder": audio_arm,
+                "text_encoder": param_arm,
+                "loss_fn": model.loss_fn,
+                "optimizer": partial(torch.optim.SGD, lr=0.1),
+            },
+        },
+        checkpoint_path,
+    )
+
+    restored = SLAPModule.load_from_checkpoint(checkpoint_path, weights_only=False).eval()
+
+    torch.testing.assert_close(restored.param_ema(params)[1], expected)
+    assert isinstance(cast(nn.Sequential, restored.param_encoder.encoder)[0], nn.Linear)
+    assert restored.text_ema is restored.param_ema
+
+
+@pytest.mark.parametrize("compiled", [False, True])
+def test_legacy_state_keys_matching_architecture_load_strictly(compiled: bool) -> None:
+    """Prefix migration supports eager and compiled target module layouts.
+
+    :param compiled: Whether parameter arms carry compiled wrappers.
+    """
+    model = _model()
+    if compiled:
+        model.param_encoder = torch.compile(model.param_encoder, backend="eager")
+        model.param_ema = torch.compile(model.param_ema, backend="eager")
+    state = {
+        key.replace("param_encoder.", "text_encoder.").replace("param_ema.", "text_ema."): value
+        for key, value in model.state_dict().items()
+    }
+    checkpoint: dict[str, object] = {"state_dict": state}
+
+    model.on_load_checkpoint(checkpoint)
+
+    model.load_state_dict(state, strict=True)
+
+
+def test_checkpoint_both_param_hparams_rejects_ambiguity() -> None:
+    """Stored architecture aliases must not silently override each other."""
+    model = _model()
+    with pytest.raises(ValueError, match="ambiguous"):
+        model.on_load_checkpoint(
+            {
+                "state_dict": model.state_dict(),
+                "hyper_parameters": {
+                    "text_encoder": model.param_encoder,
+                    "param_encoder": model.param_encoder,
+                },
+            }
+        )
+
+
+def test_legacy_constructor_uses_supplied_arm_without_architecture_substitution() -> None:
+    """The alias keeps a caller's incompatible-with-canonical input width intact."""
+    arm = _arm(7)
+    with pytest.warns(DeprecationWarning, match="param_encoder"):
+        model = SLAPModule(
+            audio_encoder=_arm(5),
+            text_encoder=arm,
+            loss_fn=BYOLLoss(),
+            optimizer=partial(torch.optim.SGD, lr=0.1),
+        )
+
+    assert model.param_encoder is arm
+    assert model.param_encoder(torch.randn(2, 7))[0].shape == (2, 4)
+
+
+def test_checkpoint_both_param_names_rejects_ambiguous_state() -> None:
+    """Colliding state namespaces fail rather than discarding trained weights."""
+    model = _model()
+    state = model.state_dict()
+    state["param_encoder.encoder.0.weight"] = torch.ones(4, 2)
+    state["text_encoder.encoder.0.weight"] = torch.zeros(4, 2)
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        model.on_load_checkpoint({"state_dict": state})
 
 
 def _loader(num_batches: int) -> DataLoader[dict[str, torch.Tensor]]:
@@ -233,8 +370,8 @@ def test_legacy_target_predictor_keys_load_strictly(compiled: bool) -> None:
     compiled_prefix = "_orig_mod." if compiled else ""
     for name, value in model.audio_encoder.transform.state_dict().items():
         state_dict[f"audio_ema.{compiled_prefix}transform.{name}"] = value.clone()
-    for name, value in model.text_encoder.transform.state_dict().items():
-        state_dict[f"text_ema.{compiled_prefix}transform.{name}"] = value.clone()
+    for name, value in model.param_encoder.transform.state_dict().items():
+        state_dict[f"param_ema.{compiled_prefix}transform.{name}"] = value.clone()
     checkpoint: dict[str, object] = {"state_dict": state_dict}
 
     model.on_load_checkpoint(checkpoint)
@@ -256,7 +393,7 @@ def test_checkpoint_migration_preserves_nested_transform_modules() -> None:
 
     state_dict = cast(dict[str, torch.Tensor], checkpoint["state_dict"])
     assert "audio_ema.encoder.transform.weight" in state_dict
-    assert "text_ema.encoder.transform.weight" in state_dict
+    assert "param_ema.encoder.transform.weight" in state_dict
     model.load_state_dict(state_dict, strict=True)
 
 

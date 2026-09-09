@@ -320,9 +320,11 @@ is isolated and receives the complete `RenderConfig` for every backend.
 | **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std; dataset-level rows NaN std) |
 | **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`)   |
 
-Five metrics are computed for every (predicted, target) audio pair. Passing
-`--renderer-backend pyfdn` adds impulse-response metrics plus the octave-band
-room-acoustic metrics of Götz et al. (arXiv:2510.23158), implemented in
+Five metrics are computed for every (predicted, target) audio pair. Stereo pairs
+also receive `mldr_mid_side`; mono rows omit that optional column rather than
+substituting zero. Passing `--renderer-backend pyfdn` adds impulse-response
+metrics plus the octave-band room-acoustic metrics of Götz et al.
+(arXiv:2510.23158), implemented in
 `src/synth_setter/evaluation/acoustic_parameters.py`. `--fad` adds a
 dataset-level Fréchet Audio Distance on CLAP embeddings. pyFDN evaluation also
 includes joint time–frequency transport and all ten public pyFDN `ResponseLoss`
@@ -337,6 +339,7 @@ normalization. Predict-mode eval forwards the renderer backend automatically.
 | **SOT**                  | Spectral Optimal Transport         | Wasserstein distance on normalized STFT bins                                                          | \[0, ∞) ↓ |
 | **RMS**                  | RMS Amplitude Envelope             | Cosine similarity of RMS envelopes                                                                    | [-1, 1] ↑ |
 | **MLDR**                 | Multi-scale Loudness Dynamic Range | L1 of log short/long energy-envelope ratios at 2 scales ([DiffVox](https://arxiv.org/abs/2504.14735)) | \[0, ∞) ↓ |
+| **MLDR mid/side**        | Stereo Mid/Side MLDR               | MLDR on energy-preserving `(L+R)/√2` and `(L-R)/√2` channels; stereo only                             | \[0, ∞) ↓ |
 | **octave_rt60_log_rmse** | Octave-band RT60 log-RMSE          | RMSE of valid paired natural-log RT60 estimates                                                       | \[0, ∞) ↓ |
 | **octave_edc_rmse_db**   | Octave-band energy-decay RMSE      | pyFDN `MatchEnergyDecay` over target-valid EDC bins                                                   | \[0, ∞) ↓ |
 | **t30_mape**             | Octave-band T30 % error            | pyFDN 30 dB Schroeder fit, 125 Hz–8 kHz, % error                                                      | \[0, ∞) ↓ |

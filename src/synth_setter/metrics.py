@@ -120,6 +120,56 @@ def spec_quantized_per_param_mse(
     return (effective - target.float()).square().mean(dim=0)
 
 
+def spec_per_param_abs_cosine_distance(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> dict[str, torch.Tensor]:
+    """Return mean sign-invariant cosine distances for model-space array parameters.
+
+    :param predicted: Model-space vectors shaped ``(batch, num_params)``.
+    :param target: Ground-truth model-space vectors with the same shape.
+    :param param_spec: Spec defining logical array spans.
+    :returns: Array names mapped to scalar batch-mean distances in ``[0, 1]``.
+        Zero vectors score one; norms are stabilized at ``1e-8``. Angles are
+        compared per ``(cos, sin)`` pair before averaging, not as one flat vector.
+    :raises ValueError: Inputs have incompatible shapes, an empty batch, or non-finite values.
+    """
+    if predicted.ndim != 2 or predicted.shape != target.shape:
+        raise ValueError(
+            f"expected matching 2-D shapes, got {tuple(predicted.shape)} and {tuple(target.shape)}"
+        )
+    if predicted.shape[1] != param_spec.encoded_width:
+        raise ValueError(
+            f"expected ParamSpec width {param_spec.encoded_width}, got {predicted.shape[1]}"
+        )
+    if predicted.shape[0] == 0:
+        raise ValueError("expected a non-empty batch")
+    if not torch.isfinite(predicted).all() or not torch.isfinite(target).all():
+        raise ValueError("predicted and target parameters must contain only finite values")
+
+    from synth_setter.data.vst.param_spec import (
+        AngleArrayParameter,
+        ContinuousArrayParameter,
+        DirectionArrayParameter,
+    )
+
+    distances = {}
+    for parameter, span in param_spec.encoded_slices():
+        if not isinstance(
+            parameter, (ContinuousArrayParameter, DirectionArrayParameter, AngleArrayParameter)
+        ):
+            continue
+        predicted_array = predicted[:, span].float()
+        target_array = target[:, span].float()
+        if isinstance(parameter, AngleArrayParameter):
+            predicted_array = predicted_array.reshape(predicted.shape[0], -1, 2)
+            target_array = target_array.reshape(target.shape[0], -1, 2)
+        similarity = torch.nn.functional.cosine_similarity(predicted_array, target_array, dim=-1)
+        distances[parameter.name] = (1 - similarity.abs().clamp(max=1)).mean()
+    return distances
+
+
 def complex_to_dbfs(z: torch.Tensor, eps: float = 1e-8):
     squared_modulus = z.real.square() + z.imag.square()
     clamped = torch.clamp(squared_modulus, min=eps)

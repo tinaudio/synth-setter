@@ -32,6 +32,16 @@ ______________________________________________________________________
 | Console capture   | `wandb.Settings(console="wrap", console_multipart=True)` — `redirect` captures into a local `output.log` that wandb 0.26.x never uploads (#1465); `wrap` reaches the server but sees only this process's Python-level writes. Subprocess tee + multipart semantics: see the note below this table | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings`   |
 | Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                                                                                                                                                                                                                  | `src/synth_setter/utils/utils.py` § `task_wrapper`                |
 
+**Display names and tags.** The shared logger uses `<experiment_name>-<run_name>`
+(e.g. `pyfdn-flow-ast-online` or `torchsynth-flow_audio_same`), falling back to
+`task_name` and `default` when those fields are absent. Surge retains its
+`<experiment_name>_<run_name>` convention. Dataset generation uses
+`generate-dataset-<task_name>`. Top-level `tags` are forwarded to W&B; Surge tags
+include its dataset family and variant, and dataset-generation tags identify the
+task. Override these with `logger.wandb.name=custom-name` and
+`tags=[custom-tag]` (or `logger.wandb.tags=[custom-tag]`). Display metadata does
+not change canonical run IDs, checkpoint paths, or artifact names.
+
 **Subprocess console capture.** `generate_dataset` tees the children it spawns — the renderer, the per-shard rclone upload, and the inline oracle eval — through `sys.stderr` via `check_call_streamed` (`src/synth_setter/pipeline/subprocess_stream.py`, exit-keyed so a pipe-holding descendant can't stall it). Other rclone call sites (spec upload, `finalize_from_spec`'s `r2_io` transfers) still write to the inherited fd and bypass capture. `console_multipart=True` gives each resumed session (generate → oracle eval) its own `logs/output_*.log` instead of overwriting one `output.log`; finalize logs to its own `<run_id>-finalize` run.
 
 **No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/synth_setter/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
@@ -108,12 +118,12 @@ Under the default `many_loggers` composition (W&B + CSV + TB), plots land in
 both W&B and TensorBoard; with `logger=tensorboard` they go to TensorBoard
 only; with `logger=wandb` they go to W&B only.
 
-| Callback                 | Logged key                                                                                                                                                                                                                       | Trigger                                                                                                                                                           | Symbol                                                                                                               |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `PlotLossPerTimestep`    | `plot` (image)                                                                                                                                                                                                                   | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`                                                 |
-| `PlotLearntProjection`   | `assignment`, `value` (images)                                                                                                                                                                                                   | `on_validation_epoch_end` or every N steps                                                                                                                        | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`                                               |
-| `LogPerParamMSE`         | `{val,test}/per_param_mse/{name}`, `{val,test}/per_param_mse_best_swap/{name}`, `{val,test}/per_param_mse_number_group_swap/{name}`, `{val,test}/per_param_mse_spec_quantized/{name}`, and `{val,test}/param_mse_spec_quantized` | `on_{validation,test}_epoch_end` (via `pl_module.log_dict`)                                                                                                       | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
-| `ValAudioProbe` (opt-in) | `val_audio/<metric>_<stat>` + `val_audio/probe_step`                                                                                                                                                                             | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
+| Callback                 | Logged key                                                                                                                                                                                                                                                                          | Trigger                                                                                                                                                           | Symbol                                                                                                               |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `PlotLossPerTimestep`    | `plot` (image)                                                                                                                                                                                                                                                                      | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`                                                 |
+| `PlotLearntProjection`   | `assignment`, `value` (images)                                                                                                                                                                                                                                                      | `on_validation_epoch_end` or every N steps                                                                                                                        | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`                                               |
+| `LogPerParamMSE`         | `{val,test}/per_param_mse/{name}`, `{val,test}/per_param_mse_best_swap/{name}`, `{val,test}/per_param_mse_number_group_swap/{name}`, `{val,test}/per_param_mse_spec_quantized/{name}`, `{val,test}/param_mse_spec_quantized`, and `{val,test}/per_param_abs_cosine_distance/{name}` | `on_{validation,test}_epoch_end` (via `pl_module.log_dict`)                                                                                                       | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
+| `ValAudioProbe` (opt-in) | `val_audio/<metric>_<stat>` + `val_audio/probe_step`                                                                                                                                                                                                                                | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
 
 `{val,test}/param_mse_spec_quantized` clips predictions to the ParamSpec domain
 and snaps categorical and integral fields to the values used for rendering
@@ -129,6 +139,16 @@ all public pyFDN response losses use the same prefix convention; see
 and energy objectives have separate `_target` and `_pred` columns. Predict-mode
 evaluation exposes these under `audio/`. The wav/spectrogram snapshot goes to
 R2, not W&B (free-tier storage budget).
+
+`{val,test}/per_param_abs_cosine_distance/{name}` adds `1 - |cosine_similarity|`
+for continuous/discrete arrays and direction parameters in model space. Angle arrays
+compare each `(cos, sin)` pair separately, then average `1 - |cos(Δθ)|` across angles.
+Values range from 0 (aligned or opposite) to 1 (perpendicular); magnitude and sign
+are ignored. Zero vectors score 1, with norms stabilized at `1e-8`. Epoch means
+are sample-weighted across batches and distributed ranks. These keys appear when
+`LogPerParamMSE` receives predictions, including during validation; test logging
+also requires the model's `test_step` to return `preds`. Scalar parameters get no
+cosine key. Existing MSE, angle metrics, and training losses are unchanged.
 
 ### 2d. Callbacks — Non-W&B
 
@@ -184,6 +204,8 @@ When `synth-setter-eval mode=predict evaluation.compute_metrics=true` runs and a
 | `audio/wmfcc_std`          | Same, standard deviation                                                                                                    |
 | `audio/mldr_mean`          | Multi-scale loudness dynamic range distance ([DiffVox](https://arxiv.org/abs/2504.14735) eq. 15), mean                      |
 | `audio/mldr_std`           | Same, standard deviation                                                                                                    |
+| `audio/mldr_mid_side_mean` | Stereo-only MLDR after the energy-preserving mid/side transform, mean over applicable samples                               |
+| `audio/mldr_mid_side_std`  | Same, standard deviation; omitted when the collection contains no stereo pairs                                              |
 | `audio/sot_mean`           | Spectral optimal-transport distance, mean                                                                                   |
 | `audio/sot_std`            | Same, standard deviation                                                                                                    |
 | `audio/rms_mean`           | RMS envelope cosine similarity, mean                                                                                        |

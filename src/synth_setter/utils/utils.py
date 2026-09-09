@@ -9,6 +9,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
+import psutil
 import torch
 from lightning import LightningModule
 from lightning.pytorch.loggers import Logger, WandbLogger
@@ -24,6 +25,14 @@ log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 # Cap the readable cache-key slug so "<slug>-<sha256[:12]>" stays within the
 # common 255-byte filename limit; the hash suffix preserves uniqueness.
 _MAX_SLUG_LEN = 200
+_BYTES_PER_GIB = 1024**3
+_CGROUP_MEMORY_FILES = (
+    (Path("/sys/fs/cgroup/memory.max"), Path("/sys/fs/cgroup/memory.current")),
+    (
+        Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+        Path("/sys/fs/cgroup/memory/memory.usage_in_bytes"),
+    ),
+)
 
 
 def register_resolvers() -> None:
@@ -38,8 +47,49 @@ def register_resolvers() -> None:
         OmegaConf.register_new_resolver("stft_n_frames", stft_n_frames_from_samples)
     if not OmegaConf.has_resolver("param_spec_width"):
         OmegaConf.register_new_resolver("param_spec_width", resolve_param_spec_width)
+    if not OmegaConf.has_resolver("available_memory_exceeds_gib"):
+        OmegaConf.register_new_resolver(
+            "available_memory_exceeds_gib", _available_memory_exceeds_gib
+        )
     if not OmegaConf.has_resolver("wandb"):
         OmegaConf.register_new_resolver("wandb", _resolve_wandb_checkpoint)
+
+
+def _available_memory_exceeds_gib(threshold_gib: float) -> bool:
+    """Return whether effective available memory exceeds a GiB threshold.
+
+    :param threshold_gib: Exclusive available-memory threshold in GiB.
+    :returns: Whether available memory is strictly greater than the threshold.
+    """
+    return _effective_available_memory_bytes() > threshold_gib * _BYTES_PER_GIB
+
+
+def _effective_available_memory_bytes() -> int:
+    """Return memory available within both host and container limits.
+
+    :returns: Effective available memory in bytes.
+    """
+    host_available = psutil.virtual_memory().available
+    cgroup_available = _cgroup_available_memory_bytes()
+    return host_available if cgroup_available is None else min(host_available, cgroup_available)
+
+
+def _cgroup_available_memory_bytes() -> int | None:
+    """Return unused memory under a cgroup v2 or v1 limit when present.
+
+    :returns: Remaining cgroup memory in bytes, or ``None`` without a finite limit.
+    """
+    for limit_path, usage_path in _CGROUP_MEMORY_FILES:
+        try:
+            limit_text = limit_path.read_text().strip()
+            if limit_text == "max":
+                return None
+            limit = int(limit_text)
+            usage = int(usage_path.read_text().strip())
+        except (OSError, ValueError):
+            continue
+        return max(0, limit - usage)
+    return None
 
 
 def _resolve_wandb_checkpoint(ref: str) -> str:

@@ -26,12 +26,13 @@ We compute the following metrics:
 7. MLDR: multi-scale loudness dynamic range (DiffVox, arXiv:2504.14735 eq. 14-15) —
     L1 distance of the log ratio between short- and long-window energy envelopes at
     (50ms, 1s) and (100ms, 2s) integration times.
-8. pyFDN only: octave-band RT60 natural-log RMSE.
-9. pyFDN only: octave-band energy-decay-curve RMSE in dB.
-10. pyFDN only (Götz et al., arXiv:2510.23158): octave-band T30 mean absolute
+8. Stereo only: MLDR after an energy-preserving mid/side transform.
+9. pyFDN only: octave-band RT60 natural-log RMSE.
+10. pyFDN only: octave-band energy-decay-curve RMSE in dB.
+11. pyFDN only (Götz et al., arXiv:2510.23158): octave-band T30 mean absolute
     percentage error and C50 mean absolute error in dB per sample, plus per-band
     Pearson correlation of both parameters across the dataset.
-11. ``--fad``: Fréchet Audio Distance between the target and predicted sets on
+12. ``--fad``: Fréchet Audio Distance between the target and predicted sets on
     CLAP embeddings (dataset-level, one row in the aggregate).
 """
 
@@ -592,6 +593,56 @@ def compute_mldr(target: np.ndarray, pred: np.ndarray, sample_rate: float = 4410
     return dist
 
 
+def compute_mldr_mid_side(
+    target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0
+) -> float:
+    """Return MLDR after an energy-preserving stereo mid/side transform.
+
+    :param target: Target stereo audio with shape ``(2, T)``.
+    :param pred: Predicted stereo audio with the same shape as ``target``.
+    :param sample_rate: Sample rate in Hz; governs the MLDR envelope time constants.
+    :returns: Non-negative mid/side distance in natural-log units.
+    :raises ValueError: Inputs are not finite, matching, nonempty stereo arrays.
+    """
+    if (
+        target.ndim != 2
+        or target.shape[0] != 2
+        or target.shape[-1] == 0
+        or target.shape != pred.shape
+    ):
+        raise ValueError(
+            "target and pred must have matching nonempty stereo (2, T) shapes; "
+            f"got {target.shape} and {pred.shape}"
+        )
+    scale = math.sqrt(2.0)
+    target_float = np.asarray(target, dtype=np.float64)
+    pred_float = np.asarray(pred, dtype=np.float64)
+    if not np.isfinite(target_float).all() or not np.isfinite(pred_float).all():
+        raise ValueError("target and pred must contain only finite values")
+    with np.errstate(over="ignore"):
+        target_mid_side = np.stack(
+            (
+                (target_float[0] + target_float[1]) / scale,
+                (target_float[0] - target_float[1]) / scale,
+            )
+        )
+        pred_mid_side = np.stack(
+            (
+                (pred_float[0] + pred_float[1]) / scale,
+                (pred_float[0] - pred_float[1]) / scale,
+            )
+        )
+    if not np.isfinite(target_mid_side).all() or not np.isfinite(pred_mid_side).all():
+        raise ValueError("mid/side transformed audio must contain only finite values")
+    peak = max(float(np.abs(target_mid_side).max()), float(np.abs(pred_mid_side).max()))
+    longest_window = max(1, int(2.0 * sample_rate))
+    safe_energy_peak = math.sqrt(np.finfo(np.float64).max / longest_window)
+    if peak > safe_energy_peak:
+        target_mid_side /= peak
+        pred_mid_side /= peak
+    return compute_mldr(target_mid_side, pred_mid_side, sample_rate)
+
+
 def compute_metrics_on_dir(
     audio_dir: Path, renderer_backend: ReverbMetricBackend | None = None
 ) -> dict[str, float]:
@@ -599,7 +650,7 @@ def compute_metrics_on_dir(
 
     :param audio_dir: Directory containing ``target.wav`` and ``pred.wav``.
     :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
-    :returns: Dict mapping metric name to scalar score.
+    :returns: Metric scores, including ``mldr_mid_side`` only for stereo pairs.
     :raises ValueError: The target and predicted WAV files have different sample rates.
     """
     with AudioFile(str(audio_dir / "target.wav")) as target_file:
@@ -618,6 +669,8 @@ def compute_metrics_on_dir(
         "rms": compute_rms(target, pred, target_sample_rate),
         "mldr": compute_mldr(target, pred, target_sample_rate),
     }
+    if target.shape[0] == 2 and pred.shape[0] == 2:
+        metrics["mldr_mid_side"] = compute_mldr_mid_side(target, pred, target_sample_rate)
     if renderer_backend == "pyfdn":
         response_losses = compute_pyfdn_response_losses(target, pred, target_sample_rate)
         metrics.update(response_losses)

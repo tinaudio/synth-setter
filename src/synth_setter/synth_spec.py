@@ -126,6 +126,30 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "1.3.master.f7b97c68",
     ),
     "obxf": ("obxf", "plugins/OB-Xf.vst3", "presets/obxf-base.vstpreset", "1.0.3"),
+    "pyfdn_gotz_n8_mono_fixed_delays": (
+        "pyfdn_gotz_n8_mono_fixed_delays",
+        "pyfdn",
+        "",
+        "0.4.2",
+    ),
+    "pyfdn_gotz_n8_mono_fixed_delays_givens": (
+        "pyfdn_gotz_n8_mono_fixed_delays_givens",
+        "pyfdn",
+        "",
+        "0.4.2",
+    ),
+    "pyfdn_gotz_n8_mono_learned_delays": (
+        "pyfdn_gotz_n8_mono_learned_delays",
+        "pyfdn",
+        "",
+        "0.4.2",
+    ),
+    "pyfdn_gotz_n8_mono_learned_delays_givens": (
+        "pyfdn_gotz_n8_mono_learned_delays_givens",
+        "pyfdn",
+        "",
+        "0.4.2",
+    ),
     "pyfdn_n8_mono_householder": (
         "pyfdn_n8_mono_householder",
         "pyfdn",

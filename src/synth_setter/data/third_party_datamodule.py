@@ -72,6 +72,9 @@ def _validate_config(
     use_saved_mean_and_variance: bool,
     mel_stats_uri: str | None,
     row_limit: int | None,
+    row_filter: str | None,
+    downmix: bool,
+    peak_normalize: bool,
 ) -> None:
     """Reject a configuration that cannot be served correctly.
 
@@ -79,6 +82,9 @@ def _validate_config(
     :param use_saved_mean_and_variance: Whether mel standardization is enabled.
     :param mel_stats_uri: Configured statistics source, if any.
     :param row_limit: Configured row cap, if any.
+    :param row_filter: Configured Lance SQL row predicate, if any.
+    :param downmix: Configured channel-averaging switch.
+    :param peak_normalize: Configured unit-peak rescaling switch.
     :raises ValueError: The conditioning mode or normalization configuration is invalid.
     """
     if conditioning != "mel":
@@ -109,6 +115,15 @@ def _validate_config(
             f"mel_stats_uri={mel_stats_uri!r} is set with use_saved_mean_and_variance=false, "
             "so the statistics would be dropped and the checkpoint fed raw mel"
         )
+    if row_filter is not None and (not isinstance(row_filter, str) or not row_filter.strip()):
+        raise ValueError(
+            f"row_filter must be a non-empty Lance SQL predicate or null, got {row_filter!r}; "
+            "a blank filter would silently serve the whole corpus"
+        )
+    # Hydra composes a quoted `=false` as a truthy string, which would enable the switch.
+    for name, value in (("downmix", downmix), ("peak_normalize", peak_normalize)):
+        if not isinstance(value, bool):
+            raise ValueError(f"{name} must be a boolean, got {value!r}")
 
 
 def _validate_numeric_config(
@@ -181,6 +196,8 @@ def decode_clip(
     channels: int,
     num_samples: int,
     amplitude_scale: float,
+    downmix: bool = False,
+    peak_normalize: bool = False,
 ) -> np.ndarray:
     """Decode one source clip onto the render contract's audio grid.
 
@@ -189,6 +206,11 @@ def decode_clip(
     :param channels: Target channel count; a mono source is duplicated.
     :param num_samples: Target sample count; shorter clips pad, longer ones truncate.
     :param amplitude_scale: Gain applied after length-pinning.
+    :param downmix: Average a multichannel source to mono before channel mapping, so
+        stereo corpora can serve a narrower contract.
+    :param peak_normalize: Rescale the resampled clip to unit peak before length-pinning;
+        float impulse-response corpora carry arbitrary, often above-unity, levels. Silence
+        is left untouched.
     :returns: ``(channels, num_samples)`` float32 audio.
     :raises AudioDecodeError: The encoded container or codec cannot be decoded.
     :raises ValueError: Source or scaled samples are invalid, or channels mismatch.
@@ -202,7 +224,7 @@ def decode_clip(
         raise ValueError("source audio contains non-finite samples")
     source_min = source.min(initial=0.0)
     source_max = source.max(initial=0.0)
-    if source_min < -_PCM16_DECODE_FULL_SCALE or source_max > 1.0:
+    if not peak_normalize and (source_min < -_PCM16_DECODE_FULL_SCALE or source_max > 1.0):
         raise ValueError("source audio leaves [-1, 1]")
 
     try:
@@ -210,6 +232,11 @@ def decode_clip(
             audio = handle.read(handle.frames)
     except (RuntimeError, ValueError) as exc:
         raise AudioDecodeError("pedalboard could not decode the audio container") from exc
+    if downmix and audio.shape[0] > 1:
+        audio = audio.mean(axis=0, keepdims=True)
+    peak = np.abs(audio).max(initial=0.0)
+    if peak_normalize and peak > 0.0:
+        audio = audio / peak
     if audio.shape[0] == 1 < channels:
         audio = np.repeat(audio, channels, axis=0)
     elif audio.shape[0] != channels:
@@ -243,7 +270,10 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         channels: int,
         num_samples: int,
         amplitude_scale: float,
+        downmix: bool,
+        peak_normalize: bool,
         rows: int,
+        addresses: Sequence[int] | None = None,
     ) -> None:
         """Configure the per-row decode.
 
@@ -255,7 +285,11 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         :param channels: Target channel count.
         :param num_samples: Target sample count per clip.
         :param amplitude_scale: Gain applied to decoded audio.
+        :param downmix: Whether multichannel sources are averaged to mono first.
+        :param peak_normalize: Whether each clip is rescaled to unit peak.
         :param rows: Number of rows served.
+        :param addresses: Lance row addresses of the served rows, in serving order;
+            ``None`` serves the first ``rows`` stored rows.
         """
         self.uri = uri
         self.storage_options = dict(storage_options) if storage_options else None
@@ -265,7 +299,11 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         self.channels = channels
         self.num_samples = num_samples
         self.amplitude_scale = amplitude_scale
+        self.downmix = downmix
+        self.peak_normalize = peak_normalize
+        self.peak_normalize = peak_normalize
         self.rows = rows
+        self.addresses = list(addresses) if addresses is not None else None
         self._dataset: lance.LanceDataset | None = None
 
     def __getstate__(self) -> dict[str, object]:
@@ -296,6 +334,18 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
             )
         return self._dataset
 
+    def _read_blobs(self, selected: list[int]) -> list[tuple[int, bytes]]:
+        """Read the containers behind served-row positions in the requested order.
+
+        :param selected: Served-row positions.
+        :returns: ``(row, bytes)`` pairs in ``selected`` order.
+        """
+        dataset = self._open()
+        if self.addresses is None:
+            return dataset.read_blobs(self.audio_column, indices=selected, preserve_order=True)
+        chosen = [self.addresses[position] for position in selected]
+        return dataset.read_blobs(self.audio_column, addresses=chosen, preserve_order=True)
+
     def _decode(self, data: bytes) -> dict[str, torch.Tensor]:
         """Decode one stored container into model audio and mel tensors.
 
@@ -308,6 +358,8 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
             channels=self.channels,
             num_samples=self.num_samples,
             amplitude_scale=self.amplitude_scale,
+            downmix=self.downmix,
+            peak_normalize=self.peak_normalize,
         )
         mel = make_spectrogram(audio, self.sample_rate).astype(np.float32)
         return {"audio": torch.from_numpy(audio), "mel": torch.from_numpy(mel)}
@@ -319,14 +371,7 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         :returns: One decoded sample per index in the requested order.
         """
         selected = list(indices)
-        blobs = _retry_lance_read(
-            "third_party_blob_read",
-            lambda: self._open().read_blobs(
-                self.audio_column,
-                indices=selected,
-                preserve_order=True,
-            ),
-        )
+        blobs = _retry_lance_read("third_party_blob_read", lambda: self._read_blobs(selected))
         return [self._decode(data) for _, data in blobs]
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
@@ -358,6 +403,9 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         batch_size: int = 32,
         num_workers: int = 0,
         row_limit: int | None = None,
+        row_filter: str | None = None,
+        downmix: bool = False,
+        peak_normalize: bool = False,
         conditioning: str = "mel",
         sketch: SketchControls = None,
         use_saved_mean_and_variance: bool = False,
@@ -377,6 +425,13 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         :param batch_size: Rows per predict batch.
         :param num_workers: Dataloader workers decoding rows.
         :param row_limit: Serve only the first N rows; ``None`` serves the whole corpus.
+        :param row_filter: Lance SQL predicate over the corpus columns selecting the
+            served rows (e.g. ``audio_decodable = true AND source_path LIKE 'IRs/%'``);
+            ``None`` serves every row. Applied before ``row_limit``.
+        :param downmix: Average multichannel sources to mono before mapping onto the
+            contract's channel count; off, a channel-count mismatch raises.
+        :param peak_normalize: Rescale every clip to unit peak; off, a source outside
+            ``[-1, 1]`` raises.
         :param conditioning: Conditioning mode; only ``mel`` is accepted.
         :param sketch: Optional live sketch-control specification.
         :param use_saved_mean_and_variance: Whether to standardize mel with saved statistics.
@@ -391,6 +446,9 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             use_saved_mean_and_variance=use_saved_mean_and_variance,
             mel_stats_uri=mel_stats_uri,
             row_limit=row_limit,
+            row_filter=row_filter,
+            downmix=downmix,
+            peak_normalize=peak_normalize,
         )
         num_samples = _validate_numeric_config(
             sample_rate=sample_rate,
@@ -411,6 +469,9 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.row_limit = row_limit
+        self.row_filter = row_filter
+        self.downmix = downmix
+        self.peak_normalize = peak_normalize
         self.conditioning = conditioning
         self.sketch_controls = resolve_sketch_controls(sketch)
         if (
@@ -529,12 +590,24 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 f"column {self.audio_column!r} in {self.dataset_uri} is not blob-encoded, "
                 "so its source containers cannot be read through the blob API"
             )
-        rows = _retry_lance_read("third_party_row_count", dataset.count_rows)
+        addresses = self._filtered_addresses(dataset)
+        rows = (
+            _retry_lance_read("third_party_row_count", dataset.count_rows)
+            if addresses is None
+            else len(addresses)
+        )
         if rows == 0:
+            selection = (
+                "no rows" if addresses is None else f"no rows matching row_filter {self.row_filter!r}"
+            )
             raise ValueError(
-                f"corpus {self.dataset_uri} has no rows; an empty sweep writes no "
+                f"corpus {self.dataset_uri} has {selection}; an empty sweep writes no "
                 "predictions and fails downstream instead of here"
             )
+        if self.row_limit is not None:
+            rows = min(rows, self.row_limit)
+            if addresses is not None:
+                addresses = addresses[:rows]
         log.info(
             "third-party corpus %s pinned at version %s", self.dataset_uri, dataset.version
         )
@@ -548,10 +621,36 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 channels=self.channels,
                 num_samples=self.num_samples,
                 amplitude_scale=self.amplitude_scale,
-                rows=rows if self.row_limit is None else min(rows, self.row_limit),
+                downmix=self.downmix,
+                peak_normalize=self.peak_normalize,
+                rows=rows,
+                addresses=addresses,
             ),
             dataset.version,
         )
+
+    def _filtered_addresses(self, dataset: lance.LanceDataset) -> list[int] | None:
+        """Resolve ``row_filter`` to the addresses of the matching rows in stored order.
+
+        ``row_limit`` is pushed into the scan so a smoke run over a large remote
+        corpus never materializes the full match set.
+
+        :param dataset: Open corpus.
+        :returns: Matching row addresses, or ``None`` when no filter is configured.
+        """
+        if self.row_filter is None:
+            return None
+        table = _retry_lance_read(
+            "third_party_row_filter",
+            lambda: dataset.scanner(
+                columns=[],
+                filter=self.row_filter,
+                limit=self.row_limit,
+                with_row_address=True,
+                scan_in_order=True,
+            ).to_table(),
+        )
+        return table.column("_rowaddr").to_pylist()
 
     def setup(self, stage: str | None = None) -> None:
         """Open the corpus and load mel statistics for prediction.
@@ -585,11 +684,14 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         """
         if self._predict_dataset is None:
             raise RuntimeError("predict split is not built; call setup('predict') first")
+        # A forked worker inherits Lance's native runtime state and can hang or die on
+        # its first object-store read; spawning starts each worker with a fresh runtime.
         return DataLoader(
             self._predict_dataset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            multiprocessing_context="spawn" if self.num_workers > 0 else None,
         )
 
     def on_before_batch_transfer(

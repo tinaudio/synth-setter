@@ -1,0 +1,13 @@
+_target_: torch.nn.Sequential
+_args_:
+  - _target_: synth_setter.models.components.transformer.AudioSpectrogramTransformer
+    d_model: 512
+    n_heads: 8
+    n_layers: 8
+    n_conditioning_outputs: 1
+    patch_size: 16
+    patch_stride: 10
+    input_channels: 2
+    spec_shape: [128, 401]
+  - _target_: torch.nn.Flatten
+    start_dim: 1
