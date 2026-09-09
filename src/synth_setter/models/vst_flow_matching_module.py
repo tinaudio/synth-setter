@@ -36,9 +36,11 @@ _BATCH_TIME_SHAPE = "batch 1"
 _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 _PARAM_SHAPE = "params"
 # Stored outside hyper_parameters because Lightning replaces those with load-time kwargs
-# before the hook runs; missing keys retain their legacy velocity/MSE meanings.
+# before the hook runs; missing keys retain their legacy velocity/MSE/uniform meanings.
 _ENDPOINT_LOSS_KEY = "endpoint_loss"
 _LEGACY_ENDPOINT_LOSS = "mse"
+_ENDPOINT_TIME_WEIGHTING_KEY = "endpoint_time_weighting"
+_LEGACY_ENDPOINT_TIME_WEIGHTING = "uniform"
 _PARAMETERIZATION_KEY = "parameterization"
 _LEGACY_PARAMETERIZATION = "velocity"
 
@@ -127,7 +129,7 @@ class TrainStepOutputs:
 
     .. attribute :: per_param_flow_mse
 
-       Weighted model-space MSE diagnostic for each encoded parameter column.
+       Unweighted model-space MSE diagnostic for each encoded parameter column.
 
     .. attribute :: audio_term
 
@@ -584,6 +586,7 @@ class VSTFlowMatchingModule(LightningModule):
         :raises TypeError: A pretrained-encoder checkpoint has malformed state metadata.
         """
         checkpoint[_ENDPOINT_LOSS_KEY] = self.hparams.endpoint_loss
+        checkpoint[_ENDPOINT_TIME_WEIGHTING_KEY] = self.hparams.endpoint_time_weighting
         checkpoint[_PARAMETERIZATION_KEY] = self.hparams.parameterization
         if not isinstance(self.encoder, PretrainedConditioningEncoder):
             return
@@ -604,8 +607,8 @@ class VSTFlowMatchingModule(LightningModule):
 
         :param checkpoint: Mutable Lightning checkpoint payload.
         :raises TypeError: A pretrained-encoder checkpoint has a malformed state dictionary.
-        :raises ValueError: The checkpoint trained another parameterization or endpoint loss; same-
-            shaped weights would load but carry incompatible output semantics.
+        :raises ValueError: The checkpoint trained another parameterization or endpoint objective;
+            same-shaped weights would load but carry incompatible training semantics.
         """
         stored_parameterization = checkpoint.get(_PARAMETERIZATION_KEY, _LEGACY_PARAMETERIZATION)
         if stored_parameterization != self.hparams.parameterization:
@@ -618,6 +621,14 @@ class VSTFlowMatchingModule(LightningModule):
             raise ValueError(
                 f"checkpoint trained endpoint_loss={stored_endpoint_loss!r}, "
                 f"module expects {self.hparams.endpoint_loss!r}"
+            )
+        stored_time_weighting = checkpoint.get(
+            _ENDPOINT_TIME_WEIGHTING_KEY, _LEGACY_ENDPOINT_TIME_WEIGHTING
+        )
+        if stored_time_weighting != self.hparams.endpoint_time_weighting:
+            raise ValueError(
+                f"checkpoint trained endpoint_time_weighting={stored_time_weighting!r}, "
+                f"module expects {self.hparams.endpoint_time_weighting!r}"
             )
         if not isinstance(self.encoder, PretrainedConditioningEncoder):
             return
@@ -844,7 +855,7 @@ class VSTFlowMatchingModule(LightningModule):
 
         endpoint_prediction = self._endpoint_prediction_to_model(prediction)
         squared_flow_error = (endpoint_prediction - target).square()
-        per_param_flow_mse = (squared_flow_error * w).mean(dim=0)
+        per_param_flow_mse = squared_flow_error.mean(dim=0)
         if self.hparams.endpoint_loss == "mixed":
             assert self._metric_param_spec is not None
             row_loss = mixed_endpoint_row_loss(prediction, target, self._metric_param_spec)

@@ -310,7 +310,7 @@ def test_module_invalid_endpoint_time_weighting_raises(
 
 
 def test_flowmol3_endpoint_time_weights_match_pinned_paper_bounds() -> None:
-    """FlowMol3 weighting uses the agreed 0.005 floor and a finite 1.5 ceiling."""
+    """FlowMol3 weighting clamps odds at the pinned paper bounds."""
     module = _module(endpoint_time_weighting="flowmol3")
     time = torch.tensor([[0.0], [0.1], [0.5], [0.8], [1.0]])
 
@@ -382,7 +382,7 @@ def test_train_step_mixed_loss_keeps_row_weights_paired_with_rows() -> None:
     expected_first = (1.0 + math.log(2.0)) / 11.0
     expected_second = (4.0 + math.log(2.0)) / 11.0
     assert outputs.loss.item() == pytest.approx((expected_first + 3.0 * expected_second) / 2.0)
-    torch.testing.assert_close(outputs.per_param_flow_mse[8:10], torch.full((2,), 2.0))
+    torch.testing.assert_close(outputs.per_param_flow_mse[8:10], torch.ones(2))
     outputs.loss.backward()
     assert field.row.grad is not None
     assert torch.count_nonzero(field.row.grad[8:10]).item() == 2
@@ -401,8 +401,8 @@ def test_train_step_mse_keeps_row_weights_paired_with_rows() -> None:
     assert outputs.loss.item() == pytest.approx(6.5)
 
 
-def test_train_step_flowmol3_mse_pairs_unequal_row_losses_and_gradients() -> None:
-    """MSE weights each row before final reduction without cross-batch broadcasting."""
+def test_train_step_flowmol3_mse_weights_objective_not_diagnostic() -> None:
+    """FlowMol3 changes loss gradients while preserving comparable diagnostic MSE."""
     field = _ConstantField(torch.zeros(_WIDTH))
     module = _module(
         endpoint_time_weighting="flowmol3",
@@ -418,7 +418,7 @@ def test_train_step_flowmol3_mse_pairs_unequal_row_losses_and_gradients() -> Non
     outputs.loss.backward()
 
     assert outputs.loss.item() == pytest.approx(3.5)
-    torch.testing.assert_close(outputs.per_param_flow_mse, torch.full((_WIDTH,), 3.5))
+    torch.testing.assert_close(outputs.per_param_flow_mse, torch.full((_WIDTH,), 2.5))
     assert field.row.grad is not None
     torch.testing.assert_close(field.row.grad, torch.full((_WIDTH,), -4.0 / _WIDTH))
 
@@ -556,11 +556,11 @@ def test_audio_feedback_mixed_endpoint_receives_typed_endpoint() -> None:
 
 
 def _save_checkpoint(module: VSTFlowMatchingModule, path: Path, *, legacy: bool = False) -> Path:
-    """Write a loadable checkpoint, optionally without endpoint-loss metadata.
+    """Write a loadable checkpoint, optionally without endpoint-objective metadata.
 
     :param module: Module supplying state and hyperparameters.
     :param path: Checkpoint destination.
-    :param legacy: Whether to remove endpoint-loss metadata.
+    :param legacy: Whether to remove endpoint-objective metadata.
     :returns: Checkpoint path.
     """
     checkpoint = {
@@ -571,7 +571,9 @@ def _save_checkpoint(module: VSTFlowMatchingModule, path: Path, *, legacy: bool 
     module.on_save_checkpoint(checkpoint)
     if legacy:
         checkpoint.pop("endpoint_loss")
+        checkpoint.pop("endpoint_time_weighting")
         checkpoint["hyper_parameters"].pop("endpoint_loss", None)
+        checkpoint["hyper_parameters"].pop("endpoint_time_weighting", None)
     torch.save(checkpoint, path)
     return path
 
@@ -592,8 +594,26 @@ def test_load_checkpoint_with_other_endpoint_loss_raises(tmp_path: Path) -> None
         )
 
 
-def test_load_legacy_checkpoint_without_endpoint_loss_counts_as_mse(tmp_path: Path) -> None:
-    """Checkpoints without endpoint-loss metadata default to the MSE objective.
+def test_load_checkpoint_with_other_endpoint_time_weighting_raises(tmp_path: Path) -> None:
+    """A resumed endpoint run cannot silently change its time weighting.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="flowmol3"), tmp_path / "flowmol3.ckpt"
+    )
+
+    with pytest.raises(ValueError, match="endpoint_time_weighting"):
+        VSTFlowMatchingModule.load_from_checkpoint(
+            path,
+            encoder=_WaveformEncoder(),
+            endpoint_time_weighting="uniform",
+            weights_only=False,
+        )
+
+
+def test_load_legacy_checkpoint_uses_uniform_mse_endpoint_objective(tmp_path: Path) -> None:
+    """Legacy checkpoints retain the uniform MSE endpoint objective.
 
     :param tmp_path: Checkpoint directory.
     """
@@ -604,6 +624,7 @@ def test_load_legacy_checkpoint_without_endpoint_loss_counts_as_mse(tmp_path: Pa
     )
 
     assert loaded.hparams["endpoint_loss"] == "mse"
+    assert loaded.hparams["endpoint_time_weighting"] == "uniform"
 
 
 def test_vst_flow_config_defaults_endpoint_loss_to_mse() -> None:
