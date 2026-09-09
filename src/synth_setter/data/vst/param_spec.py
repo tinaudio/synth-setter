@@ -43,6 +43,20 @@ class Parameter:
             return (self.name,)
         return tuple(f"{self.name}.{index}" for index in range(len(self)))
 
+    def model_to_encoded(self, model: np.ndarray) -> np.ndarray:
+        """Map this parameter's model-space columns onto the encoded ``[0, 1]`` domain.
+
+        The default saturates: each coordinate has an independent hard bound, so a
+        prediction overshooting ``[-1, 1]`` lands on the nearest native bound.
+
+        :param model: This parameter's columns on the model's ``[-1, 1]`` scale, shaped
+            ``(..., len(self))``.
+        :returns: The same columns clipped into ``[0, 1]``.
+        """
+        calculation_dtype = np.result_type(model.dtype, np.float64)
+        promoted = model.astype(calculation_dtype, copy=False)
+        return ((promoted + 1) / 2).clip(0, 1)
+
 
 class CategoricalParameter(Parameter):
     def __init__(
@@ -455,6 +469,21 @@ class AngleArrayParameter(Parameter):
             for component in ("cos", "sin")
         )
 
+    def model_to_encoded(self, model: np.ndarray) -> np.ndarray:
+        """Project each predicted ``(cos, sin)`` pair onto the unit circle, then map to ``[0, 1]``.
+
+        Clipping the two components independently would tilt the direction, so the pair
+        is normalised as a whole; a directionless pair is passed through unchanged.
+
+        :param model: Model-space pairs shaped ``(..., len(self))``.
+        :returns: Unit-circle pairs mapped into ``[0, 1]`` with the same shape.
+        """
+        calculation_dtype = np.result_type(model.dtype, np.float64)
+        pairs = model.astype(calculation_dtype, copy=False).reshape(*model.shape[:-1], -1, 2)
+        norms = np.linalg.norm(pairs, axis=-1, keepdims=True)
+        unit = np.where(norms < _ANGLE_PAIR_MIN_NORM, pairs, pairs / np.maximum(norms, 1e-300))
+        return ((unit + 1) / 2).reshape(model.shape)
+
     def decode(self, encoded: np.ndarray) -> np.ndarray:
         """Decode ``(cos, sin)`` pairs in ``[0, 1]`` to radians in ``[-π, π]``.
 
@@ -664,17 +693,25 @@ class ParamSpec:
         return encoded * 2 - 1
 
     def model_to_encoded(self, model: np.ndarray) -> np.ndarray:
-        """Rescale model-space values onto the encoded ``[0, 1]`` domain, clipped.
+        """Rescale model-space values onto the encoded ``[0, 1]`` domain.
 
-        Inverse of :meth:`encoded_to_model` for in-range inputs; predictions
-        overshooting ``[-1, 1]`` saturate rather than decode out of domain.
+        Inverse of :meth:`encoded_to_model` for in-range inputs. A full-width row (or a
+        ``(..., width)`` batch) is dispatched to each parameter's
+        :meth:`Parameter.model_to_encoded`, so scalars saturate while direction-valued
+        parameters project instead of clipping. Any narrower column span cannot be
+        attributed to parameters and falls back to the elementwise clip.
 
         :param model: Values on the model's ``[-1, 1]`` scale.
-        :returns: The same values clipped into ``[0, 1]``.
+        :returns: The same values mapped into ``[0, 1]``.
         """
         calculation_dtype = np.result_type(model.dtype, np.float64)
         promoted = model.astype(calculation_dtype, copy=False)
-        return ((promoted + 1) / 2).clip(0, 1)
+        if promoted.ndim == 0 or promoted.shape[-1] != self.encoded_width:
+            return ((promoted + 1) / 2).clip(0, 1)
+        encoded = np.empty_like(promoted)
+        for parameter, span in self.encoded_slices():
+            encoded[..., span] = parameter.model_to_encoded(promoted[..., span])
+        return encoded
 
     def decode(self, params: np.ndarray) -> tuple[ParameterValues, ParameterValues]:
         """Decode one encoded row of values in ``[0, 1]``.

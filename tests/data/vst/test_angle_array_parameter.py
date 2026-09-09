@@ -1,9 +1,15 @@
 """Contracts for the unit-circle angle array parameter."""
 
+from typing import cast
+
 import numpy as np
 import pytest
 
-from synth_setter.data.vst.param_spec import AngleArrayParameter, ParamSpec
+from synth_setter.data.vst.param_spec import (
+    AngleArrayParameter,
+    ContinuousParameter,
+    ParamSpec,
+)
 
 
 def test_angle_array_owns_two_encoded_columns_per_angle() -> None:
@@ -155,3 +161,67 @@ def test_param_spec_seam_neighbours_are_close_in_model_space() -> None:
     right = spec.encoded_to_model(spec.encode({"phase": np.array([-np.pi + 0.01])}, {}))
 
     assert float(np.sum((left - right) ** 2)) < 1e-3
+
+
+def test_angle_array_model_to_encoded_normalizes_pairs_instead_of_clipping() -> None:
+    """An overshooting pair keeps its direction: (1.4, 0.2) decodes to atan2(0.2, 1.4)."""
+    parameter = AngleArrayParameter(name="phase", shape=(1,))
+
+    decoded = parameter.decode(parameter.model_to_encoded(np.array([1.4, 0.2])))
+
+    np.testing.assert_allclose(decoded, [np.arctan2(0.2, 1.4)], atol=1e-7)
+
+
+def test_angle_array_model_to_encoded_zero_pair_stays_directionless() -> None:
+    """A (0, 0) prediction is passed through, so decode still falls back to angle 0."""
+    parameter = AngleArrayParameter(name="phase", shape=(1,))
+
+    encoded = parameter.model_to_encoded(np.zeros(2))
+
+    np.testing.assert_allclose(encoded, [0.5, 0.5])
+    assert parameter.decode(encoded).tolist() == [0.0]
+
+
+def test_param_spec_model_to_encoded_clips_scalars_but_normalizes_angle_pairs() -> None:
+    """A full-width row dispatches per parameter: scalars saturate, pairs keep direction."""
+    spec = ParamSpec(
+        synth_params=[
+            ContinuousParameter(name="gain", min=0.0, max=10.0),
+            AngleArrayParameter(name="phase", shape=(1,)),
+        ],
+        note_params=[],
+    )
+
+    encoded = spec.model_to_encoded(np.array([1.5, 1.4, 0.2], dtype=np.float32))
+    decoded, _ = spec.decode(encoded)
+
+    assert decoded["gain"] == 10.0
+    np.testing.assert_allclose(decoded["phase"], [np.arctan2(0.2, 1.4)], atol=1e-6)
+
+
+def test_param_spec_model_to_encoded_batch_rows_dispatch_per_parameter() -> None:
+    """A (batch, width) array is handled row-wise with the same per-parameter rules."""
+    spec = ParamSpec(synth_params=[AngleArrayParameter(name="phase", shape=(1,))], note_params=[])
+    rows = np.array([[1.4, 0.2], [0.0, -3.0]])
+
+    encoded = spec.model_to_encoded(rows)
+
+    assert encoded.shape == (2, 2)
+    np.testing.assert_allclose(
+        [cast(np.ndarray, spec.decode(row)[0]["phase"])[0] for row in encoded],
+        [np.arctan2(0.2, 1.4), -np.pi / 2],
+        atol=1e-7,
+    )
+
+
+def test_param_spec_model_to_encoded_partial_span_falls_back_to_elementwise_clip() -> None:
+    """A column span narrower than the row cannot be attributed, so it is clipped as before."""
+    spec = ParamSpec(
+        synth_params=[
+            ContinuousParameter(name="gain", min=0.0, max=10.0),
+            AngleArrayParameter(name="phase", shape=(1,)),
+        ],
+        note_params=[],
+    )
+
+    np.testing.assert_allclose(spec.model_to_encoded(np.array([1.5, -3.0])), [1.0, 0.0])
