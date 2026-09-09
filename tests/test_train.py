@@ -199,6 +199,30 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize(
+    "cfg_pyfdn_train", [("pyfdn/flow", "pyfdn_n8_mono_kronecker")], indirect=True
+)
+def test_train_pyfdn_kronecker_one_step_predicts_36_coordinates(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Selecting the Kronecker synth widens the model head and its per-param metrics.
+
+    :param cfg_pyfdn_train: One-step Kronecker pyFDN configuration.
+    """
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.trainer.limit_val_batches = 1
+        cfg_pyfdn_train.trainer.val_check_interval = 1
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    metrics, objects = train(cfg_pyfdn_train)
+
+    assert cfg_pyfdn_train.model.num_params == 36
+    assert objects["trainer"].global_step == 1
+    assert torch.isfinite(metrics["train/per_param_flow_mse/kronecker_angles"])
+    assert torch.isfinite(metrics["val/per_param_mse_spec_quantized/kronecker_reflect"])
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize("cfg_pyfdn_train", ["pyfdn/flow_ast_online"], indirect=True)
 def test_train_pyfdn_online_ast_one_step_uses_waveforms(
     cfg_pyfdn_train: DictConfig,

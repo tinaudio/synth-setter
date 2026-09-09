@@ -67,9 +67,15 @@ jobs:
           - name: pipeline-add-private-n-z
             patterns:
               - synth_setter.pipeline.data.add_*.x__[n-z]*
+          - name: pipeline-slap-export
+            patterns:
+              - synth_setter.pipeline.data.export_slap.*
           - name: pipeline-lance
             patterns:
               - synth_setter.pipeline.data.lance_*
+          - name: pipeline-pyfdn-sketch
+            patterns:
+              - synth_setter.pipeline.data.pyfdn_sketch_worker.*
           - name: pipeline-stats
             patterns:
               - synth_setter.pipeline.data.stats.*

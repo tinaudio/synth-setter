@@ -21,6 +21,7 @@ from typing import cast
 
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
     PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
 )
 from synth_setter.data.vst.cardinal_param_spec import CARDINAL_PARAM_SPEC
@@ -56,6 +57,7 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("surge_4"): SURGE_4_PARAM_SPEC,
     ParamSpecName("obxf"): OBXF_PARAM_SPEC,
     ParamSpecName("pyfdn_n8_mono_householder"): PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    ParamSpecName("pyfdn_n8_mono_kronecker"): PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
     ParamSpecName(
         "pyfdn_pitchshift_n8_mono_householder"
     ): PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
