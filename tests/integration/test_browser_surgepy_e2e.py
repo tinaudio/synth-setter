@@ -13,7 +13,12 @@ import soundfile as sf
 import torch
 
 from synth_setter.cli.clap_render import resolve_inverse_checkpoint
-from synth_setter.cli.sketch_render import load_render_config
+from synth_setter.cli.sketch_render import (
+    _load_audio,
+    _prepare_inputs,
+    _resolve_stats,
+    load_render_config,
+)
 from synth_setter.data.vst.core import write_wav
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.renderer_factory import make_audio_renderer
@@ -40,12 +45,19 @@ def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(tmp_path:
     :param tmp_path: Isolated input, ONNX, screenshot, audio, and metric artifacts.
     """
     render = load_render_config()
-    audio = make_audio_renderer(render).render(
+    sketch_audio = make_audio_renderer(render).render(
         {}, midi_note=60, velocity=100, note_start_and_end=(0.0, 2.0)
     )
-    source = tmp_path / "input.wav"
-    write_wav(audio, str(source), render.sample_rate, render.channels)
-    np.testing.assert_array_less(1e-4, np.max(np.abs(audio)))
+    content_audio = make_audio_renderer(render).render(
+        {}, midi_note=72, velocity=80, note_start_and_end=(0.5, 1.5)
+    )
+    sketch_source = tmp_path / "sketch-input.wav"
+    content_source = tmp_path / "content-input.wav"
+    write_wav(sketch_audio, str(sketch_source), render.sample_rate, render.channels)
+    write_wav(content_audio, str(content_source), render.sample_rate, render.channels)
+    np.testing.assert_array_less(1e-4, np.max(np.abs(sketch_audio)))
+    np.testing.assert_array_less(1e-4, np.max(np.abs(content_audio)))
+    assert not np.array_equal(sketch_audio, content_audio)
     repo = Path(__file__).resolve().parents[2]
     output_dir = tmp_path / "evaluation"
     result = sh.Command("node")(
@@ -55,8 +67,8 @@ def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(tmp_path:
             sys.executable,
             "-m",
             "synth_setter.cli.sketch_render",
-            str(source),
-            str(source),
+            str(sketch_source),
+            str(content_source),
             "--checkpoint",
             _CHECKPOINT_URI,
             "--checkpoint-sha256",
@@ -96,13 +108,33 @@ def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(tmp_path:
         map_location="cpu",
         weights_only=False,
     ).eval()
-    batch = {
-        key: torch.tensor(payload[key]["data"], dtype=torch.float32).reshape(payload[key]["shape"])
-        for key in ("mel", "sketch_ctrl")
-    }
+    decoded_sketch = _load_audio(sketch_source, render)
+    decoded_content = _load_audio(content_source, render)
+    batch = _prepare_inputs(
+        sketch_audio=decoded_sketch,
+        content_audio=decoded_content,
+        stats_path=_resolve_stats(_STATS_URI, _STATS_SHA),
+        model=model,
+        render=render,
+        device=torch.device("cpu"),
+    )
+    for key in ("mel", "sketch_ctrl"):
+        transported = torch.tensor(payload[key]["data"], dtype=torch.float32).reshape(
+            payload[key]["shape"]
+        )
+        torch.testing.assert_close(transported, batch[key], rtol=1e-5, atol=1e-5)
+    noise = torch.randn(
+        (1, model.hparams["num_params"]),
+        generator=torch.Generator(device="cpu").manual_seed(17),
+        dtype=torch.float32,
+        device="cpu",
+    )
+    torch.testing.assert_close(
+        torch.tensor([payload["noise"]], dtype=torch.float32), noise, rtol=0, atol=0
+    )
     expected = model.sample_batch(
         batch,
-        noise=torch.tensor([payload["noise"]], dtype=torch.float32),
+        noise=noise,
         content_cfg_strength=2.0,
         sketch_cfg_strength=3.0,
         sample_steps=8,
@@ -111,9 +143,16 @@ def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(tmp_path:
     np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
     predicted_audio, sample_rate = sf.read(arm / "pred.wav", dtype="float32")
     assert sample_rate == render.sample_rate
-    assert predicted_audio.shape == audio.T.shape
+    assert predicted_audio.shape == content_audio.T.shape
     assert np.isfinite(predicted_audio).all()
     assert float(np.abs(predicted_audio).max()) > 1e-4
+    for name, original in (("sketch.wav", decoded_sketch), ("target.wav", decoded_content)):
+        saved, _ = sf.read(arm / name, dtype="float32")
+        # The production WAV writer requantizes decoded samples to PCM16.
+        np.testing.assert_allclose(saved, original.T, rtol=0, atol=1 / 2**15)
+    provenance = json.loads((arm / "browser/provenance.json").read_text())
+    revision = str(sh.Command("git")(["rev-parse", "HEAD"], _cwd=repo)).strip()
+    assert provenance["git_revision"].removesuffix("-dirty") == revision
     metrics = pd.read_csv(arm / "metrics.csv")
     assert len(metrics) == 1
     assert np.isfinite(

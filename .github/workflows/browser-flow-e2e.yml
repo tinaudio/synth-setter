@@ -77,7 +77,8 @@ jobs:
         run: |
           mkdir -p logs
           uv run --extra cpu pytest tests/models/test_flow_onnx.py \
-            tests/evaluation/test_browser_flow.py tests/test_sketch_render.py \
+            tests/evaluation/test_browser_flow.py tests/evaluation/test_browser_http.py \
+            tests/test_sketch_render.py \
             tests/integration/test_browser_surgepy_e2e.py -v \
             --basetemp=logs/browser-e2e --junitxml=logs/browser-e2e.xml \
             --cov=synth_setter.evaluation.browser_flow --cov=synth_setter.models.flow_onnx \

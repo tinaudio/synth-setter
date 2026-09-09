@@ -16,6 +16,7 @@ from typing import Literal
 
 import click
 import numpy as np
+import sh
 import torch
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
@@ -482,6 +483,23 @@ def _write_metrics(path: Path, row: dict[str, str | int | float]) -> None:
         writer.writerow(row)
 
 
+def _producer_revision() -> str:
+    """Record the source checkout revision without borrowing the operator's repository.
+
+    :returns: Commit SHA with an optional ``-dirty`` suffix, or ``git-unavailable``.
+    """
+    root = Path(__file__).resolve().parents[3]
+    if not (root / ".git").exists():
+        return "git-unavailable"
+    try:
+        git = sh.Command("git")
+        revision = str(git(["rev-parse", "HEAD"], _cwd=root)).strip()
+        dirty = str(git(["status", "--porcelain", "--untracked-files=normal"], _cwd=root))
+    except (OSError, sh.ErrorReturnCode, sh.CommandNotFound):
+        return "git-unavailable"
+    return f"{revision}-dirty" if dirty else revision
+
+
 def _noise_source_device(device: torch.device) -> torch.device:
     """Select a generator-capable device for deterministic sampling noise.
 
@@ -631,6 +649,7 @@ def main(
         click.echo("Browser runtime: ONNX Runtime Web WASM; preprocessing/export: CPU.")
     else:
         selected_device = _resolve_device(device or settings.device)
+    producer_revision = _producer_revision() if inference_runtime == "browser" else None
     selected_seed = settings.seed if seed is None else seed
     run_id = _run_id(sketch_wav, content_wav)
     pair_output = output_dir or settings.output_dir / run_id
@@ -703,6 +722,7 @@ def main(
                         "stats_sha256": selected_stats_sha256.lower(),
                         "render": render.model_dump(mode="json"),
                         "seed": selected_seed,
+                        "git_revision": producer_revision,
                     },
                     indent=2,
                 )

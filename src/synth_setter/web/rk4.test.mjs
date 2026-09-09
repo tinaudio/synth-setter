@@ -11,6 +11,15 @@ test("one RK4 step integrates an exponential field", async () => {
   assert.ok(Math.abs(result[0] - 2.7083333333) < 1e-6);
 });
 
+test("multiple RK4 steps advance a time-dependent field to the endpoint", async () => {
+  const result = await integrateRK4({
+    field: async (_x, t) => new Float32Array([2 * t]),
+    noise: new Float32Array([1]),
+    steps: 4,
+  });
+  assert.ok(Math.abs(result[0] - 2) < 1e-6);
+});
+
 test("zero integration steps are rejected", async () => {
   await assert.rejects(integrateRK4({field: async (x) => x, noise: new Float32Array([1]), steps: 0}), /steps/);
 });

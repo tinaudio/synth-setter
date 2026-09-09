@@ -19,7 +19,7 @@ try {
   const ready = new Promise((resolve) => child.stdout.on("data", (chunk) => {
     process.stdout.write(chunk);
     output += chunk;
-    const match = output.match(/Browser evaluation: (http:\/\/127\.0\.0\.1:\d+)/);
+    const match = output.match(/Browser evaluation: (http:\/\/127\.0\.0\.1(?::\d+)?)\r?\n/);
     if (match) resolve(match[1]);
   }));
   const url = await Promise.race([ready, timeout, ended.then(() => {throw new Error("CLI produced no browser URL");})]);
