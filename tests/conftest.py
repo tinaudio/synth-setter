@@ -2672,9 +2672,7 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
             cfg.datamodule.pin_memory = False
             cfg.model.compile = False
             cfg.model.scheduler = None
-            encoder = (
-                cfg.model.encoder.backbone if "ast_online" in experiment else cfg.model.encoder
-            )
+            encoder = cfg.model.encoder.backbone if "_online" in experiment else cfg.model.encoder
             encoder.d_model = 16
             encoder.n_heads = 1
             encoder.n_layers = 1
