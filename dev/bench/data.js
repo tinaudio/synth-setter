@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788933325694,
+  "lastUpdate": 1788933328865,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -25775,6 +25775,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 10.640479793200006,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "42fe3966d263547dc84b5c364d1d4744d092859b",
+          "message": "internal-feat(evaluation): add MLDR loudness dynamic range audio metric (#3199)\n\n* internal-feat(evaluation): add MLDR loudness dynamic range audio metric\n\nAdd compute_mldr, the DiffVox (arXiv:2504.14735, eq. 14-15) loss, as a\nper-sample \"mldr\" column: L1 distance of the log ratio between a short and a\ndelayed long one-pole energy envelope, summed over the (50 ms, 1 s) and\n(100 ms, 2 s) scales. Constants (torchcomp ms2coef, 1e-8 energy floor,\ncircular alignment roll) mirror the reference implementation so values are\ncomparable to the paper.\n\nEvery consumer that enumerates the metric column set (interactive tool,\nsketch-render CSV, pin snapshots, e2e tests, docs) now carries five metrics.\n\nRefs #3196\n\n* test(evaluation): carry mldr through eval fakes and the metric-list docs\n\nThe shared eval fakes and the fake-plugin train->eval test still modelled\nfour aggregated rows; widen them to the five compute_audio_metrics now\nemits. Also list SOT in the module docstring and MLDR in the glossary.\n\nRefs #3196\n\n* internal-fix(evaluation): pin compute_mldr to DiffVox and check shapes\n\nAddress review: a frozen MLDRLoss value now pins the envelope coefficients,\nhalf-gap alignment, and reduction; a mono target against a stereo prediction\nraises instead of broadcasting; two comments that restated their literals are\ntrimmed.\n\nRefs #3196\n\n* test(evaluation): bound oracle mldr and use distinct stereo channels\n\nAddress review: ORACLE_AUDIO_METRIC_BOUNDS gains mldr_max (4.0, ~3.5x the\nobserved Surge XT oracle maximum) asserted at every oracle gate, and the\nstereo test now feeds different left/right signals so a flattened alignment\nroll cannot pass it.\n\nRefs #3196",
+          "timestamp": "2026-09-09T00:26:03-04:00",
+          "tree_id": "260c01d5565ba0d21ebf7b809ba27aa7c9bb8071",
+          "url": "https://github.com/tinaudio/synth-setter/commit/42fe3966d263547dc84b5c364d1d4744d092859b"
+        },
+        "date": 1788933328455,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 9.180152893066406,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.717714916318656,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.10155787318944931,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.00335085391998291,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.3602516651153564,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 15.152666709599998,
             "unit": "seconds"
           }
         ]
