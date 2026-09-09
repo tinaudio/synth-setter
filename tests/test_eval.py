@@ -2941,7 +2941,7 @@ def test_pyfdn_rir_eval_experiment_entrypoint_renders_only_impulse_responses(
 
 @pytest.mark.slow
 @pytest.mark.xfail(
-    not Path("plugins/Surge XT.vst3").exists(),
+    not Path(os.environ.get("SYNTH_SETTER_PLUGIN_PATH", "plugins/Surge XT.vst3")).exists(),
     reason="#3299: the non-VST CPU slow lane does not install Surge XT",
     strict=True,
 )
