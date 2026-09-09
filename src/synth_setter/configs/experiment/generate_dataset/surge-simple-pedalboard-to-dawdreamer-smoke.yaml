@@ -1,0 +1,30 @@
+# @package _global_
+
+defaults:
+  - /experiment/generate_dataset/smoke-shard-with-oracle-eval@_global_
+  - override /synth@oracle_eval.candidate.synth: surge_simple
+  - override /render@oracle_eval.candidate.render: vst
+  - _self_
+
+task_name: surge-simple-pedalboard-to-dawdreamer-smoke
+train_val_test_sizes: [8, 4, 4]
+finalize_inline: true
+oracle_eval_inline: true
+
+oracle_eval:
+  upload: true
+  candidate:
+    render:
+      renderer_backend: dawdreamer
+      plugin_reload_cadence: render
+      gui_toggle_cadence: never
+      sample_rate: ${render.sample_rate}
+      channels: ${render.channels}
+      velocity: ${render.velocity}
+      signal_duration_seconds: ${render.signal_duration_seconds}
+
+render:
+  renderer_backend: pedalboard
+  samples_per_render_batch: 4
+  samples_per_shard: 4
+  parallel: true

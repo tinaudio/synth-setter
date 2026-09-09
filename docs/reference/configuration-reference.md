@@ -183,6 +183,33 @@ synth-setter-generate-dataset experiment=… skypilot_launch/compute=runpod/smok
   SkyPilot's RunPod backend rejects programmatic file_mounts with a
   pubkey-overflow error (see [#749](https://github.com/tinaudio/synth-setter/issues/749)).
 
+#### Local backend-parity smokes
+
+These presets render a Pedalboard source dataset, finalize it, and compare the
+source host with one candidate backend in the same local CLI run:
+
+```bash
+WANDB_MODE=offline synth-setter-generate-dataset \
+  experiment=generate_dataset/surge-simple-pedalboard-to-dawdreamer-smoke
+WANDB_MODE=offline synth-setter-generate-dataset \
+  experiment=generate_dataset/surge-simple-pedalboard-to-surgepy-smoke
+WANDB_MODE=offline synth-setter-generate-dataset \
+  experiment=generate_dataset/ultramaster-kr106-pedalboard-to-dawdreamer-smoke
+```
+
+Run these without a `skypilot_launch/compute` override: inline finalization and
+oracle evaluation are local-only. Each preset requires working R2 credentials,
+`rclone`, the linked source VST3 bundle, and the candidate runtime. SurgePy and
+Ultramaster KR-106 require Linux x86_64; Pedalboard source rendering on Linux
+also requires the repository's Xvfb wrapper dependencies.
+
+Each run writes four source shards for `[train, val, test] = [8, 4, 4]`, then
+stores source and candidate evaluations under
+`oracle_eval/{source,candidate}/<split>/<run_id>`. Their W&B metrics use
+`source/` and `candidate/` prefixes. Uploaded probe records preserve the
+finalized split URI plus both render configurations; use those records rather
+than comparing preset filenames alone.
+
 #### Job-name conventions
 
 `sky_cfg.job_name` is optional. When unset, the launcher falls back to
