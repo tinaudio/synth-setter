@@ -1164,7 +1164,7 @@ def test_from_hydra_pyfdn_pitchshift_writes_45_coordinate_shard(
     assert tuple(param_type.shape) == (45,)
 
 
-def test_from_hydra_pyfdn_kronecker_writes_33_coordinate_shard(
+def test_from_hydra_pyfdn_kronecker_writes_36_coordinate_shard(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1209,7 +1209,7 @@ def test_from_hydra_pyfdn_kronecker_writes_33_coordinate_shard(
 
     from_hydra(cfg_dataset)
 
-    assert spec.num_params == 33
+    assert spec.num_params == 36
     assert spec.render.param_spec_name == identity
     assert validate_all_shards_from_r2(spec) == []
     shard = spec.shards[0]
@@ -1217,7 +1217,7 @@ def test_from_hydra_pyfdn_kronecker_writes_33_coordinate_shard(
     assert len(uploaded) == 1
     param_type = lance.dataset(str(uploaded[0])).schema.field(PARAM_ARRAY_FIELD).type
     assert isinstance(param_type, pa.FixedShapeTensorType)
-    assert tuple(param_type.shape) == (33,)
+    assert tuple(param_type.shape) == (36,)
 
 
 def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(

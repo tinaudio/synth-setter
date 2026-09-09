@@ -202,7 +202,7 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
 @pytest.mark.parametrize(
     "cfg_pyfdn_train", [("pyfdn/flow", "pyfdn_n8_mono_kronecker")], indirect=True
 )
-def test_train_pyfdn_kronecker_one_step_predicts_33_coordinates(
+def test_train_pyfdn_kronecker_one_step_predicts_36_coordinates(
     cfg_pyfdn_train: DictConfig,
 ) -> None:
     """Selecting the Kronecker synth widens the model head and its per-param metrics.
@@ -216,7 +216,7 @@ def test_train_pyfdn_kronecker_one_step_predicts_33_coordinates(
 
     metrics, objects = train(cfg_pyfdn_train)
 
-    assert cfg_pyfdn_train.model.num_params == 33
+    assert cfg_pyfdn_train.model.num_params == 36
     assert objects["trainer"].global_step == 1
     assert torch.isfinite(metrics["train/per_param_flow_mse/kronecker_angles"])
     assert torch.isfinite(metrics["val/per_param_mse_spec_quantized/kronecker_reflect"])

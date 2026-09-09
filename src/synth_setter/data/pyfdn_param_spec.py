@@ -10,6 +10,7 @@ import numpy as np
 from pyFDN import householder_matrix
 
 from synth_setter.data.vst.param_spec import (
+    AngleArrayParameter,
     ContinuousArrayParameter,
     ContinuousParameter,
     DiscreteArrayParameter,
@@ -179,8 +180,6 @@ PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = PyFDNParamSpec(
     feedback_matrix=_householder_feedback,
 )
 
-# A full turn keeps both signs of every kernel reachable; the wrap at +-pi is the
-# price paid for regressing a periodic angle with an MSE loss.
 PYFDN_N8_MONO_KRONECKER_PARAM_SPEC = PyFDNParamSpec(
     synth_params=[
         *_fdn_matrix_parameters(delay_min=400, delay_max=1200),
@@ -194,11 +193,9 @@ PYFDN_N8_MONO_KRONECKER_PARAM_SPEC = PyFDNParamSpec(
             min=PYFDN_RT_MIN_SECONDS,
             max=PYFDN_RT_MAX_SECONDS,
         ),
-        ContinuousArrayParameter(
+        AngleArrayParameter(
             name=PYFDN_KRONECKER_ANGLES_NAME,
             shape=(PYFDN_KRONECKER_LEVELS,),
-            min=-np.pi,
-            max=np.pi,
         ),
         DiscreteArrayParameter(
             name=PYFDN_KRONECKER_REFLECT_NAME,

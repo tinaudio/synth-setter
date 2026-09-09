@@ -10,7 +10,7 @@ from synth_setter.data.pyfdn_param_spec import (
     kronecker_feedback_matrix,
 )
 from synth_setter.data.vst.param_spec import (
-    ContinuousArrayParameter,
+    AngleArrayParameter,
     DiscreteArrayParameter,
 )
 
@@ -30,14 +30,14 @@ _EXPECTED_HADAMARD_8 = _SCALE * np.array(
 )
 
 
-def test_kronecker_spec_layout_appends_three_angles_and_three_reflect_flags() -> None:
-    """The learned row carries the six kernel controls after the shared FDN fields."""
+def test_kronecker_spec_layout_appends_three_angle_pairs_and_three_reflect_flags() -> None:
+    """The learned row carries three (cos, sin) pairs and three flags after the FDN fields."""
     layout = [
         (parameter.name, span.start, span.stop)
         for parameter, span in PYFDN_N8_MONO_KRONECKER_PARAM_SPEC.encoded_slices()
     ]
 
-    assert PYFDN_N8_MONO_KRONECKER_PARAM_SPEC.encoded_width == 33
+    assert PYFDN_N8_MONO_KRONECKER_PARAM_SPEC.encoded_width == 36
     assert layout == [
         ("delays", 0, 8),
         ("input_matrix", 8, 16),
@@ -45,17 +45,17 @@ def test_kronecker_spec_layout_appends_three_angles_and_three_reflect_flags() ->
         ("direct_matrix", 24, 25),
         ("post_delay.rt_dc_seconds", 25, 26),
         ("post_delay.rt_nyquist_seconds", 26, 27),
-        ("kronecker_angles", 27, 30),
-        ("kronecker_reflect", 30, 33),
+        ("kronecker_angles", 27, 33),
+        ("kronecker_reflect", 33, 36),
     ]
 
 
 def test_kronecker_spec_kernel_controls_have_exact_domains() -> None:
-    """Angles span one full turn and reflect flags are binary."""
+    """Angles are unit-circle pairs, one per level, and reflect flags are binary."""
     angles, reflect = PYFDN_N8_MONO_KRONECKER_PARAM_SPEC.synth_params[-2:]
 
-    assert isinstance(angles, ContinuousArrayParameter)
-    assert (angles.shape, angles.min, angles.max) == ((3,), -np.pi, np.pi)
+    assert isinstance(angles, AngleArrayParameter)
+    assert angles.shape == (3,)
     assert isinstance(reflect, DiscreteArrayParameter)
     assert (reflect.shape, reflect.min, reflect.max) == ((3,), 0, 1)
 
@@ -140,7 +140,7 @@ def test_kronecker_spec_encoding_round_trips_feedback_through_kernel_controls() 
     encoded = PYFDN_N8_MONO_KRONECKER_PARAM_SPEC.encode(params, notes)
     decoded, decoded_notes = PYFDN_N8_MONO_KRONECKER_PARAM_SPEC.decode(encoded)
 
-    assert (encoded.shape, encoded.dtype) == ((33,), np.dtype(np.float32))
+    assert (encoded.shape, encoded.dtype) == ((36,), np.dtype(np.float32))
     np.testing.assert_array_equal(decoded["kronecker_reflect"], params["kronecker_reflect"])
     np.testing.assert_allclose(decoded["kronecker_angles"], params["kronecker_angles"], atol=1e-6)
     np.testing.assert_allclose(decoded["feedback_matrix"], params["feedback_matrix"], atol=1e-6)
