@@ -11,6 +11,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from typing import cast
 from uuid import UUID, uuid4
 
 import hydra
@@ -29,9 +30,13 @@ from synth_setter.data.vst.shapes import (
     audio_dataset_shape,
     mel_dataset_shape,
 )
+from synth_setter.data.vst_datamodule import RawBatch, load_mel_statistics, prepare_batch
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_materialize import _retry_lance_read
+from synth_setter.pipeline.data.lance_materialize import (
+    _is_retryable_lance_read_error,
+    _retry_lance_read,
+)
 from synth_setter.pipeline.data.lance_shard import (
     LANCE_DATA_STORAGE_VERSION,
     read_shard_metadata,
@@ -48,7 +53,7 @@ SLAP_EXPORT_METADATA_KEY = b"synth_setter.slap_export"
 SLAP_SOURCE_POINTER_KEY = b"synth_setter.slap_retrieval"
 _UUID_MIGRATION_METADATA_KEY = b"synth_setter.row_uuid_migration"
 _SCHEMA_VERSION = 1
-_POLICY_VERSION = 1
+_POLICY_VERSION = 2
 
 
 class _ExportMetadata(BaseModel):
@@ -70,6 +75,9 @@ class _ExportMetadata(BaseModel):
     .. attribute :: input_policy
     .. attribute :: projection_policy
     .. attribute :: normalization
+    .. attribute :: parameter_preprocessing
+    .. attribute :: mel_preprocessing
+    .. attribute :: mel_stats_sha256
     .. attribute :: vector_dimension
     .. attribute :: source_row_count
     .. attribute :: output_row_count
@@ -99,6 +107,9 @@ class _ExportMetadata(BaseModel):
     input_policy: str
     projection_policy: str
     normalization: str
+    parameter_preprocessing: str
+    mel_preprocessing: str
+    mel_stats_sha256: str | None
     vector_dimension: int
     source_row_count: int
     output_row_count: int
@@ -171,6 +182,24 @@ class SlapExportResult:
     output_row_count: int
 
 
+@dataclass(frozen=True)
+class _Preprocessing:
+    """Freeze model-input transforms and optional mel statistics for one export.
+
+    .. attribute :: mean
+    .. attribute :: std
+    .. attribute :: parameter_policy
+    .. attribute :: mel_policy
+    .. attribute :: mel_stats_sha256
+    """
+
+    mean: np.ndarray | None
+    std: np.ndarray | None
+    parameter_policy: str
+    mel_policy: str
+    mel_stats_sha256: str | None
+
+
 def _split_uri(root: str, split: str) -> str:
     """Return one split dataset URI.
 
@@ -227,10 +256,10 @@ def _transaction_uuid(dataset: lance.LanceDataset, version: int) -> str:
     return transaction.uuid
 
 
-def _checkpoint_sha256(path: Path) -> str:
-    """Hash checkpoint content.
+def _file_sha256(path: Path) -> str:
+    """Hash local file content.
 
-    :param path: Checkpoint file.
+    :param path: Local file.
     :returns: SHA-256 hexadecimal digest.
     """
     digest = hashlib.sha256()
@@ -238,6 +267,51 @@ def _checkpoint_sha256(path: Path) -> str:
         for chunk in iter(lambda: checkpoint.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _checkpoint_sha256(path: Path) -> str:
+    """Hash checkpoint content.
+
+    :param path: Checkpoint file.
+    :returns: SHA-256 hexadecimal digest.
+    """
+    return _file_sha256(path)
+
+
+def _load_preprocessing(config: ExportSlapConfig, model: SLAPModule) -> _Preprocessing:
+    """Load and freeze the production preprocessing policy for one export.
+
+    :param config: Export configuration.
+    :param model: Loaded model selecting the audio input modality.
+    :returns: Immutable preprocessing state shared by all splits.
+    :raises ValueError: Required statistics are absent or change while loading.
+    """
+    parameter_policy = "stored_[0,1]_to_model_[-1,1]"
+    if model.audio_input_key == "audio":
+        return _Preprocessing(None, None, parameter_policy, "not_applicable", None)
+    if not config.use_saved_mean_and_variance:
+        return _Preprocessing(None, None, parameter_policy, "stored_mel_unnormalized", None)
+    if config.mel_stats_path is None:
+        raise ValueError(
+            "mel_stats_path is required for mel models when use_saved_mean_and_variance is true"
+        )
+
+    digest_before = _file_sha256(config.mel_stats_path)
+    mean, std = load_mel_statistics(config.mel_stats_path)
+    digest_after = _file_sha256(config.mel_stats_path)
+    if digest_after != digest_before:
+        raise ValueError("mel statistics changed while loading; use an immutable local file")
+    frozen_mean = np.array(mean, copy=True)
+    frozen_std = np.array(std, copy=True)
+    frozen_mean.setflags(write=False)
+    frozen_std.setflags(write=False)
+    return _Preprocessing(
+        frozen_mean,
+        frozen_std,
+        parameter_policy,
+        "normalize_with_saved_mean_and_variance",
+        digest_before,
+    )
 
 
 def _canonical_model_config(config: Mapping[str, object]) -> dict[str, object]:
@@ -263,6 +337,7 @@ def _request_hash(payload: Mapping[str, object]) -> str:
 
 def _static_request(
     config: ExportSlapConfig,
+    preprocessing: _Preprocessing,
     *,
     split: str,
     checkpoint_sha256: str,
@@ -271,6 +346,7 @@ def _static_request(
     """Build request fields independent of source UUID migration.
 
     :param config: Export configuration.
+    :param preprocessing: Frozen production input transforms.
     :param split: Split name.
     :param checkpoint_sha256: Checkpoint content hash.
     :param requested_source_transaction_uuid: Configured snapshot identity.
@@ -290,6 +366,9 @@ def _static_request(
         else "stored_mel",
         "projection_policy": "audio_ema[1]+text_ema[1]",
         "normalization": "l2_float32",
+        "parameter_preprocessing": preprocessing.parameter_policy,
+        "mel_preprocessing": preprocessing.mel_policy,
+        "mel_stats_sha256": preprocessing.mel_stats_sha256,
         "build_index": config.build_index,
         "metric": config.metric,
         "requested_num_partitions": config.num_partitions,
@@ -336,6 +415,49 @@ def _existing_completed(
     return dataset, metadata
 
 
+def _scan_batches(
+    dataset: lance.LanceDataset,
+    *,
+    columns: list[str],
+    batch_size: int | None = None,
+) -> Iterator[pa.RecordBatch]:
+    """Stream a pinned dataset, resuming transient failures after yielded rows.
+
+    :yields pa.RecordBatch: Each source row exactly once and in scan order.
+    :param dataset: Explicitly pinned Lance dataset.
+    :param columns: Projected source columns.
+    :param batch_size: Optional scanner batch size.
+    :raises Exception: A nonretryable scan failure.
+    """
+    yielded_rows = 0
+    batches = _retry_lance_read(
+        "slap_batch_scan_open",
+        lambda: dataset.to_batches(columns=columns, batch_size=batch_size),
+    )
+    while True:
+        try:
+            batch = next(batches)
+        except StopIteration:
+            return
+        except Exception as exc:
+            if not _is_retryable_lance_read_error(exc):
+                raise
+
+            def resume() -> tuple[Iterator[pa.RecordBatch], pa.RecordBatch | None]:
+                resumed = dataset.to_batches(
+                    columns=columns,
+                    batch_size=batch_size,
+                    offset=yielded_rows,
+                )
+                return resumed, next(resumed, None)
+
+            batches, batch = _retry_lance_read("slap_batch_scan", resume)
+            if batch is None:
+                return
+        yield batch
+        yielded_rows += batch.num_rows
+
+
 def _validate_row_uuids(dataset: lance.LanceDataset) -> None:
     """Require canonical, nonnull, unique source UUIDs.
 
@@ -343,7 +465,7 @@ def _validate_row_uuids(dataset: lance.LanceDataset) -> None:
     :raises ValueError: Any UUID is invalid or repeated.
     """
     seen: set[str] = set()
-    for batch in dataset.to_batches(columns=[ROW_UUID_FIELD]):
+    for batch in _scan_batches(dataset, columns=[ROW_UUID_FIELD]):
         for value in batch.column(0).to_pylist():
             if value is None:
                 raise ValueError("row_uuid must be nonnull")
@@ -399,9 +521,7 @@ def _attributable_uuid_migration(
     candidate = head.checkout_version(migration_version)
     if ROW_UUID_FIELD not in candidate.schema.names:
         return None
-    raw = (candidate.schema.field(ROW_UUID_FIELD).metadata or {}).get(
-        _UUID_MIGRATION_METADATA_KEY
-    )
+    raw = (candidate.schema.field(ROW_UUID_FIELD).metadata or {}).get(_UUID_MIGRATION_METADATA_KEY)
     if raw is None or _UuidMigration.model_validate_json(raw) != migration:
         return None
     _validate_row_uuids(candidate)
@@ -453,9 +573,7 @@ def _ensure_row_uuids(
             batch_size=batch_size,
         )
     migrated = head.checkout_version(requested_version + 1)
-    raw = (migrated.schema.field(ROW_UUID_FIELD).metadata or {}).get(
-        _UUID_MIGRATION_METADATA_KEY
-    )
+    raw = (migrated.schema.field(ROW_UUID_FIELD).metadata or {}).get(_UUID_MIGRATION_METADATA_KEY)
     if raw is None or _UuidMigration.model_validate_json(raw) != migration:
         raise RuntimeError("UUID migration commit has unexpected provenance")
     _validate_row_uuids(migrated)
@@ -484,11 +602,17 @@ def _decoded(column: pa.Array, *, field: str) -> np.ndarray:
     return column.to_numpy_ndarray()
 
 
-def _validate_source_inputs(source: lance.LanceDataset, *, input_field: str) -> None:
+def _validate_source_inputs(
+    source: lance.LanceDataset,
+    *,
+    input_field: str,
+    preprocessing: _Preprocessing,
+) -> None:
     """Validate stored model inputs before any source mutation or inference.
 
     :param source: Explicitly pinned source snapshot.
     :param input_field: Audio or mel source field selected by the model.
+    :param preprocessing: Frozen production input transforms.
     :raises ValueError: A required field, tensor type, finite value, or audio bound is invalid.
     """
     metadata = read_shard_metadata(source.schema)
@@ -504,13 +628,27 @@ def _validate_source_inputs(source: lance.LanceDataset, *, input_field: str) -> 
             raise ValueError(f"source field {field!r} must be a FixedShapeTensor column")
     if tuple(source.schema.field(input_field).type.shape) != expected_shape:
         raise ValueError(f"source field {input_field!r} shape disagrees with shard metadata")
-    for batch in source.to_batches(columns=list(required_fields)):
+    param_shape = tuple(source.schema.field(PARAM_ARRAY_FIELD).type.shape)
+    if len(param_shape) != 1 or param_shape[0] < 1:
+        raise ValueError(f"source field {PARAM_ARRAY_FIELD!r} has invalid shape {param_shape}")
+    if preprocessing.mean is not None and preprocessing.std is not None:
+        try:
+            normalized_shape = np.broadcast_shapes(
+                expected_shape, preprocessing.mean.shape, preprocessing.std.shape
+            )
+        except ValueError as exc:
+            raise ValueError("mel statistics cannot broadcast to stored mel geometry") from exc
+        if normalized_shape != expected_shape:
+            raise ValueError("mel statistics would expand the stored mel geometry")
+    for batch in _scan_batches(source, columns=list(required_fields)):
         for field in required_fields:
             values = _decoded(batch.column(field), field=field)
             if not np.isfinite(values).all():
                 raise ValueError(f"source field {field!r} contains nonfinite values")
             if field == AUDIO_FIELD and np.any(np.abs(values) > 1.0):
                 raise ValueError("source audio values must be within [-1, 1]")
+            if field == PARAM_ARRAY_FIELD and np.any((values < 0) | (values > 1)):
+                raise ValueError("source param_array values must be within [0, 1]")
 
 
 def _normalize(vectors: torch.Tensor, modality: str) -> np.ndarray:
@@ -526,10 +664,11 @@ def _normalize(vectors: torch.Tensor, modality: str) -> np.ndarray:
         raise ValueError(f"{modality} projection has invalid shape {values.shape}")
     if not np.isfinite(values).all():
         raise ValueError(f"{modality} projection contains nonfinite values")
-    norms = np.linalg.norm(values, axis=1, keepdims=True)
+    stable_values = values.astype(np.float64)
+    norms = np.linalg.norm(stable_values, axis=1, keepdims=True)
     if np.any(~np.isfinite(norms)) or np.any(norms == 0):
         raise ValueError(f"{modality} projection contains zero or invalid vectors")
-    return np.ascontiguousarray(values / norms, dtype=np.float32)
+    return np.ascontiguousarray(stable_values / norms, dtype=np.float32)
 
 
 def _validate_projection_pair(
@@ -558,14 +697,48 @@ def _validate_projection_pair(
     return audio_vectors, param_vectors
 
 
+def _prepare_inputs(
+    raw: Mapping[str, np.ndarray],
+    *,
+    model_input_key: str,
+    preprocessing: _Preprocessing,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply the production batch frontend and select required SLAP tensors.
+
+    :param raw: Stored model columns.
+    :param model_input_key: Prepared audio or mel key.
+    :param preprocessing: Frozen production input transforms.
+    :returns: Model-ready audio-arm and parameter-arm inputs.
+    :raises ValueError: Batch preparation omits a required input.
+    """
+    prepared = prepare_batch(
+        cast(RawBatch, raw),
+        mean=preprocessing.mean,
+        std=preprocessing.std,
+        rescale_params=True,
+        ot=False,
+        generator=torch.Generator().manual_seed(0),
+    )
+    audio = prepared[model_input_key]
+    params = prepared["params"]
+    if audio is None or params is None:
+        raise ValueError("production batch preparation omitted a required SLAP input")
+    return audio, params
+
+
 def _project_batch(
-    model: SLAPModule, batch: pa.RecordBatch, device: torch.device
+    model: SLAPModule,
+    batch: pa.RecordBatch,
+    *,
+    device: torch.device,
+    preprocessing: _Preprocessing,
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Project one source batch through both EMA arms.
 
     :param model: Loaded SLAP module.
     :param batch: Source rows.
     :param device: Inference device.
+    :param preprocessing: Frozen production input transforms.
     :returns: Audio vectors, parameter vectors, and source UUIDs.
     :raises ValueError: EMA outputs are absent or incompatible.
     """
@@ -582,11 +755,14 @@ def _project_batch(
         order="C",
         copy=True,
     )
-    audio = torch.from_numpy(audio_values).to(device)
-    params = torch.from_numpy(param_values).to(device)
+    audio, params = _prepare_inputs(
+        {input_field: audio_values, PARAM_ARRAY_FIELD: param_values},
+        model_input_key=model.audio_input_key,
+        preprocessing=preprocessing,
+    )
     with torch.inference_mode():
-        _, audio_projection, _ = model.audio_ema(audio)
-        _, param_projection, _ = model.text_ema(params)
+        _, audio_projection, _ = model.audio_ema(audio.to(device))
+        _, param_projection, _ = model.text_ema(params.to(device))
     if audio_projection is None or param_projection is None:
         raise ValueError("SLAP EMA arms must provide projection outputs")
     audio_vectors, param_vectors = _validate_projection_pair(
@@ -602,6 +778,7 @@ def _output_batches(
     device: torch.device,
     batch_size: int,
     vector_dimension: int,
+    preprocessing: _Preprocessing,
 ) -> Iterator[pa.RecordBatch]:
     """Yield interleaved parameter and audio retrieval rows.
 
@@ -611,12 +788,18 @@ def _output_batches(
     :param device: Inference device.
     :param batch_size: Source scan batch size.
     :param vector_dimension: Required output width.
+    :param preprocessing: Frozen production input transforms.
     :raises ValueError: Projection dimensions change.
     """
     input_field = _input_field(model)
     columns = [ROW_UUID_FIELD, input_field, PARAM_ARRAY_FIELD]
-    for batch in source.to_batches(columns=columns, batch_size=batch_size):
-        audio, params, row_uuids = _project_batch(model, batch, device)
+    for batch in _scan_batches(source, columns=columns, batch_size=batch_size):
+        audio, params, row_uuids = _project_batch(
+            model,
+            batch,
+            device=device,
+            preprocessing=preprocessing,
+        )
         if audio.shape[1] != vector_dimension:
             raise ValueError("SLAP projection dimension changed between batches")
         vectors = np.stack((params, audio), axis=1).reshape(-1, vector_dimension)
@@ -654,24 +837,45 @@ def _load_model(config: ExportSlapConfig) -> tuple[SLAPModule, torch.device]:
 
 
 def _infer_vector_dimension(
-    source: lance.LanceDataset, model: SLAPModule, device: torch.device
+    source: lance.LanceDataset,
+    model: SLAPModule,
+    *,
+    device: torch.device,
+    preprocessing: _Preprocessing,
 ) -> int:
     """Infer and validate the shared EMA projection width.
 
     :param source: Source snapshot providing input shapes.
     :param model: Loaded SLAP module.
     :param device: Inference device.
+    :param preprocessing: Frozen production input transforms.
     :returns: Shared vector dimension.
     :raises ValueError: EMA projection outputs are absent or incompatible.
     """
     input_field = _input_field(model)
     audio_shape = tuple(source.schema.field(input_field).type.shape)
     param_shape = tuple(source.schema.field(PARAM_ARRAY_FIELD).type.shape)
-    audio = torch.zeros((1, *audio_shape), dtype=torch.float32, device=device)
-    params = torch.zeros((1, *param_shape), dtype=torch.float32, device=device)
+    audio, params = _prepare_inputs(
+        {
+            input_field: np.zeros((1, *audio_shape), dtype=np.float32),
+            PARAM_ARRAY_FIELD: np.zeros((1, *param_shape), dtype=np.float32),
+        },
+        model_input_key=model.audio_input_key,
+        preprocessing=preprocessing,
+    )
     with torch.inference_mode():
-        _, audio_projection, _ = model.audio_ema(audio)
-        _, param_projection, _ = model.text_ema(params)
+        try:
+            _, audio_projection, _ = model.audio_ema(audio.to(device))
+        except RuntimeError as exc:
+            raise ValueError(
+                f"source {input_field} shape {audio_shape} is incompatible with loaded SLAP model"
+            ) from exc
+        try:
+            _, param_projection, _ = model.text_ema(params.to(device))
+        except RuntimeError as exc:
+            raise ValueError(
+                f"source {PARAM_ARRAY_FIELD} shape {param_shape} is incompatible with loaded SLAP model"
+            ) from exc
     if audio_projection is None or param_projection is None:
         raise ValueError("SLAP EMA arms must provide projection outputs")
     if audio_projection.ndim != 2 or param_projection.ndim != 2:
@@ -921,6 +1125,7 @@ def _new_export_metadata(
     config: ExportSlapConfig,
     model: SLAPModule,
     device: torch.device,
+    preprocessing: _Preprocessing,
     static: Mapping[str, object],
     request_hash: str,
 ) -> _ExportMetadata:
@@ -930,13 +1135,19 @@ def _new_export_metadata(
     :param config: Export configuration.
     :param model: Loaded SLAP module.
     :param device: Inference device.
+    :param preprocessing: Frozen production input transforms.
     :param static: Request fields independent of migration.
     :param request_hash: Canonical request identity.
     :returns: Incomplete output provenance.
     :raises ValueError: Requested PQ subdivisions cannot represent the vector width.
     """
     source_rows = source.count_rows()
-    vector_dimension = _infer_vector_dimension(source, model, device)
+    vector_dimension = _infer_vector_dimension(
+        source,
+        model,
+        device=device,
+        preprocessing=preprocessing,
+    )
     if config.build_index and source_rows > 0 and vector_dimension % config.num_sub_vectors != 0:
         raise ValueError("num_sub_vectors must divide the SLAP vector dimension")
     return _ExportMetadata.model_validate(
@@ -963,6 +1174,7 @@ def _write_new_output(
     config: ExportSlapConfig,
     model: SLAPModule,
     device: torch.device,
+    preprocessing: _Preprocessing,
     output_uri: str,
 ) -> tuple[lance.LanceDataset, _ExportMetadata]:
     """Write retrieval rows and commit completion metadata.
@@ -972,6 +1184,7 @@ def _write_new_output(
     :param config: Export configuration.
     :param model: Loaded SLAP module.
     :param device: Inference device.
+    :param preprocessing: Frozen production input transforms.
     :param output_uri: Output split URI.
     :returns: Completed output dataset and provenance.
     """
@@ -984,6 +1197,7 @@ def _write_new_output(
             device=device,
             batch_size=config.batch_size,
             vector_dimension=metadata.vector_dimension,
+            preprocessing=preprocessing,
         ),
     )
     target, storage_options = _lance_target(output_uri)
@@ -1004,6 +1218,7 @@ def _create_output(
     split: str,
     model: SLAPModule,
     device: torch.device,
+    preprocessing: _Preprocessing,
     source_uri: str,
     output_uri: str,
     requested_version: int,
@@ -1017,6 +1232,7 @@ def _create_output(
     :param split: Split name.
     :param model: Loaded SLAP module.
     :param device: Inference device.
+    :param preprocessing: Frozen production input transforms.
     :param source_uri: Source split URI.
     :param output_uri: Output split URI.
     :param requested_version: Explicit original source pin.
@@ -1036,6 +1252,7 @@ def _create_output(
         config=config,
         model=model,
         device=device,
+        preprocessing=preprocessing,
         static=static,
         request_hash=request_hash,
     )
@@ -1045,6 +1262,7 @@ def _create_output(
         config=config,
         model=model,
         device=device,
+        preprocessing=preprocessing,
         output_uri=output_uri,
     )
     _update_source_pointer(
@@ -1059,12 +1277,45 @@ def _create_output(
     return _result(completed, output_uri)
 
 
+def _preflight_sources(
+    config: ExportSlapConfig,
+    model: SLAPModule,
+    *,
+    device: torch.device,
+    preprocessing: _Preprocessing,
+) -> None:
+    """Validate every pinned split before any source can be mutated.
+
+    :param config: Export configuration.
+    :param model: Loaded model selecting the stored input field.
+    :param device: Inference device.
+    :param preprocessing: Frozen production input transforms.
+    """
+    input_field = _input_field(model)
+    for split in config.splits:
+        source = _open(_split_uri(config.source_root_uri, split)).checkout_version(
+            config.source_versions[split]
+        )
+        _validate_source_inputs(
+            source,
+            input_field=input_field,
+            preprocessing=preprocessing,
+        )
+        _infer_vector_dimension(
+            source,
+            model,
+            device=device,
+            preprocessing=preprocessing,
+        )
+
+
 def _export_split(
     config: ExportSlapConfig,
     split: str,
     *,
     model: SLAPModule,
     device: torch.device,
+    preprocessing: _Preprocessing,
     checkpoint_sha256: str,
 ) -> SlapExportResult:
     """Export or resume one split.
@@ -1073,6 +1324,7 @@ def _export_split(
     :param split: Split name.
     :param model: Loaded SLAP module.
     :param device: Inference device.
+    :param preprocessing: Frozen production input transforms.
     :param checkpoint_sha256: Checkpoint content hash.
     :returns: Completed split identity.
     """
@@ -1080,10 +1332,15 @@ def _export_split(
     output_uri = _split_uri(config.output_root_uri, split)
     requested_version = config.source_versions[split]
     requested_source = _open(source_uri).checkout_version(requested_version)
-    _validate_source_inputs(requested_source, input_field=_input_field(model))
+    _validate_source_inputs(
+        requested_source,
+        input_field=_input_field(model),
+        preprocessing=preprocessing,
+    )
     requested_transaction_uuid = _transaction_uuid(requested_source, requested_version)
     static = _static_request(
         config,
+        preprocessing,
         split=split,
         checkpoint_sha256=checkpoint_sha256,
         requested_source_transaction_uuid=requested_transaction_uuid,
@@ -1099,6 +1356,7 @@ def _export_split(
         split=split,
         model=model,
         device=device,
+        preprocessing=preprocessing,
         source_uri=source_uri,
         output_uri=output_uri,
         requested_version=requested_version,
@@ -1119,12 +1377,20 @@ def export_slap(config: ExportSlapConfig) -> dict[str, SlapExportResult]:
     model, device = _load_model(config)
     if _checkpoint_sha256(config.ckpt_path) != checkpoint_sha256:
         raise ValueError("checkpoint changed while loading; use an immutable checkpoint file")
+    preprocessing = _load_preprocessing(config, model)
+    _preflight_sources(
+        config,
+        model,
+        device=device,
+        preprocessing=preprocessing,
+    )
     return {
         split: _export_split(
             config,
             split,
             model=model,
             device=device,
+            preprocessing=preprocessing,
             checkpoint_sha256=checkpoint_sha256,
         )
         for split in config.splits

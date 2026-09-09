@@ -45,6 +45,8 @@ class ExportSlapConfig(BaseModel):
     .. attribute :: source_versions
     .. attribute :: ckpt_path
     .. attribute :: model
+    .. attribute :: use_saved_mean_and_variance
+    .. attribute :: mel_stats_path
     .. attribute :: device
     .. attribute :: batch_size
     .. attribute :: build_index
@@ -61,6 +63,8 @@ class ExportSlapConfig(BaseModel):
     source_versions: dict[str, int]
     ckpt_path: Path
     model: dict[str, object]
+    use_saved_mean_and_variance: bool = True
+    mel_stats_path: Path | None = None
     device: str | None = None
     batch_size: int = Field(default=256, ge=1)
     build_index: bool = False
@@ -78,12 +82,12 @@ class ExportSlapConfig(BaseModel):
         """
         return tuple(value) if isinstance(value, list) else value
 
-    @field_validator("ckpt_path", mode="before")
+    @field_validator("ckpt_path", "mel_stats_path", mode="before")
     @classmethod
-    def _coerce_checkpoint_path(cls, value: object) -> object:
-        """Coerce Hydra path strings under strict parsing.
+    def _coerce_local_path(cls, value: object) -> object:
+        """Coerce Hydra local path strings under strict parsing.
 
-        :param value: Raw checkpoint path.
+        :param value: Raw checkpoint or statistics path.
         :returns: Path for a string input, otherwise the original value.
         """
         return Path(value) if isinstance(value, str) else value
@@ -107,6 +111,8 @@ class ExportSlapConfig(BaseModel):
             raise ValueError("source_root_uri and output_root_uri must differ")
         if not self.ckpt_path.is_file():
             raise ValueError(f"ckpt_path is not a file: {self.ckpt_path}")
+        if self.mel_stats_path is not None and not self.mel_stats_path.is_file():
+            raise ValueError(f"mel_stats_path is not a file: {self.mel_stats_path}")
         if "_target_" not in self.model:
             raise ValueError("model must contain _target_")
         return self

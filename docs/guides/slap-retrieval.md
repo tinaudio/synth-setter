@@ -18,9 +18,11 @@ unique in the source, not in the retrieval table. An audio-content UUID is
 not a substitute: different source rows can contain identical audio.
 
 Both modalities use the same checkpoint. The export takes projected vectors,
-not backbone representations or online predictor outputs. Audio inputs use the
-checkpoint's configured input kind; stored mel spectrograms are not recomputed
-with a different frontend.
+not backbone representations or online predictor outputs. It follows the
+Lance training batch contract: source parameters in `[0, 1]` are rescaled to
+`[-1, 1]`, and stored mels use the checkpoint's training mean and standard
+deviation when normalization is enabled. Mel spectrograms are not recomputed
+with a different frontend. Source parameter and mel columns are not modified.
 
 ## Provenance and discovery
 
@@ -67,6 +69,7 @@ synth-setter-export-slap \
   source_root_uri=r2://bucket/source \
   output_root_uri=r2://bucket/slap \
   ckpt_path=/path/to/model.ckpt \
+  mel_stats_path=/path/to/training/stats.npz \
   source_versions.train=12 \
   source_versions.val=7 \
   source_versions.test=5
@@ -85,7 +88,8 @@ To select only train, also remove the unused version entries:
 synth-setter-export-slap \
   source_root_uri=/data/source output_root_uri=/data/slap \
   ckpt_path=/path/to/model.ckpt \
-  'splits=[train]' source_versions.train=12 \
+  mel_stats_path=/path/to/training/stats.npz \
+  'splits=[train]'  source_versions.train=12 \
   '~source_versions.val' '~source_versions.test'
 ```
 
@@ -100,7 +104,7 @@ width. Index training also requires enough rows for Lance's codebook training;
 small exports can omit the index and use exact search. An indexing failure
 retains an incomplete output without publishing a source pointer.
 
-Checkpoint paths are local files in this first implementation. Dataset roots
+Checkpoint and mel-statistics paths are local files. Dataset roots
 accept local paths, file URIs, and configured R2 URIs; S3-form URIs use the R2
 backend, not arbitrary AWS credentials.
 
@@ -110,6 +114,14 @@ The exporter requires the checkpoint and its matching Hydra model
 configuration explicitly. The model configuration includes architecture
 settings and resolved synth parameter dimensions; choosing the same model
 name with different training overrides is not sufficient.
+
+`use_saved_mean_and_variance=true` matches the training default. Mel-input
+models require `mel_stats_path` pointing to the statistics used for training,
+not statistics recomputed from the retrieval split. Set
+`use_saved_mean_and_variance=false` only for checkpoints trained without mel
+normalization. Waveform-input models do not require mel statistics. The export
+identity includes the effective preprocessing policy and statistics content
+hash so changed statistics cannot silently reuse previous vectors.
 
 Only load trusted checkpoints and model configurations. Hydra model targets
 instantiate Python code; these inputs are not a safe format for untrusted

@@ -11,6 +11,8 @@ source_versions:
   val: ???
   test: ???
 ckpt_path: ???
+use_saved_mean_and_variance: true
+mel_stats_path: null
 device: null
 batch_size: 256
 build_index: false

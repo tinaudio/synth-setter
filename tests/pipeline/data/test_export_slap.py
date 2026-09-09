@@ -6,7 +6,7 @@ import json
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from functools import partial
 from pathlib import Path
 from typing import Literal, cast
@@ -22,15 +22,16 @@ from omegaconf import OmegaConf
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
+from synth_setter.data.vst_datamodule import prepare_batch
 from synth_setter.models.components.slap import BYOLLoss, SiameseArm
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.pipeline.data import export_slap as export_slap_module
 from synth_setter.pipeline.data.export_slap import (
     SLAP_EXPORT_METADATA_KEY,
     SLAP_SOURCE_POINTER_KEY,
-    _ExportMetadata,
     _ensure_row_uuids,
     _existing_completed,
+    _ExportMetadata,
     _normalize,
     _validate_projection_pair,
     export_slap,
@@ -105,15 +106,25 @@ def _source(
     row_uuid: list[str] | None = None,
     payload_offset: int = 0,
     audio_row: list[float] | None = None,
+    audio_rows: list[list[float]] | None = None,
     mel_row: list[float] | None = None,
     param_row: list[float] | None = None,
+    param_rows: list[list[float]] | None = None,
 ) -> int:
     audio_row = audio_row or [0.1, 0.2, 0.3, 0.4, 0.5]
     mel_row = mel_row or [-0.5] * 128
-    param_row = param_row or [2.0, 1.0]
-    audio = np.tile(np.array([[audio_row]], dtype=np.float32), (rows, 1, 1))
+    param_row = param_row or [0.75, 0.25]
+    audio = (
+        np.asarray(audio_rows, dtype=np.float32).reshape(rows, 1, 5)
+        if audio_rows is not None
+        else np.tile(np.array([[audio_row]], dtype=np.float32), (rows, 1, 1))
+    )
     mel = np.tile(np.array(mel_row, dtype=np.float32).reshape(1, 1, 128, 1), (rows, 1, 1, 1))
-    params = np.tile(np.array([param_row], dtype=np.float32), (rows, 1))
+    params = (
+        np.asarray(param_rows, dtype=np.float32)
+        if param_rows is not None
+        else np.tile(np.array([param_row], dtype=np.float32), (rows, 1))
+    )
     if rows:
         audio_column = pa.FixedShapeTensorArray.from_numpy_ndarray(audio)
         mel_column = pa.FixedShapeTensorArray.from_numpy_ndarray(mel)
@@ -149,6 +160,8 @@ def _checkpoint(
     output_dim: int = 2,
     *,
     audio_input_key: Literal["audio", "mel"] = "audio",
+    training_audio: torch.Tensor | None = None,
+    training_params: torch.Tensor | None = None,
 ) -> SLAPModule:
     with torch.random.fork_rng():
         torch.manual_seed(0)
@@ -160,12 +173,17 @@ def _checkpoint(
             enable_checkpointing=False,
             enable_model_summary=False,
         )
+        default_audio = (
+            torch.full((1, 128, 1), -0.5)
+            if audio_input_key == "mel"
+            else torch.tensor([0.1, 0.2, 0.3, 0.4, 0.5])
+        )
         rows = [
             {
-                audio_input_key: torch.full((1, 128, 1), -0.5)
-                if audio_input_key == "mel"
-                else torch.tensor([0.1, 0.2, 0.3, 0.4, 0.5]),
-                "params": torch.tensor([2.0, 1.0]),
+                audio_input_key: default_audio if training_audio is None else training_audio,
+                "params": (
+                    torch.tensor([0.5, -0.5]) if training_params is None else training_params
+                ),
             }
         ]
         loader = DataLoader(cast(Dataset[dict[str, torch.Tensor]], rows), batch_size=1)
@@ -189,6 +207,7 @@ def _config(
         "metric": "cosine",
         "num_partitions": 1,
         "num_sub_vectors": 1,
+        "use_saved_mean_and_variance": False,
     }
     values.update(updates)
     return ExportSlapConfig.model_validate(values)
@@ -209,7 +228,7 @@ def test_export_slap_real_checkpoint_writes_linked_normalized_ema_rows(tmp_path:
         _, expected_audio, _ = trained.audio_ema(
             torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5]], dtype=torch.float32)
         )
-        _, expected_param, _ = trained.text_ema(torch.tensor([[2, 1]], dtype=torch.float32))
+        _, expected_param, _ = trained.text_ema(torch.tensor([[0.5, -0.5]], dtype=torch.float32))
         _, online_audio, _ = trained.audio_encoder(
             torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5]], dtype=torch.float32)
         )
@@ -246,6 +265,55 @@ def test_export_slap_real_checkpoint_writes_linked_normalized_ema_rows(tmp_path:
     assert provenance["checkpoint_sha256"]
 
 
+def test_export_slap_distinct_rows_preserve_projection_pairing(tmp_path: Path) -> None:
+    """Each source row keeps its own parameter and waveform projections.
+
+    :param tmp_path: Isolated dataset root.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    source_uuids = [str(uuid4()), str(uuid4()), str(uuid4())]
+    audio_rows = [
+        [0.1, 0.2, 0.3, 0.4, 0.5],
+        [-0.2, -0.1, 0.0, 0.1, 0.2],
+        [0.7, 0.5, 0.3, 0.1, -0.1],
+    ]
+    param_rows = [[0.75, 0.25], [0.1, 0.9], [0.6, 0.4]]
+    version = _source(
+        source / "train.lance",
+        rows=3,
+        row_uuid=source_uuids,
+        audio_rows=audio_rows,
+        param_rows=param_rows,
+    )
+    checkpoint = tmp_path / "model.ckpt"
+    trained = _checkpoint(checkpoint)
+    prepared = prepare_batch(
+        {
+            "audio": np.asarray(audio_rows, dtype=np.float32).reshape(3, 1, 5),
+            "param_array": np.asarray(param_rows, dtype=np.float32),
+        },
+        mean=None,
+        std=None,
+        rescale_params=True,
+        ot=False,
+        generator=torch.Generator().manual_seed(23),
+    )
+    with torch.inference_mode():
+        _, expected_audio, _ = trained.audio_ema(cast(torch.Tensor, prepared["audio"]))
+        _, expected_params, _ = trained.text_ema(cast(torch.Tensor, prepared["params"]))
+
+    export_slap(_config(source, output, checkpoint, version, batch_size=2))
+
+    table = lance.dataset(output / "train.lance").to_table()
+    vectors = table["slap"].combine_chunks().values.to_numpy().reshape(6, 2)
+    np.testing.assert_array_equal(table["row_uuid"].to_pylist(), np.repeat(source_uuids, 2))
+    assert table["is_param_embedding"].to_pylist() == [True, False] * 3
+    np.testing.assert_allclose(vectors[::2], expected_params.numpy(), atol=1e-6)
+    np.testing.assert_allclose(vectors[1::2], expected_audio.numpy(), atol=1e-6)
+
+
 def test_export_slap_real_mel_checkpoint_uses_stored_mel_for_ema_projection(
     tmp_path: Path,
 ) -> None:
@@ -277,6 +345,343 @@ def test_export_slap_real_mel_checkpoint_uses_stored_mel_for_ema_projection(
         .reshape(2, 2)
     )
     np.testing.assert_allclose(vectors[1], expected_mel.numpy()[0], atol=1e-6)
+
+
+def test_export_slap_normalized_mel_matches_training_preparation(tmp_path: Path) -> None:
+    """Mel and parameter EMA inputs match the training preparation contract.
+
+    :param tmp_path: Isolated dataset root.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    mel_row = np.linspace(-1.0, 1.0, 128, dtype=np.float32)
+    version = _source(
+        source / "train.lance",
+        rows=1,
+        mel_row=mel_row.tolist(),
+        param_row=[0.75, 0.25],
+    )
+    mean = np.linspace(-0.25, 0.25, 128, dtype=np.float32).reshape(1, 128, 1)
+    std = np.linspace(0.5, 1.5, 128, dtype=np.float32).reshape(1, 128, 1)
+    stats_path = tmp_path / "training-stats.npz"
+    np.savez(stats_path, mean=mean, std=std)
+    prepared = prepare_batch(
+        {
+            "mel_spec": mel_row.reshape(1, 1, 128, 1),
+            "param_array": np.array([[0.75, 0.25]], dtype=np.float32),
+        },
+        mean=mean,
+        std=std,
+        rescale_params=True,
+        ot=False,
+        generator=torch.Generator().manual_seed(17),
+    )
+    prepared_mel = prepared["mel"]
+    prepared_params = prepared["params"]
+    assert isinstance(prepared_mel, torch.Tensor)
+    assert isinstance(prepared_params, torch.Tensor)
+    checkpoint = tmp_path / "model.ckpt"
+    trained = _checkpoint(
+        checkpoint,
+        audio_input_key="mel",
+        training_audio=prepared_mel[0],
+        training_params=prepared_params[0],
+    )
+    config = _config(
+        source,
+        output,
+        checkpoint,
+        version,
+        model=_model_config(audio_input_key="mel"),
+        use_saved_mean_and_variance=True,
+        mel_stats_path=stats_path,
+    )
+    with torch.inference_mode():
+        _, expected_audio, _ = trained.audio_ema(prepared_mel)
+        _, expected_params, _ = trained.text_ema(prepared_params)
+
+    export_slap(config)
+
+    exported = lance.dataset(output / "train.lance")
+    vectors = (
+        exported.to_table(columns=["slap"])["slap"]
+        .combine_chunks()
+        .values.to_numpy()
+        .reshape(2, 2)
+    )
+    np.testing.assert_allclose(vectors[0], expected_params.numpy()[0], atol=1e-6)
+    np.testing.assert_allclose(vectors[1], expected_audio.numpy()[0], atol=1e-6)
+    metadata = json.loads(exported.schema.metadata[SLAP_EXPORT_METADATA_KEY])
+    assert metadata["parameter_preprocessing"] == "stored_[0,1]_to_model_[-1,1]"
+    assert metadata["mel_preprocessing"] == "normalize_with_saved_mean_and_variance"
+    assert metadata["mel_stats_sha256"] == export_slap_module._file_sha256(stats_path)
+
+
+def test_export_slap_mel_missing_required_stats_fails_before_uuid_migration(
+    tmp_path: Path,
+) -> None:
+    """A normalized mel export requires explicit local training statistics.
+
+    :param tmp_path: Isolated dataset root.
+    """
+    source = tmp_path / "source"
+    source.mkdir()
+    source_path = source / "train.lance"
+    version = _source(source_path, rows=1)
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint, audio_input_key="mel")
+    config = _config(
+        source,
+        tmp_path / "output",
+        checkpoint,
+        version,
+        model=_model_config(audio_input_key="mel"),
+        use_saved_mean_and_variance=True,
+    )
+
+    with pytest.raises(ValueError, match="mel_stats_path"):
+        export_slap(config)
+
+    assert lance.dataset(source_path).version == version
+    assert "row_uuid" not in lance.dataset(source_path).schema.names
+
+
+@pytest.mark.parametrize(
+    ("mean", "std", "message"),
+    [
+        (np.array([np.nan]), np.array([1.0]), "mean.*finite"),
+        (np.array([0.0]), np.array([np.inf]), "std.*finite"),
+        (np.array([0.0]), np.array([0.0]), "std.*positive"),
+    ],
+)
+def test_export_slap_invalid_mel_stats_fails_before_uuid_migration(
+    tmp_path: Path, mean: np.ndarray, std: np.ndarray, message: str
+) -> None:
+    """Invalid mel statistics cannot mutate a source.
+
+    :param tmp_path: Isolated dataset root.
+    :param mean: Invalid or paired mean statistic.
+    :param std: Invalid or paired standard-deviation statistic.
+    :param message: Expected validation category.
+    """
+    source = tmp_path / "source"
+    source.mkdir()
+    source_path = source / "train.lance"
+    version = _source(source_path, rows=1)
+    stats_path = tmp_path / "stats.npz"
+    np.savez(stats_path, mean=mean, std=std)
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint, audio_input_key="mel")
+    config = _config(
+        source,
+        tmp_path / "output",
+        checkpoint,
+        version,
+        model=_model_config(audio_input_key="mel"),
+        use_saved_mean_and_variance=True,
+        mel_stats_path=stats_path,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        export_slap(config)
+
+    assert lance.dataset(source_path).version == version
+    assert "row_uuid" not in lance.dataset(source_path).schema.names
+
+
+def test_export_slap_mel_stats_broadcast_expansion_fails_before_uuid_migration(
+    tmp_path: Path,
+) -> None:
+    """Statistics cannot expand the stored mel geometry.
+
+    :param tmp_path: Isolated dataset root.
+    """
+    source = tmp_path / "source"
+    source.mkdir()
+    source_path = source / "train.lance"
+    version = _source(source_path, rows=1)
+    stats_path = tmp_path / "stats.npz"
+    np.savez(
+        stats_path,
+        mean=np.zeros((2, 128, 1), dtype=np.float32),
+        std=np.ones((2, 128, 1), dtype=np.float32),
+    )
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint, audio_input_key="mel")
+    config = _config(
+        source,
+        tmp_path / "output",
+        checkpoint,
+        version,
+        model=_model_config(audio_input_key="mel"),
+        use_saved_mean_and_variance=True,
+        mel_stats_path=stats_path,
+    )
+
+    with pytest.raises(ValueError, match="broadcast|shape|geometry"):
+        export_slap(config)
+
+    assert lance.dataset(source_path).version == version
+    assert "row_uuid" not in lance.dataset(source_path).schema.names
+
+
+def test_export_slap_mel_preprocessing_selection_conflicts_with_existing_output(
+    tmp_path: Path,
+) -> None:
+    """Normalized and raw-mel exports cannot share one destination.
+
+    :param tmp_path: Isolated dataset root.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    version = _source(source / "train.lance", rows=1)
+    stats_path = tmp_path / "stats.npz"
+    np.savez(stats_path, mean=np.array([0.0]), std=np.array([1.0]))
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint, audio_input_key="mel")
+    normalized = _config(
+        source,
+        output,
+        checkpoint,
+        version,
+        model=_model_config(audio_input_key="mel"),
+        use_saved_mean_and_variance=True,
+        mel_stats_path=stats_path,
+    )
+    export_slap(normalized)
+
+    with pytest.raises(ValueError, match="conflicting request"):
+        export_slap(
+            normalized.model_copy(
+                update={"use_saved_mean_and_variance": False, "mel_stats_path": None}
+            )
+        )
+
+
+def test_export_slap_stats_changed_while_loading_fails_before_uuid_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A statistics replacement during loading cannot create mixed provenance.
+
+    :param tmp_path: Isolated dataset root.
+    :param monkeypatch: Pytest patching fixture.
+    """
+    source = tmp_path / "source"
+    source.mkdir()
+    source_path = source / "train.lance"
+    version = _source(source_path, rows=1)
+    stats_path = tmp_path / "stats.npz"
+    np.savez(stats_path, mean=np.array([0.0]), std=np.array([1.0]))
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint, audio_input_key="mel")
+    config = _config(
+        source,
+        tmp_path / "output",
+        checkpoint,
+        version,
+        model=_model_config(audio_input_key="mel"),
+        use_saved_mean_and_variance=True,
+        mel_stats_path=stats_path,
+    )
+    original_load = export_slap_module.load_mel_statistics
+
+    def load_then_replace(path: Path) -> tuple[np.ndarray, np.ndarray]:
+        loaded = original_load(path)
+        np.savez(path, mean=np.array([0.25]), std=np.array([1.0]))
+        return loaded
+
+    monkeypatch.setattr(export_slap_module, "load_mel_statistics", load_then_replace)
+
+    with pytest.raises(ValueError, match="statistics changed while loading"):
+        export_slap(config)
+
+    assert lance.dataset(source_path).version == version
+    assert "row_uuid" not in lance.dataset(source_path).schema.names
+
+
+def test_export_slap_changed_mel_stats_conflicts_with_existing_output(tmp_path: Path) -> None:
+    """Changed statistics content cannot reuse an existing output.
+
+    :param tmp_path: Isolated dataset root.
+    """
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    source_path = source / "train.lance"
+    version = _source(source_path, rows=1)
+    stats_path = tmp_path / "stats.npz"
+    np.savez(stats_path, mean=np.array([0.0]), std=np.array([1.0]))
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint, audio_input_key="mel")
+    config = _config(
+        source,
+        output,
+        checkpoint,
+        version,
+        model=_model_config(audio_input_key="mel"),
+        use_saved_mean_and_variance=True,
+        mel_stats_path=stats_path,
+    )
+    export_slap(config)
+    source_version = lance.dataset(source_path).version
+    np.savez(stats_path, mean=np.array([0.25]), std=np.array([1.0]))
+
+    with pytest.raises(ValueError, match="conflicting request"):
+        export_slap(config)
+
+    assert lance.dataset(source_path).version == source_version
+
+
+def test_export_slap_audio_model_default_normalization_requires_no_stats(tmp_path: Path) -> None:
+    """Waveform models ignore the mel-statistics default.
+
+    :param tmp_path: Isolated dataset root.
+    """
+    source = tmp_path / "source"
+    source.mkdir()
+    version = _source(source / "train.lance", rows=1)
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint)
+    values = _config(source, tmp_path / "output", checkpoint, version).model_dump()
+    values.pop("use_saved_mean_and_variance")
+
+    export_slap(ExportSlapConfig.model_validate(values))
+
+    assert lance.dataset(tmp_path / "output" / "train.lance").count_rows() == 2
+
+
+def test_export_slap_incompatible_parameter_width_fails_before_uuid_migration(
+    tmp_path: Path,
+) -> None:
+    """Model compatibility is checked before a UUID-less source is changed.
+
+    :param tmp_path: Isolated dataset root.
+    """
+    source = tmp_path / "source"
+    source.mkdir()
+    train_path = source / "train.lance"
+    val_path = source / "val.lance"
+    train_version = _source(train_path, rows=2)
+    val_version = _source(val_path, rows=2, param_row=[0.1, 0.2, 0.3])
+    checkpoint = tmp_path / "model.ckpt"
+    _checkpoint(checkpoint)
+    config = _config(source, tmp_path / "output", checkpoint, train_version).model_copy(
+        update={
+            "splits": ("train", "val"),
+            "source_versions": {"train": train_version, "val": val_version},
+        }
+    )
+
+    with pytest.raises(ValueError, match="source.*param_array.*shape.*incompatible.*model") as exc:
+        export_slap(config)
+
+    assert isinstance(exc.value.__cause__, RuntimeError)
+    for path, version in [(train_path, train_version), (val_path, val_version)]:
+        unchanged = lance.dataset(path)
+        assert unchanged.version == version
+        assert "row_uuid" not in unchanged.schema.names
 
 
 def test_export_slap_no_index_allows_width_not_divisible_by_pq_subvectors(
@@ -335,7 +740,10 @@ def test_export_slap_uuid_migration_failure_same_request_retry_succeeds(
     export_slap(config)
 
     assert export_slap_module._project_batch is original_project_batch
-    assert lance.dataset(path).to_table(columns=["row_uuid"])["row_uuid"].to_pylist() == migrated_uuids
+    assert (
+        lance.dataset(path).to_table(columns=["row_uuid"])["row_uuid"].to_pylist()
+        == migrated_uuids
+    )
     assert lance.dataset(output / "train.lance").count_rows() == 4
 
 
@@ -413,9 +821,7 @@ def test_export_slap_source_recreated_before_pointer_rejects_wrong_lineage(
         config: ExportSlapConfig,
         output_uri: str,
     ) -> tuple[lance.LanceDataset, _ExportMetadata]:
-        completed = original_complete(
-            dataset, metadata, config=config, output_uri=output_uri
-        )
+        completed = original_complete(dataset, metadata, config=config, output_uri=output_uri)
         shutil.rmtree(path)
         _source(path, row_uuid=[str(uuid4()), str(uuid4())], payload_offset=100)
         return completed
@@ -704,6 +1110,19 @@ def test_normalize_invalid_projection_rejects_modality_contract(
         _normalize(projection, modality)
 
 
+@pytest.mark.parametrize("magnitude", [1e20, 1e-30])
+def test_normalize_extreme_finite_vectors_returns_unit_float32(magnitude: float) -> None:
+    """Finite float32 magnitudes normalize without overflow or underflow.
+
+    :param magnitude: Large or tiny finite component magnitude.
+    """
+    normalized = _normalize(torch.tensor([[magnitude, magnitude]], dtype=torch.float32), "EMA")
+
+    np.testing.assert_allclose(normalized, [[np.sqrt(0.5), np.sqrt(0.5)]], atol=1e-6)
+    assert normalized.dtype == np.float32
+    assert normalized.flags.c_contiguous
+
+
 def test_validate_projection_pair_different_width_rejects_batch() -> None:
     """EMA modalities must share a projection width."""
     with pytest.raises(ValueError, match="dimensions differ"):
@@ -777,6 +1196,7 @@ def test_export_slap_plain_list_input_field_fails_before_uuid_mutation(
     [
         ([float("nan"), 0.0, 0.0, 0.0, 0.0], None, "audio.*nonfinite"),
         (None, [float("inf"), 0.0], "param_array.*nonfinite"),
+        (None, [1.01, 0.0], "param_array.*within.*1"),
         ([1.01, 0.0, 0.0, 0.0, 0.0], None, "within.*1"),
     ],
 )
@@ -902,7 +1322,9 @@ def test_export_slap_config_rejects_local_file_uri_alias(tmp_path: Path) -> None
     checkpoint = tmp_path / "model.ckpt"
     checkpoint.write_bytes(b"checkpoint")
     values = _config(tmp_path / "source", tmp_path / "output", checkpoint, 1).model_dump()
-    values.update(source_root_uri=str(tmp_path / "same"), output_root_uri=(tmp_path / "same").as_uri())
+    values.update(
+        source_root_uri=str(tmp_path / "same"), output_root_uri=(tmp_path / "same").as_uri()
+    )
 
     with pytest.raises(ValueError, match="must differ"):
         ExportSlapConfig.model_validate(values)
@@ -1044,6 +1466,82 @@ def test_export_slap_metadata_shape_mismatch_rejects_before_uuid_migration(
     unchanged = lance.dataset(path)
     assert unchanged.version == version
     assert "row_uuid" not in unchanged.schema.names
+
+
+@pytest.mark.parametrize("batch_size", [1, 3])
+def test_export_slap_transient_later_batch_resumes_without_replaying_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, batch_size: int
+) -> None:
+    """A transient scan failure resumes at the first unconsumed source row.
+
+    :param tmp_path: Isolated dataset root.
+    :param monkeypatch: Scoped Lance scan-boundary failure injection.
+    :param batch_size: Failure after a partial scan or immediately before exhaustion.
+    """
+    source = tmp_path / "source"
+    source.mkdir()
+    source_uuids = [str(uuid4()), str(uuid4()), str(uuid4())]
+    audio_rows = [
+        [0.1, 0.2, 0.3, 0.4, 0.5],
+        [0.5, 0.4, 0.3, 0.2, 0.1],
+        [-0.5, -0.25, 0.0, 0.25, 0.5],
+    ]
+    param_rows = [[0.75, 0.25], [0.2, 0.8], [0.6, 0.1]]
+    version = _source(
+        source / "train.lance",
+        rows=3,
+        row_uuid=source_uuids,
+        audio_rows=audio_rows,
+        param_rows=param_rows,
+    )
+    checkpoint = tmp_path / "model.ckpt"
+    trained = _checkpoint(checkpoint)
+    original_to_batches = cast(
+        Callable[..., Iterator[pa.RecordBatch]], lance.LanceDataset.to_batches
+    )
+    injected = False
+
+    def fail_after_first_output_batch(
+        dataset: lance.LanceDataset, *args: object, **kwargs: object
+    ) -> Iterator[pa.RecordBatch]:
+        nonlocal injected
+        batches = original_to_batches(dataset, *args, **kwargs)
+        columns = kwargs.get("columns")
+        if injected or columns != ["row_uuid", "audio", "param_array"]:
+            return batches
+
+        def transient_batches() -> Iterator[pa.RecordBatch]:
+            nonlocal injected
+            yield next(batches)
+            injected = True
+            raise TimeoutError("transient object-store read")
+
+        return transient_batches()
+
+    monkeypatch.setattr(lance.LanceDataset, "to_batches", fail_after_first_output_batch)
+
+    export_slap(_config(source, tmp_path / "output", checkpoint, version, batch_size=batch_size))
+
+    table = lance.dataset(tmp_path / "output" / "train.lance").to_table()
+    prepared = prepare_batch(
+        {
+            "audio": np.asarray(audio_rows, dtype=np.float32).reshape(3, 1, 5),
+            "param_array": np.asarray(param_rows, dtype=np.float32),
+        },
+        mean=None,
+        std=None,
+        rescale_params=True,
+        ot=False,
+        generator=torch.Generator().manual_seed(29),
+    )
+    with torch.inference_mode():
+        _, expected_audio, _ = trained.audio_ema(cast(torch.Tensor, prepared["audio"]))
+        _, expected_params, _ = trained.text_ema(cast(torch.Tensor, prepared["params"]))
+    vectors = table["slap"].combine_chunks().values.to_numpy().reshape(6, 2)
+    assert injected
+    np.testing.assert_array_equal(table["row_uuid"].to_pylist(), np.repeat(source_uuids, 2))
+    np.testing.assert_allclose(vectors[::2], expected_params.numpy(), atol=1e-6)
+    np.testing.assert_allclose(vectors[1::2], expected_audio.numpy(), atol=1e-6)
 
 
 def test_export_slap_transient_source_open_retries_to_complete(

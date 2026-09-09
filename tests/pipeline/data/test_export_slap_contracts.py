@@ -328,14 +328,14 @@ def test_export_slap_distinct_splits_preserve_uuid_and_projection_isolation(
         rows=1,
         row_uuid=[train_uuid],
         audio_row=[0.1, 0.2, 0.3, 0.4, 0.5],
-        param_row=[2.0, 1.0],
+        param_row=[0.75, 0.25],
     )
     val_version = _source(
         source / "val.lance",
         rows=1,
         row_uuid=[val_uuid],
         audio_row=[-0.1, -0.2, -0.3, -0.4, -0.5],
-        param_row=[1.0, 2.0],
+        param_row=[0.25, 0.75],
     )
     checkpoint = tmp_path / "model.ckpt"
     _checkpoint(checkpoint)

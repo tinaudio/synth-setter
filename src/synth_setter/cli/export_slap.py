@@ -33,7 +33,7 @@ def _hydra_main(cfg: DictConfig) -> None:
 
 
 def main() -> None:
-    """Run the SLAP export Hydra CLI."""
+    """Entrypoint used by the synth-setter-export-slap console script."""
     _hydra_main()
 
 
