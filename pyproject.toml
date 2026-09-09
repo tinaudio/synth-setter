@@ -592,6 +592,7 @@ source = ["src/synth_setter", "scripts/ci"]
 branch = true
 parallel = true
 concurrency = ["thread", "multiprocessing"]
+patch = ["subprocess"]
 relative_files = true
 omit = ["**/__main__.py"]
 
