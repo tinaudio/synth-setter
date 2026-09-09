@@ -1575,10 +1575,10 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
 
 
 @pytest.mark.slow
-def test_evaluate_seeded_override_repeats_legacy_mixed_endpoint_checkpoint(
+def test_evaluate_seeded_override_repeats_weighted_mixed_endpoint_checkpoint(
     tmp_path: Path,
 ) -> None:
-    """Evaluation opts a legacy mixed-endpoint checkpoint into repeatable sampling.
+    """Evaluation opts a weighted mixed-endpoint checkpoint into repeatable sampling.
 
     :param tmp_path: Checkpoint and evaluation output directory.
     """
@@ -1602,6 +1602,7 @@ def test_evaluate_seeded_override_repeats_legacy_mixed_endpoint_checkpoint(
         cfg.mode = "test"
         cfg.model.compile = False
         cfg.model.endpoint_loss = "mixed"
+        cfg.model.endpoint_time_weighting = "flowmol3"
         cfg.model.parameterization = "endpoint"
         cfg.model.encoder.d_model = 16
         cfg.model.encoder.n_heads = 1
@@ -1664,6 +1665,7 @@ def test_evaluate_seeded_override_repeats_legacy_mixed_endpoint_checkpoint(
         for key in endpoint_metric_keys
     )
     assert object_dict["model"].hparams.endpoint_loss == "mixed"
+    assert object_dict["model"].hparams.endpoint_time_weighting == "flowmol3"
     assert object_dict["model"].hparams.seeded_evaluation is True
 
 
