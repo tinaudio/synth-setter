@@ -1503,6 +1503,30 @@ def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
         object_dict["datamodule"].test_dataloader()
 
 
+def test_train_experiment_labels_offline_run_preserves_display_metadata(
+    cfg_train_wandb_labels: DictConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real training step logs the selected experiment's name and tags.
+
+    :param cfg_train_wandb_labels: Tiny Lance workload with production W&B metadata.
+    :param monkeypatch: Forces offline W&B for the training run.
+    """
+    import wandb
+
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    wandb.teardown()
+    HydraConfig().set_config(cfg_train_wandb_labels)
+    try:
+        _, objects = train(cfg_train_wandb_labels)
+        run = objects["logger"][0].experiment
+        assert objects["trainer"].global_step == 1
+        assert run.name == "surge-simple-onehot_ffn"
+        assert {"surge", "surge-simple-onehot", "ffn"} <= set(run.tags)
+    finally:
+        wandb.finish()
+        wandb.teardown()
+
+
 def test_train_wandb_config_resolves_scheduler_max_steps(
     cfg_train_lance: DictConfig,
 ) -> None:

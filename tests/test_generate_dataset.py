@@ -80,7 +80,7 @@ from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.processes import collect_process_results
 from tests.helpers.subprocess_args import find_script_index
-from tests.helpers.wandb_offline import read_history_rows, read_run_project
+from tests.helpers.wandb_offline import read_history_rows, read_run_labels, read_run_project
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
@@ -436,6 +436,11 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     )
     assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
     wandb_binary = wandb_binaries[0]
+    assert read_run_project(wandb_binary) == "synth-setter-citest"
+    assert read_run_labels(wandb_binary) == (
+        "generate-dataset-smoke-shard",
+        ("generate_dataset", "smoke-shard"),
+    )
     assert read_run_project(wandb_binary) == expected_project
     rows = read_history_rows(
         wandb_binary,

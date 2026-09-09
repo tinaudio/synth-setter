@@ -124,6 +124,34 @@ def read_run_project(
     )
 
 
+def read_run_labels(
+    wandb_binary: Path,
+) -> tuple[str, tuple[str, ...]] | None:
+    """Decode the display name and tags persisted in an offline run.
+
+    :param wandb_binary: Offline run datastore to read.
+    :returns: Display name and tags, or ``None`` if no run record was flushed.
+    """
+    return _poll_until(
+        lambda: _scan_run_labels(wandb_binary),
+        lambda labels: labels is not None,
+        _FLUSH_TIMEOUT_S,
+    )
+
+
+def _scan_run_labels(wandb_binary: Path) -> tuple[str, tuple[str, ...]] | None:
+    """Read display metadata from the datastore's run record.
+
+    :param wandb_binary: Offline run datastore to read.
+    :returns: Display name and tags when present, otherwise ``None``.
+    """
+    with _iter_records(wandb_binary) as records:
+        for record in records:
+            if record.WhichOneof("record_type") == "run":
+                return record.run.display_name, tuple(record.run.tags)
+    return None
+
+
 def read_history_rows(
     wandb_binary: Path,
     *,
