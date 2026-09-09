@@ -487,6 +487,10 @@ def _run_test_epoch(param_spec: str, per_param_mse: torch.Tensor) -> dict[str, f
     "param_spec",
     [
         "obxf",
+        "pyfdn_gotz_n8_mono_fixed_delays",
+        "pyfdn_gotz_n8_mono_fixed_delays_givens",
+        "pyfdn_gotz_n8_mono_learned_delays",
+        "pyfdn_gotz_n8_mono_learned_delays_givens",
         "pyfdn_n8_mono_householder",
         "pyfdn_pitchshift_n8_mono_householder",
         "surge_4",
@@ -782,3 +786,72 @@ def test_log_figure_is_noop_on_non_zero_rank():
 
     assert wandb_logger.image_calls == []
     assert tb_logger.experiment.figure_calls == []
+
+
+def test_plot_learnt_projection_logs_similarity_for_projection_attribute() -> None:
+    """A flow model with a learnt projection emits assignment and similarity plots."""
+    projection = LearntProjection(
+        d_model=2,
+        d_token=2,
+        num_params=3,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    )
+    module = Mock(spec=VSTFlowMatchingModule)
+    module.vector_field = SimpleNamespace(projection=projection)
+    wandb_logger = _RecordingWandbLogger()
+
+    PlotLearntProjection().on_validation_epoch_end(_trainer([wandb_logger]), module)
+
+    assert [call["key"] for call in wandb_logger.image_calls] == ["assignment", "value"]
+
+
+@pytest.mark.parametrize(
+    ("steps", "expected_steps"),
+    [((0, 0), []), ((1, 1, 1), [1, 1]), ((1, 1, 2), [1, 1, 2, 2])],
+)
+def test_projection_plots_accumulated_batches_emit_once_per_optimizer_step(
+    steps: tuple[int, ...], expected_steps: list[int]
+) -> None:
+    """Accumulated batches must not duplicate optimizer-step images.
+
+    :param steps: Optimizer steps observed at successive batch ends.
+    :param expected_steps: Steps attached to the assignment and value images.
+    """
+    projection = LearntProjection(
+        d_model=2,
+        d_token=2,
+        num_params=3,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    )
+    module = Mock(spec=VSTFlowMatchingModule)
+    module.vector_field = SimpleNamespace(projection=projection)
+    logger = _RecordingWandbLogger()
+    callback = PlotLearntProjection(after_val=False, every_n_steps=1)
+
+    for step in steps:
+        callback.on_train_batch_end(_trainer([logger], global_step=step), module, None, None, 0)
+
+    assert [call["step"] for call in logger.image_calls] == expected_steps
+
+
+def test_plot_learnt_projection_logs_bfloat16_projection() -> None:
+    """Bfloat16 training parameters are converted before plotting."""
+    projection = LearntProjection(
+        d_model=2,
+        d_token=2,
+        num_params=3,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    ).to(dtype=torch.bfloat16)
+    module = Mock(spec=VSTFlowMatchingModule)
+    module.vector_field = SimpleNamespace(projection=projection)
+    wandb_logger = _RecordingWandbLogger()
+
+    PlotLearntProjection().on_validation_epoch_end(_trainer([wandb_logger]), module)
+
+    assert [call["key"] for call in wandb_logger.image_calls] == ["assignment", "value"]

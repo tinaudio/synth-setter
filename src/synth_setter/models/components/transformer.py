@@ -845,7 +845,21 @@ class ASTWithProjectionHead(AudioSpectrogramTransformer):
         patch_stride: int = 10,
         input_channels: int = 2,
         spec_shape: tuple[int] = (128, 401),
-    ):
+        token_embed: nn.Module | None = None,
+    ) -> None:
+        """Encode inputs into one vector through the residual projection head.
+
+        :param d_model: Transformer and hidden projection width.
+        :param d_out: Final embedding or prediction width.
+        :param n_heads: Attention heads per layer.
+        :param n_layers: Transformer depth.
+        :param patch_size: Spectrogram patch edge, ignored with ``token_embed``.
+        :param patch_stride: Spectrogram patch stride, ignored with ``token_embed``.
+        :param input_channels: Spectrogram channels, ignored with ``token_embed``.
+        :param spec_shape: Mel-by-frame shape, ignored with ``token_embed``.
+        :param token_embed: Optional tokenizer exposing ``num_tokens`` and producing
+            ``(batch, tokens, d_model)`` sequences.
+        """
         super().__init__(
             d_model=d_model,
             n_heads=n_heads,
@@ -855,6 +869,7 @@ class ASTWithProjectionHead(AudioSpectrogramTransformer):
             patch_stride=patch_stride,
             input_channels=input_channels,
             spec_shape=spec_shape,
+            token_embed=token_embed,
         )
 
         self.prediction_head = nn.Sequential(

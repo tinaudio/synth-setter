@@ -460,6 +460,7 @@ class PlotLearntProjection(Callback):
         self.after_val = after_val
         self.every_n_steps = every_n_steps
         self.sort_assignments = sort_assignments
+        self._last_plotted_step = 0
 
     def _sort_assignments(self, assignment):
         assignment = assignment.abs()
@@ -479,7 +480,7 @@ class PlotLearntProjection(Callback):
 
         maxval = assignment.abs().max().item()
         img = ax.imshow(
-            assignment.detach().cpu().numpy(),
+            assignment.detach().cpu().float().numpy(),
             aspect="equal",
             vmin=-maxval,
             vmax=maxval,
@@ -520,7 +521,7 @@ class PlotLearntProjection(Callback):
         out_max = out_sim.abs().max().item()
 
         val_im = ax[0].imshow(
-            val_sim.detach().cpu().numpy(),
+            val_sim.detach().cpu().float().numpy(),
             aspect="equal",
             vmin=-val_max,
             vmax=val_max,
@@ -531,7 +532,7 @@ class PlotLearntProjection(Callback):
         ax[0].set_ylabel("params")
 
         out_im = ax[1].imshow(
-            out_sim.detach().cpu().numpy(),
+            out_sim.detach().cpu().float().numpy(),
             aspect="equal",
             vmin=-out_max,
             vmax=out_max,
@@ -579,11 +580,13 @@ class PlotLearntProjection(Callback):
         if self.every_n_steps is None:
             return
 
-        if trainer.global_step % self.every_n_steps != 0:
+        step = trainer.global_step
+        if step == 0 or step == self._last_plotted_step or step % self.every_n_steps != 0:
             return
 
         with torch.no_grad():
             self._do_plotting(trainer, pl_module)
+        self._last_plotted_step = step
 
 
 def _plain_cpu_tensor(tensor: torch.Tensor) -> torch.Tensor:

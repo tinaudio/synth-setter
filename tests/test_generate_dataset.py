@@ -80,12 +80,12 @@ from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.processes import collect_process_results
 from tests.helpers.subprocess_args import find_script_index
-from tests.helpers.wandb_offline import read_history_rows, read_run_project
+from tests.helpers.wandb_offline import read_history_rows, read_run_labels, read_run_project
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
 # only keys in ``metrics.json`` (see ``synth_setter.evaluation.compute_audio_metrics``).
-_ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms")
+_ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms", "mldr")
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _REAL_PLUGIN_VST3 = (
@@ -358,7 +358,13 @@ def test_cfg_dataset_default_plugin_reload_cadence_is_once(
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize(
+    ("project_env", "expected_project"),
+    [(None, "synth-setter-generate-dataset"), ("synth-setter-citest", "synth-setter-citest")],
+)
 def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
+    project_env: str | None,
+    expected_project: str,
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -375,6 +381,8 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     the assigned split dataset (#1776), and (3) a second ``from_hydra`` pass
     renders nothing because the probe finds all shards already staged.
 
+    :param project_env: Optional project override for isolated CI runs.
+    :param expected_project: Project persisted by the worker's W&B run.
     :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``
         and ``tmp_path``-pinned paths (the same ``tmp_path`` ``fake_r2_remote``
         backs ``r2:`` against).
@@ -385,7 +393,9 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     monkeypatch.setenv("WANDB_MODE", "offline")
-    monkeypatch.setenv("WANDB_PROJECT", "synth-setter-citest")
+    monkeypatch.delenv("WANDB_PROJECT", raising=False)
+    if project_env is not None:
+        monkeypatch.setenv("WANDB_PROJECT", project_env)
     monkeypatch.setattr(
         "synth_setter.pipeline.ci.validate_shard.LANCE_VALIDATION_BATCH_SIZE_BYTES",
         1,
@@ -427,6 +437,11 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
     wandb_binary = wandb_binaries[0]
     assert read_run_project(wandb_binary) == "synth-setter-citest"
+    assert read_run_labels(wandb_binary) == (
+        "generate-dataset-smoke-shard",
+        ("generate_dataset", "smoke-shard"),
+    )
+    assert read_run_project(wandb_binary) == expected_project
     rows = read_history_rows(
         wandb_binary,
         until=lambda scanned: (
@@ -1107,22 +1122,35 @@ def test_from_hydra_surgepy_experiment_writes_consumable_shard(
     assert validate_all_shards_from_r2(spec) == []
 
 
-def test_from_hydra_pyfdn_pitchshift_writes_45_coordinate_shard(
+@pytest.mark.parametrize(
+    ("identity", "width"),
+    [
+        ("pyfdn_pitchshift_n8_mono_householder", 45),
+        ("pyfdn_gotz_n8_mono_fixed_delays", 144),
+        ("pyfdn_gotz_n8_mono_learned_delays", 152),
+        ("pyfdn_gotz_n8_mono_fixed_delays_givens", 172),
+        ("pyfdn_gotz_n8_mono_learned_delays_givens", 180),
+    ],
+)
+def test_from_hydra_pyfdn_identity_writes_shard_at_spec_width(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
+    identity: str,
+    width: int,
 ) -> None:
-    """The Hydra entrypoint renders the pitch-shift identity through real pyFDN.
+    """The Hydra entrypoint renders each non-default pyFDN identity through real pyFDN.
 
-    :param cfg_dataset: Composed dataset configuration changed to pitch-shift pyFDN.
+    :param cfg_dataset: Composed dataset configuration changed to the identity.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
     :param monkeypatch: Pins the worker contract.
+    :param identity: Registered pyFDN synth and ParamSpec name.
+    :param width: Encoded width the written shard must carry.
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-    identity = "pyfdn_pitchshift_n8_mono_householder"
     with open_dict(cfg_dataset):
-        cfg_dataset.task_name = "pyfdn-pitchshift-entrypoint-e2e"
+        cfg_dataset.task_name = f"{identity}-entrypoint-e2e"
         cfg_dataset.output_format = "lance"
         cfg_dataset.train_val_test_sizes = [1, 0, 0]
         cfg_dataset.synth.name = identity
@@ -1145,40 +1173,46 @@ def test_from_hydra_pyfdn_pitchshift_writes_45_coordinate_shard(
         cfg_dataset.render.param_sample_cadence = "sample"
         cfg_dataset.render.plugin_reload_cadence = "render"
         cfg_dataset.render.gui_toggle_cadence = "never"
-        cfg_dataset.r2.prefix = "fake-r2/pyfdn-pitchshift-run/"
+        cfg_dataset.r2.prefix = f"fake-r2/{identity}-run/"
         cfg_dataset.logger = None
 
     spec = spec_from_cfg(cfg_dataset)
 
     from_hydra(cfg_dataset)
 
-    assert spec.num_params == 45
+    assert spec.num_params == width
     assert spec.render.param_spec_name == identity
     assert validate_all_shards_from_r2(spec) == []
-    shard = spec.shards[0]
-    uploaded = list(fake_r2_remote.rglob(shard.filename))
+    uploaded = list(fake_r2_remote.rglob(spec.shards[0].filename))
     assert len(uploaded) == 1
     param_type = lance.dataset(str(uploaded[0])).schema.field(PARAM_ARRAY_FIELD).type
     assert isinstance(param_type, pa.FixedShapeTensorType)
-    assert tuple(param_type.shape) == (45,)
+    assert tuple(param_type.shape) == (width,)
 
 
-def test_from_hydra_pyfdn_kronecker_writes_36_coordinate_shard(
+@pytest.mark.parametrize(
+    ("identity", "width"),
+    [("pyfdn_n8_mono_kronecker", 36), ("pyfdn_n8_mono_householder_vector", 35)],
+)
+def test_from_hydra_pyfdn_derived_feedback_writes_widened_shard(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
+    identity: str,
+    width: int,
 ) -> None:
-    """The Hydra entrypoint renders the Kronecker identity through real pyFDN.
+    """The Hydra entrypoint renders a derived-feedback identity through real pyFDN.
 
-    :param cfg_dataset: Composed dataset configuration changed to Kronecker pyFDN.
+    :param cfg_dataset: Composed dataset configuration changed to the selected pyFDN identity.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
     :param monkeypatch: Pins the worker contract.
+    :param identity: Registered derived-feedback pyFDN identity.
+    :param width: Encoded row width that identity must materialize.
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-    identity = "pyfdn_n8_mono_kronecker"
     with open_dict(cfg_dataset):
-        cfg_dataset.task_name = "pyfdn-kronecker-entrypoint-e2e"
+        cfg_dataset.task_name = f"{identity}-entrypoint-e2e"
         cfg_dataset.output_format = "lance"
         cfg_dataset.train_val_test_sizes = [1, 0, 0]
         cfg_dataset.synth.name = identity
@@ -1201,14 +1235,14 @@ def test_from_hydra_pyfdn_kronecker_writes_36_coordinate_shard(
         cfg_dataset.render.param_sample_cadence = "sample"
         cfg_dataset.render.plugin_reload_cadence = "render"
         cfg_dataset.render.gui_toggle_cadence = "never"
-        cfg_dataset.r2.prefix = "fake-r2/pyfdn-kronecker-run/"
+        cfg_dataset.r2.prefix = f"fake-r2/{identity}-run/"
         cfg_dataset.logger = None
 
     spec = spec_from_cfg(cfg_dataset)
 
     from_hydra(cfg_dataset)
 
-    assert spec.num_params == 36
+    assert spec.num_params == width
     assert spec.render.param_spec_name == identity
     assert validate_all_shards_from_r2(spec) == []
     shard = spec.shards[0]
@@ -1216,7 +1250,7 @@ def test_from_hydra_pyfdn_kronecker_writes_36_coordinate_shard(
     assert len(uploaded) == 1
     param_type = lance.dataset(str(uploaded[0])).schema.field(PARAM_ARRAY_FIELD).type
     assert isinstance(param_type, pa.FixedShapeTensorType)
-    assert tuple(param_type.shape) == (36,)
+    assert tuple(param_type.shape) == (width,)
 
 
 def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(
@@ -2046,6 +2080,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             assert metrics[f"{metric_prefix}audio/wmfcc_mean"] < bounds.wmfcc_max, (split, metrics)
             assert metrics[f"{metric_prefix}audio/sot_mean"] < bounds.sot_max, (split, metrics)
             assert metrics[f"{metric_prefix}audio/rms_mean"] > bounds.rms_min, (split, metrics)
+            assert metrics[f"{metric_prefix}audio/mldr_mean"] < bounds.mldr_max, (split, metrics)
     finally:
         r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{prefix_root}/")
 

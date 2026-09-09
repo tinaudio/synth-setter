@@ -43,7 +43,7 @@ def test_ssondo_hydra_main_real_checkpoint_writes_stable_input_sensitive_vectors
             f"lance_uri={uri}",
             "embeddings=[ssondo]",
             "device=cpu",
-            "batch_size=2",
+            "lance_batch_size=2",
             "build_index=false",
             f"paths.log_dir={tmp_path}",
             f"hydra.run.dir={tmp_path / 'hydra'}",

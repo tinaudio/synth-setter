@@ -10,13 +10,14 @@ from __future__ import annotations
 from pathlib import Path
 
 import hydra
+import numpy as np
 import pytest
 import torch
 from click.testing import CliRunner
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.tools.plot_param2tok import get_labels, instantiate_model, main
+from synth_setter.tools.plot_param2tok import cosine_self_sim, get_labels, instantiate_model, main
 
 
 def _tiny_model_config(projection: dict[str, object], num_params: int) -> DictConfig:
@@ -133,3 +134,43 @@ def test_instantiate_model_with_incompatible_state_rejects_checkpoint(tmp_path: 
 
     with pytest.raises(RuntimeError, match="Missing key.*_assignment"):
         instantiate_model(config.model, checkpoint, map_location="cpu")
+
+
+def test_cosine_self_sim_with_different_norms_returns_symmetric_similarity() -> None:
+    """Pairwise cosine similarity normalizes both vectors independently."""
+    vectors = np.array([[2.0, 0.0], [1.0, 1.0]])
+
+    similarity = cosine_self_sim(vectors)
+
+    np.testing.assert_allclose(
+        similarity,
+        np.array([[1.0, 1 / np.sqrt(2)], [1 / np.sqrt(2), 1.0]]),
+    )
+
+
+def test_cosine_self_sim_with_zero_vector_returns_zero_similarity() -> None:
+    """A zero projection has finite zero similarity with every vector."""
+    vectors = np.array([[0.0, 0.0], [1.0, 0.0]])
+
+    similarity = cosine_self_sim(vectors)
+
+    np.testing.assert_array_equal(similarity, np.array([[0.0, 0.0], [0.0, 1.0]]))
+
+
+def test_cosine_self_sim_with_float16_zero_vector_returns_finite_similarity() -> None:
+    """Zero vectors have finite zero cosine similarity in float16."""
+    vectors = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float16)
+
+    similarity = cosine_self_sim(vectors)
+
+    assert np.isfinite(similarity).all()
+    np.testing.assert_array_equal(similarity, np.array([[0.0, 0.0], [0.0, 1.0]]))
+
+
+def test_cosine_self_sim_with_tiny_nonzero_vector_preserves_cosine() -> None:
+    """Cosine similarity is invariant to nonzero vector magnitude."""
+    vectors = np.array([[1e-9, 0.0], [1.0, 0.0]])
+
+    similarity = cosine_self_sim(vectors)
+
+    np.testing.assert_allclose(similarity, np.ones((2, 2)))

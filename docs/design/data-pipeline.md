@@ -841,7 +841,7 @@ No `check_tasks` method exists. Provider APIs answer the wrong question ("is the
 
 The pipeline's output format is **Lance**. The renderer CLI dispatches on the shard's filename suffix (`.lance` → `make_lance_dataset`) via `OutputFormat.from_extension`.
 
-Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline derives logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) from the staging path, filename, and spec rather than storing it in the sidecar ([§14.4](#144-lance-fragment-sidecar-schema)). Rows carry three Arrow fixed-shape-tensor columns plus two preview columns: `render.audio_dtype` and `render.mel_spec_dtype` select float16 or float32 storage, `param_array` stays float32, `audio_mp3` is non-null binary tagged `audio/mpeg` and encoded at the format's fixed 128 kbps setting, and `audio_uuid` is a non-null UUIDv5 string derived from the persisted audio bytes. VST generation accepts the MP3-supported rates 8, 11.025, 12, 16, 22.05, 24, 32, 44.1, and 48 kHz. pyFDN fixes tensors to float32 audio `(1, 176400)` and float32 mel `(1, 128, 401)`; parameter tensors are `(91,)` for the plain identity and `(45,)` for pitch-shift shimmer. The schema embeds `ShardMetadata` JSON and pins the on-disk format to `data_storage_version="2.2"`.
+Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline derives logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) from the staging path, filename, and spec rather than storing it in the sidecar ([§14.4](#144-lance-fragment-sidecar-schema)). Rows carry three Arrow fixed-shape-tensor columns plus two preview columns: `render.audio_dtype` and `render.mel_spec_dtype` select float16 or float32 storage, `param_array` stays float32, `audio_mp3` is non-null binary tagged `audio/mpeg` and encoded at the format's fixed 128 kbps setting, and `audio_uuid` is a non-null UUIDv5 string derived from the persisted audio bytes. VST generation accepts the MP3-supported rates 8, 11.025, 12, 16, 22.05, 24, 32, 44.1, and 48 kHz. pyFDN fixes tensors to float32 audio `(1, 176400)` and float32 mel `(1, 128, 401)`; parameter-tensor width varies per synth's `ParamSpec.encoded_width` (see `src/synth_setter/data/pyfdn_param_spec.py`). The schema embeds `ShardMetadata` JSON and pins the on-disk format to `data_storage_version="2.2"`.
 
 **Why Lance:** the columnar layout gives per-column projection (train on `mel_spec` + `param_array` without decoding `audio`), the dataset streams natively from object storage for both random-access and sequential loaders, and fragment-based finalize commits winning fragment metadata instead of rewriting rows — so finalize decodes zero audio rows and never becomes a single-machine bottleneck ([§12](#12-open-questions-risks--limitations)). One format serves both the local single-GPU random-access case and the multi-GPU streaming case.
 
@@ -853,7 +853,7 @@ Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are 
 
 W&B serves as a lightweight observability layer for the pipeline — a few key metrics and the dataset as a first-class artifact. It is not a monitoring dashboard or a log aggregator. W&B is an index and lineage tracker, not the authoritative dataset store. R2 holds the data; `dataset.json` holds the metadata; W&B points to both.
 
-The finalize stage initializes W&B with `wandb.init(project="synth-setter", job_type="data-generation")`.
+The finalize stage opens its own W&B run (`id={spec.run_id}-finalize`, `job_type=finalize`) rather than resuming the data-generation run; see [storage-provenance-spec.md §7](storage-provenance-spec.md#7-job_type-values) for the authoritative `job_type` list.
 
 ### Metadata Placement
 
@@ -1171,10 +1171,10 @@ leaves `num_sub_vectors` null to let each spec's default apply.
 Sketch extraction is batch-vectorized torch and runs on the configured device
 (auto-CUDA, ~6.5× CPU on a consumer GPU; the CPU path already saturates
 multiple cores via torch intra-op threading, so a process pool would add
-contention, not throughput). `sketch_encode_chunk` caps rows per extractor
+contention, not throughput). `sketch_encode_batch` caps rows per extractor
 invocation: the default 32 bounds CPU RSS (#2707), while a large GPU may need a
-bigger chunk to saturate — benchmark per #3131 before a large backfill. The
-resolved device and chunk are logged at encoder load, so a silently-CPU run is
+bigger batch to saturate — benchmark per #3131 before a large backfill. The
+resolved device and batch are logged at encoder load, so a silently-CPU run is
 visible in the first log lines. Because co-resident encoders share one Lance
 UDF pass and run serially per batch, launch CPU-bound and GPU-bound encoders as
 separate `add-embeddings` runs so neither idles while the other works.
@@ -1296,7 +1296,8 @@ class RenderConfig(BaseModel):
     renderer_backend: RendererBackend
     # Audio/shard geometry, retry budgets, and the cadence knobs
     # (plugin_reload_cadence #1999, gui_toggle_cadence #714,
-    # param_sample_cadence #489) are documented field-by-field on the
+    # param_sample_cadence #489, post_{load,param,render}_flush_blocks #3245)
+    # are documented field-by-field on the
     # authoritative RenderConfig in pipeline/schemas/spec.py; this block is
     # an abridged sketch, not the definition.
     ...

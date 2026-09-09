@@ -11,8 +11,5 @@ defaults:
 run_name: flowmlp
 experiment_name: surge-full-onehot
 
-tags:
-  - surge
-
 callbacks:
   plot_proj_ii: null

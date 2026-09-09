@@ -218,6 +218,7 @@ def test_test_mps_yaml_matches_cfg_surge_xt_global(experiment: str, test_mps_yam
             id="datamodule",
         ),
         pytest.param("train.yaml", ["experiment=pyfdn/flow"], id="train"),
+        pytest.param("train.yaml", ["experiment=pyfdn/flow_cepstrum_online"], id="cepstrum"),
         pytest.param(
             "eval.yaml",
             ["experiment=pyfdn/flow", "ckpt_path=null"],
@@ -241,6 +242,18 @@ def test_pyfdn_configs_compose_without_external_source(
     assert cfg.datamodule._target_ == "synth_setter.data.lance_datamodule.LanceVSTDataModule"
 
 
+def test_pyfdn_cepstrum_online_experiment_sizes_ast_to_quefrency_grid() -> None:
+    """The cepstral AST's patch grid follows the front end's quefrency window and hop."""
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow_cepstrum_online"])
+
+    frontend = cfg.model.encoder.frontend
+    assert frontend._target_.endswith("CepstrogramFrontend")
+    assert frontend.in_dim == 176_400
+    assert list(cfg.model.encoder.backbone.spec_shape) == [2_500, 17]
+    assert cfg.model.conditioning == "audio"
+    assert cfg.datamodule.conditioning == "audio"
+
+
 @pytest.mark.parametrize(
     ("config_name", "overrides"),
     [
@@ -258,6 +271,26 @@ def test_pyfdn_configs_compose_without_external_source(
             ],
             id="pitchshift",
         ),
+        pytest.param(
+            "train.yaml",
+            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_fixed_delays"],
+            id="gotz_fixed_delays",
+        ),
+        pytest.param(
+            "train.yaml",
+            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_learned_delays"],
+            id="gotz_learned_delays",
+        ),
+        pytest.param(
+            "train.yaml",
+            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_fixed_delays_givens"],
+            id="gotz_fixed_delays_givens",
+        ),
+        pytest.param(
+            "train.yaml",
+            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_learned_delays_givens"],
+            id="gotz_learned_delays_givens",
+        ),
     ],
 )
 def test_pyfdn_flow_composition_enables_per_param_metrics(
@@ -271,6 +304,25 @@ def test_pyfdn_flow_composition_enables_per_param_metrics(
     cfg = _compose(config_name, overrides)
 
     assert cfg.callbacks.log_per_param_mse.param_spec == cfg.synth.param_spec_name
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        "pyfdn_gotz_n8_mono_fixed_delays_givens",
+        "pyfdn_gotz_n8_mono_learned_delays_givens",
+    ],
+)
+def test_pyfdn_gotz_givens_hydra_selector_owns_codec_identity(identity: str) -> None:
+    """Each Givens selector propagates its incompatible codec identity through Hydra.
+
+    :param identity: Fixed- or learned-delay Givens synth identity.
+    """
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow", f"synth={identity}"])
+
+    assert cfg.synth.param_spec_name == identity
+    assert cfg.datamodule.param_spec_name == identity
+    assert cfg.model.param_spec == identity
 
 
 def test_pyfdn_pitchshift_hydra_identity_dispatches_matching_renderer() -> None:
@@ -602,6 +654,7 @@ def _conditioning_profile_names() -> list[str]:
 _WAVEFORM_CONDITIONING_PROFILES = frozenset(
     {
         "ast_online",
+        "cepstrum_online",
         "clap_online",
         "log_mel",
         "pupujepa_large_online",
@@ -1653,6 +1706,80 @@ def test_third_party_eval_config_resolves_per_corpus(corpus: str, audio_column: 
     assert cfg.datamodule.sample_rate == cfg.render.sample_rate
     assert cfg.datamodule.signal_duration_seconds == cfg.render.signal_duration_seconds
     assert cfg.datamodule.conditioning == "mel"
+
+
+@pytest.mark.parametrize(
+    ("corpus", "prefix", "path_rule"),
+    [
+        pytest.param("mit_ir_survey", "MITIRSurvey", None, id="mit"),
+        pytest.param("echothief", "EchoThief", None, id="echothief"),
+        pytest.param("ashir", "ASHIR", "BRIRs/%", id="ashir"),
+        pytest.param("openair", "OpenAIR", "IRs/%", id="openair"),
+        pytest.param(
+            "thkoeln_omni", "THKoelnSRIR", "starts_with(source_path, 'Omni_ir_')", id="thkoeln"
+        ),
+        pytest.param("arni", "Arni", None, id="arni"),
+    ],
+)
+def test_rir_corpus_config_serves_decodable_rows_downmixed_onto_pyfdn(
+    corpus: str, prefix: str, path_rule: str | None
+) -> None:
+    """Each published RIR corpus composes onto the mono pyFDN contract through config alone.
+
+    :param corpus: Corpus config under ``datamodule/third_party/rir``.
+    :param prefix: Published R2 prefix the corpus reads in place.
+    :param path_rule: Path pattern the predicate must carry, or ``None`` when every
+        decodable row is an impulse response.
+    """
+    cfg = _compose(
+        "eval.yaml",
+        [
+            "experiment=pyfdn/eval_flow_rir",
+            f"datamodule=third_party/rir/{corpus}",
+            "trainer=cpu",
+            "ckpt_path=/tmp/none.ckpt",
+            "paths.output_dir=/tmp/synth-setter-test",
+        ],
+    )
+
+    assert cfg.datamodule.dataset_uri == f"r2://experiments/third_party/{prefix}/all.lance"
+    assert cfg.datamodule.audio_column == "source_bytes"
+    assert cfg.datamodule.channels == 1
+    assert cfg.datamodule.downmix is True
+    assert cfg.datamodule.peak_normalize is True
+    assert "audio_decodable = true" in cfg.datamodule.row_filter
+    if path_rule is not None:
+        assert path_rule in cfg.datamodule.row_filter
+    datamodule = hydra.utils.instantiate(cfg.datamodule)
+    assert datamodule.row_filter == cfg.datamodule.row_filter
+
+
+def test_pyfdn_rir_eval_experiment_pins_statistics_and_parameterless_prediction() -> None:
+    """The RIR eval experiment scores rendered audio without ground-truth parameters."""
+    cfg = _compose(
+        "eval.yaml",
+        [
+            "experiment=pyfdn/eval_flow_rir",
+            "trainer=cpu",
+            "ckpt_path=/tmp/none.ckpt",
+            "paths.output_dir=/tmp/synth-setter-test",
+        ],
+    )
+
+    assert cfg.mode == "predict"
+    assert cfg.evaluation.no_params is True
+    assert cfg.evaluation.rerender_target is False
+    assert cfg.evaluation.render_vst is True
+    assert cfg.render.renderer_backend == "pyfdn"
+    assert cfg.synth.param_spec_name == "pyfdn_n8_mono_householder"
+    assert cfg.datamodule.mel_stats_uri.endswith(
+        "pyfdn-householder-lance-131k-616k-8k-256-20260904T065718759Z/stats.npz"
+    )
+    assert cfg.datamodule.mel_stats_sha256 == (
+        "db418cbe3e8fa29bfeb1d13a9f64e87352277ab1c1dc5f6bae896ee8f4f34ebc"
+    )
+    assert cfg.datamodule.sample_rate == cfg.render.sample_rate
+    assert cfg.datamodule.signal_duration_seconds == cfg.render.signal_duration_seconds
 
 
 def test_nsynth_sketch_eval_config_pins_corpus_controls_and_training_statistics() -> None:

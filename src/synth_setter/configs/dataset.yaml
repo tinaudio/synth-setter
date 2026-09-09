@@ -16,7 +16,7 @@ defaults:
   - hydra: default
   - skypilot_launch: default
   - experiment: ???
-  - logger: wandb
+  - logger: wandb_dataset
   - extras: default
 
 task_name: ???
@@ -26,6 +26,7 @@ task_name: ???
 # construction), so default it to ``task_name`` for the Hydra output-dir interpolation.
 # Dropped before DatasetSpec construction (it's not a spec field).
 run_name: ${task_name}
+experiment_name: generate-dataset
 output_format: lance
 # Distinct split masters keep held-outs stable as dataset and shard sizes change (#884).
 train_val_test_seeds: [42, 43, 44]
@@ -34,7 +35,7 @@ base_seed: 42
 # Wandb run tags; parity with train.yaml/eval.yaml. ``extras: default`` sets
 # ``enforce_tags: True`` — a non-empty default keeps that path from prompting/raising.
 # Masked out of ``DatasetSpec`` by ``from_hydra_cfg`` (not a spec field).
-tags: ["dev", "generate_dataset"]
+tags: ["generate_dataset", "${task_name}"]
 
 # Forwarded by ``synth-setter-finalize-dataset`` to ``stream_stats_lance``;
 # ``true`` substitutes ``std=1.0`` at zero-variance mel bins instead of raising.

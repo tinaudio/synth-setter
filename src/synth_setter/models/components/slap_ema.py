@@ -93,8 +93,8 @@ class MovingAverageWeightUpdate:
             tau=tau,
         )
         self.update_weights(
-            cast(nn.Module, getattr(module, "text_encoder")),
-            cast(nn.Module, getattr(module, "text_ema")),
+            cast(nn.Module, getattr(module, "param_encoder")),
+            cast(nn.Module, getattr(module, "param_ema")),
             tau=tau,
         )
         module.log("MA rate", tau, on_step=True, on_epoch=False, prog_bar=False, logger=True)
