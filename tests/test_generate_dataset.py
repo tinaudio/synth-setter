@@ -50,7 +50,6 @@ import pytest
 from lance.file import LanceFileReader
 from omegaconf import DictConfig, OmegaConf, open_dict
 from pedalboard.io import AudioFile
-from wandb.sdk.lib.service.service_token import WandbServiceConnectionError
 
 from synth_setter.cli.finalize_dataset import finalize_lance
 from synth_setter.cli.generate_dataset import from_hydra, spec_from_cfg
@@ -360,11 +359,6 @@ def test_cfg_dataset_default_plugin_reload_cadence_is_once(
 
 
 @pytest.mark.fake_vst
-@pytest.mark.xfail(
-    raises=WandbServiceConnectionError,
-    reason="#2564: shared offline W&B service sockets can disappear during the full suite",
-    strict=False,
-)
 @pytest.mark.parametrize(
     ("project_env", "expected_project"),
     [(None, "synth-setter-generate-dataset"), ("synth-setter-citest", "synth-setter-citest")],
@@ -441,8 +435,6 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     wandb_binaries = list(
         Path(cfg_dataset.paths.output_dir).glob("wandb/offline-run-*/run-*.wandb")
     )
-    if not wandb_binaries:
-        pytest.xfail("#2564: the shared offline W&B service produced no run artifact")
     assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
     wandb_binary = wandb_binaries[0]
     actual_project = read_run_project(wandb_binary)
