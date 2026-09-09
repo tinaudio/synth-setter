@@ -1357,7 +1357,7 @@ def main(cfg: DictConfig) -> None:
                     metric_prefix=metric_prefix,
                 )
                 if oracle_probe_launch_id is not None:
-                    uploaded_uri = upload_oracle_probe(
+                    upload_oracle_probe(
                         eval_dir,
                         r2=spec.r2,
                         launch_id=oracle_probe_launch_id,
@@ -1370,7 +1370,6 @@ def main(cfg: DictConfig) -> None:
                             candidate_render=spec.render,
                         ),
                     )
-                    logger.info(f"oracle probe uploaded -> {uploaded_uri}")
         return
 
     if cfg.finalize_inline or cfg.oracle_eval_inline:

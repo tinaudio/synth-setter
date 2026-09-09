@@ -7,14 +7,18 @@ import tempfile
 from pathlib import Path
 from uuid import uuid4
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.r2_location import R2Location
 from synth_setter.pipeline.schemas.spec import RenderConfig, Split
+from synth_setter.utils.logging_utils import resolve_git_sha
 
 _PROVENANCE_FILENAME = "provenance.json"
 _UPLOAD_EXCLUDE = "predictions/**"
+
+logger = structlog.get_logger(__name__)
 
 
 class OracleProbeProvenance(BaseModel):
@@ -47,6 +51,10 @@ class OracleProbeProvenance(BaseModel):
     .. attribute :: candidate_render
 
         Render configuration evaluated against the source.
+
+    .. attribute :: evaluation_git_sha
+
+        Current synth-setter revision that executed the evaluation.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -57,6 +65,11 @@ class OracleProbeProvenance(BaseModel):
     source_run_id: str = Field(min_length=1, description="Source dataset run identity.")
     source_render: RenderConfig = Field(description="Source dataset render configuration.")
     candidate_render: RenderConfig = Field(description="Candidate render configuration.")
+    evaluation_git_sha: str = Field(
+        default_factory=resolve_git_sha,
+        min_length=1,
+        description="Current synth-setter git revision that executed the evaluation.",
+    )
 
     @field_validator("source_dataset_uri")
     @classmethod
@@ -123,8 +136,9 @@ def upload_oracle_probe(
     with tempfile.TemporaryDirectory(prefix="synth-setter-oracle-probe-") as temp_dir:
         archive_dir = Path(temp_dir)
         _copy_probe_artifacts(eval_dir, archive_dir)
-        (archive_dir / _PROVENANCE_FILENAME).write_text(
-            provenance.model_dump_json(indent=2) + "\n", encoding="utf-8"
-        )
         r2_io.upload_dir(archive_dir, destination, exclude=_UPLOAD_EXCLUDE)
+        provenance_path = archive_dir / _PROVENANCE_FILENAME
+        provenance_path.write_text(provenance.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        r2_io.upload_to_uri(provenance_path, f"{destination}/{_PROVENANCE_FILENAME}")
+    logger.info("oracle_probe_uploaded", uri=destination)
     return destination
