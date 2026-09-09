@@ -73,6 +73,8 @@ def _validate_config(
     mel_stats_uri: str | None,
     row_limit: int | None,
     row_filter: str | None,
+    downmix: bool,
+    peak_normalize: bool,
 ) -> None:
     """Reject a configuration that cannot be served correctly.
 
@@ -81,6 +83,8 @@ def _validate_config(
     :param mel_stats_uri: Configured statistics source, if any.
     :param row_limit: Configured row cap, if any.
     :param row_filter: Configured Lance SQL row predicate, if any.
+    :param downmix: Configured channel-averaging switch.
+    :param peak_normalize: Configured unit-peak rescaling switch.
     :raises ValueError: The conditioning mode or normalization configuration is invalid.
     """
     if conditioning != "mel":
@@ -116,6 +120,10 @@ def _validate_config(
             f"row_filter must be a non-empty Lance SQL predicate or null, got {row_filter!r}; "
             "a blank filter would silently serve the whole corpus"
         )
+    # Hydra composes a quoted `=false` as a truthy string, which would enable the switch.
+    for name, value in (("downmix", downmix), ("peak_normalize", peak_normalize)):
+        if not isinstance(value, bool):
+            raise ValueError(f"{name} must be a boolean, got {value!r}")
 
 
 def _validate_numeric_config(
@@ -439,6 +447,8 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             mel_stats_uri=mel_stats_uri,
             row_limit=row_limit,
             row_filter=row_filter,
+            downmix=downmix,
+            peak_normalize=peak_normalize,
         )
         num_samples = _validate_numeric_config(
             sample_rate=sample_rate,
@@ -587,7 +597,9 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             else len(addresses)
         )
         if rows == 0:
-            selection = "no rows" if addresses is None else f"no rows matching {self.row_filter!r}"
+            selection = (
+                "no rows" if addresses is None else f"no rows matching row_filter {self.row_filter!r}"
+            )
             raise ValueError(
                 f"corpus {self.dataset_uri} has {selection}; an empty sweep writes no "
                 "predictions and fails downstream instead of here"
@@ -620,6 +632,9 @@ class ThirdPartyAudioDataModule(LightningDataModule):
     def _filtered_addresses(self, dataset: lance.LanceDataset) -> list[int] | None:
         """Resolve ``row_filter`` to the addresses of the matching rows in stored order.
 
+        ``row_limit`` is pushed into the scan so a smoke run over a large remote
+        corpus never materializes the full match set.
+
         :param dataset: Open corpus.
         :returns: Matching row addresses, or ``None`` when no filter is configured.
         """
@@ -628,7 +643,11 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         table = _retry_lance_read(
             "third_party_row_filter",
             lambda: dataset.scanner(
-                columns=[], filter=self.row_filter, with_row_address=True, scan_in_order=True
+                columns=[],
+                filter=self.row_filter,
+                limit=self.row_limit,
+                with_row_address=True,
+                scan_in_order=True,
             ).to_table(),
         )
         return table.column("_rowaddr").to_pylist()

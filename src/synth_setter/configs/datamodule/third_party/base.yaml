@@ -15,9 +15,8 @@ batch_size: 128
 num_workers: 4
 # First-N rows, for smoke sweeps over a corpus that is otherwise served whole.
 row_limit: null
-# Lance SQL predicate over the corpus columns selecting the served rows; applied
-# before row_limit. Mixed-media corpora (RIR publications) need it to skip
-# non-audio containers and pick one rendering per space.
+# Lance SQL predicate selecting served rows before row_limit; RIR corpora use it
+# to skip non-audio rows (#3236).
 row_filter: null
 # Average multichannel sources to mono before mapping onto the render contract;
 # off, a channel-count mismatch raises.

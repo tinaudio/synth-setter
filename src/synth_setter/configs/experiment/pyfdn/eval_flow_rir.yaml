@@ -1,10 +1,7 @@
 # @package _global_
 
-# Score a pyFDN flow checkpoint against a published real-RIR corpus: the corpus
-# is served live (decode, resample, downmix, length-pin, mel), the model predicts
-# FDN parameters, and the re-rendered impulse responses are compared with the
-# source audio. Pick the corpus at launch, e.g.
-# `experiment=pyfdn/eval_flow_rir datamodule=third_party/rir/echothief ckpt_path=...`.
+# Evaluate a pyFDN flow checkpoint on a selected real-RIR corpus (#3236).
+# Override datamodule=third_party/rir/<corpus> and ckpt_path at launch.
 defaults:
   - /experiment/pyfdn/flow
   - override /callbacks: eval_vst

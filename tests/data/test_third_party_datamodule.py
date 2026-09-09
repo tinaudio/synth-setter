@@ -598,6 +598,48 @@ def test_predict_dataloader_workers_are_spawned_not_forked(tmp_path: Path) -> No
     assert sum(len(batch["audio"]) for batch in loader) == 1
 
 
+@pytest.mark.parametrize("switch", ["downmix", "peak_normalize"])
+@pytest.mark.parametrize("value", ["false", 0, None])
+def test_non_boolean_decode_switch_raises(tmp_path: Path, switch: str, value: object) -> None:
+    """A quoted or numeric switch value is a config typo that must not enable the switch.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param switch: Decode switch under test.
+    :param value: Rejected non-boolean value.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS)])
+
+    with pytest.raises(ValueError, match=switch):
+        _datamodule(tmp_path / "corpus.lance", **{switch: value})  # type: ignore[arg-type]
+
+
+def test_row_filter_starts_with_excludes_underscore_wildcard_decoys(tmp_path: Path) -> None:
+    """A literal-prefix predicate keeps `Omni_ir_*` and drops `OmniAir_*`, which LIKE would match.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    clips = [_tone(_DURATION_SECONDS, seed=i) for i in range(3)]
+    write_blob_audio_corpus(
+        tmp_path / "corpus.lance",
+        clips,
+        sample_rate=_SOURCE_SAMPLE_RATE,
+        audio_column="source_bytes",
+        extra_columns={
+            "source_path": pa.array(["Omni_ir_a.wav", "OmniAir_b.wav", "Omni_ir_c.wav"]),
+            "audio_decodable": pa.array([True, True, True]),
+        },
+    )
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        audio_column="source_bytes",
+        row_filter="starts_with(source_path, 'Omni_ir_')",
+    )
+    datamodule.setup("predict")
+
+    assert sum(len(batch["audio"]) for batch in datamodule.predict_dataloader()) == 2
+
+
 def test_multichannel_source_disagreeing_with_contract_raises() -> None:
     """A source that is neither mono nor contract-width is rejected, not silently sliced."""
     stereo = np.stack([_tone(_DURATION_SECONDS), _tone(_DURATION_SECONDS, seed=1)])

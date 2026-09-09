@@ -1626,7 +1626,9 @@ def test_third_party_eval_config_resolves_per_corpus(corpus: str, audio_column: 
         pytest.param("echothief", "EchoThief", None, id="echothief"),
         pytest.param("ashir", "ASHIR", "BRIRs/%", id="ashir"),
         pytest.param("openair", "OpenAIR", "IRs/%", id="openair"),
-        pytest.param("thkoeln_omni", "THKoelnSRIR", "Omni_ir_%", id="thkoeln"),
+        pytest.param(
+            "thkoeln_omni", "THKoelnSRIR", "starts_with(source_path, 'Omni_ir_')", id="thkoeln"
+        ),
         pytest.param("arni", "Arni", None, id="arni"),
     ],
 )
