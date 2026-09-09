@@ -67,6 +67,10 @@ def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(tmp_path:
             _STATS_SHA,
             "--inference-runtime",
             "browser",
+            "--content-cfg",
+            "2",
+            "--sketch-cfg",
+            "3",
             "--sample-steps",
             "8",
             "--seed",
@@ -83,7 +87,7 @@ def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(tmp_path:
     assert isinstance(result, str)
     (tmp_path / "browser-cli.log").write_text(result)
     assert "BROWSER_E2E_COMPLETE" in result
-    arm = output_dir / "arms/cfg-c2-s2"
+    arm = output_dir / "arms/cfg-c2-s3"
     payload = json.loads((arm / "browser/input.json").read_text())
     prediction = json.loads((arm / "browser/prediction.json").read_text())
     actual = np.array(prediction["params"], dtype=np.float32)
@@ -100,7 +104,7 @@ def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(tmp_path:
         batch,
         noise=torch.tensor([payload["noise"]], dtype=torch.float32),
         content_cfg_strength=2.0,
-        sketch_cfg_strength=2.0,
+        sketch_cfg_strength=3.0,
         sample_steps=8,
     ).numpy()[0]
     assert actual.shape == (model.hparams["num_params"],)

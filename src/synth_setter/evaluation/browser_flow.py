@@ -24,15 +24,27 @@ class BrowserPrediction(BaseModel, strict=True, extra="forbid"):
 
     .. attribute :: token
 
-        Per-session capability returned by the loopback input endpoint.
+        URL-safe ASCII capability returned by the loopback input endpoint.
 
     .. attribute :: params
 
         Finite model-space parameter coordinates; width is checked against the checkpoint.
     """
 
-    token: str
+    token: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
     params: list[FiniteFloat] = Field(min_length=1)
+
+
+def require_browser_assets() -> Path:
+    """Require the installed ONNX Runtime Web module before creating artifacts.
+
+    :returns: Directory containing the installed JavaScript/WASM runtime.
+    :raises FileNotFoundError: ONNX Runtime Web assets have not been installed.
+    """
+    vendor = _WEB_ROOT / "node_modules" / "onnxruntime-web" / "dist"
+    if not (vendor / "ort.wasm.min.mjs").is_file():
+        raise FileNotFoundError(f"Install browser assets with: npm ci --prefix {_WEB_ROOT}")
+    return vendor
 
 
 def sample_in_browser(
@@ -58,7 +70,6 @@ def sample_in_browser(
     :param port: Loopback port; zero selects an available port.
     :returns: Browser-produced model-space parameter row for native rendering.
     :raises ValueError: Sampling settings or noise violate the browser contract.
-    :raises FileNotFoundError: ONNX Runtime Web assets have not been installed.
     """
     width = model.hparams["num_params"]
     if (
@@ -78,9 +89,7 @@ def sample_in_browser(
     guidance = torch.tensor([content_cfg_strength, sketch_cfg_strength], dtype=torch.float32)
     if not torch.isfinite(guidance).all() or (guidance < 0).any():
         raise ValueError("browser guidance must be finite and non-negative")
-    vendor = _WEB_ROOT / "node_modules" / "onnxruntime-web" / "dist"
-    if not (vendor / "ort.wasm.min.mjs").is_file():
-        raise FileNotFoundError(f"Install browser assets with: npm ci --prefix {_WEB_ROOT}")
+    vendor = require_browser_assets()
     export_flow_onnx(model, batch, output_dir)
     token = secrets.token_urlsafe(32)
     payload: dict[str, object] = {

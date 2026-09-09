@@ -35,9 +35,14 @@ try {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: payload.token, params: [] }),
     });
-    return response.status;
+    const invalidToken = await fetch("prediction", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: "tökén", params: payload.noise }),
+    });
+    return [response.status, invalidToken.status];
   });
-  if (rejected !== 400) throw new Error("Malformed browser prediction was not rejected");
+  if (rejected.some((status) => status !== 400)) throw new Error("Malformed browser prediction was not rejected");
   const outside = await page.request.get(new URL("/pyproject.toml", url).href);
   if (outside.status() !== 404) throw new Error("Server exposed a non-bundle resource");
   await page.getByRole("button", { name: "Run flow evaluation" }).click();

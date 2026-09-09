@@ -618,11 +618,19 @@ def main(
         int(selected_stats_sha256, 16)
     except ValueError as exc:
         raise click.ClickException("--stats-sha256 must be hexadecimal") from exc
-    selected_device = (
-        torch.device("cpu")
-        if inference_runtime == "browser"
-        else _resolve_device(device or settings.device)
-    )
+    if inference_runtime == "browser":
+        from synth_setter.evaluation.browser_flow import require_browser_assets
+
+        if (device or settings.device) not in ("cpu", "auto"):
+            raise click.ClickException("browser inference requires --device cpu or auto")
+        try:
+            require_browser_assets()
+        except FileNotFoundError as exc:
+            raise click.ClickException(str(exc)) from exc
+        selected_device = torch.device("cpu")
+        click.echo("Browser runtime: ONNX Runtime Web WASM; preprocessing/export: CPU.")
+    else:
+        selected_device = _resolve_device(device or settings.device)
     selected_seed = settings.seed if seed is None else seed
     run_id = _run_id(sketch_wav, content_wav)
     pair_output = output_dir or settings.output_dir / run_id
@@ -673,7 +681,6 @@ def main(
         arm_dir = pair_output / "arms" / arm
         if arm_dir.exists():
             raise click.ClickException(f"refusing to overwrite existing arm: {arm_dir}")
-        arm_dir.mkdir(parents=True)
         if inference_runtime == "browser":
             from synth_setter.evaluation.browser_flow import sample_in_browser
 
@@ -701,6 +708,7 @@ def main(
                 )
             )
         else:
+            arm_dir.mkdir(parents=True)
             prediction = (
                 model.sample_batch(
                     batch,
