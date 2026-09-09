@@ -1,6 +1,5 @@
 """Behavioral tests for generic embedding encoders and model routing."""
 
-import pickle
 from collections.abc import Callable
 from functools import partial
 from typing import cast
@@ -438,18 +437,6 @@ def test_vector_projection_wrong_input_width_raises() -> None:
 
     with pytest.raises(ValueError, match=r"expected .*7.*got .*8"):
         encoder(torch.randn(3, 8))
-
-
-def test_vector_projection_pickled_before_conditioning_rank_projects_single_slot() -> None:
-    """A checkpoint pickled without rank attributes restores as one shared slot."""
-    legacy = VectorProjection(input_dim=7, d_model=11)
-    del legacy.d_model
-    del legacy.n_conditioning_outputs
-
-    restored = pickle.loads(pickle.dumps(legacy))  # noqa: S301
-    output = restored(torch.randn(3, 7))
-
-    assert output.shape == (3, 11)
 
 
 def test_embedding_pool_seq_len_configurable() -> None:

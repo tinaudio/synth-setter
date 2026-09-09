@@ -33,9 +33,5 @@ Set `model.encoder.n_conditioning_outputs=1` for cached profiles, or
 `model.encoder.head.n_conditioning_outputs=1` for online profiles, when loading a checkpoint trained
 with the pooled encoder shape or when explicitly selecting shared conditioning.
 
-Checkpoints pickled before `VectorProjection` carried these attributes restore automatically as one
-shared slot through `VectorProjection.__setstate__`; the manual override above is only needed for
-checkpoints that already carry the attribute at the pooled value.
-
 Both supported fields index one slot per layer: fewer slots fail during forward indexing, while
 extra slots are accepted but unused. There is no encoder/field slot-count validation.
