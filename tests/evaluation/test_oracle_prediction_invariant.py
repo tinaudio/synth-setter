@@ -48,6 +48,19 @@ def test_exact_oracle_predictions_without_predictions_raises(tmp_path: Path) -> 
         _assert_exact_oracle_predictions(predictions)
 
 
+def test_exact_oracle_predictions_orphan_target_raises(tmp_path: Path) -> None:
+    """Reject a target artifact without its paired prediction.
+
+    :param tmp_path: Isolated artifact root.
+    """
+    predictions = tmp_path / "predictions"
+    predictions.mkdir()
+    torch.save(torch.zeros((1, 2)), predictions / "target-params-0.pt")
+
+    with pytest.raises(ValueError, match="pred-0.pt"):
+        _assert_exact_oracle_predictions(predictions)
+
+
 def test_exact_oracle_predictions_missing_target_raises(tmp_path: Path) -> None:
     """Reject a prediction artifact without its paired target.
 
@@ -58,6 +71,18 @@ def test_exact_oracle_predictions_missing_target_raises(tmp_path: Path) -> None:
     torch.save(torch.zeros((1, 2)), predictions / "pred-0.pt")
 
     with pytest.raises(ValueError, match="target-params-0.pt"):
+        _assert_exact_oracle_predictions(predictions)
+
+
+def test_exact_oracle_predictions_non_batched_tensor_raises(tmp_path: Path) -> None:
+    """Reject artifacts outside PredictionWriter's two-dimensional batch contract.
+
+    :param tmp_path: Isolated artifact root.
+    """
+    predictions = tmp_path / "predictions"
+    _write_pair(predictions, torch.zeros(2), torch.zeros(2))
+
+    with pytest.raises(ValueError, match="2D batched tensors"):
         _assert_exact_oracle_predictions(predictions)
 
 
@@ -127,6 +152,59 @@ def test_exact_oracle_predictions_different_value_raises(tmp_path: Path) -> None
         _assert_exact_oracle_predictions(predictions)
 
 
+def test_exact_oracle_predictions_expected_rows_mismatch_raises(tmp_path: Path) -> None:
+    """Reject exact paired predictions that omit one intended row.
+
+    :param tmp_path: Isolated artifact root.
+    """
+    predictions = tmp_path / "predictions"
+    values = torch.zeros((99, 2))
+    _write_pair(predictions, values, values.clone())
+
+    with pytest.raises(ValueError, match="expected 100 rows, found 99"):
+        _assert_exact_oracle_predictions(predictions, expected_rows=100)
+
+
+def test_exact_oracle_predictions_complete_multibatch_returns_zero(tmp_path: Path) -> None:
+    """Count rows across complete paired batches before certifying equality.
+
+    :param tmp_path: Isolated artifact root.
+    """
+    predictions = tmp_path / "predictions"
+    _write_pair(predictions, torch.zeros((2, 3)), torch.zeros((2, 3)), index=0)
+    _write_pair(predictions, torch.ones((1, 3)), torch.ones((1, 3)), index=1)
+
+    assert _assert_exact_oracle_predictions(predictions, expected_rows=3) == 0.0
+
+
+@pytest.mark.parametrize("expected_rows", [True, False, 0, -1, 1.0, "1"])
+def test_predict_postprocessing_invalid_expected_rows_raises(
+    tmp_path: Path, expected_rows: object
+) -> None:
+    """Reject non-positive and non-strict-integer expected row counts.
+
+    :param tmp_path: Isolated artifact root.
+    :param expected_rows: Invalid configured value under test.
+    """
+    predictions = tmp_path / "predictions"
+    values = torch.zeros((1, 2))
+    _write_pair(predictions, values, values.clone())
+    cfg = OmegaConf.create(
+        {
+            "paths": {"output_dir": str(tmp_path)},
+            "evaluation": {
+                "compute_metrics": False,
+                "oracle_expected_rows": expected_rows,
+                "render_vst": False,
+                "require_exact_param_oracle": True,
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="oracle_expected_rows must be a positive integer"):
+        _run_predict_postprocessing(cfg)
+
+
 def test_predict_postprocessing_verified_oracle_persists_prefixed_metric(tmp_path: Path) -> None:
     """Preserve renderer-role namespacing on the exact oracle metric.
 
@@ -141,6 +219,7 @@ def test_predict_postprocessing_verified_oracle_persists_prefixed_metric(tmp_pat
             "evaluation": {
                 "compute_metrics": False,
                 "metric_prefix": "candidate/",
+                "oracle_expected_rows": 1,
                 "render_vst": False,
                 "require_exact_param_oracle": True,
             },

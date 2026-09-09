@@ -1035,6 +1035,80 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     assert logger.used_artifacts == ["data-lineage-eval:lineage-eval-20260520T000000000Z"]
 
 
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
+def test_evaluate_predict_oracle_candidate_real_renderer_persists_finite_results(
+    tmp_path: Path,
+    surge_xt_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Render exact oracle predictions through the real candidate host and metric stack.
+
+    :param tmp_path: Roots the real evaluation artifacts.
+    :param surge_xt_smoke_datasets: Real Surge-rendered source split.
+    :param param_spec_name: Indirect fixture parameter selecting the compact Surge spec.
+    """
+    output_dir = tmp_path / "candidate-eval"
+    predict_file = surge_xt_smoke_datasets / "test.lance"
+    expected_rows = lance.dataset(str(predict_file)).count_rows()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/fake_oracle",
+                "datamodule=surge_lance",
+                "trainer=cpu",
+                f"synth={param_spec_name}",
+                "render=vst",
+                "mode=predict",
+            ],
+        )
+
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(output_dir)
+        cfg.paths.log_dir = str(output_dir)
+        cfg.datamodule.dataset_root = str(surge_xt_smoke_datasets)
+        cfg.datamodule.predict_file = str(predict_file)
+        cfg.datamodule.batch_size = 2
+        cfg.datamodule.num_workers = 0
+        cfg.ckpt_path = None
+        cfg.logger = None
+        cfg.render.renderer_backend = "dawdreamer"
+        cfg.render.plugin_reload_cadence = "render"
+        cfg.render.gui_toggle_cadence = "never"
+        cfg.evaluation.compute_metrics = True
+        cfg.evaluation.metric_prefix = "candidate/"
+        cfg.evaluation.oracle_expected_rows = expected_rows
+        cfg.evaluation.render_vst = True
+        cfg.evaluation.require_exact_param_oracle = True
+        cfg.evaluation.rerender_target = False
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, _ = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert metric_dict["candidate/oracle/param_mse"] == 0.0
+    persisted_metrics = json.loads((output_dir / "metrics" / "metrics.json").read_text())
+    assert persisted_metrics["candidate/oracle/param_mse"] == 0.0
+    metric_rows = pd.read_csv(output_dir / "metrics" / "metrics.csv", index_col=0)
+    assert metric_rows.size > 0
+    assert np.isfinite(metric_rows.to_numpy()).all()
+    sample_dir = output_dir / "audio" / "sample_0"
+    with AudioFile(str(sample_dir / "pred.wav")) as handle:
+        prediction_audio = handle.read(handle.frames)
+    with AudioFile(str(sample_dir / "target.wav")) as handle:
+        target_audio = handle.read(handle.frames)
+    assert prediction_audio.shape == target_audio.shape == (2, 176_400)
+    assert np.isfinite(prediction_audio).all() and np.isfinite(target_audio).all()
+    assert np.abs(prediction_audio).max() > 0.0
+    assert np.abs(target_audio).max() > 0.0
+
+
 _FLOW_LAD_EVAL_OVERRIDES = {
     "flow_simple": (
         "model.vector_field.d_model=8",

@@ -130,28 +130,43 @@ def _log_metrics_csv_to_wandb(metrics_dir: Path, prefix: str = "") -> None:
         )
 
 
-def _assert_exact_oracle_predictions(predictions_dir: Path) -> float:
+def _assert_exact_oracle_predictions(
+    predictions_dir: Path, expected_rows: int | None = None
+) -> float:
     """Require every persisted prediction tensor to equal its target parameters.
 
     :param predictions_dir: PredictionWriter output containing paired ``pred-*`` and
         ``target-params-*`` tensors.
+    :param expected_rows: Optional intended split size across all persisted batches.
     :returns: Exact parameter MSE, always zero after successful verification.
-    :raises ValueError: Artifacts are absent, empty, non-finite, structurally different,
-        or contain any unequal element.
+    :raises ValueError: Artifacts are absent, unpaired, empty, non-finite,
+        structurally different, contain any unequal element, or have the wrong row count.
     """
     prediction_files = sorted(predictions_dir.glob("pred-*.pt"))
+    target_files = sorted(predictions_dir.glob("target-params-*.pt"))
+    prediction_suffixes = {path.name.removeprefix("pred-") for path in prediction_files}
+    target_suffixes = {path.name.removeprefix("target-params-") for path in target_files}
+    if prediction_suffixes != target_suffixes:
+        missing_targets = sorted(prediction_suffixes - target_suffixes)
+        if missing_targets:
+            missing = predictions_dir / f"target-params-{missing_targets[0]}"
+            raise ValueError(f"oracle target artifact is missing: {missing}")
+        missing_predictions = sorted(target_suffixes - prediction_suffixes)
+        missing = predictions_dir / f"pred-{missing_predictions[0]}"
+        raise ValueError(f"oracle prediction artifact is missing: {missing}")
     if not prediction_files:
         raise ValueError(f"no prediction artifacts found in {predictions_dir}")
 
+    actual_rows = 0
     for prediction_file in prediction_files:
         suffix = prediction_file.name.removeprefix("pred-")
         target_file = predictions_dir / f"target-params-{suffix}"
-        if not target_file.is_file():
-            raise ValueError(f"oracle target artifact is missing: {target_file}")
         prediction = torch.load(prediction_file, map_location="cpu", weights_only=True)
         target = torch.load(target_file, map_location="cpu", weights_only=True)
         if not isinstance(prediction, torch.Tensor) or not isinstance(target, torch.Tensor):
             raise ValueError(f"oracle artifacts must contain tensors: {prediction_file}")
+        if prediction.ndim != 2 or target.ndim != 2:
+            raise ValueError(f"oracle artifacts must be 2D batched tensors: {prediction_file}")
         if prediction.numel() == 0 or target.numel() == 0:
             raise ValueError(f"oracle artifacts must not be empty: {prediction_file}")
         if prediction.shape != target.shape:
@@ -174,6 +189,10 @@ def _assert_exact_oracle_predictions(predictions_dir: Path) -> float:
                 f"oracle parameters differ for {prediction_file.name}; "
                 f"maximum absolute difference {max_difference}"
             )
+        actual_rows += prediction.shape[0]
+
+    if expected_rows is not None and actual_rows != expected_rows:
+        raise ValueError(f"oracle expected {expected_rows} rows, found {actual_rows}")
     return 0.0
 
 
@@ -206,10 +225,18 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             "evaluation.require_exact_param_oracle must be a boolean, "
             f"got {require_exact_oracle!r}"
         )
+    expected_rows = cfg.evaluation.get("oracle_expected_rows")
+    if expected_rows is not None and (
+        not isinstance(expected_rows, int) or isinstance(expected_rows, bool) or expected_rows <= 0
+    ):
+        raise ValueError(
+            "evaluation.oracle_expected_rows must be a positive integer or null, "
+            f"got {expected_rows!r}"
+        )
     verified_metrics: dict[str, float] = {}
     if require_exact_oracle:
         verified_metrics[f"{prefix}oracle/param_mse"] = _assert_exact_oracle_predictions(
-            predictions_dir
+            predictions_dir, expected_rows
         )
         _log_audio_metrics_to_wandb(verified_metrics)
 

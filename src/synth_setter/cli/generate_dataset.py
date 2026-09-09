@@ -261,6 +261,7 @@ def _run_oracle_eval_subprocess(
     # Budget scales with the split's sample count (predict + re-render + metrics
     # all run over it); the finalized Lance split exposes it as its row count.
     num_samples = int(lance.dataset(str(predict_file)).count_rows())
+    argv.append(f"evaluation.oracle_expected_rows={num_samples}")
     logger.info(f"oracle_eval_inline subprocess: {argv}")
     _check_call_streamed(
         argv,
