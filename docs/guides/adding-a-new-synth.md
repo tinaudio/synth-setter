@@ -130,6 +130,13 @@ The draft is a starting point, not a finished spec. Open
   choices (waveform, filter type) with optional sample weights; `encoding`
   is `"scalar"` or `"onehot"`.
 - `DiscreteLiteralParameter(name, min, max, encoding)` — an integer range.
+- `ContinuousArrayParameter(name, shape, min, max)` — a fixed-shape float array
+  (delay lines, gain matrices) encoded elementwise onto `[0, 1]`.
+- `DiscreteArrayParameter(name, shape, min, max)` — the integer counterpart,
+  decoded back to `int64`.
+- `AngleArrayParameter(name, shape)` — a fixed-shape array of radians carried as
+  one `(cos θ, sin θ)` pair per angle, so `±π` share one encoding and the loss
+  is seam-aware; decode projects predictions onto the unit circle.
 - `NoteDurationParameter(name, max_note_duration_seconds)` — samples when the
   note starts and ends within the audio buffer (not an ADSR envelope); lives in
   the `note_params` list.
