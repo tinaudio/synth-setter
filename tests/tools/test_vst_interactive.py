@@ -1463,6 +1463,21 @@ class TestValidateMetricsDf:
 
         vst_interactive._validate_metrics_df(Path("aggregated_metrics.csv"), df, spec)
 
+    def test_missing_required_aggregate_row_raises(self, vst_interactive: ModuleType) -> None:
+        """Required aggregate metric labels must be present.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
+        df = pd.DataFrame({"metric": ["mss"], "mean": [0.1], "std": [0.01]})
+        spec = vst_interactive._MetricsFileSpec(
+            rows=1,
+            columns=frozenset({"mean", "std"}),
+            required_rows=frozenset({"mldr_mid_side"}),
+        )
+
+        with pytest.raises(ValueError, match="missing required metric rows"):
+            vst_interactive._validate_metrics_df(Path("aggregated_metrics.csv"), df, spec)
+
     def test_duplicate_optional_aggregate_rows_raise(self, vst_interactive: ModuleType) -> None:
         """An optional metric name may occur at most once in an aggregate table.
 
@@ -1841,12 +1856,16 @@ class _MaterializingPipelineRunner:
             pd.DataFrame(
                 {
                     metric: np.full(self.num_samples, 0.5)
-                    for metric in ("mss", "wmfcc", "sot", "rms", "mldr")
+                    for metric in ("mss", "wmfcc", "sot", "rms", "mldr", "mldr_mid_side")
                 }
             ).to_csv(metrics_dir / "metrics.csv", index=False)
-            pd.DataFrame({"mean": np.full(5, 0.5), "std": np.zeros(5)}).to_csv(
-                metrics_dir / "aggregated_metrics.csv", index=False
-            )
+            pd.DataFrame(
+                {
+                    "metric": ("mss", "wmfcc", "sot", "rms", "mldr", "mldr_mid_side"),
+                    "mean": np.full(6, 0.5),
+                    "std": np.zeros(6),
+                }
+            ).to_csv(metrics_dir / "aggregated_metrics.csv", index=False)
             return
         raise AssertionError(f"unexpected subprocess module: {module}")
 

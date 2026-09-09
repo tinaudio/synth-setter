@@ -669,6 +669,12 @@ def compute_mldr_mid_side(
         )
     if not np.isfinite(target_mid_side).all() or not np.isfinite(pred_mid_side).all():
         raise ValueError("mid/side transformed audio must contain only finite values")
+    peak = max(float(np.abs(target_mid_side).max()), float(np.abs(pred_mid_side).max()))
+    longest_window = max(1, int(2.0 * sample_rate))
+    safe_energy_peak = math.sqrt(np.finfo(np.float64).max / longest_window)
+    if peak > safe_energy_peak:
+        target_mid_side /= peak
+        pred_mid_side /= peak
     return compute_mldr(target_mid_side, pred_mid_side, sample_rate)
 
 

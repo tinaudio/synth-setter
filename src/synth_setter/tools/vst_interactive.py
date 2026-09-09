@@ -169,7 +169,7 @@ _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 SILENCE_PEAK_THRESHOLD = 1e-4
 
 _METRIC_COLUMNS: frozenset[str] = frozenset({"mss", "wmfcc", "sot", "rms", "mldr"})
-_OPTIONAL_METRIC_COLUMNS: frozenset[str] = frozenset({"mldr_mid_side"})
+_STEREO_METRIC_COLUMNS: frozenset[str] = _METRIC_COLUMNS | {"mldr_mid_side"}
 
 
 # External I/O seams keep tests state-based without patching module globals (#844).
@@ -267,12 +267,17 @@ class _MetricsFileSpec:
     .. attribute :: optional_rows
 
         Metric names allowed as additional optional rows beyond ``rows``.
+
+    .. attribute :: required_rows
+
+        Metric names that must occur in the first column.
     """
 
     rows: int
     columns: frozenset[str]
     optional_columns: frozenset[str] = frozenset()
     optional_rows: frozenset[str] = frozenset()
+    required_rows: frozenset[str] = frozenset()
 
 
 def _expected_prediction_filenames(num_samples: int) -> list[str]:
@@ -299,6 +304,10 @@ def _validate_metrics_df(
     :param expected: Required rows and columns plus optional columns and row labels.
     :raises ValueError: The table does not satisfy the expected metrics contract.
     """
+    row_names = set(metrics_df.iloc[:, 0])
+    missing_rows = expected.required_rows - row_names
+    if missing_rows:
+        raise ValueError(f"{metrics_path}: missing required metric rows {sorted(missing_rows)}")
     optional_row_mask = metrics_df.iloc[:, 0].isin(expected.optional_rows)
     optional_row_names = metrics_df.loc[optional_row_mask].iloc[:, 0]
     if optional_row_names.duplicated().any():
@@ -1091,14 +1100,13 @@ def _compute_and_validate_metrics(
     """
     metrics_file_expectations: dict[str, _MetricsFileSpec] = {
         "aggregated_metrics.csv": _MetricsFileSpec(
-            rows=len(_METRIC_COLUMNS),
+            rows=len(_STEREO_METRIC_COLUMNS),
             columns=frozenset({"mean", "std"}),
-            optional_rows=_OPTIONAL_METRIC_COLUMNS,
+            required_rows=frozenset({"mldr_mid_side"}),
         ),
         "metrics.csv": _MetricsFileSpec(
             rows=num_samples,
-            columns=_METRIC_COLUMNS,
-            optional_columns=_OPTIONAL_METRIC_COLUMNS,
+            columns=_STEREO_METRIC_COLUMNS,
         ),
     }
     runner = subprocess_runner if subprocess_runner is not None else subprocess.check_call

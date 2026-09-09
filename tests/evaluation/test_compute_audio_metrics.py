@@ -677,6 +677,15 @@ def test_compute_mldr_mid_side_nonmatching_stereo_shape_raises(
         compute_mldr_mid_side(target, pred)
 
 
+def test_compute_mldr_mid_side_finite_energy_overflow_is_rescaled() -> None:
+    """Finite transformed values are safely rescaled before energy squaring."""
+    stereo = np.full((2, 10), 1e200)
+
+    result = compute_mldr_mid_side(stereo, stereo)
+
+    assert result == pytest.approx(0.0)
+
+
 def test_compute_mldr_mid_side_finite_overflowing_transform_raises() -> None:
     """Finite values whose mid/side sum overflows cannot produce a metric."""
     stereo = np.full((2, 10), np.finfo(np.float64).max)
