@@ -23,6 +23,8 @@ from synth_setter.data.third_party_datamodule import AudioDecodeError, decode_cl
 from synth_setter.data.vst.core import write_wav
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
+_CLI_HELP_TIMEOUT_SECONDS = 120
+
 
 def test_noise_source_device_mps_uses_supported_cpu_generator() -> None:
     """MPS sampling draws seeded noise on CPU before device transfer."""
@@ -671,16 +673,13 @@ def test_console_script_is_installed_and_callable() -> None:
     """The package exposes the sketch renderer executable."""
     executable = Path(sys.executable).with_name("synth-setter-sketch")
 
-    try:
-        result = subprocess.run(  # noqa: S603 — fixed package entrypoint
-            [str(executable), "--help"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        pytest.xfail("#3337: sketch CLI cold imports can exceed 30 seconds on macOS CI")
+    result = subprocess.run(  # noqa: S603 — fixed package entrypoint
+        [str(executable), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_CLI_HELP_TIMEOUT_SECONDS,
+    )
 
     assert result.returncode == 0, result.stderr
     assert "SKETCH_WAV CONTENT_WAV" in result.stdout
