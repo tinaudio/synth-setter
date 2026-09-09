@@ -25,6 +25,7 @@ from synth_setter.cli.clap_render import (
 from synth_setter.pipeline import r2_io
 
 _CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
+_CLI_HELP_TIMEOUT_SECONDS = 120
 
 
 def test_cli_whitespace_prompt_exits_before_creating_output() -> None:
@@ -263,11 +264,6 @@ def test_cli_local_no_upload_writes_prompt_audio_comparison_csv(
     assert row["csv_r2_uri"] == ""
 
 
-@pytest.mark.xfail(
-    sys.platform == "darwin",
-    reason="#2915: heavyweight CLI cold imports can exceed 30 seconds on macOS CI",
-    strict=False,
-)
 def test_console_script_is_installed_and_callable() -> None:
     """The documented executable is installed by the package entrypoint."""
     executable = Path(sys.executable).with_name("synth-setter-clap")
@@ -278,7 +274,7 @@ def test_console_script_is_installed_and_callable() -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=_CLI_HELP_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr

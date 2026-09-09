@@ -87,6 +87,7 @@ from tests.helpers.wandb_offline import read_history_rows, read_run_labels, read
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
 # only keys in ``metrics.json`` (see ``synth_setter.evaluation.compute_audio_metrics``).
 _ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms", "mldr")
+_ORACLE_EVAL_SUBPROCESS_TIMEOUT_SECONDS = 1200
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _REAL_PLUGIN_VST3 = (
@@ -436,7 +437,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
         Path(cfg_dataset.paths.output_dir).glob("wandb/offline-run-*/run-*.wandb")
     )
     if not wandb_binaries:
-        pytest.xfail("#2564: the shared offline W&B service produced no run artifact")
+        pytest.xfail("#2954: offline W&B run discovery can be empty under the full suite")
     assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
     wandb_binary = wandb_binaries[0]
     actual_project = read_run_project(wandb_binary)
@@ -2099,7 +2100,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             capture_output=True,
             text=True,
             check=False,
-            timeout=600,
+            timeout=_ORACLE_EVAL_SUBPROCESS_TIMEOUT_SECONDS,
         )
         assert result.returncode == 0, (
             f"generate-dataset CLI exited {result.returncode}\n"

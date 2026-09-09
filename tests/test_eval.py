@@ -1371,6 +1371,70 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
     )
 
 
+@pytest.mark.slow
+def test_evaluate_loads_mixed_endpoint_checkpoint_and_samples(tmp_path: Path) -> None:
+    """Evaluation loads a mixed-endpoint checkpoint and runs the production sampler.
+
+    :param tmp_path: Checkpoint and evaluation output directory.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=surge/fake_oracle",
+                "synth=cardinal",
+                "trainer=cpu",
+                "model=vst_flow",
+            ],
+        )
+    checkpoint_path = tmp_path / "mixed.ckpt"
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path)
+        cfg.paths.log_dir = str(tmp_path)
+        cfg.mode = "test"
+        cfg.model.compile = False
+        cfg.model.endpoint_loss = "mixed"
+        cfg.model.parameterization = "endpoint"
+        cfg.model.encoder.d_model = 16
+        cfg.model.encoder.n_heads = 1
+        cfg.model.encoder.n_layers = 1
+        cfg.model.encoder.n_conditioning_outputs = 2
+        cfg.model.encoder.patch_size = 128
+        cfg.model.encoder.patch_stride = 127
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 16
+        cfg.model.vector_field.num_heads = 1
+        cfg.model.vector_field.d_ff = 16
+        cfg.model.vector_field.projection.num_tokens = 2
+        cfg.model.test_sample_steps = 2
+        cfg.datamodule.fake = True
+        cfg.datamodule.batch_size = 2
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.use_saved_mean_and_variance = False
+        cfg.trainer.limit_test_batches = 1
+        cfg.logger = None
+        cfg.ckpt_path = str(checkpoint_path)
+
+    trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+    )
+    trainer.strategy.connect(instantiate(cfg.model))
+    trainer.save_checkpoint(checkpoint_path)
+
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = evaluate(cfg)
+
+    assert torch.isfinite(metric_dict["test/param_mse"])
+    assert object_dict["model"].hparams.endpoint_loss == "mixed"
+
+
 def test_evaluate_loads_compiled_cpu_training_checkpoint(
     tmp_path: Path,
     cfg_train: DictConfig,
