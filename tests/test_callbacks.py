@@ -483,7 +483,49 @@ def test_log_per_param_mse_emits_pyfdn_spec_quantized_graph_per_parameter(
 
     callback.on_validation_epoch_end(trainer, pl_module)
 
-    assert module.logged == pytest.approx(expected)
+    quantized_metrics = {
+        name: value for name, value in module.logged.items() if "mse_spec_quantized" in name
+    }
+    assert quantized_metrics == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("stage", ["val", "test"])
+@pytest.mark.parametrize(("reset", "expected"), [(False, 0.75), (True, 1.0)])
+def test_abs_cosine_logging_ragged_batches_returns_epoch_mean(
+    stage: str, reset: bool, expected: float
+) -> None:
+    """Each sample contributes equally, and epochs never reuse previous distances.
+
+    :param stage: Validation or test namespace.
+    :param reset: Whether a new epoch separates the two batches.
+    :param expected: Sample-weighted distance for the final epoch.
+    """
+    spec_name = "pyfdn_n8_mono_householder_vector"
+    spec = param_specs[spec_name]
+    callback = LogPerParamMSE(spec_name)
+    module = _RecordingModule()
+    trainer = cast(Trainer, None)
+    pl_module = cast(LightningModule, module)
+    hook_stage = "validation" if stage == "val" else "test"
+    start = getattr(callback, f"on_{hook_stage}_epoch_start")
+    batch_end = getattr(callback, f"on_{hook_stage}_batch_end")
+    end = getattr(callback, f"on_{hook_stage}_epoch_end")
+    span = {param.name: span for param, span in spec.encoded_slices()}["householder_vector"]
+    targets = torch.zeros(3, spec.encoded_width)
+    targets[:, span.start] = 1.0
+    predictions = torch.zeros_like(targets)
+    predictions[:, span.start + 1] = 1.0
+    start(trainer, pl_module)
+    batch_end(trainer, pl_module, {"preds": targets[:1]}, {"params": targets[:1]}, 0)
+    if reset:
+        end(trainer, pl_module)
+        start(trainer, pl_module)
+    batch_end(trainer, pl_module, {"preds": predictions}, {"params": targets}, 1)
+
+    end(trainer, pl_module)
+
+    key = f"{stage}/per_param_abs_cosine_distance/householder_vector"
+    assert module.logged[key] == pytest.approx(expected)
 
 
 def test_log_per_param_mse_weights_spec_quantized_error_by_sample_count() -> None:
@@ -544,6 +586,38 @@ def test_log_per_param_mse_weights_samples_across_distributed_ranks(
 
     assert module.logged["val/param_mse_spec_quantized"] == pytest.approx(0.75)
     assert module.sync_dist is False
+
+
+def test_abs_cosine_logging_distributed_ranks_weights_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rank sums and counts, not rank means, determine the logged distance.
+
+    :param monkeypatch: Supplies three remote perpendicular samples to the collective.
+    """
+    spec_name = "pyfdn_n8_mono_householder_vector"
+    callback = LogPerParamMSE(spec_name)
+    module = _RecordingModule()
+    trainer = cast(Trainer, None)
+    pl_module = cast(LightningModule, module)
+    targets = torch.ones(1, param_specs[spec_name].encoded_width)
+    callback.on_validation_epoch_start(trainer, pl_module)
+    callback.on_validation_batch_end(
+        trainer, pl_module, {"preds": targets}, {"params": targets}, 0
+    )
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+
+    def add_remote_samples(total_and_count: torch.Tensor) -> None:
+        total_and_count[:-1] += 3.0
+        total_and_count[-1] += 3.0
+
+    monkeypatch.setattr(torch.distributed, "all_reduce", add_remote_samples)
+
+    callback.on_validation_epoch_end(trainer, pl_module)
+
+    assert module.logged["val/per_param_abs_cosine_distance/householder_vector"] == pytest.approx(
+        0.75
+    )
 
 
 def test_log_per_param_mse_emits_optional_best_swap_metrics() -> None:
