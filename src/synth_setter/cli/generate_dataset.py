@@ -177,7 +177,7 @@ def _run_oracle_eval_subprocess(
         f"datamodule.dataset_root={dataset_root}",
         f"hydra.run.dir={run_dir}",
         "ckpt_path=null",
-        "logger=wandb",
+        "logger=wandb_dataset",
         # Identity replays through the root synth group (#2565): select the row,
         # then restate each field so per-run overrides (stub plugins) survive.
         "render=vst",

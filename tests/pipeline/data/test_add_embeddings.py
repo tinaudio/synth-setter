@@ -124,7 +124,7 @@ from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
 from tests.helpers.run_if import RunIf
-from tests.helpers.wandb_offline import read_run_config, read_run_exit_code
+from tests.helpers.wandb_offline import read_run_config, read_run_exit_code, read_run_project
 
 _SAMPLE_RATE = 44100
 _FIXTURE_SAMPLES = 16
@@ -3029,7 +3029,6 @@ def test_add_embeddings_main_creates_offline_wandb_run_with_config_and_command(
         "lance_batch_size=7",
         "logger.wandb.offline=true",
         f"logger.wandb.save_dir={tmp_path}",
-        "logger.wandb.project=add-embeddings-test",
         f"paths.log_dir={tmp_path}",
         f"hydra.run.dir={tmp_path / 'hydra-run'}",
     ]
@@ -3046,6 +3045,7 @@ def test_add_embeddings_main_creates_offline_wandb_run_with_config_and_command(
     )
     assert json.loads(run_config["lance_uri"]) == str(uri)
     assert json.loads(run_config["embeddings"]) == ["clap"]
+    assert read_run_project(Path(run_files[0])) == "synth-setter-generate-dataset"
     assert json.loads(run_config["lance_batch_size"]) == 7
     assert json.loads(run_config["command"]) == " ".join(argv)
     assert read_run_exit_code(Path(run_files[0])) == 0

@@ -1,0 +1,6 @@
+defaults:
+  - wandb
+  - _self_
+
+wandb:
+  project: "${oc.env:WANDB_PROJECT,synth-setter-generate-dataset}"
