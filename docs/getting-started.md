@@ -59,7 +59,7 @@ first.
 The pre-commit hooks run Ruff (linting + formatting), pyright (type checking),
 mdformat, codespell, and several other checks automatically on each commit.
 
-> **Prefer pip or conda?** See
+> **Prefer plain pip?** See
 > [Appendix A](#appendix-a-manual-environment-setup) for a
 > walkthrough using your own Python interpreter and environment tooling.
 
@@ -631,7 +631,7 @@ ______________________________________________________________________
 `make install` is the canonical path for most users — it installs uv, a
 managed Python 3.12.13 interpreter, the venv, dependencies, and pre-commit.
 This appendix is for users who want to manage Python and the environment
-themselves (pip, conda, pyenv, system Python, etc.).
+themselves (pip, pyenv, system Python, etc.).
 
 **Requirement:** see the `requires-python` field in `pyproject.toml`
 (currently `>=3.12,<3.13`; `pip` enforces this). Development and CI use the
@@ -653,24 +653,7 @@ pre-commit install
 
 Drop `-e` for a non-editable install.
 
-### A.2. conda
-
-```bash
-conda create -n synth-setter python=3.12.13
-conda activate synth-setter
-
-# conda owns the torch stack; uv pulls the rest of the runtime + dev tooling
-# from the `dev` dependency-group (plain pip can't install groups). See #1139.
-pip install uv==0.11.28
-uv pip install --group dev -e .
-pre-commit install
-```
-
-The project's runtime packages (hydra-core, librosa, etc.) ship through PyPI
-rather than conda-forge, so we install everything via uv inside the conda
-environment.
-
-### A.3. uv pip without `make install`
+### A.2. uv pip without `make install`
 
 If you want to drive uv directly (e.g., to point at a specific interpreter
 you manage yourself):
@@ -684,7 +667,7 @@ pre-commit install
 
 This is what `make install` does under the hood.
 
-### A.4. GPU vs CPU PyTorch
+### A.3. GPU vs CPU PyTorch
 
 The `torch` dependency-group pins `torch>=2.0.0` without fixing the CPU/CUDA
 build. After installing the project, override with the wheel you want from the
