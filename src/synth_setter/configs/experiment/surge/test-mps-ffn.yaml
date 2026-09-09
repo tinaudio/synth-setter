@@ -14,9 +14,6 @@ defaults:
 run_name: ffn
 experiment_name: surge-full-onehot
 
-tags:
-  - surge
-
 logger: null
 test: false
 

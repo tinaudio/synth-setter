@@ -15,7 +15,7 @@ from lightning.pytorch.loggers import Logger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec_width
-from synth_setter.data.vst.shapes import mel_n_frames_from_samples
+from synth_setter.data.vst.shapes import mel_n_frames_from_samples, stft_n_frames_from_samples
 from synth_setter.synth_spec import validate_synth_identity
 from synth_setter.utils import pylogger, rich_utils
 
@@ -34,6 +34,8 @@ def register_resolvers() -> None:
         OmegaConf.register_new_resolver("div", lambda x, y: int(x) // int(y))
     if not OmegaConf.has_resolver("mel_n_frames"):
         OmegaConf.register_new_resolver("mel_n_frames", mel_n_frames_from_samples)
+    if not OmegaConf.has_resolver("stft_n_frames"):
+        OmegaConf.register_new_resolver("stft_n_frames", stft_n_frames_from_samples)
     if not OmegaConf.has_resolver("param_spec_width"):
         OmegaConf.register_new_resolver("param_spec_width", resolve_param_spec_width)
     if not OmegaConf.has_resolver("wandb"):

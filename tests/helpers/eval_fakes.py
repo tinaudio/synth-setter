@@ -7,7 +7,7 @@ PREDICT_VST_AUDIO_FRAGMENT = "predict_vst_audio"
 COMPUTE_AUDIO_METRICS_FRAGMENT = "compute_audio_metrics"
 
 FAKE_AGGREGATED_METRICS_CSV = (
-    ",mean,std\nmss,0.5,0.1\nwmfcc,0.3,0.05\nsot,0.2,0.02\nrms,0.9,0.01\n"
+    ",mean,std\nmss,0.5,0.1\nwmfcc,0.3,0.05\nsot,0.2,0.02\nrms,0.9,0.01\nmldr,0.05,0.005\n"
 )
 
 
@@ -17,8 +17,8 @@ def fake_metrics_csv(num_samples: int = 2) -> str:
     :param num_samples: Number of sample rows to emit.
     :returns: CSV body matching ``compute_audio_metrics``'s per-sample output shape.
     """
-    rows = [f"{idx},0.1,0.2,0.3,0.4" for idx in range(num_samples)]
-    return ",mss,wmfcc,sot,rms\n" + "\n".join(rows) + "\n"
+    rows = [f"{idx},0.1,0.2,0.3,0.4,0.05" for idx in range(num_samples)]
+    return ",mss,wmfcc,sot,rms,mldr\n" + "\n".join(rows) + "\n"
 
 
 FAKE_METRICS_CSV = fake_metrics_csv()

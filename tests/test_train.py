@@ -88,6 +88,8 @@ from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _Record
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
+NUM_AUDIO_METRICS = 5
+
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
 _ORACLE_EXPERIMENT = "surge/fake_oracle"
@@ -199,13 +201,48 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("cfg_pyfdn_train", ["pyfdn/flow_ast_online"], indirect=True)
+@pytest.mark.parametrize(
+    ("cfg_pyfdn_train", "width", "control"),
+    [
+        (("pyfdn/flow", "pyfdn_n8_mono_kronecker"), 36, "kronecker_angles"),
+        (("pyfdn/flow", "pyfdn_n8_mono_householder_vector"), 35, "householder_vector"),
+    ],
+    indirect=["cfg_pyfdn_train"],
+)
+def test_train_pyfdn_derived_feedback_one_step_predicts_widened_row(
+    cfg_pyfdn_train: DictConfig, width: int, control: str
+) -> None:
+    """Selecting a derived-feedback synth widens the model head and its per-param metrics.
+
+    :param cfg_pyfdn_train: One-step configuration for the selected pyFDN identity.
+    :param width: Encoded row width the model head must predict.
+    :param control: Learned feedback-control group that must appear in the metrics.
+    """
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.trainer.limit_val_batches = 1
+        cfg_pyfdn_train.trainer.val_check_interval = 1
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    metrics, objects = train(cfg_pyfdn_train)
+
+    assert cfg_pyfdn_train.model.num_params == width
+    assert objects["trainer"].global_step == 1
+    assert torch.isfinite(metrics[f"train/per_param_flow_mse/{control}"])
+    assert torch.isfinite(metrics[f"val/per_param_mse_spec_quantized/{control}"])
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "cfg_pyfdn_train",
+    ["pyfdn/flow_ast_online", "pyfdn/flow_cepstrum_online"],
+    indirect=True,
+)
 def test_train_pyfdn_online_ast_one_step_uses_waveforms(
     cfg_pyfdn_train: DictConfig,
 ) -> None:
-    """Train the online-AST comparison from stored pyFDN waveforms.
+    """Train each waveform-in AST front end from stored pyFDN waveforms.
 
-    :param cfg_pyfdn_train: One-step online-AST pyFDN configuration.
+    :param cfg_pyfdn_train: One-step online-AST or cepstral-AST pyFDN configuration.
     """
     HydraConfig().set_config(cfg_pyfdn_train)
 
@@ -1170,7 +1207,6 @@ def test_train_eval_surge_xt(
     """
     from pedalboard.io import AudioFile
 
-    NUM_AUDIO_METRICS = 4  # mss, wmfcc, sot, rms
     METRICS_FILE_EXPECTATIONS = {
         "aggregated_metrics.csv": {
             "rows": NUM_AUDIO_METRICS,
@@ -1178,7 +1214,7 @@ def test_train_eval_surge_xt(
         },
         "metrics.csv": {
             "rows": NUM_FIXTURE_SAMPLES,
-            "columns": {"mss", "wmfcc", "sot", "rms"},
+            "columns": {"mss", "wmfcc", "sot", "rms", "mldr"},
         },
     }
 
@@ -1266,6 +1302,9 @@ def test_train_eval_surge_xt(
         )
         assert per_sample["rms"].min() > bounds.rms_min, (
             f"oracle rms too low: {per_sample['rms'].tolist()}"
+        )
+        assert per_sample["mldr"].max() < bounds.mldr_max, (
+            f"oracle mldr too high: {per_sample['mldr'].tolist()}"
         )
 
 
@@ -1464,6 +1503,30 @@ def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
         object_dict["datamodule"].test_dataloader()
 
 
+def test_train_experiment_labels_offline_run_preserves_display_metadata(
+    cfg_train_wandb_labels: DictConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real training step logs the selected experiment's name and tags.
+
+    :param cfg_train_wandb_labels: Tiny Lance workload with production W&B metadata.
+    :param monkeypatch: Forces offline W&B for the training run.
+    """
+    import wandb
+
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    wandb.teardown()
+    HydraConfig().set_config(cfg_train_wandb_labels)
+    try:
+        _, objects = train(cfg_train_wandb_labels)
+        run = objects["logger"][0].experiment
+        assert objects["trainer"].global_step == 1
+        assert run.name == "surge-simple-onehot_ffn"
+        assert {"surge", "surge-simple-onehot", "ffn"} <= set(run.tags)
+    finally:
+        wandb.finish()
+        wandb.teardown()
+
+
 def test_train_wandb_config_resolves_scheduler_max_steps(
     cfg_train_lance: DictConfig,
 ) -> None:
@@ -1651,7 +1714,7 @@ def test_train_eval_surge_fake_writes_audio_and_metrics_outputs(
 
     metrics_dir = tmp_path / "metrics"
     for metrics_file, expected_rows in {
-        "aggregated_metrics.csv": 4,
+        "aggregated_metrics.csv": NUM_AUDIO_METRICS,
         "metrics.csv": NUM_FIXTURE_SAMPLES,
     }.items():
         assert (metrics_dir / metrics_file).is_file(), f"{metrics_file} not found"
@@ -1990,7 +2053,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
 
     assert set(metrics) == {
         f"val_audio/{name}_{stat}"
-        for name in ("mss", "wmfcc", "sot", "rms")
+        for name in ("mss", "wmfcc", "sot", "rms", "mldr")
         for stat in ("mean", "std")
     }
     bounds = ORACLE_AUDIO_METRIC_BOUNDS
@@ -1998,6 +2061,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     assert metrics["val_audio/wmfcc_mean"] < bounds.wmfcc_max
     assert metrics["val_audio/sot_mean"] < bounds.sot_max
     assert metrics["val_audio/rms_mean"] > bounds.rms_min
+    assert metrics["val_audio/mldr_mean"] < bounds.mldr_max
 
     uploaded = fake_r2_remote / cfg_surge_real_train.r2.bucket / "probes"
     landed = sorted(p.relative_to(uploaded).as_posix() for p in uploaded.rglob("*") if p.is_file())
