@@ -210,13 +210,20 @@ def test_finalize_split_commit_is_one_atomic_manifest_version(
 
 
 def test_finalize_entrypoint_estimates_stats_from_real_fragments(
-    fake_r2_remote: Path, tmp_path: Path
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The config entrypoint writes estimated stats from committed train audio.
 
     :param fake_r2_remote: Root the ``r2:`` remote resolves to.
     :param tmp_path: Scratch dir for the spec and finalized artifacts.
+    :param monkeypatch: Isolates canonical storage settings from CI credentials.
     """
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "local-access-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "local-secret-key")
     spec = mono_tiny_lance_spec()
     stage_all_shards(spec, tmp_path)
     spec_root = tmp_path / "spec"
