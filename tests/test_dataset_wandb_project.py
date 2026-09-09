@@ -6,10 +6,16 @@ import pytest
 import wandb
 from hydra import compose, initialize_config_module
 from hydra.utils import instantiate
+from wandb.sdk.lib.service.service_token import WandbServiceConnectionError
 
 from tests.helpers.wandb_offline import read_run_project
 
 
+@pytest.mark.xfail(
+    raises=WandbServiceConnectionError,
+    reason="#2564: shared offline W&B service sockets can disappear during the full suite",
+    strict=False,
+)
 @pytest.mark.parametrize(
     ("config_name", "overrides"),
     [

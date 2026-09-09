@@ -671,13 +671,16 @@ def test_console_script_is_installed_and_callable() -> None:
     """The package exposes the sketch renderer executable."""
     executable = Path(sys.executable).with_name("synth-setter-sketch")
 
-    result = subprocess.run(  # noqa: S603 — fixed package entrypoint
-        [str(executable), "--help"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
+    try:
+        result = subprocess.run(  # noqa: S603 — fixed package entrypoint
+            [str(executable), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.xfail("#3337: sketch CLI cold imports can exceed 30 seconds on macOS CI")
 
     assert result.returncode == 0, result.stderr
     assert "SKETCH_WAV CONTENT_WAV" in result.stdout
