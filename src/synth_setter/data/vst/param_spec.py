@@ -43,6 +43,20 @@ class Parameter:
             return (self.name,)
         return tuple(f"{self.name}.{index}" for index in range(len(self)))
 
+    def model_to_encoded(self, model: np.ndarray) -> np.ndarray:
+        """Map this parameter's model-space columns onto the encoded ``[0, 1]`` domain.
+
+        The default saturates: each coordinate has an independent hard bound, so a
+        prediction overshooting ``[-1, 1]`` lands on the nearest native bound.
+
+        :param model: This parameter's columns on the model's ``[-1, 1]`` scale, shaped
+            ``(..., len(self))``.
+        :returns: The same columns clipped into ``[0, 1]``.
+        """
+        calculation_dtype = np.result_type(model.dtype, np.float64)
+        promoted = model.astype(calculation_dtype, copy=False)
+        return ((promoted + 1) / 2).clip(0, 1)
+
 
 class CategoricalParameter(Parameter):
     def __init__(
@@ -390,6 +404,114 @@ class DiscreteArrayParameter(ContinuousArrayParameter):
         return np.rint(super().decode(encoded)).astype(np.int64)
 
 
+# Below this model-space norm a (cos, sin) pair has no usable direction.
+_ANGLE_PAIR_MIN_NORM = 1e-6
+
+
+class AngleArrayParameter(Parameter):
+    """A fixed-shape array of radians encoded as one ``(cos, sin)`` pair per angle.
+
+    Model space then sees ``(cos θ, sin θ)`` directly, so ``+π`` and ``-π`` share one
+    encoding and MSE against the pair equals ``2 - 2cos(θ̂ - θ)``: seam-aware without
+    a dedicated loss. Decode projects any predicted pair onto the unit circle.
+    """
+
+    def __init__(self, name: str, shape: tuple[int, ...]) -> None:
+        """Bind the native angle-array shape.
+
+        :param name: Logical parameter name.
+        :param shape: Non-empty native array shape with positive dimensions.
+        :raises ValueError: The shape cannot describe at least one angle.
+        """
+        super().__init__(name)
+        if not shape or any(
+            not isinstance(size, Integral) or isinstance(size, bool) or size <= 0
+            for size in shape
+        ):
+            raise ValueError("shape must contain positive integer dimensions")
+        self.shape = tuple(int(size) for size in shape)
+
+    def __len__(self) -> int:
+        return 2 * math.prod(self.shape)
+
+    def sample(self, rng: np.random.Generator) -> np.ndarray:
+        """Draw one native float64 array of radians uniform over ``[-π, π)``.
+
+        :param rng: Generator that owns the deterministic sample stream.
+        :returns: Radians shaped ``self.shape``.
+        """
+        return rng.uniform(-np.pi, np.pi, size=self.shape)
+
+    def encode(self, raw_value: object) -> np.ndarray:
+        """Encode radians as a flat C-order float32 vector of ``(cos, sin)`` pairs in ``[0, 1]``.
+
+        :param raw_value: Finite radians shaped ``self.shape``; any real value is accepted
+            because angles are periodic.
+        :returns: Values shaped ``(len(self),)`` in ``[0, 1]``.
+        :raises ValueError: The input has the wrong shape or non-finite values.
+        """
+        raw = np.asarray(raw_value, dtype=np.float64)
+        if raw.shape != self.shape:
+            raise ValueError(f"{self.name} must have shape {self.shape}, got {raw.shape}")
+        if not np.isfinite(raw).all():
+            raise ValueError(f"{self.name} must contain only finite values")
+        pairs = np.stack((np.cos(raw), np.sin(raw)), axis=-1)
+        return ((pairs + 1.0) / 2.0).reshape(-1, order="C").astype(np.float32)
+
+    def encoded_names(self) -> tuple[str, ...]:
+        """Return ``<name>.<coordinate>.cos`` / ``.sin`` labels in encoding order.
+
+        :returns: Labels ordered identically to :meth:`encode`.
+        """
+        return tuple(
+            f"{self.name}.{'.'.join(str(coordinate) for coordinate in index)}.{component}"
+            for index in np.ndindex(self.shape)
+            for component in ("cos", "sin")
+        )
+
+    def model_to_encoded(self, model: np.ndarray) -> np.ndarray:
+        """Project each predicted ``(cos, sin)`` pair onto the unit circle, then map to ``[0, 1]``.
+
+        Clipping the two components independently would tilt the direction, so the pair
+        is normalised as a whole; a directionless pair is passed through unchanged.
+
+        :param model: Model-space pairs shaped ``(..., len(self))``.
+        :returns: Unit-circle pairs mapped into ``[0, 1]`` with the same shape.
+        """
+        calculation_dtype = np.result_type(model.dtype, np.float64)
+        pairs = model.astype(calculation_dtype, copy=False).reshape(*model.shape[:-1], -1, 2)
+        norms = np.linalg.norm(pairs, axis=-1, keepdims=True)
+        unit = np.where(norms < _ANGLE_PAIR_MIN_NORM, pairs, pairs / np.maximum(norms, 1e-300))
+        return ((unit + 1) / 2).reshape(model.shape)
+
+    def decode(self, encoded: np.ndarray) -> np.ndarray:
+        """Decode ``(cos, sin)`` pairs in ``[0, 1]`` to radians in ``[-π, π]``.
+
+        Pairs are projected onto the unit circle first, so an off-circle model prediction
+        decodes to the angle of its direction; a directionless pair decodes to ``0``.
+
+        :param encoded: Finite values shaped ``(len(self),)`` in ``[0, 1]``.
+        :returns: Float64 radians shaped ``self.shape``.
+        :raises ValueError: The input has the wrong shape or invalid values.
+        """
+        values = np.asarray(encoded)
+        expected_shape = (len(self),)
+        if values.shape != expected_shape:
+            raise ValueError(
+                f"encoded {self.name} must have shape {expected_shape}, got {values.shape}"
+            )
+        if not np.isfinite(values).all():
+            raise ValueError(f"encoded {self.name} must contain only finite values")
+        if np.any((values < 0.0) | (values > 1.0)):
+            raise ValueError(f"encoded {self.name} values must be within [0, 1]")
+        pairs = (values.astype(np.float64) * 2.0 - 1.0).reshape(-1, 2)
+        norms = np.linalg.norm(pairs, axis=-1)
+        angles = np.where(
+            norms < _ANGLE_PAIR_MIN_NORM, 0.0, np.arctan2(pairs[:, 1], pairs[:, 0])
+        )
+        return angles.reshape(self.shape, order="C")
+
+
 class NoteDurationParameter(Parameter):
     """A special parameter for sampling note durations."""
 
@@ -571,17 +693,25 @@ class ParamSpec:
         return encoded * 2 - 1
 
     def model_to_encoded(self, model: np.ndarray) -> np.ndarray:
-        """Rescale model-space values onto the encoded ``[0, 1]`` domain, clipped.
+        """Rescale model-space values onto the encoded ``[0, 1]`` domain.
 
-        Inverse of :meth:`encoded_to_model` for in-range inputs; predictions
-        overshooting ``[-1, 1]`` saturate rather than decode out of domain.
+        Inverse of :meth:`encoded_to_model` for in-range inputs. A full-width row (or a
+        ``(..., width)`` batch) is dispatched to each parameter's
+        :meth:`Parameter.model_to_encoded`, so scalars saturate while direction-valued
+        parameters project instead of clipping. Any narrower column span cannot be
+        attributed to parameters and falls back to the elementwise clip.
 
         :param model: Values on the model's ``[-1, 1]`` scale.
-        :returns: The same values clipped into ``[0, 1]``.
+        :returns: The same values mapped into ``[0, 1]``.
         """
         calculation_dtype = np.result_type(model.dtype, np.float64)
         promoted = model.astype(calculation_dtype, copy=False)
-        return ((promoted + 1) / 2).clip(0, 1)
+        if promoted.ndim == 0 or promoted.shape[-1] != self.encoded_width:
+            return ((promoted + 1) / 2).clip(0, 1)
+        encoded = np.empty_like(promoted)
+        for parameter, span in self.encoded_slices():
+            encoded[..., span] = parameter.model_to_encoded(promoted[..., span])
+        return encoded
 
     def decode(self, params: np.ndarray) -> tuple[ParameterValues, ParameterValues]:
         """Decode one encoded row of values in ``[0, 1]``.
