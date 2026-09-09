@@ -220,13 +220,19 @@ mkdir -p "$VST3_DIR" "$STUDIORACK_PLUGINS_DIR"
 readonly HEADLESS=src/synth_setter/scripts/run-linux-vst-headless.sh
 chmod +x "$HEADLESS"
 studiorack() { synth-setter-plugins --manifest studiorack.json --links-dir "$VST3_DIR" "$@"; }
+# Studiorack's validator instantiates each plugin after download. JUCE synths
+# (Six Sines, OB-Xf) touch X11 on init and hang against a forwarded or absent
+# DISPLAY, so every install runs inside the Xvfb/xsettingsd/dbus wrapper with
+# the login environment's DISPLAY dropped.
 for spec in "surge-synthesizer/surge:Surge XT" "asb2m10/dexed:Dexed" \
             "baconpaul/six-sines:Six Sines" "surge-synthesizer/ob-xf:OB-Xf"; do
   plugin="${spec%%:*}"; bundle="${spec#*:}"
-  [[ -d "$VST3_DIR/${bundle}.vst3" ]] || studiorack install --plugin "$plugin"
+  [[ -d "$VST3_DIR/${bundle}.vst3" ]] \
+    || env -u DISPLAY "$HEADLESS" synth-setter-plugins --manifest studiorack.json \
+         --links-dir "$VST3_DIR" install --plugin "$plugin"
 done
 if [[ ! -d "$VST3_DIR/CardinalSynth.vst3" ]]; then
-  "$HEADLESS" synth-setter-plugins --manifest studiorack-cardinal.json \
+  env -u DISPLAY "$HEADLESS" synth-setter-plugins --manifest studiorack-cardinal.json \
     --links-dir "$VST3_DIR" install --plugin distrho/cardinal
 fi
 # KR-106: upstream release zips need glibc 2.38, so build from source like the image.
@@ -254,9 +260,9 @@ for entry in "Surge XT|" "CardinalSynth|" "Dexed|" "OB-Xf|" "Six Sines|Six Sines
   name="${entry%%|*}"; pname="${entry#*|}"
   [[ -d "$VST3_DIR/${name}.vst3" ]] || die "${name}.vst3 missing from ${VST3_DIR}"
   if [[ -n "$pname" ]]; then
-    "$HEADLESS" python -X faulthandler src/synth_setter/scripts/load_vst3_check.py "$VST3_DIR/${name}.vst3" "$pname"
+    env -u DISPLAY "$HEADLESS" python -X faulthandler src/synth_setter/scripts/load_vst3_check.py "$VST3_DIR/${name}.vst3" "$pname"
   else
-    "$HEADLESS" python -X faulthandler src/synth_setter/scripts/load_vst3_check.py "$VST3_DIR/${name}.vst3"
+    env -u DISPLAY "$HEADLESS" python -X faulthandler src/synth_setter/scripts/load_vst3_check.py "$VST3_DIR/${name}.vst3"
   fi
   ln -sfn "$VST3_DIR/${name}.vst3" "plugins/${name}.vst3"
 done
