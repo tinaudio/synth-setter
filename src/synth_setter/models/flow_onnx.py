@@ -118,6 +118,8 @@ def export_flow_onnx(
         raise ValueError("ONNX export requires mel conditioning and sketch controls")
     if model.training or next(model.parameters()).device.type != "cpu":
         raise ValueError("ONNX export requires a CPU model in evaluation mode")
+    if "mel" not in batch or "sketch_ctrl" not in batch:
+        raise ValueError("ONNX inputs require mel and sketch_ctrl conditioning")
     inputs = (batch["mel"], batch["sketch_ctrl"])
     if any(
         value.device.type != "cpu"
