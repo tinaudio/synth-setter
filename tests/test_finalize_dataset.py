@@ -56,6 +56,20 @@ def stub_finalize_setup(monkeypatch: pytest.MonkeyPatch) -> Callable[[int | None
     return install_finalize_setup_stubs(monkeypatch)
 
 
+def test_finalize_loggers_pins_dedicated_finalize_run_identity() -> None:
+    """The finalize wandb run derives its id from the spec and is resumable."""
+    spec = build_lance_smoke_spec(task_name="finalize-run-identity")
+    # No ``_target_`` so ``instantiate_loggers`` skips construction and the test
+    # isolates the cfg pinning rather than building a real WandbLogger.
+    cfg = OmegaConf.create({"logger": {"wandb": {"id": None, "job_type": ""}}})
+
+    finalize_dataset.finalize_loggers(cfg, spec)
+
+    assert cfg.logger.wandb.id == f"{spec.run_id}-finalize"
+    assert cfg.logger.wandb.job_type == "finalize"
+    assert cfg.logger.wandb.resume == "allow"
+
+
 def test_finalize_uploads_stats_then_marker_at_canonical_uris(
     tmp_path: Path,
     fake_r2_remote: Path,
@@ -315,9 +329,11 @@ def test_finalize_logs_dataset_artifact_to_offline_wandb_run(
     finalize_dataset.finalize(cfg)
     assert wandb.run is None, "finalize() did not close the wandb run on return"
 
-    offline_dirs = list((tmp_path / "wandb").glob(f"offline-run-*-{spec.run_id}"))
+    # Finalize owns its own W&B run rather than resuming the generation run.
+    finalize_run_id = f"{spec.run_id}-finalize"
+    offline_dirs = list((tmp_path / "wandb").glob(f"offline-run-*-{finalize_run_id}"))
     assert len(offline_dirs) == 1, (
-        f"expected one offline-run dir for {spec.run_id}, found {offline_dirs}"
+        f"expected one offline-run dir for {finalize_run_id}, found {offline_dirs}"
     )
     binary_files = glob.glob(str(offline_dirs[0] / "run-*.wandb"))
     assert len(binary_files) == 1, (

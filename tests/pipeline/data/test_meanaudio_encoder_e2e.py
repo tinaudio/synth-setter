@@ -191,7 +191,7 @@ def test_add_embeddings_real_meanaudio_lance_conditions_embedding_pool(
             f"lance_uri={dataset_path}",
             "embeddings=[meanaudio_16k]",
             f"device={device}",
-            "batch_size=1",
+            "lance_batch_size=1",
             "build_index=false",
             f"paths.log_dir={tmp_path / 'logs'}",
             f"hydra.run.dir={tmp_path / 'run'}",

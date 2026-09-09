@@ -16,6 +16,7 @@ from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 from synth_setter.models.components.pupujepa_encoder import (
     PupuJepaAudioEncoder,
+    PupuJepaConditioningEncoder,
     PupuJepaMelFrontend,
 )
 from synth_setter.pupujepa import (
@@ -446,3 +447,159 @@ def test_encoder_too_short_for_one_time_patch_raises() -> None:
 
     with pytest.raises(ValueError, match="one complete time patch"):
         encoder(torch.zeros(1, 63))
+
+
+def test_from_scratch_backbone_is_trainable_and_follows_parent_train_mode() -> None:
+    """A from-scratch teacher trains like the AST instead of staying a frozen eval module."""
+    encoder = PupuJepaAudioEncoder.from_scratch(sample_rate=8_000, variant="tiny")
+
+    encoder.train(True)
+
+    assert encoder.training
+    assert all(parameter.requires_grad for parameter in encoder.parameters())
+    assert encoder.config == PUPUJEPA_TINY_CONFIG
+
+
+def test_from_scratch_large_variant_uses_released_geometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The variant selects the released teacher geometry without touching any checkpoint.
+
+    :param monkeypatch: Fixture replacing the expensive teacher construction.
+    """
+    monkeypatch.setattr(
+        pupujepa_encoder_module,
+        "_PupuJepaTeacherModel",
+        lambda _config: torch.nn.Identity(),
+    )
+
+    encoder = PupuJepaAudioEncoder.from_scratch(sample_rate=8_000, variant="large")
+
+    assert encoder.config == PUPUJEPA_LARGE_CONFIG
+    assert encoder.out_dim == PUPUJEPA_LARGE_EMBEDDING_DIM
+
+
+def test_trainable_encoder_parameters_receive_waveform_loss_gradients() -> None:
+    """Loss gradients reach the teacher blocks so the backbone can learn from scratch."""
+    torch.manual_seed(0)
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config, trainable=True)
+
+    encoder(torch.randn(2, 256).clamp(-1.0, 1.0)).square().mean().backward()
+
+    gradients = [parameter.grad for parameter in encoder.teacher_model.parameters()]
+    assert None not in gradients
+    assert any(
+        torch.count_nonzero(gradient).item() > 0 for gradient in gradients if gradient is not None
+    )
+
+
+def test_trainable_encoder_runs_teacher_at_ambient_autocast_precision() -> None:
+    """A trainable backbone trains in mixed precision like the AST rather than forcing float32."""
+    torch.manual_seed(0)
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config, trainable=True)
+
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        sequence = encoder(torch.randn(2, 256).clamp(-1.0, 1.0))
+
+    assert sequence.dtype == torch.bfloat16
+
+
+def test_trainable_encoder_cast_to_bfloat16_still_encodes_float32_waveforms() -> None:
+    """A true-low-precision trainer casts the module; float32 audio must still flow through."""
+    torch.manual_seed(0)
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config, trainable=True)
+    encoder.to(torch.bfloat16)
+
+    sequence = encoder(torch.randn(2, 256).clamp(-1.0, 1.0))
+
+    assert sequence.dtype == torch.bfloat16
+    assert sequence.shape == (2, 48, 4)
+
+
+@pytest.mark.slow
+def test_conditioning_encoder_from_scratch_overfits_fixed_batch() -> None:
+    """A randomly initialised teacher and pool learn a fixed mapping when trained jointly."""
+    torch.manual_seed(0)
+    config = _tiny_config()
+    encoder = PupuJepaConditioningEncoder(
+        backbone=PupuJepaAudioEncoder(
+            sample_rate=config.sample_rate, config=config, trainable=True
+        ),
+        head=EmbeddingPool(embed_dim=config.output_dim, d_model=8, num_heads=1, max_seq_len=4),
+        out_dim=8,
+    )
+    predictor = torch.nn.Linear(8, 2)
+    audio = torch.randn(2, 256).clamp(-1.0, 1.0)
+    targets = torch.tensor(((-1.0, 1.0), (1.0, -1.0)))
+    optimizer = torch.optim.Adam((*encoder.parameters(), *predictor.parameters()), lr=3e-3)
+
+    initial_loss = torch.nn.functional.mse_loss(predictor(encoder(audio)), targets)
+    loss = initial_loss
+    for _ in range(1_000):
+        optimizer.zero_grad()
+        loss = torch.nn.functional.mse_loss(predictor(encoder(audio)), targets)
+        loss.backward()
+        optimizer.step()
+
+    assert loss.item() < initial_loss.item() / 100
+    assert loss.item() < 0.01
+
+
+def test_conditioning_encoder_training_step_updates_backbone_and_head() -> None:
+    """One optimizer step moves both the from-scratch teacher and the pool."""
+    torch.manual_seed(0)
+    config = _tiny_config()
+    backbone = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config, trainable=True)
+    head = EmbeddingPool(embed_dim=config.output_dim, d_model=8, num_heads=1, max_seq_len=4)
+    encoder = PupuJepaConditioningEncoder(backbone=backbone, head=head, out_dim=8)
+    original_patch = backbone.teacher_model.patch_embed.proj.weight.detach().clone()
+    original_query = head.query.detach().clone()
+    optimizer = torch.optim.SGD(encoder.parameters(), lr=0.1)
+
+    optimizer.zero_grad()
+    encoder(torch.randn(2, 256).clamp(-1.0, 1.0)).square().mean().backward()
+    optimizer.step()
+
+    assert not torch.equal(backbone.teacher_model.patch_embed.proj.weight, original_patch)
+    assert not torch.equal(head.query, original_query)
+
+
+def test_conditioning_encoder_emits_one_token_per_conditioning_output() -> None:
+    """The wrapper hands the flow the pool's per-layer conditioning tokens."""
+    config = _tiny_config()
+    backbone = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config, trainable=True)
+    head = EmbeddingPool(
+        embed_dim=config.output_dim,
+        d_model=8,
+        num_heads=1,
+        max_seq_len=4,
+        n_conditioning_outputs=3,
+    )
+    encoder = PupuJepaConditioningEncoder(backbone=backbone, head=head, out_dim=8)
+
+    tokens = encoder(torch.zeros(2, 256))
+
+    assert tokens.shape == (2, 3, 8)
+
+
+def test_conditioning_encoder_rejects_frozen_backbone() -> None:
+    """Pairing a frozen teacher with the trainable wrapper would silently skip learning."""
+    config = _tiny_config()
+    backbone = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config)
+    head = EmbeddingPool(embed_dim=config.output_dim, d_model=8, num_heads=1, max_seq_len=4)
+
+    with pytest.raises(ValueError, match="trainable"):
+        PupuJepaConditioningEncoder(backbone=backbone, head=head, out_dim=8)
+
+
+def test_conditioning_encoder_rejects_mismatched_head_width() -> None:
+    """A pool sized for another teacher width fails at construction, not mid-training."""
+    config = _tiny_config()
+    backbone = PupuJepaAudioEncoder(sample_rate=config.sample_rate, config=config, trainable=True)
+    head = EmbeddingPool(embed_dim=config.output_dim + 1, d_model=8, num_heads=1, max_seq_len=4)
+
+    with pytest.raises(ValueError, match="does not match backbone out_dim"):
+        PupuJepaConditioningEncoder(backbone=backbone, head=head, out_dim=8)

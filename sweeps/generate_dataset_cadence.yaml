@@ -2,7 +2,7 @@ program: src/synth_setter/cli/generate_dataset.py
 # Pinned in YAML — wandb sweep CLI does not support OmegaConf resolvers and ignores
 # WANDB_ENTITY / WANDB_PROJECT at sweep-creation time (those only steer wandb.init in each trial).
 entity: tinaudio
-project: synth-setter
+project: synth-setter-generate-dataset
 command:
   - ${interpreter}
   - ${program}

@@ -65,6 +65,7 @@ def _validate_arm(
     control_encoder: torch.nn.Module | None,
     audio_loss: object | None,
     rectified_sigma_min: float,
+    parameterization: str,
     sketch_controls: object | None,
     compiled: bool,
 ) -> None:
@@ -76,6 +77,8 @@ def _validate_arm(
     :param audio_loss: The base module's audio term, which this module cannot also carry.
     :param rectified_sigma_min: Probability-path noise scale; only zero leaves the one-step
         estimate exact.
+    :param parameterization: What the base field predicts; the one-step estimate and the
+        control both assume a velocity.
     :param sketch_controls: Sketch-control spec, which the controlled field cannot route.
     :param compiled: Whether the run asked for ``torch.compile``.
     :raises ValueError: Any of those conditions holds.
@@ -95,6 +98,10 @@ def _validate_arm(
         # sigma-free path; any other sigma renders parameters the flow did not imply.
         raise ValueError(
             f"simulator feedback requires rectified_sigma_min=0, got {rectified_sigma_min}"
+        )
+    if parameterization != "velocity":
+        raise ValueError(
+            f"simulator feedback requires parameterization='velocity', got {parameterization!r}"
         )
     if sketch_controls is not None:
         # ControlledFlow takes no control_tokens, so a sketch spec would train the frozen
@@ -165,6 +172,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
             control_encoder=control_encoder,
             audio_loss=base_kwargs.get("audio_loss"),
             rectified_sigma_min=float(base_kwargs.get("rectified_sigma_min", 0.0)),  # pyright: ignore[reportArgumentType]
+            parameterization=str(base_kwargs.get("parameterization", "velocity")),
             sketch_controls=base_kwargs.get("sketch_controls"),
             compiled=bool(base_kwargs.get("compile", False)),
         )

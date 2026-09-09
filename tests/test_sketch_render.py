@@ -30,6 +30,33 @@ def test_noise_source_device_mps_uses_supported_cpu_generator() -> None:
     assert sketch_render._noise_source_device(torch.device("cuda")) == torch.device("cuda")
 
 
+def test_write_metrics_stereo_row_preserves_optional_mid_side_score(tmp_path: Path) -> None:
+    """The sketch-render CSV writer accepts the optional stereo metric.
+
+    :param tmp_path: Pytest fixture providing a fresh output directory.
+    """
+    path = tmp_path / "metrics.csv"
+    sketch_render._write_metrics(
+        path,
+        {
+            "content_cfg": 1.0,
+            "sketch_cfg": 2.0,
+            "seed": 3,
+            "mss": 0.1,
+            "wmfcc": 0.2,
+            "sot": 0.3,
+            "rms": 0.4,
+            "mldr": 0.5,
+            "mldr_mid_side": 0.6,
+            "r2_uri": "",
+        },
+    )
+
+    with path.open(newline="", encoding="utf-8") as stream:
+        row = next(csv.DictReader(stream))
+    assert row["mldr_mid_side"] == "0.6"
+
+
 def test_cfg_grid_repeated_strengths_returns_argument_order_product() -> None:
     """Repeated strengths expand content-major into every requested arm."""
     assert cfg_grid([0.0, 2.0], [1.0, 3.0]) == (
@@ -576,7 +603,7 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
     monkeypatch.setattr(
         sketch_render,
         "compute_metrics_on_dir",
-        lambda *args: {"mss": 1.0, "wmfcc": 2.0, "sot": 3.0, "rms": 0.5},
+        lambda *args: {"mss": 1.0, "wmfcc": 2.0, "sot": 3.0, "rms": 0.5, "mldr": 0.7},
     )
 
     def invoke(seed: int, output: Path) -> Result:

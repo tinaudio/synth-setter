@@ -24,8 +24,8 @@ from synth_setter.conditioning import (
     SKETCH_PITCH_CHILD,
     Conditioning,
     EmbeddingConditioningSpec,
-    SketchControls,
     SketchControlProfile,
+    SketchControls,
     SketchControlSpec,
     resolve_embedding_conditioning,
     sketch_control_layout,
@@ -299,9 +299,12 @@ class PrepareBatchCollate:
         """Convert stored Lance columns to the model batch contract.
 
         :param batch: Pre-collated stored columns from :class:`LanceMapDataset`.
-        :returns: Float32 model batch with generated noise.
+        :returns: Float32 model batch with generated noise and optional int64 source IDs.
+        :raises ValueError: If source identities accompany OT-reordered batches.
         """
         columns = cast(dict[str, torch.Tensor], batch)
+        if "sample_id" in columns and self.ot:
+            raise ValueError("sample_id cannot accompany OT-reordered batches")
         raw_values = {name: tensor.numpy() for name, tensor in columns.items()}
         if self.conditioning_column is not None:
             conditioning = raw_values[self.conditioning_column]
@@ -323,7 +326,7 @@ class PrepareBatchCollate:
                 children, self.sketch_profile
             )
         raw = cast(RawBatch, raw_values)
-        return prepare_batch(
+        prepared = prepare_batch(
             raw,
             mean=self.mean,
             std=self.std,
@@ -333,6 +336,9 @@ class PrepareBatchCollate:
             sketch_profile=self.sketch_profile,
             sketch_pitch_zero_threshold=self.sketch_pitch_zero_threshold,
         )
+        if "sample_id" in columns:
+            prepared["sample_id"] = columns["sample_id"]
+        return prepared
 
 
 class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
@@ -550,6 +556,7 @@ class LanceVSTDataModule(VSTDataModule):
         download_dataset_row_limit: int | None = None,
         high_memory_materialization: bool = False,
         growing_active_record: str | Path | None = None,
+        eval_sample_ids: bool = False,
     ) -> None:
         """Store map-style Lance loader configuration.
 
@@ -577,8 +584,13 @@ class LanceVSTDataModule(VSTDataModule):
             time. Without txids, disposable runs use the latest source snapshots.
         :param high_memory_materialization: Whether to use high-memory Lance tuning.
         :param growing_active_record: Atomic active-record path for train-only snapshots.
-        :raises ValueError: Growing refresh is combined with persistent workers.
+        :param eval_sample_ids: Include pinned source row identities in validation and test.
+        :raises ValueError: Growing refresh is combined with persistent workers, or
+            identity-bearing evaluation is requested for random fake data.
         """
+        if eval_sample_ids and fake:
+            raise ValueError("eval_sample_ids requires real source rows, not fake data")
+        self.eval_sample_ids = eval_sample_ids
         super().__init__(
             dataset_root=dataset_root,
             download_dataset_root_uri=download_dataset_root_uri,
@@ -656,6 +668,7 @@ class LanceVSTDataModule(VSTDataModule):
         read_audio: bool,
         stats: tuple[np.ndarray, np.ndarray] | None,
         version: int | None = None,
+        include_sample_id: bool = False,
     ) -> _MapSplit:
         """Build one real Lance split and its batch transformer.
 
@@ -664,6 +677,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param read_audio: Whether to project prediction audio.
         :param stats: Mel ``(mean, std)``, or ``None`` to skip normalization.
         :param version: Exact local Lance version for a growing train split.
+        :param include_sample_id: Add transient source row identities to this split.
         :returns: Sample-indexed dataset and collate operation.
         """
         spec = self.embedding_conditioning
@@ -675,7 +689,12 @@ class LanceVSTDataModule(VSTDataModule):
         columns = self._loader_columns(read_audio=read_audio)
         mean, std = stats if stats is not None else (None, None)
         return _MapSplit(
-            dataset=LanceMapDataset(shard_path, columns=columns, version=version),
+            dataset=LanceMapDataset(
+                shard_path,
+                columns=columns,
+                version=version,
+                include_sample_id=include_sample_id,
+            ),
             collate=PrepareBatchCollate(
                 mean=mean,
                 std=std,
@@ -906,6 +925,7 @@ class LanceVSTDataModule(VSTDataModule):
                 read_audio=name == "predict",
                 stats=stats_by_split.get(name, eval_stats),
                 version=active_version if name == "train" else None,
+                include_sample_id=self.eval_sample_ids and name in ("val", "test"),
             )
             for name in split_names
         }

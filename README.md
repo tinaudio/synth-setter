@@ -59,8 +59,10 @@ digests must match each manifest's same-stem lock, such as
 [`studiorack.lock.json`](studiorack.lock.json) or
 [`studiorack-cardinal.lock.json`](studiorack-cardinal.lock.json), and completed
 bundles receive a content seal before aliasing. `make install-plugins` installs
-every package in the manifest. Unsupported package/host combinations and
-registry drift fail explicitly.
+every package in the manifest. On Linux x86_64, Ultramaster KR-106 is built
+from its pinned source revision before Studiorack seals and links it because its
+registry binary is incompatible with Ubuntu 22.04. Unsupported package/host
+combinations and registry drift fail explicitly.
 
 ## Installation
 
@@ -228,6 +230,8 @@ New to the project? These are the docs worth skimming first, in order:
 
 Further reading (mostly for contributors and maintainers):
 
+- **[CLI command cookbook](docs/reference/cli.md)** — copy-ready commands for
+  dataset generation, finalization, embeddings, training, and SkyPilot jobs
 - [`docs/design/`](docs/design/) — training pipeline, evaluation pipeline,
   storage provenance spec, SkyPilot integration, implementation plans
 - [`docs/reference/`](docs/reference/) — configuration reference, Docker,

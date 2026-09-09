@@ -224,6 +224,7 @@ def write_blob_audio_corpus(
     audio_column: str = AUDIO_FIELD,
     with_sample_rate_column: bool = False,
     mode: str = "create",
+    extra_columns: Mapping[str, pa.Array] | None = None,
 ) -> None:
     """Write a third-party-style corpus storing WAV bytes in a blob column.
 
@@ -237,6 +238,8 @@ def write_blob_audio_corpus(
     :param with_sample_rate_column: Whether to store the rate alongside, as NSynth does
         and ESC50 does not.
     :param mode: Lance write mode; ``append`` commits a further version.
+    :param extra_columns: Per-row metadata columns, one value per clip, as the
+        RIR corpora carry ``source_path`` and ``audio_decodable``.
     """
 
     def _wav_bytes(clip: np.ndarray) -> bytes:
@@ -256,5 +259,8 @@ def write_blob_audio_corpus(
     if with_sample_rate_column:
         fields.append(pa.field("sample_rate", pa.int64(), nullable=False))
         columns["sample_rate"] = pa.array([sample_rate] * len(clips), pa.int64())
+    for name, values in (extra_columns or {}).items():
+        fields.append(pa.field(name, values.type, nullable=False))
+        columns[name] = values
     table = pa.table(columns, schema=pa.schema(fields))
     lance.write_dataset(table, path, mode=mode, data_storage_version="2.1")

@@ -4,7 +4,8 @@ Example:
     ``PyFDNRenderer().render(native_params)`` returns a channel-first impulse response.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import replace
 from importlib.metadata import version
 from numbers import Integral, Real
 from typing import cast
@@ -12,10 +13,33 @@ from typing import cast
 import numpy as np
 from jaxtyping import Float32
 from pyFDN import FDNBuild, build_set_decay, build_to_impz, decay_to_geq, process_fdn
+from pyFDN.auxiliary.utils import hertz_to_rad
+from pyFDN.eq import (
+    BANDWIDTH_R,
+    CENTER_FREQUENCIES,
+    SHELVING_CROSSOVER,
+    highshelf_biquad,
+    lowshelf_biquad,
+    peaking_biquad,
+)
 from pyFDN.td import PitchShift, SOSBank, Series
 
+from synth_setter.data.pyfdn_diffvox import render_diffvox_chain
 from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_DIRECT_DELAY_SAMPLES,
+    PYFDN_FEEDBACK_GIVENS_ANGLES_NAME,
+    PYFDN_FEEDBACK_SKEW_NAME,
+    PYFDN_FEEDBACK_SKEW_SIZE,
+    PYFDN_GEQ_BAND_GAIN_DB_MAX,
+    PYFDN_GEQ_BAND_GAIN_DB_MIN,
+    PYFDN_GEQ_BAND_GAIN_DB_NAME,
+    PYFDN_GEQ_GAIN_DB_MAX,
+    PYFDN_GEQ_GAIN_DB_MIN,
+    PYFDN_GEQ_GAIN_DB_NAME,
     PYFDN_GEQ_RT_MAX_SECONDS,
+    PYFDN_GEQ_SECTIONS,
+    PYFDN_GOTZ_DELAYS,
+    PYFDN_HOUSEHOLDER_VECTOR_NAME,
     PYFDN_KRONECKER_ANGLES_NAME,
     PYFDN_KRONECKER_REFLECT_NAME,
     PYFDN_ORDER,
@@ -32,7 +56,13 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_RT_MAX_SECONDS,
     PYFDN_RT_MIN_SECONDS,
     PYFDN_RT_NYQUIST_NAME,
+    PYFDN_TONE_GEQ_GAIN_DB_MAX,
+    PYFDN_TONE_GEQ_GAIN_DB_NAME,
+    givens_to_orthogonal,
+    householder_feedback_matrix,
     kronecker_feedback_matrix,
+    require_array,
+    skew_to_orthogonal,
 )
 from synth_setter.data.pyfdn_source import (
     PYFDN_SOURCE_CHANNELS,
@@ -45,7 +75,11 @@ from synth_setter.data.pyfdn_source import (
 from synth_setter.data.vst.param_spec import ParameterValue
 from synth_setter.data.vst.renderers import AudioRenderer, NonFiniteAudioError
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.renderer_backend import PyFDNExcitation
+from synth_setter.renderer_backend import (
+    PYFDN_DIFFVOX_PARAM_SPEC_NAME,
+    PyFDNExcitation,
+    pyfdn_output_channels,
+)
 
 _PYFDN_VERSION = "0.4.2"
 _SAMPLE_RATE = float(PYFDN_SOURCE_SAMPLE_RATE_HZ)
@@ -57,7 +91,24 @@ PYFDN_PITCHSHIFT_MIN_DELAY_SAMPLES = 3
 PYFDN_PITCHSHIFT_MAX_DELAY_WINDOW_MULTIPLIER = 2
 _PLAIN_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_householder")
 _KRONECKER_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_kronecker")
+_HOUSEHOLDER_VECTOR_PARAM_SPEC = ParamSpecName("pyfdn_n8_mono_householder_vector")
 _PITCHSHIFT_PARAM_SPEC = ParamSpecName("pyfdn_pitchshift_n8_mono_householder")
+_DIFFVOX_PARAM_SPEC = ParamSpecName(PYFDN_DIFFVOX_PARAM_SPEC_NAME)
+_GOTZ_PARAM_SPECS = {
+    ParamSpecName("pyfdn_gotz_n8_mono_fixed_delays"): (PYFDN_FEEDBACK_SKEW_NAME, True),
+    ParamSpecName("pyfdn_gotz_n8_mono_learned_delays"): (PYFDN_FEEDBACK_SKEW_NAME, False),
+    ParamSpecName("pyfdn_gotz_n8_mono_fixed_delays_givens"): (
+        PYFDN_FEEDBACK_GIVENS_ANGLES_NAME,
+        True,
+    ),
+    ParamSpecName("pyfdn_gotz_n8_mono_learned_delays_givens"): (
+        PYFDN_FEEDBACK_GIVENS_ANGLES_NAME,
+        False,
+    ),
+}
+_GOTZ_GEQ_SOS_SHAPE = (PYFDN_GEQ_SECTIONS, 6, PYFDN_ORDER)
+# Float32 codec round-trips perturb derived matrix values at this scale.
+_FEEDBACK_DERIVATION_ATOL = 1e-6
 _ARRAY_CONTRACTS = (
     ("feedback_matrix", (PYFDN_ORDER, PYFDN_ORDER), np.dtype(np.float64)),
     ("input_matrix", (PYFDN_ORDER, _CHANNELS), np.dtype(np.float64)),
@@ -66,12 +117,47 @@ _ARRAY_CONTRACTS = (
     ("delays", (PYFDN_ORDER,), np.dtype(np.int64)),
 )
 _BASE_KEYS = frozenset(name for name, _, _ in _ARRAY_CONTRACTS)
-_KRONECKER_CONTROL_KEYS = frozenset(
-    {PYFDN_KRONECKER_ANGLES_NAME, PYFDN_KRONECKER_REFLECT_NAME}
-)
-# Decoded angles and their matrix come from the same float64 pass; anything beyond
+
+
+def _kronecker_feedback(params: Mapping[str, ParameterValue]) -> np.ndarray:
+    """Rebuild the feedback matrix a Kronecker patch's kernel controls describe.
+
+    :param params: Native patch carrying the angle and reflect arrays.
+    :returns: The orthogonal matrix those controls describe.
+    """
+    return kronecker_feedback_matrix(
+        np.asarray(params[PYFDN_KRONECKER_ANGLES_NAME]),
+        np.asarray(params[PYFDN_KRONECKER_REFLECT_NAME]),
+    )
+
+
+def _householder_vector_feedback(params: Mapping[str, ParameterValue]) -> np.ndarray:
+    """Rebuild the feedback matrix a learnable-Householder patch's vector describes.
+
+    :param params: Native patch carrying the reflection vector.
+    :returns: The reflection matrix that vector describes.
+    """
+    return householder_feedback_matrix(np.asarray(params[PYFDN_HOUSEHOLDER_VECTOR_NAME]))
+
+
+# Specs whose feedback matrix is derived from learned controls: the control keys the
+# patch must carry and the rule that rebuilds the matrix from them.
+_DERIVED_FEEDBACK: dict[
+    ParamSpecName,
+    tuple[frozenset[str], Callable[[Mapping[str, ParameterValue]], np.ndarray]],
+] = {
+    _KRONECKER_PARAM_SPEC: (
+        frozenset({PYFDN_KRONECKER_ANGLES_NAME, PYFDN_KRONECKER_REFLECT_NAME}),
+        _kronecker_feedback,
+    ),
+    _HOUSEHOLDER_VECTOR_PARAM_SPEC: (
+        frozenset({PYFDN_HOUSEHOLDER_VECTOR_NAME}),
+        _householder_vector_feedback,
+    ),
+}
+# Decoded controls and their matrix come from the same float64 pass; anything beyond
 # float32 round-off between them means a caller edited one without the other.
-_KRONECKER_FEEDBACK_ATOL = 1e-6
+_DERIVED_FEEDBACK_ATOL = 1e-5
 _REQUIRED_KEYS = _BASE_KEYS.union({PYFDN_RT_DC_NAME, PYFDN_RT_NYQUIST_NAME})
 _PITCHSHIFT_REQUIRED_KEYS = _BASE_KEYS.union(
     {
@@ -81,34 +167,17 @@ _PITCHSHIFT_REQUIRED_KEYS = _BASE_KEYS.union(
         PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME,
     }
 )
-
-
-def _require_array(
-    name: str,
-    value: ParameterValue,
-    *,
-    shape: tuple[int, ...],
-    dtype: np.dtype[np.generic],
-) -> np.ndarray:
-    """Validate one native array without coercing or copying it.
-
-    :param name: Patch field name used in validation errors.
-    :param value: Native patch value to validate.
-    :param shape: Required array shape.
-    :param dtype: Required NumPy dtype.
-    :returns: The original validated array.
-    :raises TypeError: The value is not an array or has the wrong dtype.
-    :raises ValueError: The array has the wrong shape or non-finite values.
-    """
-    if not isinstance(value, np.ndarray):
-        raise TypeError(f"{name} must be a NumPy array")
-    if value.shape != shape:
-        raise ValueError(f"{name} must have shape {shape}, got {value.shape}")
-    if value.dtype != dtype:
-        raise TypeError(f"{name} must have dtype {dtype}, got {value.dtype}")
-    if not np.isfinite(value).all():
-        raise ValueError(f"{name} must contain only finite values")
-    return value
+_GOTZ_SHARED_REQUIRED_KEYS = _BASE_KEYS.union(
+    {
+        PYFDN_GEQ_GAIN_DB_NAME,
+        PYFDN_GEQ_BAND_GAIN_DB_NAME,
+        PYFDN_TONE_GEQ_GAIN_DB_NAME,
+    }
+)
+_GOTZ_FEEDBACK_BUILDERS: dict[str, Callable[[np.ndarray], np.ndarray]] = {
+    PYFDN_FEEDBACK_SKEW_NAME: skew_to_orthogonal,
+    PYFDN_FEEDBACK_GIVENS_ANGLES_NAME: givens_to_orthogonal,
+}
 
 
 def _require_rt_seconds(name: str, value: ParameterValue) -> float:
@@ -186,30 +255,27 @@ def _build_decay_fdn(
     return decay_build
 
 
-def _kronecker_plain_params(
+def _verified_plain_params(
     params: Mapping[str, ParameterValue],
+    param_spec_name: ParamSpecName,
 ) -> dict[str, ParameterValue]:
-    """Fold verified kernel controls out of a Kronecker patch into a plain patch.
+    """Fold verified feedback controls out of a derived-feedback patch into a plain patch.
 
-    :param params: Native Kronecker patch carrying angle and reflect arrays.
+    :param params: Native patch carrying the spec's feedback controls.
+    :param param_spec_name: Derived-feedback spec that names those controls.
     :returns: Plain-topology mapping whose feedback matrix the controls describe.
     :raises ValueError: A control is missing or the embedded matrix is stale.
     """
-    missing = sorted(_KRONECKER_CONTROL_KEYS.difference(params))
+    control_keys, rebuild = _DERIVED_FEEDBACK[param_spec_name]
+    missing = sorted(control_keys.difference(params))
     if missing:
-        raise ValueError(f"kronecker params must contain {missing}")
-    expected = kronecker_feedback_matrix(
-        np.asarray(params[PYFDN_KRONECKER_ANGLES_NAME]),
-        np.asarray(params[PYFDN_KRONECKER_REFLECT_NAME]),
-    )
+        raise ValueError(f"{param_spec_name} params must contain {missing}")
     supplied = params["feedback_matrix"]
     if not isinstance(supplied, np.ndarray) or not np.allclose(
-        supplied, expected, rtol=0.0, atol=_KRONECKER_FEEDBACK_ATOL
+        supplied, rebuild(params), rtol=0.0, atol=_DERIVED_FEEDBACK_ATOL
     ):
-        raise ValueError("feedback_matrix does not match the kronecker kernel controls")
-    return {
-        name: value for name, value in params.items() if name not in _KRONECKER_CONTROL_KEYS
-    }
+        raise ValueError(f"feedback_matrix does not match the {param_spec_name} controls")
+    return {name: value for name, value in params.items() if name not in control_keys}
 
 
 def _validate_base_params(
@@ -233,7 +299,7 @@ def _validate_base_params(
     if sample_rate != _SAMPLE_RATE:
         raise ValueError("sample_rate must be exactly 44100.0")
     arrays = {
-        name: _require_array(name, params[name], shape=shape, dtype=dtype)
+        name: require_array(name, params[name], shape=shape, dtype=dtype)
         for name, shape, dtype in _ARRAY_CONTRACTS
     }
     if np.any(arrays["delays"] <= 0):
@@ -294,7 +360,7 @@ def params_to_pitchshift_fdn_build(
         topology="pitch-shift",
     )
     _pitchshift_controls(params)
-    rt_seconds = _require_array(
+    rt_seconds = require_array(
         PYFDN_RT_GEQ_SECONDS_NAME,
         params[PYFDN_RT_GEQ_SECONDS_NAME],
         shape=(10,),
@@ -327,6 +393,186 @@ def params_to_pitchshift_fdn_build(
     if not np.isfinite(post_delay).all():
         raise ValueError("pitch-shift post_delay must contain only finite values")
     return build
+
+
+def _command_gains_to_geq_sos(command_gain_db: np.ndarray, sample_rate: float) -> np.ndarray:
+    """Assemble pyFDN's eleven-section graphic EQ directly from command gains.
+
+    Section order matches ``pyFDN.eq.graphic_eq``: flat gain, low shelf, eight
+    octave peaking sections, high shelf. Unlike ``gain_to_geq`` there is no
+    least-squares fit, so a gain of at most 0 dB per section bounds the cascade
+    magnitude by unity.
+
+    :param command_gain_db: Gains shaped ``(11, channels)`` in dB.
+    :param sample_rate: Processing rate in Hz.
+    :returns: Float64 SOS bank shaped ``(11, 6, channels)`` with ``a0 == 1``.
+    """
+    gains = 10.0 ** (command_gain_db / 20.0)
+    center_omega = hertz_to_rad(CENTER_FREQUENCIES, sample_rate)
+    shelf_omega = hertz_to_rad(SHELVING_CROSSOVER, sample_rate)
+    q = np.sqrt(BANDWIDTH_R) / (BANDWIDTH_R - 1.0)
+    zero, one = np.zeros_like(gains[0]), np.ones_like(gains[0])
+    sections = [
+        (np.stack([gains[0], zero, zero]), np.stack([one, zero, zero])),
+        lowshelf_biquad(float(shelf_omega[0]), gains[1]),
+        *(
+            peaking_biquad(float(omega), gain, float(q))
+            for omega, gain in zip(center_omega, gains[2:-1], strict=True)
+        ),
+        highshelf_biquad(float(shelf_omega[1]), gains[-1]),
+    ]
+    sos = np.stack([np.concatenate([b, a], axis=0) for b, a in sections], axis=0)
+    return np.asarray(sos / sos[:, 3:4, :], dtype=np.float64)
+
+
+def _require_gain_db(
+    name: str,
+    value: ParameterValue,
+    *,
+    shape: tuple[int, ...],
+    bounds: tuple[float, float],
+) -> np.ndarray:
+    """Validate one dB gain array against its ParamSpec bounds.
+
+    :param name: Patch field name used in validation errors.
+    :param value: Native patch value to validate.
+    :param shape: Required array shape.
+    :param bounds: Inclusive ``(min_db, max_db)`` pair.
+    :returns: The validated float64 array.
+    :raises ValueError: A value exceeds the bounds.
+    """
+    gains = require_array(name, value, shape=shape, dtype=np.dtype(np.float64))
+    min_db, max_db = bounds
+    if np.any(gains > max_db):
+        raise ValueError(f"{name} must be at most {max_db:g} dB")
+    if np.any(gains < min_db):
+        raise ValueError(f"{name} must be at least {min_db:g} dB")
+    return gains
+
+
+def _require_tone_gain_db(params: Mapping[str, ParameterValue]) -> np.ndarray:
+    """Validate the tone-correction command gains.
+
+    :param params: Native Götz controls.
+    :returns: Float64 gains shaped ``(11,)`` within ±12 dB.
+    """
+    return _require_gain_db(
+        PYFDN_TONE_GEQ_GAIN_DB_NAME,
+        params[PYFDN_TONE_GEQ_GAIN_DB_NAME],
+        shape=(PYFDN_GEQ_SECTIONS,),
+        bounds=(-PYFDN_TONE_GEQ_GAIN_DB_MAX, PYFDN_TONE_GEQ_GAIN_DB_MAX),
+    )
+
+
+def _gotz_attenuation_sos(
+    params: Mapping[str, ParameterValue], sample_rate: float
+) -> np.ndarray:
+    """Validate the per-line attenuation gains and design their GEQ cascades.
+
+    :param params: Native Götz controls.
+    :param sample_rate: Processing rate in Hz.
+    :returns: Finite float64 SOS bank shaped ``(11, 6, 8)``.
+    :raises ValueError: A gain leaves its ParamSpec bounds or the design is non-finite.
+    """
+    gain_db = _require_gain_db(
+        PYFDN_GEQ_GAIN_DB_NAME,
+        params[PYFDN_GEQ_GAIN_DB_NAME],
+        shape=(PYFDN_ORDER,),
+        bounds=(PYFDN_GEQ_GAIN_DB_MIN, PYFDN_GEQ_GAIN_DB_MAX),
+    )
+    band_gain_db = _require_gain_db(
+        PYFDN_GEQ_BAND_GAIN_DB_NAME,
+        params[PYFDN_GEQ_BAND_GAIN_DB_NAME],
+        shape=(PYFDN_GEQ_SECTIONS - 1, PYFDN_ORDER),
+        bounds=(PYFDN_GEQ_BAND_GAIN_DB_MIN, PYFDN_GEQ_BAND_GAIN_DB_MAX),
+    )
+    post_delay = _command_gains_to_geq_sos(
+        np.concatenate([gain_db[None, :], band_gain_db], axis=0), sample_rate
+    )
+    if post_delay.shape != _GOTZ_GEQ_SOS_SHAPE or not np.isfinite(post_delay).all():
+        raise ValueError(f"gotz post_delay must be finite with shape {_GOTZ_GEQ_SOS_SHAPE}")
+    return post_delay
+
+
+def params_to_gotz_fdn_build(
+    params: Mapping[str, ParameterValue],
+    *,
+    sample_rate: float,
+    fixed_delays: np.ndarray | None = None,
+    feedback_parameter: str = PYFDN_FEEDBACK_SKEW_NAME,
+) -> FDNBuild:
+    """Build a Götz-topology order-8 FDN with per-line GEQ attenuation.
+
+    :param params: Mapping containing A/B/C/D arrays, int64 delays, the selected feedback
+        controls, per-line attenuation gains, and tone-correction command gains.
+    :param sample_rate: Processing rate in Hz; exactly ``44100.0``.
+    :param fixed_delays: Int64 delays ``(8,)`` the mapping must carry, or ``None`` when
+        delays are learned.
+    :param feedback_parameter: Exact feedback control key selected by the synth identity.
+    :returns: Native build whose feedback matrix is regenerated from its selected controls.
+    :raises ValueError: Keys, shapes, values, delays, sample rate, or derived matrix violate
+        the selected identity's contract.
+    """
+    if feedback_parameter not in _GOTZ_FEEDBACK_BUILDERS:
+        raise ValueError(f"unsupported Götz feedback parameter {feedback_parameter!r}")
+    arrays = _validate_base_params(
+        params,
+        required_keys=_GOTZ_SHARED_REQUIRED_KEYS.union({feedback_parameter}),
+        sample_rate=sample_rate,
+        topology="gotz",
+    )
+    if fixed_delays is not None and not np.array_equal(arrays["delays"], fixed_delays):
+        raise ValueError(f"delays must equal the fixed lengths {fixed_delays.tolist()}")
+    controls = require_array(
+        feedback_parameter,
+        params[feedback_parameter],
+        shape=(PYFDN_FEEDBACK_SKEW_SIZE,),
+        dtype=np.dtype(np.float64),
+    )
+    feedback = _GOTZ_FEEDBACK_BUILDERS[feedback_parameter](controls)
+    if not np.allclose(
+        arrays["feedback_matrix"], feedback, rtol=0.0, atol=_FEEDBACK_DERIVATION_ATOL
+    ):
+        raise ValueError(
+            f"feedback_matrix must be the orthogonal matrix encoded by {feedback_parameter}"
+        )
+    post_delay = _gotz_attenuation_sos(params, sample_rate)
+    _require_tone_gain_db(params)
+    return FDNBuild(
+        A=feedback,
+        B=arrays["input_matrix"],
+        C=arrays["output_matrix"],
+        D=arrays["direct_matrix"],
+        delays=arrays["delays"],
+        fs=sample_rate,
+        post_delay=post_delay,
+        post_matrix=None,
+        post_output=None,
+    )
+
+
+def _render_gotz(
+    build: FDNBuild,
+    params: Mapping[str, ParameterValue],
+    source: np.ndarray,
+) -> np.ndarray:
+    """Apply the paper's transfer function: tone GEQ, then wet plus a delayed direct path.
+
+    :param build: Götz build whose ``D`` holds the direct gain ``g``.
+    :param params: Native Götz controls.
+    :param source: Mono excitation shaped ``(176400,)``.
+    :returns: Native output shaped ``(176400,)``.
+    """
+    tone_sos = _command_gains_to_geq_sos(_require_tone_gain_db(params)[:, None], build.fs)
+    toned = SOSBank(tone_sos).filter(source[:, None])[:, 0]
+    wet = _process_source(
+        replace(build, D=np.zeros_like(build.D)),
+        toned,
+        SOSBank(cast(np.ndarray, build.post_delay)),
+    )
+    direct = np.zeros_like(toned)
+    direct[PYFDN_DIRECT_DELAY_SAMPLES:] = toned[:-PYFDN_DIRECT_DELAY_SAMPLES]
+    return wet + float(build.D[0, 0]) * direct
 
 
 def _pitchshift_controls(
@@ -363,7 +609,7 @@ def _pitchshift_controls(
             f"{PYFDN_PITCHSHIFT_WINDOW_SIZE_MIN} and "
             f"{PYFDN_PITCHSHIFT_WINDOW_SIZE_MAX}"
         )
-    active_mask = _require_array(
+    active_mask = require_array(
         PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME,
         params[PYFDN_PITCHSHIFT_ACTIVE_CHANNELS_NAME],
         shape=(PYFDN_ORDER,),
@@ -448,7 +694,7 @@ def _validate_version(synth_version: str) -> None:
 
 
 class PyFDNRenderer(AudioRenderer):
-    """Render an FDN impulse response or an explicitly selected custom source."""
+    """Render a pyFDN topology's impulse response or an explicitly selected custom source."""
 
     def __init__(
         self,
@@ -465,11 +711,11 @@ class PyFDNRenderer(AudioRenderer):
         """Configure impulse-response rendering or the optional canonical chirp.
 
         :param excitation: ``"impulse"`` for the native IR or ``"chirp"`` for the custom source.
-        :param param_spec_name: Registered plain, Kronecker, or pitch-shift pyFDN topology.
+        :param param_spec_name: Registered plain, derived-feedback, pitch-shift, or DiffVox topology.
         :param synth_version: Required installed pyFDN version.
         :param plugin_path: Required in-process backend sentinel.
         :param sample_rate: Required sample rate.
-        :param channels: Required mono output channel count.
+        :param channels: Required output channel count of the selected topology.
         :param signal_duration_seconds: Required render duration.
         :param plugin_state_path: Required empty preset path.
         :raises ValueError: The excitation, geometry, or artifact identity drifts.
@@ -479,14 +725,16 @@ class PyFDNRenderer(AudioRenderer):
             raise ValueError("pyFDN excitation must be 'impulse' or 'chirp'")
         if param_spec_name not in (
             _PLAIN_PARAM_SPEC,
-            _KRONECKER_PARAM_SPEC,
             _PITCHSHIFT_PARAM_SPEC,
+            _DIFFVOX_PARAM_SPEC,
+            *_DERIVED_FEEDBACK,
+            *_GOTZ_PARAM_SPECS,
         ):
             raise ValueError(f"unsupported pyFDN param spec {param_spec_name!r}")
         if (
             plugin_path != "pyfdn"
             or sample_rate != _SAMPLE_RATE
-            or channels != _CHANNELS
+            or channels != pyfdn_output_channels(param_spec_name)
             or signal_duration_seconds != _SIGNAL_LENGTH / _SAMPLE_RATE
             or plugin_state_path not in (None, "")
         ):
@@ -509,9 +757,9 @@ class PyFDNRenderer(AudioRenderer):
             else {
                 "identity": "unit_impulse_v1",
                 "implementation": (
-                    "pyFDN.process_fdn"
-                    if param_spec_name == _PITCHSHIFT_PARAM_SPEC
-                    else "pyFDN.build_to_impz"
+                    "pyFDN.build_to_impz"
+                    if param_spec_name == _PLAIN_PARAM_SPEC
+                    else "pyFDN.process_fdn"
                 ),
                 "sample_rate_hz": PYFDN_SOURCE_SAMPLE_RATE_HZ,
                 "total_frames": PYFDN_SOURCE_TOTAL_FRAMES,
@@ -520,6 +768,17 @@ class PyFDNRenderer(AudioRenderer):
                 "layout": "channel_first",
             }
         )
+
+    def _impulse_or_chirp(self) -> np.ndarray:
+        """Return the configured mono excitation.
+
+        :returns: Unit impulse or the canonical chirp shaped ``(176400,)``.
+        """
+        if self._excitation == "chirp":
+            return cast(np.ndarray, self._source_audio)[0]
+        source = np.zeros(_SIGNAL_LENGTH, dtype=np.float32)
+        source[0] = 1.0
+        return source
 
     @property
     def source_provenance(self) -> PyFDNSourceProvenance:
@@ -537,59 +796,66 @@ class PyFDNRenderer(AudioRenderer):
         note_start_and_end: tuple[float, float] = (0.0, 0.0),
         *,
         warmup: bool = False,
-    ) -> Float32[np.ndarray, "1 176400"]:
+    ) -> Float32[np.ndarray, "channels 176400"]:
         """Render the configured excitation through one patch with fresh recursion state.
 
-        :param params: Native order-8 mono pyFDN arrays.
+        :param params: Native controls of the configured pyFDN topology.
         :param midi_note: Ignored compatibility stub.
         :param velocity: Ignored compatibility stub.
         :param note_start_and_end: Ignored compatibility stub.
         :param warmup: Ignored compatibility stub.
-        :returns: Contiguous finite channel-first float32 audio shaped ``(1, 176400)``; native
-            amplitude is preserved without clipping or normalization.
+        :returns: Contiguous finite channel-first float32 audio shaped ``(channels, 176400)``;
+            native amplitude is preserved without clipping or normalization.
         :raises ValueError: The patch or rendered shape violates the fixed contract.
         :raises NonFiniteAudioError: The rendered audio contains NaN or infinity.
         """
         del midi_note, velocity, note_start_and_end, warmup
-        if self._param_spec_name == _PITCHSHIFT_PARAM_SPEC:
+        if self._param_spec_name == _DIFFVOX_PARAM_SPEC:
+            output_array = render_diffvox_chain(
+                params, self._impulse_or_chirp(), sample_rate=_SAMPLE_RATE
+            ).T
+        elif self._param_spec_name in _GOTZ_PARAM_SPECS:
+            feedback_parameter, has_fixed_delays = _GOTZ_PARAM_SPECS[self._param_spec_name]
+            build = params_to_gotz_fdn_build(
+                params,
+                sample_rate=_SAMPLE_RATE,
+                fixed_delays=PYFDN_GOTZ_DELAYS if has_fixed_delays else None,
+                feedback_parameter=feedback_parameter,
+            )
+            output_array = _render_gotz(build, params, self._impulse_or_chirp())
+        elif self._param_spec_name == _PITCHSHIFT_PARAM_SPEC:
             build = params_to_pitchshift_fdn_build(params, sample_rate=_SAMPLE_RATE)
-            if self._excitation == "impulse":
-                source = np.zeros(_SIGNAL_LENGTH, dtype=np.float32)
-                source[0] = 1.0
-            else:
-                source = cast(np.ndarray, self._source_audio)[0]
             output_array = _process_source(
                 build,
-                source,
+                self._impulse_or_chirp(),
                 _pitchshift_post_delay(build, params),
             )
         else:
-            if self._param_spec_name == _KRONECKER_PARAM_SPEC:
-                params = _kronecker_plain_params(params)
+            if self._param_spec_name in _DERIVED_FEEDBACK:
+                params = _verified_plain_params(params, self._param_spec_name)
             build = params_to_fdn_build(params, sample_rate=_SAMPLE_RATE)
             if self._excitation == "impulse":
                 impulse_response = np.asarray(build_to_impz(build, ir_len=_SIGNAL_LENGTH))
-                expected_shape = (_SIGNAL_LENGTH, _CHANNELS, _CHANNELS)
-                if impulse_response.shape != expected_shape:
+                impulse_shape = (_SIGNAL_LENGTH, _CHANNELS, _CHANNELS)
+                if impulse_response.shape != impulse_shape:
                     raise ValueError(
-                        f"pyFDN impulse response must have shape {expected_shape}, "
+                        f"pyFDN impulse response must have shape {impulse_shape}, "
                         f"got {impulse_response.shape}"
                     )
                 output_array = impulse_response[:, 0, 0]
             else:
                 post_delay = cast(np.ndarray, build.post_delay)
-                source = cast(np.ndarray, self._source_audio)[0]
-                output_array = _process_source(build, source, SOSBank(post_delay))
-        if output_array.shape != (_SIGNAL_LENGTH,):
+                output_array = _process_source(build, self._impulse_or_chirp(), SOSBank(post_delay))
+        expected_shape = (self.channels, _SIGNAL_LENGTH)
+        output_array = np.atleast_2d(output_array)
+        if output_array.shape != expected_shape:
             raise ValueError(
-                f"pyFDN output must have shape {(_SIGNAL_LENGTH,)}, got {output_array.shape}"
+                f"pyFDN output must have shape {expected_shape}, got {output_array.shape}"
             )
         if not np.isfinite(output_array).all():
             raise NonFiniteAudioError("pyFDN output must contain only finite values")
         with np.errstate(over="ignore"):
-            audio = np.ascontiguousarray(output_array, dtype=np.float32).reshape(
-                _CHANNELS, _SIGNAL_LENGTH
-            )
+            audio = np.ascontiguousarray(output_array, dtype=np.float32)
         if not np.isfinite(audio).all():
             raise NonFiniteAudioError("float32 pyFDN output must contain only finite values")
         return audio

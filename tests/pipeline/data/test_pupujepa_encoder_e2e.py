@@ -162,7 +162,7 @@ def test_real_pupujepa_weights_add_embeddings_and_online_consumers_match(
             f"embeddings=[{profile}]",
             f"checkpoints.{profile}={checkpoint}",
             f"device={device}",
-            "batch_size=1",
+            "lance_batch_size=1",
             "build_index=false",
             f"paths.log_dir={tmp_path / 'logs'}",
             f"hydra.run.dir={tmp_path / 'run'}",

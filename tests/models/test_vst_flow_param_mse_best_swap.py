@@ -6,13 +6,16 @@ structured middle bound ``best_swap <= number_group_swap <= param_mse``.
 
 from __future__ import annotations
 
+import csv
 import math
 from functools import partial
+from pathlib import Path
 
 import pytest
 import torch
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.loggers import CSVLogger, Logger
 from torch.utils.data import DataLoader, Dataset
 
 from synth_setter.data.vst import param_specs
@@ -115,16 +118,19 @@ def _flow_module(num_params: int, *, param_spec: str | None = None) -> VSTFlowMa
     )
 
 
-def _tiny_trainer(*, callbacks: list[Callback] | None = None) -> Trainer:
+def _tiny_trainer(
+    *, callbacks: list[Callback] | None = None, logger: Logger | bool = False
+) -> Trainer:
     """Build a minimal CPU trainer for one validation/test batch.
 
     :param callbacks: Optional callbacks to exercise with the loop.
+    :param logger: Optional real logger receiving loop metrics.
     :returns: Silent single-batch CPU trainer.
     """
     return Trainer(
         callbacks=callbacks,
         accelerator="cpu",
-        logger=False,
+        logger=logger,
         enable_checkpointing=False,
         enable_progress_bar=False,
         enable_model_summary=False,
@@ -233,6 +239,90 @@ def test_validation_loop_logs_spec_quantized_metrics() -> None:
 
     assert math.isfinite(metrics["val/param_mse_spec_quantized"])
     assert math.isfinite(metrics["val/per_param_mse_spec_quantized/a_amp_eg_attack"])
+
+
+@pytest.mark.parametrize("stage", ["val", "test"])
+@pytest.mark.parametrize(
+    ("spec_name", "array_names", "geometric_name"),
+    [
+        pytest.param(
+            "pyfdn_n8_mono_kronecker",
+            {
+                "delays",
+                "direct_matrix",
+                "input_matrix",
+                "kronecker_angles",
+                "kronecker_reflect",
+                "output_matrix",
+            },
+            "kronecker_angles",
+            id="kronecker",
+        ),
+        pytest.param(
+            "pyfdn_n8_mono_householder_vector",
+            {
+                "delays",
+                "direct_matrix",
+                "householder_vector",
+                "input_matrix",
+                "output_matrix",
+            },
+            "householder_vector",
+            id="householder-vector",
+        ),
+    ],
+)
+def test_pyfdn_loop_persists_abs_cosine_for_array_parameters_without_losing_metrics(
+    tmp_path: Path,
+    stage: str,
+    spec_name: str,
+    array_names: set[str],
+    geometric_name: str,
+) -> None:
+    """Real loops persist bounded array cosine metrics beside existing families.
+
+    :param tmp_path: Isolated CSV logger directory.
+    :param stage: Validation or test loop namespace.
+    :param spec_name: Registered PyFDN parameter spec.
+    :param array_names: Expected continuous, discrete, angle, and direction arrays.
+    :param geometric_name: Angle or direction parameter retaining existing metrics.
+    """
+    spec = param_specs[spec_name]
+    module = _flow_module(spec.encoded_width, param_spec=spec_name)
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+    logger = CSVLogger(tmp_path, name=stage)
+    trainer = _tiny_trainer(callbacks=[LogPerParamMSE(spec_name)], logger=logger)
+
+    loop = trainer.validate if stage == "val" else trainer.test
+    metrics = loop(module, dataloaders=loader)[0]
+
+    abs_cosine_prefix = f"{stage}/per_param_abs_cosine_distance/"
+    abs_cosine_metrics = {
+        key.removeprefix(abs_cosine_prefix): value
+        for key, value in metrics.items()
+        if key.startswith(abs_cosine_prefix)
+    }
+    assert abs_cosine_metrics.keys() == array_names
+    assert all(
+        math.isfinite(value) and 0.0 <= value <= 1.0 for value in abs_cosine_metrics.values()
+    )
+    assert f"{abs_cosine_prefix}post_delay.rt_dc_seconds" not in metrics
+    assert f"{abs_cosine_prefix}post_delay.rt_nyquist_seconds" not in metrics
+
+    expected_existing_keys = {
+        f"{stage}/per_param_mse/{geometric_name}",
+        f"{stage}/per_param_mse_best_swap/{geometric_name}",
+        f"{stage}/per_param_mse_number_group_swap/{geometric_name}",
+        f"{stage}/per_param_mse_spec_quantized/{geometric_name}",
+    }
+    assert expected_existing_keys <= metrics.keys()
+
+    with Path(logger.log_dir, "metrics.csv").open(newline="") as metrics_file:
+        persisted = list(csv.DictReader(metrics_file))[-1]
+    expected_keys = {f"{abs_cosine_prefix}{name}" for name in array_names} | expected_existing_keys
+    assert {key: float(persisted[key]) for key in expected_keys} == pytest.approx(
+        {key: metrics[key] for key in expected_keys}
+    )
 
 
 def test_pyfdn_validation_loop_logs_all_per_param_metric_families() -> None:
