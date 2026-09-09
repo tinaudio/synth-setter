@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Mapping
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -27,10 +27,6 @@ import numpy as np
 from synth_setter.data.vst.dawdreamer_runtime import settle_dawdreamer_preset
 from synth_setter.data.vst.param_map import SynthParamMap
 from synth_setter.data.vst.param_spec import ParameterValue, require_scalar_synth_params
-from synth_setter.data.vst.torchsynth_param_spec import (
-    DEFAULT_NORMALIZED_PATCH,
-    TORCHSYNTH_FULL_PARAM_SPEC,
-)
 from synth_setter.data.vst.surgepy_runtime import (
     SurgePyModule,
     SurgePyNamedParam,
@@ -38,8 +34,17 @@ from synth_setter.data.vst.surgepy_runtime import (
     import_surgepy,
     iter_surgepy_named_params,
 )
+from synth_setter.data.vst.torchsynth_param_spec import (
+    DEFAULT_NORMALIZED_PATCH,
+    TORCHSYNTH_FULL_PARAM_SPEC,
+)
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, SURGEPY_PLUGIN_NAME
+from synth_setter.renderer_backend import (
+    DAWDREAMER_FLUSH_BLOCKS,
+    FAUST_PLUGIN_NAME,
+    SURGEPY_PLUGIN_NAME,
+    FlushBlocks,
+)
 
 if TYPE_CHECKING:
     from pedalboard import VST3Plugin
@@ -307,9 +312,15 @@ class PedalboardRenderer(AudioRenderer):
     .. attribute :: plugin
 
        Optional preloaded pedalboard plugin instance.
+
+    .. attribute :: flush_blocks
+
+       Silent host blocks processed after load, parameter writes, and the render;
+       ``None`` covers ``PEDALBOARD_FLUSH_SECONDS`` at the render sample rate.
     """
 
     plugin: VST3Plugin | None = field(default=None, repr=False)
+    flush_blocks: FlushBlocks | None = None
 
     def render(
         self,
@@ -345,6 +356,7 @@ class PedalboardRenderer(AudioRenderer):
                 plugin_state_path=self.plugin_state_path,
                 plugin=self.plugin,
                 warmup=warmup,
+                flush_blocks=self.flush_blocks,
             ),
             channels=self.channels,
             samples=int(self.sample_rate * self.signal_duration_seconds),
@@ -875,6 +887,10 @@ class DawDreamerRenderer(AudioRenderer):
 
        Whether subsequent calls replace the initialized plugin graph.
 
+    .. attribute :: flush_blocks
+
+       Silent engine callbacks after preset load, parameter writes, and the note render.
+
     .. attribute :: engine
 
        DawDreamer render engine instance.
@@ -887,6 +903,7 @@ class DawDreamerRenderer(AudioRenderer):
     block_size: int = DAWDREAMER_BLOCK_SIZE
     parameter_map: SynthParamMap = field(kw_only=True)
     reload_plugin_each_render: bool = True
+    flush_blocks: FlushBlocks = DAWDREAMER_FLUSH_BLOCKS
     engine: _DawDreamerEngine = field(init=False, repr=False)
     plugin: _DawDreamerPlugin = field(init=False, repr=False)
     _parameter_indices: dict[str, int] = field(init=False, repr=False)
@@ -979,12 +996,15 @@ class DawDreamerRenderer(AudioRenderer):
         try:
             for name, value in params.items():
                 self.plugin.set_parameter(self._parameter_indices[name], value)
+            self._settle(self.flush_blocks.post_param)
             start, end = note_start_and_end
             self.plugin.add_midi_note(midi_note, velocity, start, end - start)
             self.engine.render(self.signal_duration_seconds)
-            audio = np.asarray(self.engine.get_audio())
+            # Copy before further callbacks in case the engine hands back its own buffer.
+            audio = np.array(self.engine.get_audio(), copy=True)
         finally:
             self.plugin.clear_midi()
+        self._settle(self.flush_blocks.post_render)
         matched = self._match_channels(audio)
         return _validate_rendered_audio(
             matched,
@@ -1044,8 +1064,18 @@ class DawDreamerRenderer(AudioRenderer):
             self.plugin.load_vst3_preset(self.plugin_state_path)
         else:
             self.plugin.load_preset(self.plugin_state_path)
+        self._settle(self.flush_blocks.post_load)
+
+    def _settle(self, blocks: int) -> None:
+        """Process ``blocks`` silent engine callbacks; zero skips the step.
+
+        :param blocks: Number of block-length callbacks to process.
+        """
+        if blocks == 0:
+            return
         settle_dawdreamer_preset(
             self.engine,
             sample_rate=self.sample_rate,
             block_size=self.block_size,
+            blocks=blocks,
         )

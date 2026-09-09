@@ -234,3 +234,33 @@ def test_pyfdn_pitchshift_identity_hosted_backend_error_names_family() -> None:
         RenderConfig.model_validate(
             _pyfdn_render_kwargs(synth=synth, renderer_backend="pedalboard")
         )
+
+
+def _diffvox_synth() -> dict[str, str]:
+    return {
+        "name": "pyfdn_diffvox",
+        "param_spec_name": "pyfdn_diffvox",
+        "plugin_path": "pyfdn",
+        "plugin_state_path": "",
+        "synth_version": "0.4.2",
+    }
+
+
+def test_pyfdn_diffvox_render_config_accepts_stereo_output() -> None:
+    """The DiffVox chain pans the mono excitation out to two channels."""
+    render = RenderConfig.model_validate(_pyfdn_render_kwargs(synth=_diffvox_synth(), channels=2))
+
+    assert render.channels == 2
+    assert render.param_spec_name == "pyfdn_diffvox"
+
+
+def test_pyfdn_diffvox_render_config_rejects_mono_output() -> None:
+    """The stereo chain cannot be declared with the mono FDN geometry."""
+    with pytest.raises(ValidationError, match="channels=2"):
+        RenderConfig.model_validate(_pyfdn_render_kwargs(synth=_diffvox_synth(), channels=1))
+
+
+def test_pyfdn_mono_identity_rejects_stereo_output() -> None:
+    """Mono pyFDN identities keep requiring the single source channel."""
+    with pytest.raises(ValidationError, match="channels=1"):
+        RenderConfig.model_validate(_pyfdn_render_kwargs(channels=2))

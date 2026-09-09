@@ -227,6 +227,8 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             "-w",
             str(cfg.evaluation.num_workers),
         ]
+        if OmegaConf.select(cfg, "render.renderer_backend") == "pyfdn":
+            args.extend(["--renderer-backend", "pyfdn"])
         # Upper-bounds the sample count compute_audio_metrics scores (it skips
         # subdirs lacking both wavs); the surplus only loosens the budget.
         n_metric_samples = sum(1 for d in audio_dir.glob("*") if d.is_dir())
@@ -483,7 +485,10 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
 
     log.info("Instantiating loggers...")
-    pin_wandb_run_id(cfg, make_wandb_run_id(resolve_run_config_id(cfg)), "evaluation")
+    run_id = OmegaConf.select(cfg, "logger.wandb.id") or make_wandb_run_id(
+        resolve_run_config_id(cfg)
+    )
+    pin_wandb_run_id(cfg, run_id, "evaluation")
     logger: list[Logger] = instantiate_loggers(cfg.get("logger"))
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")

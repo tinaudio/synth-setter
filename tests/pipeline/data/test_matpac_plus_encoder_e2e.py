@@ -134,10 +134,11 @@ def test_add_embeddings_real_matpac_plus_checkpoint_audio_conditions_generic_enc
     subprocess.run(  # noqa: S603 — installed public CLI with test-owned arguments
         [
             str(command),
+            "logger=[]",
             f"lance_uri={dataset_path}",
             "embeddings=[matpac_plus]",
             "device=cpu",
-            "batch_size=1",
+            "lance_batch_size=1",
             "build_index=false",
             f"paths.log_dir={tmp_path / 'logs'}",
             f"hydra.run.dir={tmp_path / 'run'}",
@@ -182,10 +183,11 @@ def test_matpac_plus_real_embeddings_build_searchable_ivf_pq_index(tmp_path: Pat
     subprocess.run(  # noqa: S603 — installed public CLI with test-owned arguments
         [
             str(command),
+            "logger=[]",
             f"lance_uri={dataset_path}",
             "embeddings=[matpac_plus]",
             f"device={device}",
-            "batch_size=16",
+            "lance_batch_size=16",
             "build_index=true",
             "num_partitions=4",
             "num_sub_vectors=16",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import torch
 from beartype import beartype
@@ -35,6 +35,13 @@ _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_TIME_SHAPE = "batch 1"
 _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 _PARAM_SHAPE = "params"
+# Stored outside hyper_parameters because Lightning overwrites those with load-time
+# kwargs before the load hook runs; a checkpoint without the key trained a velocity field.
+_PARAMETERIZATION_KEY = "parameterization"
+_LEGACY_PARAMETERIZATION = "velocity"
+
+Parameterization = Literal["velocity", "endpoint"]
+_PARAMETERIZATIONS: frozenset[str] = frozenset(("velocity", "endpoint"))
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import (
@@ -301,23 +308,29 @@ def integrate_flow(
     steps: int,
     *,
     warp_time: Callable[[Float[torch.Tensor, "batch 1"]], Float[torch.Tensor, "batch 1"]],
+    parameterization: Parameterization = "velocity",
 ) -> Float[torch.Tensor, "batch params"]:
-    """Integrate a velocity field from noise at t=0 to a sample at t=1 with fixed-step RK4.
+    """Integrate a velocity field from noise at t=0 to a sample at t=1.
 
     :param velocity: Two-argument time field over parameter state and time.
     :param noise: Initial state shaped ``(batch, params)``.
     :param steps: Number of equal steps in unwarped time.
     :param warp_time: Monotone map applied to the time grid before each step.
+    :param parameterization: Field representation used to derive the velocity.
     :returns: Terminal parameter state.
     """
     t = torch.zeros(noise.shape[0], 1, device=noise.device)
     dt = 1.0 / steps
     sample = noise
 
-    for _ in range(steps):
+    for step in range(steps):
         warped_t = warp_time(t)
         warped_dt = warp_time(t + dt) - warped_t
-        sample = rk4_step(velocity, sample, warped_t, warped_dt)
+        if parameterization == "endpoint" and step == steps - 1:
+            # RK4's final stage reaches t=1, where endpoint-to-velocity conversion is 0 / 0.
+            sample = sample + warped_dt * velocity(sample, warped_t)
+        else:
+            sample = rk4_step(velocity, sample, warped_t, warped_dt)
         t = t + dt
 
     return sample
@@ -346,6 +359,7 @@ class VSTFlowMatchingModule(LightningModule):
         warmup_steps: int = 5000,
         cfg_dropout_rate: float = 0.1,
         rectified_sigma_min: float = 0.0,
+        parameterization: Parameterization = "velocity",
         validation_sample_steps: int = 50,
         validation_cfg_strength: float = 4.0,
         validation_sketch_cfg_strength: float | None = None,
@@ -377,6 +391,8 @@ class VSTFlowMatchingModule(LightningModule):
         :param cfg_dropout_rate: Independent content-conditioning drop probability
             during training (CFG).
         :param rectified_sigma_min: Minimum noise scale for the rectified probability path.
+        :param parameterization: What the field predicts: the velocity ``x1 - x0`` or the
+            clean endpoint ``x1``; the sampler converts an endpoint to a velocity.
         :param validation_sample_steps: RK4 integration steps used at validation.
         :param validation_cfg_strength: Content guidance strength at validation.
         :param validation_sketch_cfg_strength: Sketch guidance strength at validation;
@@ -386,11 +402,17 @@ class VSTFlowMatchingModule(LightningModule):
         :param test_sketch_cfg_strength: Sketch guidance strength at test and prediction;
             defaults to ``test_cfg_strength``.
         :param compile: Whether to compile the encoder and vector field during fit setup.
-        :raises ValueError: The ParamSpec width differs from ``num_params``, or
-            ``audio_loss`` is combined with a nonzero ``rectified_sigma_min`` or
-            ``compile=True`` (#2585).
+        :raises ValueError: The ParamSpec width differs from ``num_params``,
+            ``parameterization`` is not a known value, or ``audio_loss`` is combined with
+            a nonzero ``rectified_sigma_min`` or ``compile=True`` (#2585).
         """
         super().__init__()
+        if parameterization not in _PARAMETERIZATIONS:
+            # Hydra passes strings through unchecked; a typo would silently train velocity.
+            raise ValueError(
+                f"parameterization must be one of {sorted(_PARAMETERIZATIONS)}, "
+                f"got {parameterization!r}"
+            )
 
         # Saving hyperparameters deep-copies them, which a weight-normalized frozen encoder
         # inside the audio term cannot survive; the term is training-time only, so it is not
@@ -469,11 +491,12 @@ class VSTFlowMatchingModule(LightningModule):
 
     @jaxtyped(typechecker=beartype)
     def on_save_checkpoint(self, checkpoint: dict[str, object]) -> None:
-        """Exclude re-resolvable frozen CLAP state from a Lightning checkpoint.
+        """Stamp the parameterization and exclude re-resolvable frozen CLAP state.
 
         :param checkpoint: Mutable Lightning checkpoint payload.
         :raises TypeError: A pretrained-encoder checkpoint has malformed state metadata.
         """
+        checkpoint[_PARAMETERIZATION_KEY] = self.hparams.parameterization
         if not isinstance(self.encoder, PretrainedConditioningEncoder):
             return
         state = checkpoint.get("state_dict")
@@ -493,7 +516,15 @@ class VSTFlowMatchingModule(LightningModule):
 
         :param checkpoint: Mutable Lightning checkpoint payload.
         :raises TypeError: A pretrained-encoder checkpoint has a malformed state dictionary.
+        :raises ValueError: The checkpoint trained the other parameterization; its weights would
+            load cleanly and then sample nonsense.
         """
+        stored_parameterization = checkpoint.get(_PARAMETERIZATION_KEY, _LEGACY_PARAMETERIZATION)
+        if stored_parameterization != self.hparams.parameterization:
+            raise ValueError(
+                f"checkpoint trained parameterization={stored_parameterization!r}, "
+                f"module expects {self.hparams.parameterization!r}"
+            )
         if not isinstance(self.encoder, PretrainedConditioningEncoder):
             return
         state = checkpoint.get("state_dict")
@@ -536,8 +567,9 @@ class VSTFlowMatchingModule(LightningModule):
     def _evaluate_target_field(
         self, x0: torch.Tensor, x1: torch.Tensor, x_t: torch.Tensor, t: torch.Tensor
     ):
-        target = self._rectified_vector_field(x0, x1)
-        return target
+        if self.hparams.parameterization == "endpoint":
+            return x1
+        return self._rectified_vector_field(x0, x1)
 
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         conditioning = batch[self._conditioning_key]
@@ -717,7 +749,7 @@ class VSTFlowMatchingModule(LightningModule):
         if self.audio_loss is not None:
             # One-step estimate of x1 from the current field; rendering it keeps
             # autograd connected so latent audio error reaches the field's weights.
-            theta_hat = x_t + (1 - t) * prediction
+            theta_hat = self._one_step_estimate(x_t, t, prediction)
             # Fully unconditional rows estimate the marginal, so their row-specific
             # target-audio residual is high-variance noise rather than identity signal.
             audio_term = self.audio_loss(
@@ -751,8 +783,15 @@ class VSTFlowMatchingModule(LightningModule):
         outputs = self._train_step(batch)
         self.log("train/loss", outputs.loss, on_step=True, on_epoch=True, prog_bar=True)
         if self._metric_param_spec is not None:
+            # Velocity and endpoint errors are not comparable; the endpoint run logs under
+            # its own prefix so shared dashboards never overlay the two.
+            prefix = (
+                "train/per_param_endpoint_mse"
+                if self.hparams.parameterization == "endpoint"
+                else "train/per_param_flow_mse"
+            )
             metrics = {
-                f"train/per_param_flow_mse/{param.name}": outputs.per_param_flow_mse[span].mean()
+                f"{prefix}/{param.name}": outputs.per_param_flow_mse[span].mean()
                 for param, span in self._metric_param_spec.encoded_slices()
             }
             self.log_dict(
@@ -812,13 +851,36 @@ class VSTFlowMatchingModule(LightningModule):
         :param sketch_cfg_strength: Guidance scale for sketch controls.
         :returns: Two-argument velocity field over parameter state and time.
         """
-        return build_guided_velocity(
+        guided = build_guided_velocity(
             self.vector_field,
             conditioning,
             cfg_strength,
             sketch_cfg_strength=sketch_cfg_strength,
             control_tokens=control_tokens,
         )
+        if self.hparams.parameterization != "endpoint":
+            return guided
+        # Guidance mixes raw predictions before the conversion so it stays linear in the
+        # endpoint; the straight-line path then makes (x1 - x_t) / (1 - t) the velocity.
+        return lambda x, t: (guided(x, t) - x) / (1 - t)
+
+    @jaxtyped(typechecker=beartype)
+    def _one_step_estimate(
+        self,
+        x_t: Float[torch.Tensor, "batch params"],
+        t: Float[torch.Tensor, _BATCH_TIME_SHAPE],
+        prediction: Float[torch.Tensor, "batch params"],
+    ) -> Float[torch.Tensor, "batch params"]:
+        """Return the endpoint prediction, or extrapolate it from a velocity prediction.
+
+        :param x_t: Trajectory point.
+        :param t: Flow time.
+        :param prediction: Field output at ``(x_t, t)`` under the configured parameterization.
+        :returns: Estimate of ``x1``.
+        """
+        if self.hparams.parameterization == "endpoint":
+            return prediction
+        return x_t + (1 - t) * prediction
 
     def _sample(
         self,
@@ -839,7 +901,13 @@ class VSTFlowMatchingModule(LightningModule):
             control_tokens,
             sketch_cfg_strength=sketch_cfg_strength,
         )
-        return integrate_flow(guided_velocity, noise, steps, warp_time=self._warp_time)
+        return integrate_flow(
+            guided_velocity,
+            noise,
+            steps,
+            warp_time=self._warp_time,
+            parameterization=self.hparams.parameterization,
+        )
 
     @torch.inference_mode()
     @jaxtyped(typechecker=beartype)

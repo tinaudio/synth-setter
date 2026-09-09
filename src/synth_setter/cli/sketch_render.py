@@ -57,8 +57,10 @@ _METRIC_FIELDS = (
     "wmfcc",
     "sot",
     "rms",
+    "mldr",
     "r2_uri",
 )
+_OPTIONAL_METRIC_FIELDS = ("mldr_mid_side",)
 
 
 class _SketchRenderSettings(BaseModel):
@@ -470,6 +472,9 @@ def _write_metrics(path: Path, row: dict[str, str | int | float]) -> None:
     :param row: Values for every metric field.
     """
     fieldnames: list[str] = list(_METRIC_FIELDS)
+    for optional_field in _OPTIONAL_METRIC_FIELDS:
+        if optional_field in row:
+            fieldnames.insert(-1, optional_field)
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fieldnames)
         writer.writeheader()

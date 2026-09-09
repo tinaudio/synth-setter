@@ -46,6 +46,8 @@ from synth_setter.data.vst.shapes import (
     MEANAUDIO_16K_FIELD,
     NUM_SKETCH_CONTROLS,
     PARAM_ARRAY_FIELD,
+    PUPUJEPA_LARGE_FIELD,
+    PUPUJEPA_TINY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
     SHIFT_FIELD,
@@ -54,8 +56,6 @@ from synth_setter.data.vst.shapes import (
     SKETCH_VEC_CHILD,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
-    PUPUJEPA_LARGE_FIELD,
-    PUPUJEPA_TINY_FIELD,
     mel_n_frames_from_samples,
 )
 from synth_setter.model_cache import checkpoint_tree_sha256
@@ -75,18 +75,6 @@ from synth_setter.pipeline.data.meanaudio import (
     load_meanaudio_audio_encoder,
     meanaudio_artifact_digest,
 )
-from synth_setter.pipeline.data.pupujepa import (
-    PupuJepaEncodeFn,
-    encode_pupujepa_column,
-    encode_pupujepa_large_column,
-    load_pupujepa_audio_encoder,
-)
-from synth_setter.pupujepa import (
-    DEFAULT_PUPUJEPA_CHECKPOINT,
-    PUPUJEPA_LARGE_EMBEDDING_DIM,
-    PUPUJEPA_TINY_EMBEDDING_DIM,
-    pupujepa_artifact_digest,
-)
 from synth_setter.pipeline.data.param_shift import (
     PARAM_SHIFT_INPUT_FIELDS,
     ROW_ID_FIELD,
@@ -94,6 +82,12 @@ from synth_setter.pipeline.data.param_shift import (
     encode_param_shift_column,
     load_param_shifter,
     param_shift_policy_values,
+)
+from synth_setter.pipeline.data.pupujepa import (
+    PupuJepaEncodeFn,
+    encode_pupujepa_column,
+    encode_pupujepa_large_column,
+    load_pupujepa_audio_encoder,
 )
 from synth_setter.pipeline.data.ssondo import (
     DEFAULT_SSONDO_CHECKPOINT,
@@ -103,6 +97,12 @@ from synth_setter.pipeline.data.ssondo import (
     SSONDOEncodeFn,
     load_ssondo_audio_encoder,
     resolve_ssondo_checkpoint,
+)
+from synth_setter.pupujepa import (
+    DEFAULT_PUPUJEPA_CHECKPOINT,
+    PUPUJEPA_LARGE_EMBEDDING_DIM,
+    PUPUJEPA_TINY_EMBEDDING_DIM,
+    pupujepa_artifact_digest,
 )
 from synth_setter.same import (
     DEFAULT_SAME_L_CHECKPOINT,
@@ -114,6 +114,8 @@ from synth_setter.same import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
+from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
+from synth_setter.utils.logging_utils import log_wandb_provenance
 from synth_setter.workspace import operator_workspace
 
 if TYPE_CHECKING:
@@ -931,18 +933,18 @@ def _sketch_encode(
     audio: Float[np.ndarray, "batch channel time"],
     sample_rate: int,
     device: str = "cpu",
-    chunk: int = SKETCH_ENCODE_MAX_BATCH,
+    max_batch: int = SKETCH_ENCODE_MAX_BATCH,
 ) -> Float[np.ndarray, "batch control frame"]:
-    """Extract sketch controls for one audio batch in memory-capped chunks.
+    """Extract sketch controls for one audio batch in memory-capped sub-batches.
 
-    Every track is per-clip independent, so chunking only moves values within
+    Every track is per-clip independent, so sub-batching only moves values within
     float32 kernel jitter (~1e-6, already batch-size-dependent) while bounding
     extraction RSS at the default Lance batch size.
 
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
     :param device: Torch device the extractor runs on.
-    :param chunk: Rows per extractor invocation; sizes memory, and on CUDA also
+    :param max_batch: Rows per extractor invocation; sizes memory, and on CUDA also
         GPU utilization (#3131).
     :returns: ``(B, NUM_SKETCH_CONTROLS, F)`` float32 controls.
     """
@@ -952,10 +954,10 @@ def _sketch_encode(
 
     batch = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
     chunks = [
-        extract_sketch_controls_batch(batch[start : start + chunk], sample_rate, device=device)
+        extract_sketch_controls_batch(batch[start : start + max_batch], sample_rate, device=device)
         .cpu()
         .numpy()
-        for start in range(0, len(batch), chunk)
+        for start in range(0, len(batch), max_batch)
     ]
     return np.concatenate(chunks, axis=0)
 
@@ -975,10 +977,10 @@ def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
     device = _resolve_torch_device(config.device)
     # Surfaces a silently-CPU run in the first log lines (#3131).
     logger.info(
-        "sketch_encoder_loaded", device=device, encode_chunk=config.sketch_encode_chunk
+        "sketch_encoder_loaded", device=device, encode_batch=config.sketch_encode_batch
     )
     load_pesto_model(checkpoint, device=device)
-    return functools.partial(_sketch_encode, device=device, chunk=config.sketch_encode_chunk)
+    return functools.partial(_sketch_encode, device=device, max_batch=config.sketch_encode_batch)
 
 
 def _encode_sketch_column(
@@ -996,8 +998,8 @@ def _encode_sketch_column(
     """
     import torch
 
-    from synth_setter.sketch import pool_sketch_controls
     from synth_setter.pipeline.data.lance_shard import sketch_struct_array
+    from synth_setter.sketch import pool_sketch_controls
 
     audio = sources[AUDIO_FIELD]
     encode = cast("SketchEncodeFn", encoder)
@@ -1512,7 +1514,7 @@ def _write_columns(
         raise ValueError("no embedding specs given; nothing to write")
     _guard_existing_columns(dataset, specs)
     input_fields = sorted({field for spec in specs for field in spec.input_fields})
-    total_rows = _validate_write_source(dataset, config.batch_size, input_fields)
+    total_rows = _validate_write_source(dataset, config.lance_batch_size, input_fields)
     # Model construction must not consume the seed governing stochastic encoders.
     with torch.random.fork_rng():
         encoders = _load_encoders(specs, config)
@@ -1522,7 +1524,7 @@ def _write_columns(
         source_identity = _resume_source_identity(
             dataset,
             sample_rate=sample_rate,
-            batch_size=config.batch_size,
+            batch_size=config.lance_batch_size,
             input_fields=input_fields,
         )
         _prepare_resume_cache(resume_cache, identities, source_identity)
@@ -1541,7 +1543,7 @@ def _write_columns(
         logger.info("inferred_embedding_schema", columns=output_columns)
 
         progress_interval = max(
-            config.batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS
+            config.lance_batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS
         )
         next_progress_row = progress_interval
         rows_processed = 0
@@ -1586,10 +1588,10 @@ def _write_columns(
             "embedding_write_started",
             columns=output_columns,
             total_rows=total_rows,
-            batch_size=config.batch_size,
+            batch_size=config.lance_batch_size,
             source_version=dataset.version,
         )
-        dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
+        dataset.add_columns(udf, read_columns=input_fields, batch_size=config.lance_batch_size)
         # A zero-batch replay is valid only when the target columns are already committed.
         uncommitted = [
             column for column in output_columns if column not in dataset.schema.names
@@ -1856,7 +1858,7 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
             if _nested_schema_field(dataset.schema, vector_column) is not None:
                 _matching_index_exists(dataset, vector_column, index=spec.index, config=config)
     if pending:
-        _validate_write_source(dataset, config.batch_size)
+        _validate_write_source(dataset, config.lance_batch_size)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info(
@@ -1865,7 +1867,7 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
         columns=output_columns,
         sample_rate=sample_rate,
         rows=dataset.count_rows(),
-        batch_size=config.batch_size,
+        batch_size=config.lance_batch_size,
     )
     co_resident = [spec for spec in pending if spec.co_resident]
     solo = [spec for spec in pending if not spec.co_resident]
@@ -2036,6 +2038,22 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     return lance.dataset(uri)
 
 
+def _assert_no_active_wandb_run(cfg: DictConfig) -> None:
+    """Reject a configured W&B logger when this process already owns a run.
+
+    :param cfg: Hydra-composed endpoint config.
+    :raises RuntimeError: If a configured W&B logger would reuse an active run.
+    """
+    logger_cfg = cfg.get("logger")
+    if not logger_cfg or "wandb" not in logger_cfg:
+        return
+
+    import wandb
+
+    if wandb.run is not None:
+        raise RuntimeError("add-embeddings cannot reuse an active W&B run")
+
+
 @hydra.main(
     version_base="1.3", config_path="pkg://synth_setter.configs", config_name="add_embeddings"
 )
@@ -2046,14 +2064,24 @@ def _hydra_main(cfg: DictConfig) -> None:
     """
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
+    loggers = []
+    status = "failed"
     try:
         config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+        _assert_no_active_wandb_run(cfg)
+        loggers = instantiate_loggers(cfg.get("logger"))
+        for run_logger in loggers:
+            run_logger.log_hyperparams(config.model_dump(mode="json"))
+        log_wandb_provenance()
         _configure_lance_logging(debug=config.debug)
         logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
         add_embeddings(config)
+        status = "success"
     except (OSError, ValueError, RuntimeError, ImportError, subprocess.CalledProcessError) as exc:
         logger.error("add_embeddings_failed", uri=cfg.get("lance_uri"), error=str(exc))
         sys.exit(1)
+    finally:
+        close_loggers(loggers, status)
 
 
 def main() -> None:

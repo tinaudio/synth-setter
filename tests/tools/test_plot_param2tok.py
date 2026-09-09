@@ -7,10 +7,46 @@ misaligns every label drawn after the gap.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import hydra
+import numpy as np
 import pytest
+import torch
+from click.testing import CliRunner
+from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.tools.plot_param2tok import get_labels
+from synth_setter.tools.plot_param2tok import cosine_self_sim, get_labels, instantiate_model, main
+
+
+def _tiny_model_config(projection: dict[str, object], num_params: int) -> DictConfig:
+    return OmegaConf.create(
+        {
+            "model": {
+                "_target_": "synth_setter.models.vst_flow_matching_module.VSTFlowMatchingModule",
+                "encoder": {"_target_": "torch.nn.Identity"},
+                "vector_field": {
+                    "_target_": "synth_setter.models.components.transformer.ApproxEquivTransformer",
+                    "projection": projection,
+                    "num_layers": 1,
+                    "d_model": 8,
+                    "conditioning_dim": 4,
+                    "num_heads": 1,
+                    "d_ff": 8,
+                    "learn_projection": True,
+                    "d_enc": 4,
+                },
+                "optimizer": {
+                    "_target_": "torch.optim.Adam",
+                    "_partial_": True,
+                    "lr": 0.001,
+                },
+                "scheduler": None,
+                "num_params": num_params,
+            }
+        }
+    )
 
 
 @pytest.mark.parametrize("spec", ["surge_4", "surge_simple", "surge_xt", "obxf"])
@@ -36,3 +72,105 @@ def test_get_labels_widths_are_positive() -> None:
     intervals = get_labels("surge_simple")
 
     assert all(width > 0 for _, width in intervals)
+
+
+def test_main_with_incompatible_projection_rejects_before_plotting(tmp_path: Path) -> None:
+    """The real Hydra/checkpoint entrypoint clearly rejects a non-learnt projection.
+
+    :param tmp_path: Isolated log tree, checkpoint, and prospective plot directory.
+    """
+    config = _tiny_model_config(
+        {
+            "_target_": "synth_setter.models.components.transformer.GroupedParameterProjection",
+            "d_model": 8,
+            "param_spec_name": "surge_simple",
+        },
+        num_params=92,
+    )
+    model = hydra.utils.instantiate(config.model)
+    run_dir = tmp_path / "logs" / "run"
+    wandb_dir = run_dir / "wandb" / "run-test-id"
+    wandb_dir.mkdir(parents=True)
+    checkpoint_dir = run_dir / "checkpoints"
+    checkpoint_dir.mkdir()
+    torch.save({"state_dict": model.state_dict()}, checkpoint_dir / "last.ckpt")
+    hparams_dir = run_dir / "csv" / "version_0"
+    hparams_dir.mkdir(parents=True)
+    OmegaConf.save(config, hparams_dir / "hparams.yaml")
+    output_dir = tmp_path / "plots"
+
+    result = CliRunner().invoke(
+        main,
+        ["test-id", str(output_dir), "--log-dir", str(tmp_path / "logs"), "--device", "cpu"],
+    )
+
+    assert isinstance(result.exception, TypeError)
+    assert "requires LearntProjection" in str(result.exception)
+    assert not output_dir.exists()
+
+
+def test_instantiate_model_with_incompatible_state_rejects_checkpoint(tmp_path: Path) -> None:
+    """Strict loading rejects a checkpoint missing a learnt projection matrix.
+
+    :param tmp_path: Isolated checkpoint location.
+    """
+    config = _tiny_model_config(
+        {
+            "_target_": "synth_setter.models.components.transformer.LearntProjection",
+            "d_model": 8,
+            "d_token": 8,
+            "num_params": 3,
+            "num_tokens": 2,
+            "initial_ffn": False,
+            "final_ffn": False,
+        },
+        num_params=3,
+    )
+    model = hydra.utils.instantiate(config.model)
+    state_dict = model.state_dict()
+    del state_dict["vector_field.projection._assignment"]
+    checkpoint = tmp_path / "incompatible.ckpt"
+    torch.save({"state_dict": state_dict}, checkpoint)
+
+    with pytest.raises(RuntimeError, match="Missing key.*_assignment"):
+        instantiate_model(config.model, checkpoint, map_location="cpu")
+
+
+def test_cosine_self_sim_with_different_norms_returns_symmetric_similarity() -> None:
+    """Pairwise cosine similarity normalizes both vectors independently."""
+    vectors = np.array([[2.0, 0.0], [1.0, 1.0]])
+
+    similarity = cosine_self_sim(vectors)
+
+    np.testing.assert_allclose(
+        similarity,
+        np.array([[1.0, 1 / np.sqrt(2)], [1 / np.sqrt(2), 1.0]]),
+    )
+
+
+def test_cosine_self_sim_with_zero_vector_returns_zero_similarity() -> None:
+    """A zero projection has finite zero similarity with every vector."""
+    vectors = np.array([[0.0, 0.0], [1.0, 0.0]])
+
+    similarity = cosine_self_sim(vectors)
+
+    np.testing.assert_array_equal(similarity, np.array([[0.0, 0.0], [0.0, 1.0]]))
+
+
+def test_cosine_self_sim_with_float16_zero_vector_returns_finite_similarity() -> None:
+    """Zero vectors have finite zero cosine similarity in float16."""
+    vectors = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float16)
+
+    similarity = cosine_self_sim(vectors)
+
+    assert np.isfinite(similarity).all()
+    np.testing.assert_array_equal(similarity, np.array([[0.0, 0.0], [0.0, 1.0]]))
+
+
+def test_cosine_self_sim_with_tiny_nonzero_vector_preserves_cosine() -> None:
+    """Cosine similarity is invariant to nonzero vector magnitude."""
+    vectors = np.array([[1e-9, 0.0], [1.0, 0.0]])
+
+    similarity = cosine_self_sim(vectors)
+
+    np.testing.assert_allclose(similarity, np.ones((2, 2)))

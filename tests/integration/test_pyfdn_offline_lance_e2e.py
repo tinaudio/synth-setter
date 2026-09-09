@@ -23,8 +23,11 @@ from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
+    PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
     PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
 )
+from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.lance_shard import (
@@ -42,13 +45,35 @@ from synth_setter.workspace import operator_workspace
 
 
 @pytest.mark.slow
-def test_pyfdn_acceptance_lance_reader_rerender_round_trip(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("synth_name", "param_spec"),
+    [
+        pytest.param(
+            "pyfdn_n8_mono_householder",
+            PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+            id="householder",
+        ),
+        pytest.param(
+            "pyfdn_n8_mono_kronecker",
+            PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
+            id="kronecker",
+        ),
+        pytest.param(
+            "pyfdn_n8_mono_householder_vector",
+            PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
+            id="householder_vector",
+        ),
+    ],
+)
+def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
+    tmp_path: Path, synth_name: str, param_spec: ParamSpec
+) -> None:
     """A real accepted row survives storage and the production model-batch reader.
 
     :param tmp_path: Isolated destination for the production Lance writer.
+    :param synth_name: Registered plain-topology pyFDN identity under test.
+    :param param_spec: The spec that identity resolves to.
     """
-    synth_name = "pyfdn_n8_mono_householder"
-    param_spec = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
     render = RenderConfig(
         synth=SynthSpec(
             name=SynthName(synth_name),
@@ -140,12 +165,13 @@ def test_pyfdn_acceptance_lance_reader_rerender_round_trip(tmp_path: Path) -> No
     assert debug.seed is not None
     native_params, native_notes = param_spec.sample(np.random.default_rng(debug.seed))
     assert native_notes == {"pitch": 0, "note_start_and_end": (0.0, 0.0)}
-    native_rerender = PyFDNRenderer().render(native_params)
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName(synth_name))
+    native_rerender = renderer.render(native_params)
     np.testing.assert_array_equal(native_rerender, audio[0].numpy())
 
     encoded = param_spec.model_to_encoded(params[0].numpy())
     decoded, note_params = param_spec.decode(encoded)
-    decoded_rerender = PyFDNRenderer().render(decoded)
+    decoded_rerender = renderer.render(decoded)
     assert note_params == {"pitch": 0, "note_start_and_end": (0.0, 0.0)}
     np.testing.assert_allclose(decoded_rerender, audio[0].numpy(), rtol=1e-4, atol=2e-5)
 
@@ -303,9 +329,10 @@ def test_pyfdn_sketch_generation_augmentation_training_sampling_end_to_end(
             sys.executable,
             "-m",
             "synth_setter.pipeline.data.add_embeddings",
+            "logger=[]",
             f"lance_uri={generated_lance}",
             "embeddings=[pyfdn_sketch]",
-            "batch_size=1",
+            "lance_batch_size=1",
             "build_index=false",
         ],
         check=True,
