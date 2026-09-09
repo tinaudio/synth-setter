@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 import importlib.metadata
 import importlib.util
 import plistlib
@@ -514,10 +515,19 @@ class _FlushRecordingPlugin(FakeVST3Plugin):
     def reset(self) -> None:
         self.reset_count += 1
 
-    def process(self, midi_events, duration_seconds, sample_rate, channels, block_size, tail):  # type: ignore[override]  # noqa: PLR0913
-        if not list(midi_events):
+    def process(  # noqa: PLR0913
+        self,
+        midi_events: Iterable[tuple[Sequence[int], float]],
+        duration_seconds: float,
+        sample_rate: float,
+        channels: int,
+        block_size: int,
+        tail: bool,
+    ) -> np.ndarray:
+        events = list(midi_events)
+        if not events:
             self.flush_durations.append(duration_seconds)
-        return super().process(midi_events, duration_seconds, sample_rate, channels, block_size, tail)
+        return super().process(events, duration_seconds, sample_rate, channels, block_size, tail)
 
 
 class TestRenderParamsFlushBlocks:
@@ -539,7 +549,7 @@ class TestRenderParamsFlushBlocks:
         )
 
     def test_default_flush_blocks_run_three_32_second_flushes(self) -> None:
-        """The default flushes match the historical post-load, post-param, post-render 32 s calls."""
+        """Verify default Pedalboard flush behavior."""
         plugin = _FlushRecordingPlugin()
 
         self._render(plugin)

@@ -15,7 +15,7 @@ plugin_reload_cadence: once
 # macOS rejects ``render``; cadence sweeps override this safe default (#714, #489).
 gui_toggle_cadence: once
 param_sample_cadence: sample
-# Silent 2048-sample host blocks per step; null keeps the 690-block (32 s) flushes (#3245).
+# Null defers each step to the Pedalboard backend default (#3245).
 post_load_flush_blocks: null
 post_param_flush_blocks: null
 post_render_flush_blocks: null

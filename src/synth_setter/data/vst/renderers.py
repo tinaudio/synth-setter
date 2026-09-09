@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Mapping
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -25,17 +25,8 @@ from typing import TYPE_CHECKING, Protocol, TypedDict, cast
 import numpy as np
 
 from synth_setter.data.vst.dawdreamer_runtime import settle_dawdreamer_preset
-from synth_setter.renderer_backend import (
-    DAWDREAMER_FLUSH_BLOCKS,
-    PEDALBOARD_FLUSH_BLOCKS,
-    FlushBlocks,
-)
 from synth_setter.data.vst.param_map import SynthParamMap
 from synth_setter.data.vst.param_spec import ParameterValue, require_scalar_synth_params
-from synth_setter.data.vst.torchsynth_param_spec import (
-    DEFAULT_NORMALIZED_PATCH,
-    TORCHSYNTH_FULL_PARAM_SPEC,
-)
 from synth_setter.data.vst.surgepy_runtime import (
     SurgePyModule,
     SurgePyNamedParam,
@@ -43,8 +34,17 @@ from synth_setter.data.vst.surgepy_runtime import (
     import_surgepy,
     iter_surgepy_named_params,
 )
+from synth_setter.data.vst.torchsynth_param_spec import (
+    DEFAULT_NORMALIZED_PATCH,
+    TORCHSYNTH_FULL_PARAM_SPEC,
+)
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, SURGEPY_PLUGIN_NAME
+from synth_setter.renderer_backend import (
+    DAWDREAMER_FLUSH_BLOCKS,
+    FAUST_PLUGIN_NAME,
+    SURGEPY_PLUGIN_NAME,
+    FlushBlocks,
+)
 
 if TYPE_CHECKING:
     from pedalboard import VST3Plugin
@@ -315,11 +315,12 @@ class PedalboardRenderer(AudioRenderer):
 
     .. attribute :: flush_blocks
 
-       Silent host blocks processed after load, parameter writes, and the render.
+       Silent host blocks processed after load, parameter writes, and the render;
+       ``None`` covers ``PEDALBOARD_FLUSH_SECONDS`` at the render sample rate.
     """
 
     plugin: VST3Plugin | None = field(default=None, repr=False)
-    flush_blocks: FlushBlocks = PEDALBOARD_FLUSH_BLOCKS
+    flush_blocks: FlushBlocks | None = None
 
     def render(
         self,
@@ -999,7 +1000,8 @@ class DawDreamerRenderer(AudioRenderer):
             start, end = note_start_and_end
             self.plugin.add_midi_note(midi_note, velocity, start, end - start)
             self.engine.render(self.signal_duration_seconds)
-            audio = np.asarray(self.engine.get_audio())
+            # Copy before further callbacks in case the engine hands back its own buffer.
+            audio = np.array(self.engine.get_audio(), copy=True)
         finally:
             self.plugin.clear_midi()
         self._settle(self.flush_blocks.post_render)

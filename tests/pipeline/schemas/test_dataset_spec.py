@@ -1447,12 +1447,12 @@ class TestFlushBlocks:
     """Per-step host flush-block counts resolve per backend and reject unsupported backends."""
 
     def test_flush_blocks_default_pedalboard_matches_historical_flushes(self) -> None:
-        """Pedalboard keeps its three 32 s flushes (690 blocks of 2048 at 44.1 kHz)."""
+        """Verify the default Pedalboard flush configuration."""
         cfg = RenderConfig(**_valid_render_kwargs())
         assert cfg.flush_blocks == FlushBlocks(post_load=690, post_param=690, post_render=690)
 
     def test_flush_blocks_default_dawdreamer_settles_only_after_preset_load(self) -> None:
-        """DawDreamer keeps its eight-callback preset settle and no later flushes."""
+        """Verify the default DawDreamer preset-settlement configuration."""
         cfg = RenderConfig(
             **{
                 **_valid_render_kwargs(),
@@ -1461,6 +1461,11 @@ class TestFlushBlocks:
             }
         )
         assert cfg.flush_blocks == FlushBlocks(post_load=8, post_param=0, post_render=0)
+
+    def test_flush_blocks_default_pedalboard_scales_with_sample_rate(self) -> None:
+        """The Pedalboard default covers the same flush duration at any sample rate."""
+        cfg = RenderConfig(**{**_valid_render_kwargs(), "sample_rate": 22050})
+        assert cfg.flush_blocks == FlushBlocks(post_load=345, post_param=345, post_render=345)
 
     def test_flush_blocks_explicit_values_override_backend_defaults(self) -> None:
         """Each explicit field replaces only its own backend default."""

@@ -45,14 +45,14 @@ from synth_setter.pipeline.schemas.shard_metadata import (
 )
 from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
-    FLUSH_BLOCK_DEFAULTS,
-    NO_FLUSH_BLOCKS,
+    FLUSHING_BACKENDS,
     PYFDN_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
     FlushBlocks,
     PyFDNExcitation,
     RendererBackend,
+    default_flush_blocks,
 )
 from synth_setter.synth_spec import SYNTHS, SynthSpec
 
@@ -359,9 +359,10 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         default=None,
         ge=0,
         description=(
-            "Silent 2048-sample host blocks processed (then reset) after the preset loads; "
-            "``None`` keeps the backend default (Pedalboard 690 ≈ 32 s, DawDreamer 8). "
-            "Zero skips the step. Only Pedalboard and DawDreamer flush."
+            "Silent host blocks processed after the preset loads; Pedalboard also resets the "
+            "plugin afterwards. ``None`` keeps the backend default (Pedalboard: "
+            "``PEDALBOARD_FLUSH_SECONDS`` at the render sample rate; DawDreamer: its preset "
+            "settle). Zero skips the step. Only Pedalboard and DawDreamer flush."
         ),
     )
     post_param_flush_blocks: int | None = Field(
@@ -369,7 +370,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         ge=0,
         description=(
             "Silent host blocks processed after parameter writes and before the note; "
-            "``None`` keeps the backend default (Pedalboard 690, DawDreamer 0)."
+            "``None`` keeps the backend default (Pedalboard flushes, DawDreamer does not)."
         ),
     )
     post_render_flush_blocks: int | None = Field(
@@ -377,7 +378,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         ge=0,
         description=(
             "Silent host blocks processed after the note render to scrub voice state; "
-            "``None`` keeps the backend default (Pedalboard 690, DawDreamer 0)."
+            "``None`` keeps the backend default (Pedalboard flushes, DawDreamer does not)."
         ),
     )
     gui_toggle_cadence: _GuiToggleCadence = Field(
@@ -528,10 +529,10 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         :raises ValueError: If a flush-block field is set for a non-flushing backend.
         """
         explicit = self._explicit_flush_blocks()
-        if explicit and self.renderer_backend not in FLUSH_BLOCK_DEFAULTS:
+        if explicit and self.renderer_backend not in FLUSHING_BACKENDS:
             steps = ", ".join(f"{step}_flush_blocks" for step in explicit)
             raise ValueError(
-                f"{steps} require renderer_backend in {sorted(FLUSH_BLOCK_DEFAULTS)}; "
+                f"{steps} require renderer_backend in {sorted(FLUSHING_BACKENDS)}; "
                 f"got {self.renderer_backend!r}"
             )
         return self
@@ -542,7 +543,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
         :returns: Resolved counts; a non-flushing backend resolves to all zeros.
         """
-        defaults = FLUSH_BLOCK_DEFAULTS.get(self.renderer_backend, NO_FLUSH_BLOCKS)
+        defaults = default_flush_blocks(self.renderer_backend, self.sample_rate)
         return replace(defaults, **self._explicit_flush_blocks())
 
     @model_validator(mode="after")

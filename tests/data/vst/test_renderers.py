@@ -29,7 +29,7 @@ from synth_setter.data.vst.renderers import (
     PedalboardRenderer,
 )
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.renderer_backend import PEDALBOARD_FLUSH_BLOCKS, FlushBlocks
+from synth_setter.renderer_backend import FlushBlocks
 
 
 def _test_param_map(params: dict[str, tuple[int, str]], count: int) -> SynthParamMap:
@@ -181,7 +181,7 @@ def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.Mon
             "plugin_state_path": "preset.vstpreset",
             "plugin": None,
             "warmup": False,
-            "flush_blocks": PEDALBOARD_FLUSH_BLOCKS,
+            "flush_blocks": None,
         },
     }
 

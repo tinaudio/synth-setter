@@ -8,6 +8,7 @@ from omegaconf import DictConfig
 
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.renderer_backend import FlushBlocks
 from synth_setter.synth_spec import SynthName, SynthSpec
 
 _GENERIC_RENDER_FIELDS = {
@@ -43,6 +44,9 @@ _SURFACED_RENDER_DEFAULTS: dict[str, object] = {
     "plugin_reload_cadence": "render",
     "gui_toggle_cadence": "never",
     "param_sample_cadence": "shard",
+    "post_load_flush_blocks": 4,
+    "post_param_flush_blocks": 0,
+    "post_render_flush_blocks": 2,
 }
 
 # An experiment that sets none of ``_SURFACED_RENDER_DEFAULTS``, so a successful
@@ -179,6 +183,22 @@ def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
     assert spec.render.plugin_reload_cadence == "once"
     assert spec.render.gui_toggle_cadence == "once"
     assert spec.render.param_sample_cadence == "sample"
+
+
+def test_base_render_config_null_flush_blocks_resolve_to_pedalboard_defaults() -> None:
+    """The nulls in ``vst.yaml`` leave every flush step on the Pedalboard default."""
+    spec = _spec_from_dataset_overrides([])
+
+    assert spec.render.post_load_flush_blocks is None
+    assert spec.render.flush_blocks == FlushBlocks(post_load=690, post_param=690, post_render=690)
+
+
+def test_cardinal_render_group_null_flush_blocks_resolve_to_dawdreamer_defaults() -> None:
+    """The nulls in ``cardinal.yaml`` leave every flush step on the DawDreamer default."""
+    spec = _spec_from_dataset_overrides(["synth=cardinal", "render=cardinal"])
+
+    assert spec.render.post_render_flush_blocks is None
+    assert spec.render.flush_blocks == FlushBlocks(post_load=8, post_param=0, post_render=0)
 
 
 @pytest.mark.parametrize(

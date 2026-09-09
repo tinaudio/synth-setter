@@ -1,6 +1,7 @@
 import importlib.metadata
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
@@ -13,15 +14,15 @@ from pedalboard.io import AudioFile
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_PLUGIN_NAME
 from synth_setter.plugin_runtime import plugin_bundle_version, validated_bundle_lease
 from synth_setter.renderer_backend import (
-    PEDALBOARD_FLUSH_BLOCKS,
-    FlushBlocks,
     FAUST_PLUGIN_NAME,
+    PEDALBOARD_BLOCK_SIZE,
     PYFDN_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
+    FlushBlocks,
+    pedalboard_flush_blocks,
 )
 
 # How long the editor stays open before we signal it to close.
-PEDALBOARD_BLOCK_SIZE = 2048
 _EDITOR_INIT_DELAY_SECONDS = 0.5
 # Hard ceiling on how long ``run_with_editor_held_open`` waits for the render
 # worker to drain after ``show_editor`` returns; exceeding it raises
@@ -214,7 +215,7 @@ def render_params(
     *,
     plugin: VST3Plugin | None = None,
     warmup: bool = False,
-    flush_blocks: FlushBlocks = PEDALBOARD_FLUSH_BLOCKS,
+    flush_blocks: FlushBlocks | None = None,
 ) -> np.ndarray:
     """Render a single audio sample; reuse ``plugin`` if supplied, else load fresh.
 
@@ -236,7 +237,8 @@ def render_params(
     :param plugin_state_path: Optional pedalboard plugin-state file to load.
     :param plugin: Existing plugin instance to reuse.
     :param warmup: Whether to run the plugin warm-up sequence.
-    :param flush_blocks: Silent block counts after load, parameter writes, and the render.
+    :param flush_blocks: Silent block counts after load, parameter writes, and the render;
+        ``None`` covers ``PEDALBOARD_FLUSH_SECONDS`` at ``sample_rate`` for each step.
     :returns: Rendered audio as a channel-first NumPy array.
     """
     if plugin is None:
@@ -246,13 +248,16 @@ def render_params(
 
     if warmup:
         warmup_plugin(plugin)
+    if flush_blocks is None:
+        flush_blocks = pedalboard_flush_blocks(sample_rate)
+    host = _HostFormat(sample_rate=sample_rate, channels=channels)
 
-    _flush_and_reset(plugin, flush_blocks.post_load, sample_rate, channels, "post-load")
+    _flush_and_reset(plugin, host, blocks=flush_blocks.post_load, step="post-load")
 
     logger.debug("setting params")
     set_params(plugin, params)
 
-    _flush_and_reset(plugin, flush_blocks.post_param, sample_rate, channels, "post-param")
+    _flush_and_reset(plugin, host, blocks=flush_blocks.post_param, step="post-param")
 
     midi_events = make_midi_events(midi_note, velocity, *note_start_and_end)
 
@@ -261,27 +266,41 @@ def render_params(
         midi_events, signal_duration_seconds, sample_rate, channels, PEDALBOARD_BLOCK_SIZE, True
     )
 
-    _flush_and_reset(plugin, flush_blocks.post_render, sample_rate, channels, "post-render")
+    _flush_and_reset(plugin, host, blocks=flush_blocks.post_render, step="post-render")
 
     return output
 
 
-def _flush_and_reset(
-    plugin: VST3Plugin, blocks: int, sample_rate: float, channels: int, step: str
-) -> None:
+@dataclass(frozen=True)
+class _HostFormat:
+    """Sample rate and channel count every host ``process`` call shares.
+
+    .. attribute :: sample_rate
+
+       Audio sample rate in Hz.
+
+    .. attribute :: channels
+
+       Number of output channels.
+    """
+
+    sample_rate: float
+    channels: int
+
+
+def _flush_and_reset(plugin: VST3Plugin, host: _HostFormat, *, blocks: int, step: str) -> None:
     """Process ``blocks`` silent host blocks and reset the plugin; zero blocks skips both.
 
     :param plugin: Loaded plugin instance.
-    :param blocks: Number of 2048-sample silent blocks to process.
-    :param sample_rate: Audio sample rate in Hz.
-    :param channels: Number of output channels.
+    :param host: Sample rate and channel count of the silent blocks.
+    :param blocks: Number of silent host blocks to process.
     :param step: Render step name for the debug log.
     """
     if blocks == 0:
         return
     logger.debug(f"{step} flush")
-    seconds = blocks * PEDALBOARD_BLOCK_SIZE / sample_rate
-    plugin.process([], seconds, sample_rate, channels, PEDALBOARD_BLOCK_SIZE, True)
+    seconds = blocks * PEDALBOARD_BLOCK_SIZE / host.sample_rate
+    plugin.process([], seconds, host.sample_rate, host.channels, PEDALBOARD_BLOCK_SIZE, True)
     plugin.reset()
 
 

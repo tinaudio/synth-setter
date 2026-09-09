@@ -130,7 +130,7 @@ def test_dawdreamer_backend_missing_package_raises_actionable_error(
 
 
 def test_settle_dawdreamer_preset_honours_explicit_block_count() -> None:
-    """An explicit ``blocks`` count replaces the default eight callbacks."""
+    """An explicit ``blocks`` count replaces the default."""
 
     class Engine:
         """Record the durations processed by the settlement contract."""
