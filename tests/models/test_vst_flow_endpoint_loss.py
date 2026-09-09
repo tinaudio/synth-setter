@@ -18,6 +18,7 @@ from synth_setter.data.vst.param_spec import (
     ParamSpec,
 )
 from synth_setter.models.vst_flow_matching_module import (
+    ControlTokenBranches,
     VSTFlowMatchingModule,
     endpoint_prediction_to_model,
     mixed_endpoint_row_loss,
@@ -99,6 +100,36 @@ class _ConditionedLogitField(_ConstantField):
         row[8:10] = torch.tensor(
             [2.0, 0.0] if conditioning is not None else [0.0, 2.0], device=x.device
         )
+        return row.expand(x.shape[0], -1)
+
+
+class _ConditionedControlLogitField(_ConstantField):
+    """Emit distinct logits for all three multi-CFG branches."""
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        conditioning: torch.Tensor | None = None,
+        *,
+        control_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        """Choose logits from content and control-token presence.
+
+        :param x: Parameter state.
+        :param t: Flow time.
+        :param conditioning: Present only for the content-plus-sketch branch.
+        :param control_tokens: Full-sketch or unconditional control tokens.
+        :returns: Branch-specific logits.
+        """
+        row = self.row.clone()
+        if conditioning is not None:
+            logits = [2.0, 0.0]
+        elif torch.count_nonzero(control_tokens):
+            logits = [0.0, 2.0]
+        else:
+            logits = [-1.0, 1.0]
+        row[8:10] = torch.tensor(logits, device=x.device)
         return row.expand(x.shape[0], -1)
 
 
@@ -331,6 +362,31 @@ def test_mixed_endpoint_cfg_converts_guided_logits_to_valid_endpoint() -> None:
     expected_endpoint = 2 * torch.softmax(torch.tensor([4.0, -2.0]), dim=0) - 1
     torch.testing.assert_close(velocity[0, 8:10], expected_endpoint / 0.5)
     assert torch.all(expected_endpoint.abs() <= 1.0)
+
+
+def test_mixed_endpoint_multi_cfg_converts_guided_logits_once() -> None:
+    """Three CFG branches combine as logits before one endpoint conversion."""
+    module = _module(
+        endpoint_loss="mixed",
+        vector_field=_ConditionedControlLogitField(torch.zeros(_WIDTH)),
+    )
+    x = torch.zeros(1, _WIDTH)
+    t = torch.full((1, 1), 0.5)
+    conditioning = torch.ones(1, _CONDITIONING_DIM)
+    control_tokens = ControlTokenBranches(
+        conditional=torch.ones(1, 1, 1),
+        unconditional=torch.zeros(1, 1, 1),
+    )
+
+    velocity = module._velocity_field(  # noqa: SLF001
+        conditioning,
+        2.0,
+        control_tokens,
+        sketch_cfg_strength=0.5,
+    )(x, t)
+
+    expected_endpoint = 2 * torch.softmax(torch.tensor([3.5, -2.5]), dim=0) - 1
+    torch.testing.assert_close(velocity[0, 8:10], expected_endpoint / 0.5)
 
 
 def test_sample_mixed_endpoint_finishes_on_typed_endpoint_without_sampling_classes() -> None:
