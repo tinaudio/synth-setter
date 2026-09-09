@@ -110,7 +110,7 @@ def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() ->
 
 
 def test_ultramaster_kr106_single_note_smoke_uses_curated_fresh_identity() -> None:
-    """The single-note smoke run reloads its 84-column identity for every row."""
+    """The single-note smoke run reloads its fresh identity for every row."""
     spec = _compose_dataset_spec("generate_dataset/ultramaster-kr106-single-note-lance-smoke")
 
     assert spec.render.synth.name == "ultramaster_kr106_single_note"

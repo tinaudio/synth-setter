@@ -439,6 +439,60 @@ def test_ultramaster_kr106_single_note_preset_fixes_omitted_safe_states() -> Non
 
 @pytest.mark.slow
 @pytest.mark.requires_vst
+@pytest.mark.parametrize(
+    ("name", "retained_raw", "alias_raw"),
+    [
+        pytest.param("porta_mode", 0.5, 1.0, id="poly_i-poly_ii"),
+        pytest.param("voices", 0.0, 0.25, id="six-seven-voices"),
+        pytest.param("voices", 0.5, 0.75, id="eight-nine-voices"),
+        pytest.param("vcf_oversample", 1.0 / 3.0, 2.0 / 3.0, id="two-three-times"),
+    ],
+)
+def test_ultramaster_kr106_single_note_aliases_render_identically(
+    name: str, retained_raw: float, alias_raw: float
+) -> None:
+    """Each omitted host alias produces the retained setting's exact audio.
+
+    :param name: Host parameter under comparison.
+    :param retained_raw: Normalized value retained by the curated identity.
+    :param alias_raw: Omitted normalized value with equivalent host behavior.
+    """
+    if platform.machine() != "x86_64":
+        pytest.skip("Ultramaster KR-106 is source-built only on x86_64")
+    assert _PLUGIN_PATH.is_dir(), f"Ultramaster KR-106 is not installed at {_PLUGIN_PATH}"
+
+    synth_params = {
+        "attack": 0.0,
+        "dco_noise": 0.0,
+        "master_volume": 0.5,
+        "pulse": 1.0,
+        "saw": 1.0,
+        "sustain": 0.8,
+        "volume": 0.5,
+    }
+    with as_file(param_map("ultramaster_kr106")) as path:
+        joint_map = load_param_map(path)
+    renderer = DawDreamerRenderer(
+        plugin_path=str(_PLUGIN_PATH),
+        sample_rate=44_100,
+        channels=2,
+        signal_duration_seconds=1.0,
+        plugin_state_path=str(_REPO_ROOT / plugin_state_paths["ultramaster_kr106"]),
+        parameter_map=joint_map,
+        reload_plugin_each_render=True,
+    )
+
+    retained = renderer.render(
+        {**synth_params, name: retained_raw}, 60, 100, (0.05, 0.75)
+    )
+    alias = renderer.render({**synth_params, name: alias_raw}, 60, 100, (0.05, 0.75))
+
+    assert np.max(np.abs(retained)) > 1e-4
+    assert np.array_equal(alias, retained)
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
 def test_ultramaster_kr106_single_note_dawdreamer_renders_audio() -> None:
     """The curated parameters drive a real fresh KR-106 render."""
     if platform.machine() != "x86_64":
