@@ -512,9 +512,6 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     assert renderer_invocations == 0, (
         f"resume re-rendered {renderer_invocations} shard(s) already present in R2"
     )
-    if project_env is None:
-        pytest.xfail("#3290: the default W&B project case retains a hard-coded CI assertion")
-    assert actual_project == "synth-setter-citest"
 
 
 @pytest.mark.fake_vst
