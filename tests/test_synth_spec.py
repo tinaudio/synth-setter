@@ -14,7 +14,11 @@ from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
 from pydantic import ValidationError
 
-from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
+from synth_setter.data.vst.param_spec_registry import (
+    param_specs,
+    plugin_state_paths,
+    resolve_param_spec_width,
+)
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME
 from synth_setter.synth_spec import (
@@ -154,7 +158,14 @@ class TestSynthsTable:
 
         assert packaged == (
             synth.param_spec_name
-            in {"cardinal", "surge_4", "surge_simple", "surge_xt", "ultramaster_kr106"}
+            in {
+                "cardinal",
+                "surge_4",
+                "surge_simple",
+                "surge_xt",
+                "ultramaster_kr106",
+                "ultramaster_kr106_onehot",
+            }
         )
 
     @pytest.mark.parametrize(
@@ -190,6 +201,15 @@ class TestSynthConfigGroup:
             group = compose(config_name=f"synth/{name}").synth
 
         assert OmegaConf.to_container(group) == SYNTHS[SynthName(name)].model_dump()
+
+    def test_ultramaster_onehot_selector_resolves_configured_width(self) -> None:
+        """The opt-in Hydra selector and width resolver agree on 250 columns."""
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            group = compose(config_name="synth/ultramaster_kr106_onehot").synth
+
+        assert group.name == "ultramaster_kr106_onehot"
+        assert group.param_spec_name == "ultramaster_kr106_onehot"
+        assert resolve_param_spec_width(group.param_spec_name) == 250
 
     def test_group_covers_every_registered_synth(self) -> None:
         """No table entry lacks a config group, and no group lacks a table entry."""

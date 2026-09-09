@@ -4,15 +4,22 @@ from __future__ import annotations
 
 import platform
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
+from hydra import compose, initialize_config_module
 
 from synth_setter.data.vst.param_map import load_param_map
-from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter
+from synth_setter.data.vst.param_spec import (
+    CategoricalParameter,
+    DiscreteLiteralParameter,
+    decode_model_output,
+)
 from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
 from synth_setter.data.vst.renderers import DawDreamerRenderer
 from synth_setter.resources import as_file, param_map
+from synth_setter.synth_spec import SYNTHS, SynthName, validate_synth_identity
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PLUGIN_PATH = _REPO_ROOT / "plugins" / "Ultramaster KR-106.vst3"
@@ -93,6 +100,92 @@ def test_ultramaster_kr106_spec_has_expected_full_width() -> None:
     assert spec.encoded_width == 246
 
 
+def test_ultramaster_kr106_onehot_spec_changes_only_voices_width() -> None:
+    """The opt-in identity expands voices without changing another coordinate."""
+    scalar = param_specs["ultramaster_kr106"]
+    onehot = param_specs["ultramaster_kr106_onehot"]
+
+    assert scalar.encoded_width == 246
+    assert onehot.encoded_width == 250
+    assert onehot.encoded_names[:200] == scalar.encoded_names[:200]
+    assert onehot.encoded_names[200:205] == [
+        "voices.0",
+        "voices.1",
+        "voices.2",
+        "voices.3",
+        "voices.4",
+    ]
+    assert onehot.encoded_names[205:] == scalar.encoded_names[201:]
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        (0.0, [1.0, 0.0, 0.0, 0.0, 0.0]),
+        (0.25, [0.0, 1.0, 0.0, 0.0, 0.0]),
+        (0.5, [0.0, 0.0, 1.0, 0.0, 0.0]),
+        (0.75, [0.0, 0.0, 0.0, 1.0, 0.0]),
+        (1.0, [0.0, 0.0, 0.0, 0.0, 1.0]),
+    ],
+)
+def test_ultramaster_kr106_onehot_voices_round_trip_preserves_raw_map(
+    raw_value: float, expected: list[float]
+) -> None:
+    """Each renderer-native voices value round-trips through its onehot coordinate.
+
+    :param raw_value: Renderer-native value for one voices setting.
+    :param expected: Onehot encoding for that setting.
+    """
+    voices = next(
+        param
+        for param in param_specs["ultramaster_kr106_onehot"].synth_params
+        if param.name == "voices"
+    )
+
+    assert isinstance(voices, CategoricalParameter)
+    assert voices.values == [6, 7, 8, 9, 10]
+    assert voices.raw_values == [0.0, 0.25, 0.5, 0.75, 1.0]
+    assert voices.encode(raw_value).tolist() == expected
+    assert voices.decode(np.asarray(expected)) == raw_value
+
+
+def test_ultramaster_kr106_onehot_transpose_offset_stays_scalar() -> None:
+    """The high-cardinality transpose offset retains its numerical encoding."""
+    transpose_offset = next(
+        param
+        for param in param_specs["ultramaster_kr106_onehot"].synth_params
+        if param.name == "transpose_offset"
+    )
+
+    assert isinstance(transpose_offset, CategoricalParameter)
+    assert transpose_offset.encoding == "scalar"
+    assert len(transpose_offset) == 1
+
+
+def test_ultramaster_kr106_onehot_pitch_stays_scalar_with_midi_rounding() -> None:
+    """The MIDI pitch remains a numerical scalar rounded to the nearest note."""
+    pitch = param_specs["ultramaster_kr106_onehot"].note_params[0]
+
+    assert isinstance(pitch, DiscreteLiteralParameter)
+    assert pitch.encoding == "scalar"
+    assert len(pitch) == 1
+    assert pitch.decode(np.asarray([0.521])) == 61
+
+
+def test_ultramaster_kr106_onehot_identity_reuses_renderer_artifacts() -> None:
+    """The opt-in identity changes only its registry and ParamSpec names."""
+    scalar = SYNTHS[SynthName("ultramaster_kr106")]
+    onehot = SYNTHS[SynthName("ultramaster_kr106_onehot")]
+
+    assert scalar.name == "ultramaster_kr106"
+    assert scalar.param_spec_name == "ultramaster_kr106"
+    assert onehot.name == "ultramaster_kr106_onehot"
+    assert onehot.param_spec_name == "ultramaster_kr106_onehot"
+    assert onehot.plugin_path == scalar.plugin_path
+    assert onehot.plugin_state_path == scalar.plugin_state_path
+    assert onehot.synth_version == scalar.synth_version
+
+
 def test_ultramaster_kr106_spec_round_trip_preserves_values() -> None:
     """A deterministic sample survives encoding and decoding."""
     spec = param_specs["ultramaster_kr106"]
@@ -143,6 +236,60 @@ def test_ultramaster_kr106_preset_is_committed() -> None:
     """The registered baseline resolves to a captured plugin state."""
     preset = _REPO_ROOT / plugin_state_paths["ultramaster_kr106"]
     assert preset.is_file()
+
+
+def test_ultramaster_kr106_onehot_param_map_uses_new_identity() -> None:
+    """The new identity packages the shared KR-106 host projection under its own name."""
+    with as_file(param_map("ultramaster_kr106_onehot")) as path:
+        joint_map = load_param_map(path)
+
+    assert joint_map.param_spec_name == "ultramaster_kr106_onehot"
+    assert set(joint_map.params) == set(_EXPECTED_SYNTH_PARAMS)
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+def test_ultramaster_kr106_onehot_selector_renders_decoded_model_output() -> None:
+    """The opt-in identity decodes and renders through its real host projection."""
+    if platform.machine() != "x86_64":
+        pytest.skip("Ultramaster KR-106 is source-built only on x86_64")
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        selected = compose(config_name="synth/ultramaster_kr106_onehot")
+    identity = validate_synth_identity(selected)
+    assert identity is not None
+    plugin_path = _REPO_ROOT / identity.plugin_path
+    assert plugin_path.is_dir(), f"Ultramaster KR-106 is not installed at {plugin_path}"
+
+    spec = param_specs[identity.param_spec_name]
+    sampled_synth, sampled_note = spec.sample(np.random.default_rng(3270))
+    sampled_note["note_start_and_end"] = (0.05, 0.3)
+    model_output = spec.encoded_to_model(spec.encode(sampled_synth, sampled_note))
+    decoded_synth, decoded_note = decode_model_output(model_output, spec)
+    with as_file(param_map(identity.param_spec_name)) as path:
+        joint_map = load_param_map(path)
+    renderer = DawDreamerRenderer(
+        plugin_path=str(plugin_path),
+        sample_rate=44_100,
+        channels=2,
+        signal_duration_seconds=0.5,
+        plugin_state_path=str(_REPO_ROOT / identity.plugin_state_path),
+        parameter_map=joint_map,
+        reload_plugin_each_render=True,
+    )
+
+    audio = renderer.render(
+        decoded_synth,
+        cast(int, decoded_note["pitch"]),
+        100,
+        cast(tuple[float, float], decoded_note["note_start_and_end"]),
+    )
+
+    assert model_output.shape == (250,)
+    assert decoded_synth["voices"] == sampled_synth["voices"]
+    assert decoded_note["pitch"] == sampled_note["pitch"]
+    assert audio.shape == (2, 22_050)
+    assert np.isfinite(audio).all()
+    assert np.max(np.abs(audio)) > 1e-4
 
 
 def test_ultramaster_kr106_param_map_covers_full_spec_without_clap() -> None:
@@ -225,9 +372,7 @@ def test_ultramaster_kr106_categorical_params_cover_every_host_setting() -> None
     plugin = load_plugin(str(_PLUGIN_PATH))
     spec = param_specs["ultramaster_kr106"]
     categorical_params = {
-        param.name: param
-        for param in spec.synth_params
-        if isinstance(param, CategoricalParameter)
+        param.name: param for param in spec.synth_params if isinstance(param, CategoricalParameter)
     }
 
     for name, param in categorical_params.items():
