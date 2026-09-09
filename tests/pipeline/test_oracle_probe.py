@@ -1,0 +1,147 @@
+"""Behavior tests for dataset oracle-probe archival."""
+
+from __future__ import annotations
+
+import json
+import uuid
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from synth_setter.evaluation.oracle_probe import (
+    OracleProbeProvenance,
+    new_oracle_probe_launch_id,
+    upload_oracle_probe,
+)
+from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
+
+
+def _write_eval_artifacts(eval_dir: Path) -> None:
+    """Create the uploadable eval outputs plus excluded and unsafe files.
+
+    :param eval_dir: Root directory for the synthetic eval run.
+    """
+    for relative_path, contents in (
+        (".hydra/config.yaml", "task_name: eval\n"),
+        ("audio/sample_0/pred.wav", "audio"),
+        ("metrics/metrics.json", '{"audio/rms_mean": 1.0}\n'),
+        ("predictions/pred-0.pt", "tensor"),
+        ("eval.log", "raw process output"),
+        ("wandb/debug.log", "credential-adjacent client log"),
+    ):
+        path = eval_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents)
+
+
+def _provenance(spec: DatasetSpec, split: Split = "test") -> OracleProbeProvenance:
+    """Build provenance from one generated dataset and identical oracle renders.
+
+    :param spec: Source dataset specification.
+    :param split: Source split represented by the probe.
+    :returns: Validated provenance for the probe upload.
+    """
+    return OracleProbeProvenance(
+        source_dataset_uri=spec.r2.split_lance_uri(split),
+        source_dataset_task=spec.task_name,
+        source_split=split,
+        source_run_id=spec.run_id,
+        source_render=spec.render,
+        candidate_render=spec.render,
+    )
+
+
+def test_upload_oracle_probe_materializes_only_probe_artifacts(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    valid_dataset_spec_kwargs: dict[str, Any],
+) -> None:
+    """Real rclone upload keeps config, audio, metrics, and strict provenance only.
+
+    :param tmp_path: Temporary eval-run root.
+    :param fake_r2_remote: Local rclone remote root.
+    :param valid_dataset_spec_kwargs: Valid source dataset fields.
+    """
+    spec = DatasetSpec(**valid_dataset_spec_kwargs)
+    eval_dir = tmp_path / "eval"
+    _write_eval_artifacts(eval_dir)
+
+    uri = upload_oracle_probe(
+        eval_dir,
+        r2=spec.r2,
+        launch_id="launch-1",
+        provenance=_provenance(spec),
+    )
+
+    assert uri == (
+        f"r2://{spec.r2.bucket}/probes/dataset-oracle/{spec.task_name}/{spec.run_id}/launch-1/test"
+    )
+    landed = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / "probes"
+        / "dataset-oracle"
+        / spec.task_name
+        / spec.run_id
+        / "launch-1"
+        / "test"
+    )
+    uploaded = sorted(
+        path.relative_to(landed).as_posix() for path in landed.rglob("*") if path.is_file()
+    )
+    assert uploaded == [
+        ".hydra/config.yaml",
+        "audio/sample_0/pred.wav",
+        "metrics/metrics.json",
+        "provenance.json",
+    ]
+    payload = json.loads((landed / "provenance.json").read_text())
+    assert OracleProbeProvenance.model_validate(payload) == _provenance(spec)
+    assert payload["source_render"] == payload["candidate_render"]
+
+
+def test_new_oracle_probe_launch_id_returns_unique_names() -> None:
+    """Independent inline invocations receive distinct destination components."""
+    assert new_oracle_probe_launch_id() != new_oracle_probe_launch_id()
+
+
+@pytest.mark.integration_r2
+@pytest.mark.r2
+def test_upload_oracle_probe_real_r2_round_trip(
+    tmp_path: Path,
+    valid_dataset_spec_kwargs: dict[str, Any],
+) -> None:
+    """A probe uploaded to real R2 can be downloaded with its provenance intact.
+
+    :param tmp_path: Temporary eval and download root.
+    :param valid_dataset_spec_kwargs: Valid source dataset fields.
+    """
+    nonce = uuid.uuid4().hex
+    valid_dataset_spec_kwargs["task_name"] = f"oracle-probe-test-{nonce}"
+    valid_dataset_spec_kwargs["run_id"] = f"run-{nonce}"
+    spec = DatasetSpec(**valid_dataset_spec_kwargs)
+    eval_dir = tmp_path / "eval"
+    _write_eval_artifacts(eval_dir)
+    launch_id = new_oracle_probe_launch_id()
+    probe_prefix = f"probes/dataset-oracle/{spec.task_name}/{spec.run_id}/{launch_id}/"
+
+    try:
+        uri = upload_oracle_probe(
+            eval_dir,
+            r2=spec.r2,
+            launch_id=launch_id,
+            provenance=_provenance(spec),
+        )
+        downloaded = tmp_path / "downloaded"
+        r2_io.download_dir_no_overwrite(uri, downloaded)
+
+        payload = json.loads((downloaded / "provenance.json").read_text())
+        assert OracleProbeProvenance.model_validate(payload) == _provenance(spec)
+        assert (downloaded / ".hydra" / "config.yaml").is_file()
+        assert (downloaded / "audio" / "sample_0" / "pred.wav").is_file()
+        assert (downloaded / "metrics" / "metrics.json").is_file()
+        assert not (downloaded / "predictions").exists()
+    finally:
+        r2_io.purge_prefix(spec.r2.bucket, probe_prefix)

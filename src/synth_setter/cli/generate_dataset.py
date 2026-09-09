@@ -46,6 +46,11 @@ from pydantic import ValidationError
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
+from synth_setter.evaluation.oracle_probe import (
+    OracleProbeProvenance,
+    new_oracle_probe_launch_id,
+    upload_oracle_probe,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.constants import (
@@ -1257,8 +1262,8 @@ def main(cfg: DictConfig) -> None:
 
     :param cfg: Hydra-composed dataset cfg.
     :raises ValueError: ``oracle_eval_inline=true`` without
-        ``finalize_inline=true``, or with a zero-size train / val / test split
-        (the eval datamodule opens all three split files unconditionally).
+        ``finalize_inline=true``, with a zero-size train / val / test split,
+        or with a non-boolean ``oracle_eval.upload`` value.
     """
     extras(cfg)
     render_cfg = cfg.get("render")
@@ -1278,6 +1283,7 @@ def main(cfg: DictConfig) -> None:
     if sky_cfg.compute is None:
         ensure_dawdreamer_runtime(spec.render.renderer_backend)
 
+    upload_oracle_evals = False
     if sky_cfg.compute is None and cfg.oracle_eval_inline:
         if not cfg.finalize_inline:
             raise ValueError(
@@ -1290,6 +1296,12 @@ def main(cfg: DictConfig) -> None:
                 "oracle_eval_inline=true requires all of "
                 f"train_val_test_sizes > 0; got {tuple(spec.train_val_test_sizes)}. "
                 "VSTDataModule opens train.lance / val.lance / test.lance unconditionally."
+            )
+        upload_oracle_evals = OmegaConf.select(cfg, "oracle_eval.upload", default=False)
+        if not isinstance(upload_oracle_evals, bool):
+            raise ValueError(
+                f"oracle_eval.upload must be a boolean, got {upload_oracle_evals!r}; a quoted "
+                '"false" would otherwise upload probe artifacts'
             )
 
     spec_path = write_spec_locally(spec, Path(cfg.paths.output_dir))
@@ -1329,19 +1341,36 @@ def main(cfg: DictConfig) -> None:
                 r2_io.download_dir_no_overwrite(
                     spec.r2.split_lance_uri(split), output_dir / f"{split}.lance"
                 )
+            oracle_probe_launch_id = new_oracle_probe_launch_id() if upload_oracle_evals else None
             for split in splits:
                 # test stays bare; train/val are namespaced so the shared run
                 # keeps one summary key per split (see _run_oracle_eval_subprocess).
                 metric_prefix = "" if split == "test" else f"{split}/"
+                eval_dir = output_dir / "oracle_eval" / split / spec.run_id
                 _run_oracle_eval_subprocess(
                     output_dir,
-                    output_dir / "oracle_eval" / split / spec.run_id,
+                    eval_dir,
                     spec.run_id,
                     render=spec.render,
                     num_workers=cfg.datamodule.num_workers,
                     predict_file=output_dir / f"{split}.lance",
                     metric_prefix=metric_prefix,
                 )
+                if oracle_probe_launch_id is not None:
+                    uploaded_uri = upload_oracle_probe(
+                        eval_dir,
+                        r2=spec.r2,
+                        launch_id=oracle_probe_launch_id,
+                        provenance=OracleProbeProvenance(
+                            source_dataset_uri=spec.r2.split_lance_uri(split),
+                            source_dataset_task=spec.task_name,
+                            source_split=split,
+                            source_run_id=spec.run_id,
+                            source_render=spec.render,
+                            candidate_render=spec.render,
+                        ),
+                    )
+                    logger.info(f"oracle probe uploaded -> {uploaded_uri}")
         return
 
     if cfg.finalize_inline or cfg.oracle_eval_inline:
