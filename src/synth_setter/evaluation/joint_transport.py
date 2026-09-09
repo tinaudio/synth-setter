@@ -1,6 +1,8 @@
 """Exact joint transport on globally normalized time-frequency energy.
 
-See ``docs/reference/reverb-metrics.md`` for the fixed STFT and grid contract.
+Usage: ``compute_joint_time_frequency_ot(target[None, :], pred[None, :], 44100)``
+for one-dimensional float impulse responses. Gain is unrestricted, not PCM-clipped.
+See ``docs/reference/reverb-metrics.md`` for the representation and ground cost.
 """
 
 from __future__ import annotations
@@ -113,16 +115,12 @@ def _grid_flow_problem(
     shape: tuple[int, int],
     time_coordinates: np.ndarray,
     log_frequency_coordinates: np.ndarray,
-    time_scale_seconds: float,
-    log_frequency_scale_octaves: float,
 ) -> tuple[np.ndarray, coo_matrix]:
     """Build sparse incidence constraints and costs for the grid graph.
 
     :param shape: Frequency and time cell counts.
-    :param time_coordinates: Time-cell centres in seconds.
-    :param log_frequency_coordinates: Frequency-cell centres in octaves.
-    :param time_scale_seconds: Seconds worth one transport cost unit.
-    :param log_frequency_scale_octaves: Octaves worth one transport cost unit.
+    :param time_coordinates: Time-cell centres in transport cost units.
+    :param log_frequency_coordinates: Frequency-cell centres in transport cost units.
     :return: Directed-edge costs and sparse node-edge incidence matrix.
     """
     frequency_cells, time_cells = shape
@@ -134,9 +132,7 @@ def _grid_flow_problem(
     for frequency_index in range(frequency_cells):
         row_offset = frequency_index * time_cells
         for time_index in range(time_cells - 1):
-            cost = (
-                time_coordinates[time_index + 1] - time_coordinates[time_index]
-            ) / time_scale_seconds
+            cost = time_coordinates[time_index + 1] - time_coordinates[time_index]
             _append_directed_edge(
                 rows,
                 columns,
@@ -151,7 +147,7 @@ def _grid_flow_problem(
         cost = (
             log_frequency_coordinates[frequency_index + 1]
             - log_frequency_coordinates[frequency_index]
-        ) / log_frequency_scale_octaves
+        )
         for time_index in range(time_cells):
             first_node = frequency_index * time_cells + time_index
             second_node = first_node + time_cells
@@ -219,10 +215,8 @@ def compute_grid_wasserstein_distance(
 
     costs, incidence = _grid_flow_problem(
         target.shape,
-        times,
-        frequencies,
-        time_scale,
-        frequency_scale,
+        times / time_scale,
+        frequencies / frequency_scale,
     )
     balance = (target - pred).ravel()
     result = linprog(

@@ -16,7 +16,9 @@ Generic non-pyFDN evaluation retains its existing metric columns.
 The wrappers use all ten public concrete `ResponseLoss` implementations in
 [pyFDN v0.4.2](https://github.com/artificial-audio/pyFDN/tree/v0.4.2/src/pyFDN/train/losses),
 with their upstream default settings. Inputs are finite, equal-length mono impulse
-responses at a shared sample rate. Upstream window and decay-fit requirements
+responses at a shared sample rate. Floating-point filter responses may have gain
+above unity: these APIs do not impose PCM sample bounds or clip responses before
+scoring amplitude-sensitive losses. Upstream window and decay-fit requirements
 still apply: silence, insufficient response length, or an unfittable decay can
 make a loss undefined. Such failures and non-finite results raise an error naming
 the metric rather than being silently omitted.

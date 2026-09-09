@@ -41,7 +41,7 @@ def _broadband_decay(decay_rate: float = 20.0) -> np.ndarray:
 
 
 def test_response_loss_registries_cover_every_public_concrete_response_loss() -> None:
-    """The registries cover all ten public concrete response-loss classes."""
+    """The registries cover every public concrete response-loss class."""
     public_concrete = {
         exported
         for name in losses.__all__
@@ -115,7 +115,7 @@ def test_response_diagnostics_identical_decay_report_equal_sides() -> None:
 def test_response_losses_invalid_sample_rate_raises(sample_rate: float) -> None:
     """Non-positive and non-finite sample rates are rejected.
 
-    :param sample_rate: Invalid rate under test.
+    :param sample_rate: Sampling frequency in Hz violating the positive-finite contract.
     """
     audio = _broadband_decay()
 

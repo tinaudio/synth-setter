@@ -1,4 +1,9 @@
-"""Evaluate pyFDN training response losses as audio metrics."""
+"""Evaluate pyFDN training response losses as audio metrics.
+
+Usage: ``compute_pyfdn_response_losses(target[None, :], pred[None, :], 44100)``
+returns a ``pyfdn_*`` scalar mapping for one-dimensional float impulse responses.
+Response gain is unrestricted; PCM sample bounds do not apply to filter responses.
+"""
 
 from __future__ import annotations
 
@@ -38,6 +43,13 @@ PYFDN_DIAGNOSTIC_LOSSES: Mapping[str, Callable[[], ResponseLoss]] = {
 
 
 def _mono_impulse_response(audio: np.ndarray, name: str) -> np.ndarray:
+    """Validate real ``(1, samples)`` audio and return a float64 time-major vector.
+
+    :param audio: Mono impulse response, with unrestricted finite gain.
+    :param name: Signal identifier included in validation errors.
+    :returns: One-dimensional impulse response.
+    :raises ValueError: If the input is empty, non-mono, complex, or non-finite.
+    """
     raw = np.asarray(audio)
     if np.iscomplexobj(raw):
         raise ValueError(f"{name} impulse response must be real-valued")
@@ -75,6 +87,14 @@ def _responses(
     pred: np.ndarray,
     sample_rate: float,
 ) -> tuple[np.ndarray, Response, Response]:
+    """Build pyFDN ``(samples, 1, 1)`` responses from a mono audio pair.
+
+    :param target: Target audio with shape ``(1, samples)``.
+    :param pred: Prediction with the same shape as the target.
+    :param sample_rate: Shared positive sample rate in Hz.
+    :returns: Target time-major vector and target/prediction Response objects.
+    :raises ValueError: If the sample rate or either input is invalid.
+    """
     try:
         rate = float(sample_rate)
     except (TypeError, ValueError) as error:

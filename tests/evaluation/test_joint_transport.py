@@ -15,11 +15,11 @@ _NUM_SAMPLES = 4096
 
 
 def _impulse(sample: int, amplitude: float = 1.0) -> np.ndarray:
-    """Return one channel containing a point impulse.
+    """Return a one-channel point impulse.
 
-    :param sample: Impulse sample index.
-    :param amplitude: Impulse amplitude.
-    :return: One-channel waveform with the requested impulse.
+    :param sample: Zero-based location within the fixed-length test response.
+    :param amplitude: Signed linear gain of the sole nonzero sample.
+    :returns: Float64 audio with shape ``(1, _NUM_SAMPLES)``.
     """
     audio = np.zeros((1, _NUM_SAMPLES), dtype=np.float64)
     audio[0, sample] = amplitude
@@ -222,7 +222,7 @@ def test_joint_ot_frequencies_above_eight_kilohertz_are_included() -> None:
 def test_joint_ot_invalid_sample_rate_raises_value_error(sample_rate: float) -> None:
     """Nonpositive and nonfinite sample rates are rejected.
 
-    :param sample_rate: Candidate invalid sample rate.
+    :param sample_rate: Sampling frequency in Hz violating the positive-finite contract.
     """
     audio = _impulse(1024)
 
