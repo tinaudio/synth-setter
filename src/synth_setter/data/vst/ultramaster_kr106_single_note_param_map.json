@@ -472,18 +472,6 @@
       },
       "surgepy": null
     },
-    "voices": {
-      "pedalboard": {
-        "index": 45,
-        "name": "Voices"
-      },
-      "clap": null,
-      "dawdreamer": {
-        "index": 45,
-        "name": "Voices"
-      },
-      "surgepy": null
-    },
     "vcf_oversample": {
       "pedalboard": {
         "index": 46,

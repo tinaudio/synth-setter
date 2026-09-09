@@ -119,7 +119,7 @@ def test_ultramaster_kr106_single_note_smoke_uses_curated_fresh_identity() -> No
     assert spec.render.gui_toggle_cadence == "never"
     assert spec.render.plugin_reload_cadence == "render"
     assert spec.render.samples_per_render_batch == 1
-    assert spec.num_params == 84
+    assert spec.num_params == 81
     assert spec.train_val_test_sizes == (20, 0, 0)
 
 

@@ -309,6 +309,7 @@ _SINGLE_NOTE_EXCLUDED_PARAMS = frozenset(
         "program",
         "send_midi_sysex",
         "transpose",
+        "voices",
     }
 )
 _SINGLE_NOTE_PARAM_OVERRIDES = {
@@ -322,12 +323,6 @@ _SINGLE_NOTE_PARAM_OVERRIDES = {
         name="vcf_oversample",
         values=["Off", "2x", "4x"],
         raw_values=[0.0, 1.0 / 3.0, 1.0],
-        encoding="onehot",
-    ),
-    "voices": CategoricalParameter(
-        name="voices",
-        values=[6, 8, 10],
-        raw_values=[0.0, 0.5, 1.0],
         encoding="onehot",
     ),
 }

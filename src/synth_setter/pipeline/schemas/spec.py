@@ -497,10 +497,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
     @model_validator(mode="after")
     def _kr106_single_note_requires_fresh_plugin(self) -> RenderConfig:
-        """Reload the baseline before every render for the curated KR-106 contract.
+        """Require per-render plugin reloads for the curated KR-106 identity.
 
-        :returns: The validated render configuration.
-        :raises ValueError: The single-note identity would reuse plugin state.
+        :returns: This configuration after fresh-instance isolation is validated.
+        :raises ValueError: ``plugin_reload_cadence`` is not ``"render"`` for
+            ``ultramaster_kr106_single_note``.
         """
         if (
             self.param_spec_name == "ultramaster_kr106_single_note"

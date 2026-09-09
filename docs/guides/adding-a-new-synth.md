@@ -158,7 +158,7 @@ patch:
 | `cardinal`                      | 9              | 13            |
 | `surge_simple`                  | 89             | 92            |
 | `obxf`                          | 94             | 187           |
-| `ultramaster_kr106_single_note` | 44             | 84            |
+| `ultramaster_kr106_single_note` | 43             | 81            |
 | `ultramaster_kr106`             | 58             | 246           |
 | `surge_xt`                      | 162            | 300           |
 

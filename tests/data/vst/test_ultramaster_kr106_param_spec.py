@@ -123,7 +123,6 @@ _SINGLE_NOTE_SYNTH_PARAMS = (
     "porta_rate",
     "transpose_offset",
     "master_volume",
-    "voices",
     "vcf_oversample",
     "ignore_velocity",
     "lfo_sync_host",
@@ -238,10 +237,10 @@ def test_ultramaster_kr106_single_note_spec_contains_only_audible_controls() -> 
     spec = param_specs["ultramaster_kr106_single_note"]
 
     assert tuple(spec.synth_param_names) == _SINGLE_NOTE_SYNTH_PARAMS
-    assert len(spec.synth_params) == 44
-    assert spec.synth_param_length == 81
+    assert len(spec.synth_params) == 43
+    assert spec.synth_param_length == 78
     assert spec.note_param_length == 3
-    assert spec.encoded_width == 84
+    assert spec.encoded_width == 81
 
 
 def test_ultramaster_kr106_single_note_spec_uses_canonical_host_values() -> None:
@@ -254,8 +253,6 @@ def test_ultramaster_kr106_single_note_spec_uses_canonical_host_values() -> None
 
     assert categorical_params["porta_mode"].values == ["Mono", "Poly I"]
     assert categorical_params["porta_mode"].raw_values == [0.0, 0.5]
-    assert categorical_params["voices"].values == [6, 8, 10]
-    assert categorical_params["voices"].raw_values == [0.0, 0.5, 1.0]
     assert categorical_params["vcf_oversample"].values == ["Off", "2x", "4x"]
     assert categorical_params["vcf_oversample"].raw_values == [0.0, 1.0 / 3.0, 1.0]
 
@@ -413,6 +410,15 @@ def test_ultramaster_kr106_single_note_param_map_covers_curated_spec() -> None:
     assert tuple(joint_map.params) == _SINGLE_NOTE_SYNTH_PARAMS
     assert joint_map.preset_resource == "presets/ultramaster_kr106_single_note-base.vstpreset"
     assert joint_map.clap is None
+    assert len(set(joint_map.dawdreamer_indices().values())) == len(_SINGLE_NOTE_SYNTH_PARAMS)
+    assert all(
+        identity.dawdreamer.name.casefold().replace(" ", "_") == name
+        for name, identity in joint_map.params.items()
+    )
+    assert all(
+        0 <= identity.dawdreamer.index < joint_map.dawdreamer.parameter_count
+        for identity in joint_map.params.values()
+    )
 
 
 @pytest.mark.slow
@@ -445,18 +451,20 @@ def test_ultramaster_kr106_single_note_preset_fixes_omitted_safe_states() -> Non
     [
         pytest.param("porta_mode", 0.5, 1.0, id="poly_i-poly_ii"),
         pytest.param("voices", 0.0, 0.25, id="six-seven-voices"),
-        pytest.param("voices", 0.5, 0.75, id="eight-nine-voices"),
+        pytest.param("voices", 0.0, 0.5, id="six-eight-voices"),
+        pytest.param("voices", 0.0, 0.75, id="six-nine-voices"),
+        pytest.param("voices", 0.0, 1.0, id="six-ten-voices"),
         pytest.param("vcf_oversample", 1.0 / 3.0, 2.0 / 3.0, id="two-three-times"),
     ],
 )
-def test_ultramaster_kr106_single_note_aliases_render_identically(
-    name: str, retained_raw: float, alias_raw: float
+def test_ultramaster_kr106_single_note_excluded_settings_render_identically(
+    name: str, retained_raw: float, excluded_raw: float
 ) -> None:
-    """Each omitted host alias produces the retained setting's exact audio.
+    """Each excluded host setting produces a retained setting's exact audio.
 
     :param name: Host parameter under comparison.
-    :param retained_raw: Normalized value retained by the curated identity.
-    :param alias_raw: Omitted normalized value with equivalent host behavior.
+    :param retained_raw: Normalized reference value.
+    :param excluded_raw: Excluded normalized value with equivalent audio.
     """
     if platform.machine() != "x86_64":
         pytest.skip("Ultramaster KR-106 is source-built only on x86_64")
@@ -486,10 +494,77 @@ def test_ultramaster_kr106_single_note_aliases_render_identically(
     retained = renderer.render(
         {**synth_params, name: retained_raw}, 60, 100, (0.05, 0.75)
     )
-    alias = renderer.render({**synth_params, name: alias_raw}, 60, 100, (0.05, 0.75))
+    excluded = renderer.render(
+        {**synth_params, name: excluded_raw}, 60, 100, (0.05, 0.75)
+    )
 
     assert np.max(np.abs(retained)) > 1e-4
-    assert np.array_equal(alias, retained)
+    assert np.array_equal(excluded, retained)
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+@pytest.mark.parametrize(
+    ("name", "first_raw", "second_raw"),
+    [
+        pytest.param("porta_mode", 0.0, 0.5, id="mono-poly_i"),
+        pytest.param("vcf_oversample", 0.0, 1.0 / 3.0, id="off-two-times"),
+        pytest.param("vcf_oversample", 1.0 / 3.0, 1.0, id="two-four-times"),
+    ],
+)
+def test_ultramaster_kr106_single_note_retained_categories_change_audio(
+    name: str, first_raw: float, second_raw: float
+) -> None:
+    """Each retained host category produces distinct single-note audio.
+
+    :param name: Host parameter under comparison.
+    :param first_raw: First retained normalized value.
+    :param second_raw: Second retained normalized value.
+    """
+    if platform.machine() != "x86_64":
+        pytest.skip("Ultramaster KR-106 is source-built only on x86_64")
+    assert _PLUGIN_PATH.is_dir(), f"Ultramaster KR-106 is not installed at {_PLUGIN_PATH}"
+
+    synth_params = {
+        "attack": 0.0,
+        "chorus_i": 0.0,
+        "chorus_ii": 0.0,
+        "dco_noise": 0.0,
+        "decay": 0.2,
+        "hpf": 1.0 / 3.0,
+        "master_volume": 0.25,
+        "porta_rate": 1.0,
+        "pulse": 1.0,
+        "release": 0.1,
+        "saw": 1.0,
+        "sustain": 0.8,
+        "vcf_env": 0.4,
+        "vcf_freq": 0.45,
+        "vcf_res": 0.7,
+        "volume": 0.5,
+    }
+    with as_file(param_map("ultramaster_kr106_single_note")) as path:
+        joint_map = load_param_map(path)
+    renderer = DawDreamerRenderer(
+        plugin_path=str(_PLUGIN_PATH),
+        sample_rate=44_100,
+        channels=2,
+        signal_duration_seconds=1.0,
+        plugin_state_path=str(
+            _REPO_ROOT / plugin_state_paths["ultramaster_kr106_single_note"]
+        ),
+        parameter_map=joint_map,
+        reload_plugin_each_render=True,
+    )
+
+    first = renderer.render({**synth_params, name: first_raw}, 60, 100, (0.05, 0.75))
+    second = renderer.render({**synth_params, name: second_raw}, 60, 100, (0.05, 0.75))
+    relative_difference = np.linalg.norm(first - second) / max(
+        np.linalg.norm(first), np.linalg.norm(second)
+    )
+
+    assert np.max(np.abs(first)) > 1e-4
+    assert relative_difference > 1e-3
 
 
 @pytest.mark.slow
