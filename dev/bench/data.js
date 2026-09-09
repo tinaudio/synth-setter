@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788974205788,
+  "lastUpdate": 1788974209977,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -26204,6 +26204,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.820530444999985,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ad0ca66a0fbbb176ef10b01223d802716f47f07d",
+          "message": "internal-feat(evaluation): archive inline oracle probes in R2 (#3293)\n\n* internal-feat(evaluation): archive inline oracle probes in R2\n\n* internal-fix(evaluation): publish complete oracle probe snapshots\n\n* internal-fix(evaluation): require opt-in oracle probe uploads\n\n* internal-fix(evaluation): refresh rebased test contracts",
+          "timestamp": "2026-09-09T12:01:39-04:00",
+          "tree_id": "29e199646c3b3814713e85e43deac33aff4acd77",
+          "url": "https://github.com/tinaudio/synth-setter/commit/ad0ca66a0fbbb176ef10b01223d802716f47f07d"
+        },
+        "date": 1788974209083,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 7.972959995269775,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 12.956475746259093,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08214280754327774,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.005583584308624268,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.1143112182617188,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.832325294800011,
             "unit": "seconds"
           }
         ]
