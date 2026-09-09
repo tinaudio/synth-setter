@@ -46,6 +46,8 @@ from synth_setter.data.vst.shapes import (
     MEANAUDIO_16K_FIELD,
     NUM_SKETCH_CONTROLS,
     PARAM_ARRAY_FIELD,
+    PUPUJEPA_LARGE_FIELD,
+    PUPUJEPA_TINY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
     SHIFT_FIELD,
@@ -54,8 +56,6 @@ from synth_setter.data.vst.shapes import (
     SKETCH_VEC_CHILD,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
-    PUPUJEPA_LARGE_FIELD,
-    PUPUJEPA_TINY_FIELD,
     mel_n_frames_from_samples,
 )
 from synth_setter.model_cache import checkpoint_tree_sha256
@@ -75,18 +75,6 @@ from synth_setter.pipeline.data.meanaudio import (
     load_meanaudio_audio_encoder,
     meanaudio_artifact_digest,
 )
-from synth_setter.pipeline.data.pupujepa import (
-    PupuJepaEncodeFn,
-    encode_pupujepa_column,
-    encode_pupujepa_large_column,
-    load_pupujepa_audio_encoder,
-)
-from synth_setter.pupujepa import (
-    DEFAULT_PUPUJEPA_CHECKPOINT,
-    PUPUJEPA_LARGE_EMBEDDING_DIM,
-    PUPUJEPA_TINY_EMBEDDING_DIM,
-    pupujepa_artifact_digest,
-)
 from synth_setter.pipeline.data.param_shift import (
     PARAM_SHIFT_INPUT_FIELDS,
     ROW_ID_FIELD,
@@ -94,6 +82,12 @@ from synth_setter.pipeline.data.param_shift import (
     encode_param_shift_column,
     load_param_shifter,
     param_shift_policy_values,
+)
+from synth_setter.pipeline.data.pupujepa import (
+    PupuJepaEncodeFn,
+    encode_pupujepa_column,
+    encode_pupujepa_large_column,
+    load_pupujepa_audio_encoder,
 )
 from synth_setter.pipeline.data.ssondo import (
     DEFAULT_SSONDO_CHECKPOINT,
@@ -103,6 +97,12 @@ from synth_setter.pipeline.data.ssondo import (
     SSONDOEncodeFn,
     load_ssondo_audio_encoder,
     resolve_ssondo_checkpoint,
+)
+from synth_setter.pupujepa import (
+    DEFAULT_PUPUJEPA_CHECKPOINT,
+    PUPUJEPA_LARGE_EMBEDDING_DIM,
+    PUPUJEPA_TINY_EMBEDDING_DIM,
+    pupujepa_artifact_digest,
 )
 from synth_setter.same import (
     DEFAULT_SAME_L_CHECKPOINT,
@@ -114,6 +114,8 @@ from synth_setter.same import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
+from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
+from synth_setter.utils.logging_utils import log_wandb_provenance
 from synth_setter.workspace import operator_workspace
 
 if TYPE_CHECKING:
@@ -996,8 +998,8 @@ def _encode_sketch_column(
     """
     import torch
 
-    from synth_setter.sketch import pool_sketch_controls
     from synth_setter.pipeline.data.lance_shard import sketch_struct_array
+    from synth_setter.sketch import pool_sketch_controls
 
     audio = sources[AUDIO_FIELD]
     encode = cast("SketchEncodeFn", encoder)
@@ -2036,6 +2038,22 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     return lance.dataset(uri)
 
 
+def _assert_no_active_wandb_run(cfg: DictConfig) -> None:
+    """Reject a configured W&B logger when this process already owns a run.
+
+    :param cfg: Hydra-composed endpoint config.
+    :raises RuntimeError: If a configured W&B logger would reuse an active run.
+    """
+    logger_cfg = cfg.get("logger")
+    if not logger_cfg or "wandb" not in logger_cfg:
+        return
+
+    import wandb
+
+    if wandb.run is not None:
+        raise RuntimeError("add-embeddings cannot reuse an active W&B run")
+
+
 @hydra.main(
     version_base="1.3", config_path="pkg://synth_setter.configs", config_name="add_embeddings"
 )
@@ -2046,14 +2064,24 @@ def _hydra_main(cfg: DictConfig) -> None:
     """
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
+    loggers = []
+    status = "failed"
     try:
         config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+        _assert_no_active_wandb_run(cfg)
+        loggers = instantiate_loggers(cfg.get("logger"))
+        for run_logger in loggers:
+            run_logger.log_hyperparams(config.model_dump(mode="json"))
+        log_wandb_provenance()
         _configure_lance_logging(debug=config.debug)
         logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
         add_embeddings(config)
+        status = "success"
     except (OSError, ValueError, RuntimeError, ImportError, subprocess.CalledProcessError) as exc:
         logger.error("add_embeddings_failed", uri=cfg.get("lance_uri"), error=str(exc))
         sys.exit(1)
+    finally:
+        close_loggers(loggers, status)
 
 
 def main() -> None:
