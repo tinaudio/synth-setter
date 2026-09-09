@@ -525,6 +525,56 @@ def test_cli_inconsistent_options_fail_before_inference(
     assert message in result.output
 
 
+@pytest.mark.parametrize(
+    ("device", "message"),
+    [
+        ("cuda", "browser inference requires --device cpu or auto"),
+        ("cpu", "Install browser assets"),
+    ],
+)
+def test_cli_browser_preconditions_fail_without_creating_arm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, device: str, message: str
+) -> None:
+    """Browser prerequisites fail before loading checkpoints or decoding audio.
+
+    :param tmp_path: Unread input paths and absent output destination.
+    :param monkeypatch: Points runtime discovery at an uninstalled asset directory.
+    :param device: Explicit browser preprocessing device request.
+    :param message: Actionable prerequisite failure expected before any model work.
+    """
+    from synth_setter.evaluation import browser_flow
+
+    monkeypatch.setattr(browser_flow, "_WEB_ROOT", tmp_path / "uninstalled-web")
+    source = tmp_path / "input.wav"
+    source.touch()
+    output = tmp_path / "evaluation"
+    result = CliRunner().invoke(
+        main,
+        [
+            str(source),
+            str(source),
+            "--checkpoint",
+            str(tmp_path / "missing.ckpt"),
+            "--checkpoint-sha256",
+            "0" * 64,
+            "--stats",
+            str(tmp_path / "missing.npz"),
+            "--stats-sha256",
+            "0" * 64,
+            "--inference-runtime",
+            "browser",
+            "--device",
+            device,
+            "--output-dir",
+            str(output),
+            "--no-upload",
+        ],
+    )
+    assert result.exit_code != 0
+    assert message in result.output
+    assert not (output / "arms").exists()
+
+
 def test_cli_local_grid_writes_every_arm_with_shared_noise(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

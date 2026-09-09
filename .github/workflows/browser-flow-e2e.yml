@@ -73,20 +73,25 @@ jobs:
           rclone lsd --checksum r2:experiments/browser-evaluation >/dev/null
       - name: Run browser sampler unit contracts
         run: npm test --prefix src/synth_setter/web
-      - name: Run real browser production path
+      - name: Run browser contracts and real production path
         run: |
           mkdir -p logs
-          uv run --extra cpu pytest tests/integration/test_browser_surgepy_e2e.py -v \
+          uv run --extra cpu pytest tests/models/test_flow_onnx.py \
+            tests/evaluation/test_browser_flow.py tests/test_sketch_render.py \
+            tests/integration/test_browser_surgepy_e2e.py -v \
             --basetemp=logs/browser-e2e --junitxml=logs/browser-e2e.xml \
             --cov=synth_setter.evaluation.browser_flow --cov=synth_setter.models.flow_onnx \
-            --cov-report=xml:coverage.xml
+            --cov=synth_setter.cli.sketch_render --cov-report=xml:coverage.xml
       - name: Require an executed E2E test
         run: |
           uv run --extra cpu python - <<'PY'
           import xml.etree.ElementTree as ET
 
-          cases = ET.parse("logs/browser-e2e.xml").findall(".//testcase")
-          assert len(cases) == 1, "Expected exactly one browser E2E test"
+          cases = [
+              case for case in ET.parse("logs/browser-e2e.xml").findall(".//testcase")
+              if case.get("classname") == "tests.integration.test_browser_surgepy_e2e"
+          ]
+          assert len(cases) == 1, "Expected the real browser E2E test"
           assert cases[0].find("skipped") is None, "Browser E2E must execute, not skip"
           PY
       - name: Upload production-path evidence
