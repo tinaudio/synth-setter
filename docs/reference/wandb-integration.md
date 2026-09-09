@@ -175,6 +175,8 @@ When `synth-setter-eval mode=predict evaluation.compute_metrics=true` runs and a
 | `audio/mss_std`            | Same, standard deviation                                                                                                    |
 | `audio/wmfcc_mean`         | DTW-aligned MFCC distance, mean                                                                                             |
 | `audio/wmfcc_std`          | Same, standard deviation                                                                                                    |
+| `audio/mldr_mean`          | Multi-scale loudness dynamic range distance ([DiffVox](https://arxiv.org/abs/2504.14735) eq. 15), mean                      |
+| `audio/mldr_std`           | Same, standard deviation                                                                                                    |
 | `audio/sot_mean`           | Spectral optimal-transport distance, mean                                                                                   |
 | `audio/sot_std`            | Same, standard deviation                                                                                                    |
 | `audio/rms_mean`           | RMS envelope cosine similarity, mean                                                                                        |

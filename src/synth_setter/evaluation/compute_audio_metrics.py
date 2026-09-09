@@ -21,8 +21,13 @@ We compute the following metrics:
     literature for an option here?). cosine sim.
 5. amp env: compute RMS amp envelopes (50ms window, 25ms hop). take cosine similarity
     (i.e. normalized dot prod).
-6. pyFDN only: octave-band RT60 natural-log RMSE.
-7. pyFDN only: octave-band energy-decay-curve RMSE in dB.
+6. SOT: spectral optimal transport — per-frame Wasserstein-1 distance between
+    sum-normalised STFT magnitudes (50ms window, 20ms hop), averaged over frames.
+7. MLDR: multi-scale loudness dynamic range (DiffVox, arXiv:2504.14735 eq. 14-15) —
+    L1 distance of the log ratio between short- and long-window energy envelopes at
+    (50ms, 1s) and (100ms, 2s) integration times.
+8. pyFDN only: octave-band RT60 natural-log RMSE.
+9. pyFDN only: octave-band energy-decay-curve RMSE in dB.
 """
 
 import math
@@ -44,6 +49,7 @@ from kymatio.numpy import Scattering1D
 from loguru import logger
 from pedalboard.io import AudioFile
 from pyFDN import MatchEnergyDecay, Response, estimate_rt_bands
+from scipy.signal import lfilter
 
 # Column headers load_aggregated_metrics requires of the aggregated-metrics CSVs;
 # the write sites below still spell them literally.
@@ -439,6 +445,77 @@ def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100
     return cosine_sim.mean()
 
 
+# (short, long) integration times in ms — DiffVox's ``s_taus``/``l_taus`` for the MLDR loss.
+LDR_SCALES_MS: tuple[tuple[float, float], ...] = ((50.0, 1000.0), (100.0, 2000.0))
+# Energy floor before the log, matching the reference implementation's ``clamp_min``.
+_LDR_ENERGY_FLOOR = 1e-8
+# Numerator used by torchcomp's ``ms2coef``.
+_TORCHCOMP_MS_TO_COEF = 2200.0
+
+
+def _one_pole_average(energy: np.ndarray, time_ms: float, sample_rate: float) -> np.ndarray:
+    """Return torchcomp's running-average envelope of ``energy`` along the last axis.
+
+    :param energy: Non-negative signal, any leading shape.
+    :param time_ms: Integration time in ms, converted with torchcomp's ``ms2coef``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Smoothed signal, same shape as ``energy``.
+    """
+    coef = 1.0 - math.exp(-_TORCHCOMP_MS_TO_COEF / (time_ms * sample_rate))
+    return lfilter([coef], [1.0, coef - 1.0], energy, axis=-1)
+
+
+def _loudness_dynamic_range(
+    energy: np.ndarray, short_ms: float, long_ms: float, sample_rate: float
+) -> np.ndarray:
+    """Return the per-sample log ratio of the short to the delayed long energy envelope.
+
+    The long envelope is advanced by half the integration-time gap (circularly, as the
+    reference implementation's ``roll`` does) so both envelopes centre on the same instant.
+    The roll is per row: DiffVox rolls the flattened tensor, which bleeds each channel's
+    tail into the next channel and departs from the paper's per-signal definition.
+
+    :param energy: Floored squared signal, shape ``(rows, T)``.
+    :param short_ms: Short integration time in ms.
+    :param long_ms: Long integration time in ms.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Log loudness dynamic range, shape ``(rows, T)``.
+    """
+    half_gap_seconds = (long_ms - short_ms) / 1000.0 / 2.0
+    align_shift = int(sample_rate * half_gap_seconds)
+    short_env = _one_pole_average(energy, short_ms, sample_rate)
+    long_env = np.roll(_one_pole_average(energy, long_ms, sample_rate), -align_shift, axis=-1)
+    return np.log(short_env) - np.log(long_env)
+
+
+def compute_mldr(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
+    """Return the multi-scale loudness dynamic range distance between ``target`` and ``pred``.
+
+    Sums, over ``LDR_SCALES_MS``, the mean absolute difference of the two signals' log
+    short-to-long energy-envelope ratios (DiffVox eq. 15). Gain-invariant by construction.
+
+    :param target: Target audio, shape ``(C, T)``; channels are scored as independent rows.
+    :param pred: Predicted audio, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz; governs the envelope time constants.
+    :returns: Non-negative distance in natural-log units.
+    :raises ValueError: ``target`` and ``pred`` are not two-dimensional arrays of one shape.
+    """
+    logger.info("Computing MLDR...")
+    if target.ndim != 2 or target.shape != pred.shape:
+        raise ValueError(
+            f"target and pred must share one (C, T) shape; got {target.shape} and {pred.shape}"
+        )
+    target_energy = np.maximum(np.square(target, dtype=np.float64), _LDR_ENERGY_FLOOR)
+    pred_energy = np.maximum(np.square(pred, dtype=np.float64), _LDR_ENERGY_FLOOR)
+
+    dist = 0.0
+    for short_ms, long_ms in LDR_SCALES_MS:
+        target_ldr = _loudness_dynamic_range(target_energy, short_ms, long_ms, sample_rate)
+        pred_ldr = _loudness_dynamic_range(pred_energy, short_ms, long_ms, sample_rate)
+        dist += float(np.mean(np.abs(target_ldr - pred_ldr)))
+    return dist
+
+
 def compute_metrics_on_dir(
     audio_dir: Path, renderer_backend: ReverbMetricBackend | None = None
 ) -> dict[str, float]:
@@ -463,6 +540,7 @@ def compute_metrics_on_dir(
         "wmfcc": compute_wmfcc(target, pred, target_sample_rate),
         "sot": compute_sot(target, pred, target_sample_rate),
         "rms": compute_rms(target, pred, target_sample_rate),
+        "mldr": compute_mldr(target, pred, target_sample_rate),
     }
     if renderer_backend == "pyfdn":
         metrics.update(
