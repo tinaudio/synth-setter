@@ -17,6 +17,7 @@ import copy
 import math
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import cast
 
 import torch
 from beartype import beartype
@@ -327,7 +328,14 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
             conditioning = self.encoder(self._get_conditioning_from_batch(batch))  # pyright: ignore[reportArgumentType]
             conditioning = conditioning.repeat_interleave(group, dim=0)
             endpoints = self._sample_endpoints(conditioning)
-            target = batch[self._reward_target_key].repeat_interleave(group, dim=0)
+            raw_target = batch[self._reward_target_key]
+            prepare_target = getattr(self.reward, "prepare_target", None)
+            target = (
+                cast(Tensor, prepare_target(raw_target))
+                if callable(prepare_target)
+                else raw_target
+            )
+            target = target.repeat_interleave(group, dim=0)
             rewards = self.reward(endpoints, target)
             advantages = self.reward_multiplier * group_relative_advantages(rewards, group)
 

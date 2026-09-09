@@ -48,13 +48,28 @@ class _NormReward(torch.nn.Module):
 
     target_key = "audio"
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.prepared_target: torch.Tensor | None = None
+        self.scored_target: torch.Tensor | None = None
+
+    def prepare_target(self, target: torch.Tensor) -> torch.Tensor:
+        """Record and return the ungrouped target.
+
+        :param target: Original batch target rows.
+        :returns: The unchanged target rows.
+        """
+        self.prepared_target = target.clone()
+        return target
+
     def forward(self, theta: torch.Tensor, target_audio: torch.Tensor) -> torch.Tensor:
         """Return the negative row norm.
 
         :param theta: Sampled rows.
-        :param target_audio: Ignored.
+        :param target_audio: Prepared target rows repeated per candidate group.
         :returns: Rewards shaped ``(batch,)``.
         """
+        self.scored_target = target_audio.clone()
         return -theta.norm(dim=-1)
 
 
@@ -245,6 +260,53 @@ def test_ram_training_step_with_constant_reward_has_zero_loss_at_initialisation(
     loss = module.training_step(_batch(), 0)
 
     torch.testing.assert_close(loss, torch.tensor(0.0))
+
+
+def test_ram_training_step_prepares_targets_before_candidate_grouping(tmp_path: Path) -> None:
+    """Target preparation sees original rows before each result repeats across its candidates.
+
+    :param tmp_path: Directory for the base checkpoint.
+    """
+    reward = _NormReward()
+    module = _ram(
+        _base_checkpoint(tmp_path),
+        overrides={"num_samples_per_row": 3, "reward": reward},
+    )
+    module.log = lambda *args, **kwargs: None  # pyright: ignore[reportAttributeAccessIssue]
+    batch = _batch(2)
+
+    module.training_step(batch, 0)
+
+    torch.testing.assert_close(reward.prepared_target, batch["audio"])
+    torch.testing.assert_close(
+        reward.scored_target,
+        batch["audio"].repeat_interleave(3, dim=0),
+    )
+
+
+def test_ram_training_step_keeps_all_configured_noise_draws(tmp_path: Path) -> None:
+    """The policy sees one training row per candidate and analytic noise draw.
+
+    :param tmp_path: Directory for the base checkpoint.
+    """
+    module = _ram(
+        _base_checkpoint(tmp_path),
+        overrides={
+            "num_samples_per_row": 3,
+            "num_targets_per_sample": 4,
+            "reward": _ConstantReward(),
+        },
+    )
+    module.log = lambda *args, **kwargs: None  # pyright: ignore[reportAttributeAccessIssue]
+    policy_batch_sizes: list[int] = []
+    hook = module.vector_field.register_forward_pre_hook(
+        lambda _module, args: policy_batch_sizes.append(args[0].shape[0])
+    )
+
+    module.training_step(_batch(2), 0)
+    hook.remove()
+
+    assert policy_batch_sizes == [24]
 
 
 def test_ram_training_step_logs_the_mean_reward(tmp_path: Path) -> None:

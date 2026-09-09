@@ -1,12 +1,15 @@
 """Behaviour tests for the renderer-backed reward that scores sampled rows against target rows."""
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
 import torch
 
 from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.models.components.audio_distance import MultiScaleSpectralDistance
 from synth_setter.models.components.rendered_reward import SynthRenderedReward
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -15,6 +18,44 @@ from synth_setter.synth_spec import SYNTHS
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SAMPLE_RATE = 16_000
 _SIGNAL_DURATION_SECONDS = 1.0
+
+
+class _FirstSampleDistance(torch.nn.Module):
+    """Measure the absolute difference between each waveform's first sample."""
+
+    def forward(self, rendered: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Return one absolute first-sample difference per row.
+
+        :param rendered: Candidate waveforms.
+        :param target: Target waveforms.
+        :returns: Per-row absolute differences.
+        """
+        return (rendered[:, 0] - target[:, 0]).abs()
+
+
+class _SequentialRenderer:
+    """Return a different constant waveform for every render call."""
+
+    def __init__(self) -> None:
+        self.render_count = 0
+
+    def render(
+        self,
+        params: Mapping[str, float],
+        pitch: int,
+        velocity: int,
+        note_window: tuple[float, float],
+    ) -> np.ndarray:
+        """Render a waveform containing this call's one-based sequence number.
+
+        :param params: Ignored synth parameters.
+        :param pitch: Ignored MIDI pitch.
+        :param velocity: Ignored MIDI velocity.
+        :param note_window: Ignored note window.
+        :returns: Mono waveform with a call-specific constant value.
+        """
+        self.render_count += 1
+        return np.full((1, _SAMPLE_RATE), self.render_count, dtype=np.float32)
 
 
 def _surgepy_synth() -> dict[str, object]:
@@ -77,13 +118,30 @@ def _rows(count: int, seed: int) -> torch.Tensor:
     return rows
 
 
+def test_synth_rendered_reward_reuses_one_target_render_per_original_row() -> None:
+    """Each target row renders once, while every grouped candidate renders independently."""
+    reward = _reward()
+    renderer = _SequentialRenderer()
+    reward._renderer = cast(AudioRenderer, renderer)  # pyright: ignore[reportPrivateUsage]
+    reward.distance = _FirstSampleDistance()
+    target_rows = _rows(1, seed=2).expand(2, -1)
+    candidates = _rows(6, seed=3)
+
+    target_audio = reward.prepare_target(target_rows).repeat_interleave(3, dim=0)
+    rewards = reward(candidates, target_audio)
+
+    torch.testing.assert_close(rewards, torch.tensor([-2.0, -3.0, -4.0, -4.0, -5.0, -6.0]))
+    assert renderer.render_count == 8
+
+
 @pytest.mark.requires_surgepy
 def test_synth_rendered_reward_prefers_the_row_that_matches_the_target() -> None:
     """The reward is non-positive and highest where sampled and target rows coincide."""
     rows = _rows(2, seed=3)
     target = rows[:1].expand(2, -1)
 
-    rewards = _reward()(rows, target)
+    reward = _reward()
+    rewards = reward(rows, reward.prepare_target(target))
 
     assert rewards.shape == (2,)
     assert rewards[0] > rewards[1]
@@ -100,8 +158,9 @@ def test_synth_rendered_reward_scores_each_row_against_its_own_target() -> None:
     rows = _rows(3, seed=4)
     reward = _reward()
 
-    aligned = reward(rows, rows)
-    swapped = reward(rows, torch.stack([rows[0], rows[2], rows[2]]))
+    aligned = reward(rows, reward.prepare_target(rows))
+    swapped_params = torch.stack([rows[0], rows[2], rows[2]])
+    swapped = reward(rows, reward.prepare_target(swapped_params))
 
     render_floor = (aligned[[0, 2]] - swapped[[0, 2]]).abs().max()
     assert swapped[1] < aligned[1]
@@ -113,7 +172,8 @@ def test_synth_rendered_reward_renders_out_of_range_rows_without_raising() -> No
     """Sampled rows can leave ``[-1, 1]``; the reward clamps them into the renderable domain."""
     rows = _rows(2, seed=5) * 3.0
 
-    rewards = _reward()(rows, _rows(2, seed=6))
+    reward = _reward()
+    rewards = reward(rows, reward.prepare_target(_rows(2, seed=6)))
 
     assert torch.isfinite(rewards).all()
 

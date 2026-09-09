@@ -1,8 +1,8 @@
 """Black-box rewards that score sampled parameter rows by re-rendering them.
 
-Each reward declares ``target_key``, the batch column it scores a sampled row against:
-``audio`` when the datamodule carries the target waveform, ``params`` when only the target
-row is stored and the target must be re-rendered alongside the sample.
+Each reward declares ``target_key``, the batch column it prepares before candidate grouping:
+``audio`` when the datamodule carries the target waveform, ``params`` when the target row must
+be rendered first.
 """
 
 from typing import Any, ClassVar
@@ -70,6 +70,17 @@ class RenderedAudioReward(nn.Module):
         self.render_batch_size = render_batch_size
 
     @jaxtyped(typechecker=beartype)
+    def prepare_target(
+        self, target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE]
+    ) -> Float[Tensor, _BATCH_AUDIO_SHAPE]:
+        """Return stored target waveforms unchanged before candidate grouping.
+
+        :param target_audio: Observed audio with one waveform per original row.
+        :returns: The same target waveforms.
+        """
+        return target_audio
+
+    @jaxtyped(typechecker=beartype)
     @torch.no_grad()
     def forward(
         self,
@@ -101,10 +112,11 @@ class RenderedAudioReward(nn.Module):
 
 
 class SynthRenderedReward(nn.Module):
-    """Negative audio distance between a sampled row and its target row, both re-rendered.
+    """Negative audio distance between rendered samples and prepared target renders.
 
     Renders through whichever backend the render config names (surgepy in-process for Surge), so
-    the reward needs no stored target audio and both sides share one render path.
+    the reward needs no stored target audio. Each original target row renders once before candidate
+    grouping; candidate rows still render independently.
 
     .. attribute :: target_key
 
@@ -173,18 +185,30 @@ class SynthRenderedReward(nn.Module):
 
     @jaxtyped(typechecker=beartype)
     @torch.no_grad()
+    def prepare_target(
+        self, target_params: Float[Tensor, _BATCH_PARAMS_SHAPE]
+    ) -> Float[Tensor, _BATCH_AUDIO_SHAPE]:
+        """Render each original target parameter row once.
+
+        :param target_params: Target parameters in model space before candidate grouping.
+        :returns: One target waveform per original row.
+        """
+        return self._render_rows(target_params)
+
+    @jaxtyped(typechecker=beartype)
+    @torch.no_grad()
     def forward(
         self,
         theta: Float[Tensor, _BATCH_PARAMS_SHAPE],
-        target_params: Float[Tensor, _BATCH_PARAMS_SHAPE],
+        target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
     ) -> Float[Tensor, _BATCH_SHAPE]:
-        """Render both rows and score the sample against its own target.
+        """Render sampled rows and score each against its prepared target waveform.
 
         :param theta: Sampled parameters in model space.
-        :param target_params: Target parameters in model space, one per sampled row.
+        :param target_audio: Prepared target waveforms, one per sampled row.
         :returns: Per-row reward, higher for renders closer to the target's render.
         """
-        return -self.distance(self._render_rows(theta), self._render_rows(target_params))
+        return -self.distance(self._render_rows(theta), target_audio)
 
 
 @jaxtyped(typechecker=beartype)

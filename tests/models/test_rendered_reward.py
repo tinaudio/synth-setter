@@ -30,6 +30,15 @@ def _target_audio(params: torch.Tensor) -> torch.Tensor:
     )
 
 
+def test_rendered_audio_reward_preserves_stored_target_waveforms() -> None:
+    """Stored torchsynth audio needs no preparation before candidate grouping."""
+    target = _target_audio(_audible_model_rows(2, seed=2))
+
+    prepared = _reward(render_batch_size=2).prepare_target(target)
+
+    assert prepared is target
+
+
 def test_rendered_audio_reward_prefers_the_row_that_produced_the_target() -> None:
     """The reward is non-positive and highest for the parameters the target was rendered from."""
     rows = _audible_model_rows(2, seed=3)
