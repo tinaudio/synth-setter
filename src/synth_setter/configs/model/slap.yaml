@@ -1,7 +1,7 @@
 _target_: synth_setter.models.slap_module.SLAPModule
 
 audio_encoder: ???
-text_encoder: ???
+param_encoder: ???
 
 loss_fn:
   _target_: synth_setter.models.components.slap.BYOLLoss

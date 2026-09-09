@@ -21,14 +21,25 @@ We compute the following metrics:
     literature for an option here?). cosine sim.
 5. amp env: compute RMS amp envelopes (50ms window, 25ms hop). take cosine similarity
     (i.e. normalized dot prod).
-6. pyFDN only: octave-band RT60 natural-log RMSE.
-7. pyFDN only: octave-band energy-decay-curve RMSE in dB.
+6. SOT: spectral optimal transport — per-frame Wasserstein-1 distance between
+    sum-normalised STFT magnitudes (50ms window, 20ms hop), averaged over frames.
+7. MLDR: multi-scale loudness dynamic range (DiffVox, arXiv:2504.14735 eq. 14-15) —
+    L1 distance of the log ratio between short- and long-window energy envelopes at
+    (50ms, 1s) and (100ms, 2s) integration times.
+8. pyFDN only: octave-band RT60 natural-log RMSE.
+9. pyFDN only: octave-band energy-decay-curve RMSE in dB.
+10. pyFDN only (Götz et al., arXiv:2510.23158): octave-band T30 mean absolute
+    percentage error and C50 mean absolute error in dB per sample, plus per-band
+    Pearson correlation of both parameters across the dataset.
+11. ``--fad``: Fréchet Audio Distance between the target and predicted sets on
+    CLAP embeddings (dataset-level, one row in the aggregate).
 """
 
 import math
 import multiprocessing
 import os
 import shutil
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Literal
@@ -44,11 +55,39 @@ from kymatio.numpy import Scattering1D
 from loguru import logger
 from pedalboard.io import AudioFile
 from pyFDN import MatchEnergyDecay, Response, estimate_rt_bands
+from scipy.signal import lfilter
+
+from synth_setter.evaluation import acoustic_parameters
 
 # Column headers load_aggregated_metrics requires of the aggregated-metrics CSVs;
 # the write sites below still spell them literally.
 AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
 type ReverbMetricBackend = Literal["pyfdn"]
+type AudioEncodeFn = Callable[[np.ndarray, int], np.ndarray]
+
+# Per-sample columns holding raw octave-band parameters; they feed the dataset-level
+# Pearson rows instead of the mean/std aggregate.
+_ACOUSTIC_PARAMETER_PREFIX = "acoustic_param/"
+_ACOUSTIC_PARAMETER_NAMES: tuple[str, ...] = ("t30", "c50")
+
+
+def _acoustic_parameter_column(name: str, centre_hz: int, side: str) -> str:
+    """Return the per-sample column holding one side's octave-band parameter.
+
+    :param name: Parameter name, ``"t30"`` or ``"c50"``.
+    :param centre_hz: Octave-band centre frequency in Hz.
+    :param side: ``"target"`` or ``"pred"``.
+    :returns: Column name under :data:`_ACOUSTIC_PARAMETER_PREFIX`.
+    """
+    return f"{_ACOUSTIC_PARAMETER_PREFIX}{name}/{centre_hz}hz/{side}"
+
+
+ACOUSTIC_PARAMETER_COLUMNS: tuple[str, ...] = tuple(
+    _acoustic_parameter_column(name, centre, side)
+    for name in _ACOUSTIC_PARAMETER_NAMES
+    for centre in acoustic_parameters.BAND_CENTRES_HZ
+    for side in ("target", "pred")
+)
 
 
 def subdir_matches_pattern(sample_dir: Path) -> bool:
@@ -400,6 +439,84 @@ def compute_octave_edc_rmse_db(
     return value
 
 
+def compute_acoustic_parameter_metrics(
+    target: np.ndarray, pred: np.ndarray, sample_rate: float
+) -> dict[str, float]:
+    """Return Götz et al. T30/C50 errors plus the raw per-band parameters of both sides.
+
+    :param target: Target mono impulse response, shape ``(1, samples)``.
+    :param pred: Predicted mono impulse response, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: ``t30_mape``, ``c50_mae_db`` and one ``acoustic_param/...`` entry per
+        parameter, octave band and side; unfittable T30 bands read ``NaN``. Invalid
+        shapes and a T30 that fits on no band on both sides raise ``ValueError``.
+    """
+    target_ir, pred_ir = _paired_mono_impulse_responses(target, pred)
+    target_t30, _ = acoustic_parameters.octave_band_t30(target_ir, sample_rate)
+    pred_t30, _ = acoustic_parameters.octave_band_t30(pred_ir, sample_rate)
+    target_c50, _ = acoustic_parameters.octave_band_c50(target_ir, sample_rate)
+    pred_c50, _ = acoustic_parameters.octave_band_c50(pred_ir, sample_rate)
+    metrics = {
+        "t30_mape": acoustic_parameters.t30_mape(target_t30, pred_t30),
+        "c50_mae_db": acoustic_parameters.c50_mae_db(target_c50, pred_c50),
+    }
+    per_band = {"t30": (target_t30, pred_t30), "c50": (target_c50, pred_c50)}
+    for name, (target_values, pred_values) in per_band.items():
+        bands = zip(acoustic_parameters.BAND_CENTRES_HZ, target_values, pred_values, strict=True)
+        for centre, target_value, pred_value in bands:
+            metrics[_acoustic_parameter_column(name, centre, "target")] = float(target_value)
+            metrics[_acoustic_parameter_column(name, centre, "pred")] = float(pred_value)
+    return metrics
+
+
+def compute_acoustic_parameter_pcc(per_sample: pd.DataFrame) -> dict[str, float]:
+    """Return per-band Pearson correlation between target and predicted parameters.
+
+    :param per_sample: Per-sample metrics frame carrying ``acoustic_param/`` columns.
+    :returns: ``{"<param>_pcc_<centre>hz": r}`` for every band present in the frame.
+    """
+    pcc: dict[str, float] = {}
+    for name in _ACOUSTIC_PARAMETER_NAMES:
+        for centre in acoustic_parameters.BAND_CENTRES_HZ:
+            target_column = _acoustic_parameter_column(name, centre, "target")
+            if target_column not in per_sample.columns:
+                continue
+            pred_column = _acoustic_parameter_column(name, centre, "pred")
+            pcc[f"{name}_pcc_{centre}hz"] = acoustic_parameters.pearson_correlation(
+                per_sample[target_column].to_numpy(dtype=float),
+                per_sample[pred_column].to_numpy(dtype=float),
+            )
+    return pcc
+
+
+def _load_fad_encoder() -> AudioEncodeFn:
+    """Load the repo's CLAP audio encoder for Fréchet Audio Distance.
+
+    :returns: Encoder mapping ``(B, T)`` mono audio at a sample rate to ``(B, D)``.
+    """
+    from synth_setter.pipeline.data.add_embeddings import load_clap_audio_encoder
+
+    return load_clap_audio_encoder()
+
+
+def compute_fad(audio_dirs: list[Path], encode: AudioEncodeFn) -> float:
+    """Return the Fréchet Audio Distance between the target and predicted sets.
+
+    :param audio_dirs: Sample dirs each containing ``target.wav`` and ``pred.wav``.
+    :param encode: Audio encoder mapping ``(B, T)`` mono audio to ``(B, D)`` embeddings.
+    :returns: Fréchet distance between Gaussian fits of the two embedding sets.
+    """
+    embeddings: dict[str, list[np.ndarray]] = {"target": [], "pred": []}
+    for sample_dir in audio_dirs:
+        for side, rows in embeddings.items():
+            with AudioFile(str(sample_dir / f"{side}.wav")) as audio_file:
+                mono = audio_file.read(audio_file.frames).mean(axis=0, keepdims=True)
+                rows.append(encode(mono, int(audio_file.samplerate)))
+    return acoustic_parameters.frechet_distance(
+        np.concatenate(embeddings["target"]), np.concatenate(embeddings["pred"])
+    )
+
+
 def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
     """Return the cosine similarity of the RMS amplitude envelopes of ``target`` and ``pred``.
 
@@ -439,6 +556,77 @@ def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100
     return cosine_sim.mean()
 
 
+# (short, long) integration times in ms — DiffVox's ``s_taus``/``l_taus`` for the MLDR loss.
+LDR_SCALES_MS: tuple[tuple[float, float], ...] = ((50.0, 1000.0), (100.0, 2000.0))
+# Energy floor before the log, matching the reference implementation's ``clamp_min``.
+_LDR_ENERGY_FLOOR = 1e-8
+# Numerator used by torchcomp's ``ms2coef``.
+_TORCHCOMP_MS_TO_COEF = 2200.0
+
+
+def _one_pole_average(energy: np.ndarray, time_ms: float, sample_rate: float) -> np.ndarray:
+    """Return torchcomp's running-average envelope of ``energy`` along the last axis.
+
+    :param energy: Non-negative signal, any leading shape.
+    :param time_ms: Integration time in ms, converted with torchcomp's ``ms2coef``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Smoothed signal, same shape as ``energy``.
+    """
+    coef = 1.0 - math.exp(-_TORCHCOMP_MS_TO_COEF / (time_ms * sample_rate))
+    return lfilter([coef], [1.0, coef - 1.0], energy, axis=-1)
+
+
+def _loudness_dynamic_range(
+    energy: np.ndarray, short_ms: float, long_ms: float, sample_rate: float
+) -> np.ndarray:
+    """Return the per-sample log ratio of the short to the delayed long energy envelope.
+
+    The long envelope is advanced by half the integration-time gap (circularly, as the
+    reference implementation's ``roll`` does) so both envelopes centre on the same instant.
+    The roll is per row: DiffVox rolls the flattened tensor, which bleeds each channel's
+    tail into the next channel and departs from the paper's per-signal definition.
+
+    :param energy: Floored squared signal, shape ``(rows, T)``.
+    :param short_ms: Short integration time in ms.
+    :param long_ms: Long integration time in ms.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Log loudness dynamic range, shape ``(rows, T)``.
+    """
+    half_gap_seconds = (long_ms - short_ms) / 1000.0 / 2.0
+    align_shift = int(sample_rate * half_gap_seconds)
+    short_env = _one_pole_average(energy, short_ms, sample_rate)
+    long_env = np.roll(_one_pole_average(energy, long_ms, sample_rate), -align_shift, axis=-1)
+    return np.log(short_env) - np.log(long_env)
+
+
+def compute_mldr(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
+    """Return the multi-scale loudness dynamic range distance between ``target`` and ``pred``.
+
+    Sums, over ``LDR_SCALES_MS``, the mean absolute difference of the two signals' log
+    short-to-long energy-envelope ratios (DiffVox eq. 15). Gain-invariant by construction.
+
+    :param target: Target audio, shape ``(C, T)``; channels are scored as independent rows.
+    :param pred: Predicted audio, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz; governs the envelope time constants.
+    :returns: Non-negative distance in natural-log units.
+    :raises ValueError: ``target`` and ``pred`` are not two-dimensional arrays of one shape.
+    """
+    logger.info("Computing MLDR...")
+    if target.ndim != 2 or target.shape != pred.shape:
+        raise ValueError(
+            f"target and pred must share one (C, T) shape; got {target.shape} and {pred.shape}"
+        )
+    target_energy = np.maximum(np.square(target, dtype=np.float64), _LDR_ENERGY_FLOOR)
+    pred_energy = np.maximum(np.square(pred, dtype=np.float64), _LDR_ENERGY_FLOOR)
+
+    dist = 0.0
+    for short_ms, long_ms in LDR_SCALES_MS:
+        target_ldr = _loudness_dynamic_range(target_energy, short_ms, long_ms, sample_rate)
+        pred_ldr = _loudness_dynamic_range(pred_energy, short_ms, long_ms, sample_rate)
+        dist += float(np.mean(np.abs(target_ldr - pred_ldr)))
+    return dist
+
+
 def compute_metrics_on_dir(
     audio_dir: Path, renderer_backend: ReverbMetricBackend | None = None
 ) -> dict[str, float]:
@@ -463,6 +651,7 @@ def compute_metrics_on_dir(
         "wmfcc": compute_wmfcc(target, pred, target_sample_rate),
         "sot": compute_sot(target, pred, target_sample_rate),
         "rms": compute_rms(target, pred, target_sample_rate),
+        "mldr": compute_mldr(target, pred, target_sample_rate),
     }
     if renderer_backend == "pyfdn":
         metrics.update(
@@ -473,6 +662,7 @@ def compute_metrics_on_dir(
                 "octave_edc_rmse_db": compute_octave_edc_rmse_db(target, pred, target_sample_rate),
             }
         )
+        metrics.update(compute_acoustic_parameter_metrics(target, pred, target_sample_rate))
     return metrics
 
 
@@ -623,22 +813,26 @@ def load_aggregated_metrics(csv_path: Path) -> dict[str, float]:
 @click.argument("output_dir", type=str, default="metrics")
 @click.option("--num_workers", "-w", type=click.IntRange(min=1), default=8)
 @click.option("--renderer-backend", type=click.Choice(["pyfdn"]), default=None)
+@click.option("--fad", is_flag=True, help="Add CLAP Fréchet Audio Distance (loads CLAP).")
 def main(
     audio_dir: str,
     output_dir: str,
     num_workers: int,
     renderer_backend: ReverbMetricBackend | None,
+    fad: bool,
 ) -> None:
     """Score rendered audio under ``audio_dir`` and write metrics to ``output_dir``.
 
     Runs the parallel per-sample pass writing ``metrics.csv`` and
-    ``aggregated_metrics.csv``.
+    ``aggregated_metrics.csv``. Dataset-level rows (per-band Pearson correlation,
+    ``fad_clap``) carry the statistic as ``mean`` and ``NaN`` as ``std``.
 
     :param audio_dir: Root containing per-sample subdirectories
         (each must have ``pred.wav`` and ``target.wav``).
     :param output_dir: Destination for CSV outputs.
     :param num_workers: Number of parallel worker processes.
     :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
+    :param fad: Add the CLAP Fréchet Audio Distance between the target and predicted sets.
     :raises ValueError: when no valid sample dirs are found or the input and output
         directories overlap.
     """
@@ -668,8 +862,16 @@ def main(
     df = _aggregate_metrics(audio_dirs, output_dir_path, num_workers, renderer_backend)
     df.to_csv(output_dir_path / "metrics.csv")
 
-    columnwise_means = df.mean(axis=0)
-    columnwise_stds = df.std(axis=0)
+    is_parameter_column = df.columns.str.startswith(_ACOUSTIC_PARAMETER_PREFIX)
+    scalar_metrics = df.loc[:, ~is_parameter_column]
+    columnwise_means = scalar_metrics.mean(axis=0)
+    columnwise_stds = scalar_metrics.std(axis=0)
+    dataset_level = compute_acoustic_parameter_pcc(df.loc[:, is_parameter_column])
+    if fad:
+        dataset_level["fad_clap"] = compute_fad(audio_dirs, _load_fad_encoder())
+    for name, value in dataset_level.items():
+        columnwise_means[name] = value
+        columnwise_stds[name] = float("nan")
     logger.info("metric means:\n{m}", m=columnwise_means.to_string())
     logger.info("metric stds:\n{s}", s=columnwise_stds.to_string())
 

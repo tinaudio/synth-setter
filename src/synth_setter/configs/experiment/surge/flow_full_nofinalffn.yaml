@@ -15,6 +15,3 @@ model:
   vector_field:
     projection:
       final_ffn: false
-
-tags:
-  - surge

@@ -148,7 +148,7 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
 @pytest.mark.slow
 @pytest.mark.parametrize(
     "cfg_slap_train_lance",
-    ["surge/slap_ast_audio_mlp_param", "surge/slap_ast_audio_transformer_param"],
+    ["surge/slap_ast_audio_vst_ff_param"],
     indirect=True,
 )
 def test_evaluate_slap_experiment_checkpoint_end_to_end(
@@ -199,12 +199,15 @@ def test_evaluate_slap_experiment_checkpoint_end_to_end(
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize(
+    "cfg_pyfdn_train", ["pyfdn/flow", "pyfdn/flow_cepstrum_online"], indirect=True
+)
 def test_evaluate_pyfdn_householder_checkpoint_logs_param_mse(
     cfg_pyfdn_train: DictConfig,
 ) -> None:
-    """Evaluate a real checkpoint through the fixed-Householder pyFDN config.
+    """Evaluate a real checkpoint through each fixed-Householder pyFDN conditioning path.
 
-    :param cfg_pyfdn_train: One-step fixed-Householder pyFDN configuration.
+    :param cfg_pyfdn_train: One-step stored-mel or cepstral pyFDN configuration.
     """
     HydraConfig().set_config(cfg_pyfdn_train)
     train(cfg_pyfdn_train)
@@ -1541,7 +1544,7 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
 
     assert metric_dict["audio/mss_mean"] == pytest.approx(0.5)
     assert metric_dict["audio/rms_std"] == pytest.approx(0.01)
-    for key in ("mss", "wmfcc", "sot", "rms"):
+    for key in ("mss", "wmfcc", "sot", "rms", "mldr"):
         for stat in ("mean", "std"):
             value = metric_dict[f"audio/{key}_{stat}"]
             assert isinstance(value, float) and math.isfinite(value)

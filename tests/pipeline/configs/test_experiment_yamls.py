@@ -111,7 +111,9 @@ def test_ultramaster_kr106_smoke_experiment_renders_twenty_lance_rows() -> None:
     spec = _compose_dataset_spec("generate_dataset/ultramaster-kr106-lance-smoke")
 
     assert spec.render.synth.name == "ultramaster_kr106"
-    assert spec.render.renderer_backend == "pedalboard"
+    assert spec.render.renderer_backend == "dawdreamer"
+    assert spec.render.gui_toggle_cadence == "never"
+    assert spec.render.plugin_reload_cadence == "render"
     assert spec.render.samples_per_shard == 20
     assert spec.train_val_test_sizes == (20, 0, 0)
 

@@ -80,12 +80,12 @@ from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.processes import collect_process_results
 from tests.helpers.subprocess_args import find_script_index
-from tests.helpers.wandb_offline import read_history_rows, read_run_project
+from tests.helpers.wandb_offline import read_history_rows, read_run_labels, read_run_project
 
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
 # only keys in ``metrics.json`` (see ``synth_setter.evaluation.compute_audio_metrics``).
-_ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms")
+_ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms", "mldr")
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _REAL_PLUGIN_VST3 = (
@@ -358,7 +358,13 @@ def test_cfg_dataset_default_plugin_reload_cadence_is_once(
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize(
+    ("project_env", "expected_project"),
+    [(None, "synth-setter-generate-dataset"), ("synth-setter-citest", "synth-setter-citest")],
+)
 def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
+    project_env: str | None,
+    expected_project: str,
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -375,6 +381,8 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     the assigned split dataset (#1776), and (3) a second ``from_hydra`` pass
     renders nothing because the probe finds all shards already staged.
 
+    :param project_env: Optional project override for isolated CI runs.
+    :param expected_project: Project persisted by the worker's W&B run.
     :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``
         and ``tmp_path``-pinned paths (the same ``tmp_path`` ``fake_r2_remote``
         backs ``r2:`` against).
@@ -385,7 +393,9 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     monkeypatch.setenv("WANDB_MODE", "offline")
-    monkeypatch.setenv("WANDB_PROJECT", "synth-setter-citest")
+    monkeypatch.delenv("WANDB_PROJECT", raising=False)
+    if project_env is not None:
+        monkeypatch.setenv("WANDB_PROJECT", project_env)
     monkeypatch.setattr(
         "synth_setter.pipeline.ci.validate_shard.LANCE_VALIDATION_BATCH_SIZE_BYTES",
         1,
@@ -427,6 +437,11 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
     wandb_binary = wandb_binaries[0]
     assert read_run_project(wandb_binary) == "synth-setter-citest"
+    assert read_run_labels(wandb_binary) == (
+        "generate-dataset-smoke-shard",
+        ("generate_dataset", "smoke-shard"),
+    )
+    assert read_run_project(wandb_binary) == expected_project
     rows = read_history_rows(
         wandb_binary,
         until=lambda scanned: (
@@ -862,15 +877,15 @@ def test_from_hydra_real_vst_lance_render_stages_then_resume_skips(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_from_hydra_real_kr106_writes_finite_consumable_lance_shard(
-    cfg_dataset_kr106_2m: DictConfig,
+def test_from_hydra_real_kr106_smoke_writes_finite_consumable_lance_shard(
+    cfg_dataset_kr106_smoke: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """The public operator renders, validates, and finalizes a real KR-106 row.
+    """The public operator renders and finalizes a real KR-106 DawDreamer row.
 
-    :param cfg_dataset_kr106_2m: Composed production-scale KR-106 experiment.
+    :param cfg_dataset_kr106_smoke: Composed KR-106 DawDreamer smoke experiment.
     :param fake_r2_remote: Local filesystem backing the real rclone transport.
     :param monkeypatch: Configures the single local worker process.
     :param tmp_path: Render and finalize workspace.
@@ -883,17 +898,16 @@ def test_from_hydra_real_kr106_writes_finite_consumable_lance_shard(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-    with open_dict(cfg_dataset_kr106_2m):
-        cfg_dataset_kr106_2m.train_val_test_sizes = [2, 0, 0]
-        cfg_dataset_kr106_2m.mask_degenerate_bins = True
-        cfg_dataset_kr106_2m.synth.plugin_path = str(_KR106_PLUGIN_VST3)
-        cfg_dataset_kr106_2m.synth.plugin_state_path = str(_KR106_PRESET)
-        cfg_dataset_kr106_2m.render.samples_per_shard = 2
-        cfg_dataset_kr106_2m.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
-        cfg_dataset_kr106_2m.logger = None
+    with open_dict(cfg_dataset_kr106_smoke):
+        cfg_dataset_kr106_smoke.train_val_test_sizes = [2, 0, 0]
+        cfg_dataset_kr106_smoke.synth.plugin_path = str(_KR106_PLUGIN_VST3)
+        cfg_dataset_kr106_smoke.synth.plugin_state_path = str(_KR106_PRESET)
+        cfg_dataset_kr106_smoke.render.samples_per_shard = 2
+        cfg_dataset_kr106_smoke.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
+        cfg_dataset_kr106_smoke.logger = None
 
-    spec = spec_from_cfg(cfg_dataset_kr106_2m)
-    from_hydra(cfg_dataset_kr106_2m)
+    spec = spec_from_cfg(cfg_dataset_kr106_smoke)
+    from_hydra(cfg_dataset_kr106_smoke)
 
     shard = spec.shards[0]
     assert shard_has_complete_attempt(spec, shard.shard_id)
@@ -1210,6 +1224,7 @@ def test_from_hydra_pyfdn_diffvox_writes_stereo_82_coordinate_shard(
     from_hydra(cfg_dataset)
 
     assert spec.num_params == 82
+    assert spec.render.param_spec_name == identity
     assert validate_all_shards_from_r2(spec) == []
     shard = spec.shards[0]
     uploaded = list(fake_r2_remote.rglob(shard.filename))
@@ -1224,6 +1239,69 @@ def test_from_hydra_pyfdn_diffvox_writes_stereo_82_coordinate_shard(
     assert tuple(param_type.shape) == (82,)
     assert tuple(audio_type.shape) == (2, 176_400)
     assert tuple(mel_type.shape) == (2, 128, 401)
+
+
+@pytest.mark.parametrize(
+    ("identity", "width"),
+    [("pyfdn_n8_mono_kronecker", 36), ("pyfdn_n8_mono_householder_vector", 35)],
+)
+def test_from_hydra_pyfdn_derived_feedback_writes_widened_shard(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    identity: str,
+    width: int,
+) -> None:
+    """The Hydra entrypoint renders a derived-feedback identity through real pyFDN.
+
+    :param cfg_dataset: Composed dataset configuration changed to the selected pyFDN identity.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the worker contract.
+    :param identity: Registered derived-feedback pyFDN identity.
+    :param width: Encoded row width that identity must materialize.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset):
+        cfg_dataset.task_name = f"{identity}-entrypoint-e2e"
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.train_val_test_sizes = [1, 0, 0]
+        cfg_dataset.synth.name = identity
+        cfg_dataset.synth.param_spec_name = identity
+        cfg_dataset.synth.plugin_path = "pyfdn"
+        cfg_dataset.synth.plugin_state_path = ""
+        cfg_dataset.synth.synth_version = "0.4.2"
+        cfg_dataset.render.renderer_backend = "pyfdn"
+        cfg_dataset.render.pyfdn_excitation = "impulse"
+        cfg_dataset.render.sample_rate = 44_100
+        cfg_dataset.render.channels = 1
+        cfg_dataset.render.velocity = 0
+        cfg_dataset.render.signal_duration_seconds = 4.0
+        cfg_dataset.render.min_loudness = -100.0
+        cfg_dataset.render.audio_dtype = "float32"
+        cfg_dataset.render.mel_spec_dtype = "float32"
+        cfg_dataset.render.samples_per_render_batch = 1
+        cfg_dataset.render.samples_per_shard = 1
+        cfg_dataset.render.attempts_per_sample = 100
+        cfg_dataset.render.param_sample_cadence = "sample"
+        cfg_dataset.render.plugin_reload_cadence = "render"
+        cfg_dataset.render.gui_toggle_cadence = "never"
+        cfg_dataset.r2.prefix = f"fake-r2/{identity}-run/"
+        cfg_dataset.logger = None
+
+    spec = spec_from_cfg(cfg_dataset)
+
+    from_hydra(cfg_dataset)
+
+    assert spec.num_params == width
+    assert spec.render.param_spec_name == identity
+    assert validate_all_shards_from_r2(spec) == []
+    shard = spec.shards[0]
+    uploaded = list(fake_r2_remote.rglob(shard.filename))
+    assert len(uploaded) == 1
+    param_type = lance.dataset(str(uploaded[0])).schema.field(PARAM_ARRAY_FIELD).type
+    assert isinstance(param_type, pa.FixedShapeTensorType)
+    assert tuple(param_type.shape) == (width,)
 
 
 def test_from_hydra_torchsynth_experiment_forwards_backend_and_uploads_shard(
@@ -2053,6 +2131,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             assert metrics[f"{metric_prefix}audio/wmfcc_mean"] < bounds.wmfcc_max, (split, metrics)
             assert metrics[f"{metric_prefix}audio/sot_mean"] < bounds.sot_max, (split, metrics)
             assert metrics[f"{metric_prefix}audio/rms_mean"] > bounds.rms_min, (split, metrics)
+            assert metrics[f"{metric_prefix}audio/mldr_mean"] < bounds.mldr_max, (split, metrics)
     finally:
         r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{prefix_root}/")
 

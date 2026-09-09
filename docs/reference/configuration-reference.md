@@ -46,7 +46,7 @@ src/synth_setter/configs/experiment/generate_dataset/{id}.yaml → Hydra compose
 - `DatasetSpec` is the unified model: the same frozen Pydantic instance is both the validated input and the materialized artifact (`DatasetConfig` + `DatasetPipelineSpec` were unified in #887)
 - Runtime state (git SHA, renderer version, and split seed positions) auto-fills via `default_factory` fields (`git_sha`, `is_repo_dirty`, `created_at`, plus `run_id` and `r2` via the `_default_run_id` / `_default_r2_location` factories; `r2.prefix` is derived by `_fill_default_r2_prefix` in a `mode='before'` model validator). See [Deterministic Dataset Seeding](../design/deterministic-seeding.md) for the seed contract.
 - Spec is the reproducibility unit and reconciliation target
-- `render=pyfdn synth=pyfdn_n8_mono_householder` selects the native pyFDN backend with feedback fixed to pyFDN's order-8 Householder reflection of the all-ones vector. The model learns the remaining 27 coordinates, while every rendered feedback matrix stays orthogonal by construction. `synth=pyfdn_pitchshift_n8_mono_householder` selects a separate 45-coordinate pitch-shift shimmer contract with the same fixed feedback: longer delay lines, ten learnable graphic-EQ RT values, transpose, window size, and an eight-line active mask. Its post-delay buffer remains derived as twice the predicted window. `render=pyfdn_diffvox synth=pyfdn_diffvox` (`experiment=pyfdn/diffvox_flow`) selects the 82-coordinate DiffVox vocal chain ([arXiv:2504.14735](https://arxiv.org/abs/2504.14735)): a six-band parametric EQ, a direct panner, a ping-pong delay send with an in-loop low-pass, and a six-line FDN reverb send with a learned orthogonal feedback matrix, ten-band GEQ decay, and a four-band tone EQ. The reference compressor/expander is omitted, and it is the one pyFDN identity that renders stereo (`channels: 2`). The mono variants render four-second, 44.1 kHz mono impulse responses by default through the shared `AudioRenderer` acceptance loop. Set `render.pyfdn_excitation=chirp` to use the canonical in-process chirp instead. MIDI fields are fixed compatibility stubs; R2 stores only generated dataset outputs.
+- `render=pyfdn synth=pyfdn_n8_mono_householder` selects the native pyFDN backend with feedback fixed to pyFDN's order-8 Householder reflection of the all-ones vector. The model learns the remaining 27 coordinates, while every rendered feedback matrix stays orthogonal by construction. `synth=pyfdn_n8_mono_kronecker` keeps those 27 and learns nine more (36 coordinates): three kernel angles, each carried as a (cos θ, sin θ) pair so the ±π seam never appears in the loss, and three rotate/reflect flags that build the Kronecker feedback matrix of Coppola (DAFx26), so all-reflect at π/4 is the order-8 Hadamard and a zero angle decouples the network at that level. `synth=pyfdn_n8_mono_householder_vector` instead learns the eight-entry reflection vector itself (35 coordinates); the all-ones vector reproduces the fixed Householder, and only the vector's direction matters. `synth=pyfdn_pitchshift_n8_mono_householder` selects a separate 45-coordinate pitch-shift shimmer contract with the same fixed feedback: longer delay lines, ten learnable graphic-EQ RT values, transpose, window size, and an eight-line active mask. Its post-delay buffer remains derived as twice the predicted window. All four variants render four-second, 44.1 kHz mono impulse responses by default through the shared `AudioRenderer` acceptance loop. `render=pyfdn_diffvox synth=pyfdn_diffvox` (`experiment=pyfdn/diffvox_flow`) selects the 82-coordinate DiffVox vocal chain ([arXiv:2504.14735](https://arxiv.org/abs/2504.14735)): a six-band parametric EQ, a direct panner, a ping-pong delay send with an in-loop low-pass, and a six-line FDN reverb send with a learned orthogonal feedback matrix, ten-band GEQ decay, and a four-band tone EQ. The reference compressor/expander is omitted, and it is the one pyFDN identity that renders stereo (`channels: 2`). Set `render.pyfdn_excitation=chirp` to use the canonical in-process chirp instead. MIDI fields are fixed compatibility stubs; R2 stores only generated dataset outputs.
 - **Config drift protection (planned):** the design doc specifies that re-passing `--config` for a `run_id` that already has a spec should error — but this is not yet enforced. The current implementation always generates a new `run_id` and writes a fresh spec. Tracked in [#386](https://github.com/tinaudio/synth-setter/issues/386).
 - **Path note:** `storage-provenance-spec.md` §3a documents the target path as `metadata/input_spec.json`, but the current implementation uploads to `{r2.prefix}input_spec.json` (`r2.prefix` already ends in `/` — see `make_r2_prefix` in `src/synth_setter/pipeline/schemas/prefix.py`; no `metadata/` subdirectory). Tracked in [#385](https://github.com/tinaudio/synth-setter/issues/385).
 - **Worker env:** `dispatch_via_skypilot` injects the canonical `spec.r2.input_spec_uri()` as `WORKER_SPEC_URI` into each worker pod's env. The canonical provenance copy at `{r2.prefix}input_spec.json` is written by `spec_io.upload_spec`, called once from `main()` on the launcher host before the dispatch branch fires, so the URI resolves before any worker boots. Workers do not re-upload the spec. See `storage-provenance-spec.md` §3a "Materialized spec: two destinations" for the consumer table.
@@ -55,9 +55,12 @@ Reference: `data-pipeline.md` §14.5
 
 ### 2.2 Data Finalization
 
+For the operational command, see [Finalize a dataset](cli.md#finalize-a-dataset).
+The composed configuration flow is:
+
 ```
-synth-setter-finalize-dataset dataset_root_uri=r2://…/<task_name>/<run_id>/
-  → @hydra.main composes DictConfig from src/synth_setter/configs/finalize_dataset.yaml
+src/synth_setter/configs/finalize_dataset.yaml
+  → @hydra.main composes DictConfig
     → load_spec_from_root(cfg.dataset_root_uri) → DatasetSpec (joins input_spec.json under the root; the frozen spec generate uploaded)
       → r2_io.object_size(spec.r2.dataset_complete_marker_uri()) probe (idempotency short-circuit)
       → assert_r2_prefix_matches(…) (advisory: warns on a non-canonical prefix, never aborts — custom prefixes like the oracle-eval e2e's test-runs/ are legitimate)
@@ -132,13 +135,8 @@ commands use the Hydra-native `synth-setter-skypilot-launch` endpoint with
 
 #### Generic dispatch
 
-```bash
-synth-setter-skypilot-launch \
-  skypilot_launch/compute=runpod/training \
-  'skypilot_launch.cmd="exec synth-setter-train experiment=torchsynth/flow_audio_same"'
-```
-
-The launcher prepends repository checkout synchronization under
+See [Launch with SkyPilot](cli.md#launch-with-skypilot) for the operational
+commands. The launcher prepends repository checkout synchronization under
 `skypilot_launch.worker_checkout_dir` (default `/home/build/synth-setter`) before
 executing `cmd`. Override that field for worker images with a different checkout
 location. Every literal `${...}` intended for the worker command—including
@@ -152,9 +150,12 @@ with manual Python callers during migration; their removal is tracked by
 
 #### Dataset dispatch flow
 
+See [Generate a dataset](cli.md#generate-a-dataset) and
+[Launch with SkyPilot](cli.md#launch-with-skypilot) for the operational commands.
+The configuration flow is:
+
 ```
-synth-setter-generate-dataset experiment=… skypilot_launch/compute=runpod/smoke
-  → @hydra.main composes DictConfig → spec_from_cfg → DatasetSpec
+@hydra.main composes DictConfig → spec_from_cfg → DatasetSpec
     → write_spec_locally(spec, Path(cfg.paths.output_dir))
     → upload_spec(spec) → R2 at {r2.prefix}input_spec.json
     → sky_cfg.extra_envs["WORKER_SPEC_URI"] = spec.r2.input_spec_uri()

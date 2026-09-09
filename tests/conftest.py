@@ -709,16 +709,16 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
 
 
 @pytest.fixture(scope="function")
-def cfg_dataset_kr106_2m(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose the production-scale KR-106 dataset experiment with temporary paths.
+def cfg_dataset_kr106_smoke(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the KR-106 smoke experiment with temporary paths.
 
     :param tmp_path: Per-test output/work/log root.
-    :yields DictConfig: KR-106 cfg with ``tmp_path``-pinned paths.
+    :yields DictConfig: KR-106 smoke cfg with ``tmp_path``-pinned paths.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
-            overrides=["experiment=generate_dataset/ultramaster-kr106-lance-2m-40k-10k"],
+            overrides=["experiment=generate_dataset/ultramaster-kr106-lance-smoke"],
         )
         with open_dict(cfg):
             _set_workspace_root(cfg)
@@ -1869,7 +1869,7 @@ def augment_lance_splits_with_embedding(dataset_root: Path, embedding: str) -> P
                 lance_uri=str(dataset_root / f"{split}.lance"),
                 embeddings=(embedding,),
                 device="cpu",
-                batch_size=1,
+                lance_batch_size=1,
                 build_index=False,
             )
         )
@@ -1922,7 +1922,7 @@ def augment_lance_splits_with_ssondo(dataset_root: Path, checkpoint: str) -> Pat
             embeddings=("ssondo",),
             checkpoints={"ssondo": checkpoint},
             device="cpu",
-            batch_size=1,
+            lance_batch_size=1,
             build_index=False,
         )
     )
@@ -2584,7 +2584,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 # Lance datamodule smoke fixtures.
 
 _PYFDN_LANCE_SMOKE_MEL_SHAPE = (1, 128, 401)
-_PYFDN_LANCE_SMOKE_NUM_PARAMS = len(param_specs["pyfdn_n8_mono_householder"])
+_PYFDN_LANCE_SMOKE_SYNTH = "pyfdn_n8_mono_householder"
 
 
 def _write_pyfdn_lance_smoke_split(
@@ -2592,8 +2592,8 @@ def _write_pyfdn_lance_smoke_split(
     *,
     seed: int,
     include_sketch: bool,
-    channels: int = 1,
-    num_params: int = _PYFDN_LANCE_SMOKE_NUM_PARAMS,
+    channels: int,
+    num_params: int,
 ) -> None:
     """Write one pyFDN split for entrypoint tests.
 
@@ -2601,7 +2601,7 @@ def _write_pyfdn_lance_smoke_split(
     :param seed: RNG seed distinguishing splits.
     :param include_sketch: Whether to persist the temporal reverb profile.
     :param channels: Audio and mel channel count of the identity under test.
-    :param num_params: Encoded parameter width of the identity under test.
+    :param num_params: Encoded width of the selected pyFDN spec.
     """
     from synth_setter.conditioning import PYFDN_SKETCH_CONTROLS
     from synth_setter.pipeline.data.lance_shard import (
@@ -2628,13 +2628,15 @@ def _write_pyfdn_lance_smoke_split(
 
 @pytest.fixture
 def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfig:
-    """Compose a one-step pyFDN flow run over fixed-Householder Lance rows.
+    """Compose a one-step pyFDN flow run over synthetic Lance rows.
 
     :param tmp_path: Per-test dataset and output root.
-    :param request: Optional indirect experiment-name parameter.
+    :param request: Optional indirect parameter: an experiment name, or an
+        ``(experiment, synth)`` pair selecting a non-default pyFDN identity.
     :returns: Ready-to-run training configuration.
     """
-    experiment = getattr(request, "param", "pyfdn/flow")
+    param = getattr(request, "param", "pyfdn/flow")
+    experiment, synth = (param, _PYFDN_LANCE_SMOKE_SYNTH) if isinstance(param, str) else param
     dataset_root = tmp_path / "pyfdn-lance-data"
     dataset_root.mkdir()
 
@@ -2642,7 +2644,7 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
         cfg = compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=[f"experiment={experiment}", "trainer=cpu"],
+            overrides=[f"experiment={experiment}", f"synth={synth}", "trainer=cpu"],
         )
         channels = int(cfg.render.channels)
         mel_shape = (channels, *_PYFDN_LANCE_SMOKE_MEL_SHAPE[1:])
@@ -2681,9 +2683,7 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
             cfg.datamodule.pin_memory = False
             cfg.model.compile = False
             cfg.model.scheduler = None
-            encoder = (
-                cfg.model.encoder.backbone if "ast_online" in experiment else cfg.model.encoder
-            )
+            encoder = cfg.model.encoder.backbone if "_online" in experiment else cfg.model.encoder
             encoder.d_model = 16
             encoder.n_heads = 1
             encoder.n_layers = 1
@@ -2808,6 +2808,26 @@ def cfg_train_lance(tmp_path: Path) -> Iterator[DictConfig]:
     GlobalHydra.instance().clear()
 
 
+@pytest.fixture
+def cfg_train_wandb_labels(cfg_train_lance: DictConfig) -> DictConfig:
+    """Attach shipped experiment metadata to a tiny real Lance training workload.
+
+    :param cfg_train_lance: CPU-fast training configuration over generated Lance splits.
+    :returns: Training configuration with the production W&B name and tag wiring.
+    """
+    with initialize_config_module(config_module="synth_setter.configs", version_base="1.3"):
+        experiment = compose(
+            config_name="train", overrides=["experiment=surge/ffn_simple", "logger=wandb"]
+        )
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.logger = experiment.logger
+        cfg_train_lance.logger.wandb.offline = True
+        cfg_train_lance.experiment_name = experiment.experiment_name
+        cfg_train_lance.run_name = experiment.run_name
+        cfg_train_lance.tags = experiment.tags
+    return cfg_train_lance
+
+
 def _shrink_slap_ast(cfg: DictConfig) -> None:
     """Reduce the configured AST depth without relying on its list position.
 
@@ -2815,7 +2835,8 @@ def _shrink_slap_ast(cfg: DictConfig) -> None:
     """
     target = "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
     ast_configs = []
-    for arm in (cfg.model.audio_encoder, cfg.model.text_encoder):
+    cfg.model.param_encoder.encoder.n_layers = 1
+    for arm in (cfg.model.audio_encoder,):
         if "_args_" not in arm.encoder:
             continue
         ast_configs.extend(
@@ -2831,13 +2852,13 @@ def cfg_slap_train_lance(tmp_path: Path, request: pytest.FixtureRequest) -> Dict
     """Compose a one-step shipped SLAP experiment over local Lance splits.
 
     The configuration exercises fit, validation, checkpoint reload, and test. Indirect
-    parametrization selects the experiment; the default is the MLP baseline.
+    parametrization selects the experiment; the default is the canonical SLAP pair.
 
     :param tmp_path: Isolated dataset and training output root.
     :param request: Fixture request optionally carrying an experiment name.
     :returns: Ready-to-run SLAP training configuration.
     """
-    experiment = getattr(request, "param", "surge/slap_ast_audio_mlp_param")
+    experiment = getattr(request, "param", "surge/slap_ast_audio_vst_ff_param")
     dataset_root = tmp_path / "slap-lance-data"
     _materialize_lance_smoke_root(dataset_root)
 
