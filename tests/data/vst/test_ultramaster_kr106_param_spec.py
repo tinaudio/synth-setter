@@ -447,7 +447,7 @@ def test_ultramaster_kr106_single_note_preset_fixes_omitted_safe_states() -> Non
 @pytest.mark.slow
 @pytest.mark.requires_vst
 @pytest.mark.parametrize(
-    ("name", "retained_raw", "alias_raw"),
+    ("name", "retained_raw", "excluded_raw"),
     [
         pytest.param("porta_mode", 0.5, 1.0, id="poly_i-poly_ii"),
         pytest.param("voices", 0.0, 0.25, id="six-seven-voices"),
