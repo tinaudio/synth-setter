@@ -76,10 +76,10 @@ not present in the runtime manifest.
    finding with `pi_review_routing.py finding-fingerprint`; remove fingerprints
    listed in `foreground_fingerprints` and duplicates from another deferred pass.
 
-7. Run one final read-only `pr-review-filter` pass over all retained late
+7. Run one final read-only `pr-review-filter` judge over all retained late
    findings before rendering or delivery. Pin the agent exactly to
-   `openai-codex/gpt-5.6-sol` with `high` thinking and at most 8 turns. This is
-   the explicit cross-cutting exception to the mechanical-checklist Sol rule.
+   `openai-codex/gpt-6-astra` with `high` thinking and at most 8 turns. Worker
+   severity is advisory; the judge may promote or demote it.
    Skip the call when there are no late findings. Otherwise, write the same
    immutable top-level shape used by the foreground filter:
 
@@ -87,24 +87,25 @@ not present in the runtime manifest.
    {"target":"PR #123","base_sha":"<40-character base SHA>","head_sha":"<40-character head SHA>","candidates": [{"id":"<finding-fingerprint>","skill":"correctness-review","severity":"warn","path":"agent/example.py","line":42,"description":"<original description>"}]}
    ```
 
-   Generate the assignment with `pi_review_routing.py filter-prompt`, and launch the filter
+   Generate the assignment with `pi_review_routing.py filter-prompt`, and launch the judge
    with only the absolute assignment path. Extract with `extract-filter-report`
-   and run `validate-filter-report` against the original input. Keep only the
-   returned candidate IDs without rewriting content or severity. Record retained
-   and dropped counts in the attempt audit. If Sol is unavailable or the filter
-   fails or returns a malformed partition, fail closed and post no late findings;
-   never fall back to an unfiltered result.
+   and run `validate-filter-report` against the original input. The output must
+   contain one unique decision per candidate and preserve every original field,
+   provenance, and ID alongside original severity, final class, and rationale.
+   Keep DROP rows in the audit. If Astra is unavailable or the judge fails or
+   returns a malformed, duplicate, or incomplete partition, fail closed and post
+   no late findings; never fall back to an unadjudicated result.
 
 8. Re-fetch `headRefOid` immediately before delivery. On any head or PR-state
-   drift, record `stale` and post nothing. For `mode: "no-comments"`, retain the
-   filtered late findings in the runtime result without GitHub writes. For
+   drift, record `stale` and post nothing. For `mode: "no-comments"`, retain all
+   late adjudications, including drops, in the runtime result without GitHub writes. For
    `mode: "full"`, submit one `COMMENT` review through
    `agent/skills/_shared/post_review.py`. Its body must identify late
    Codex-verified follow-up findings and include the originating skill/model
-   audit rows. Never approve or request changes from follow-up; each retained
-   BLOCK and WARN remains an unresolved inline thread. Late retained NITs go
-   under a `## Nits` body section, never inline — the same advisory contract the
-   foreground uses.
+   audit rows. Never approve or request changes from follow-up; each final BLOCK
+   and WARN remains an unresolved inline thread. Final NITs and LOW CONFIDENCE
+   observations are body-only. Mark LOW CONFIDENCE visibly `[low confidence]`
+   and explicitly ignorable with no required reply or gate. DROP is audit-only.
 
 9. Write exactly one strict JSON object atomically to `<manifest>.result.json`.
    The supervisor validates it with `FollowUpResult`, merges its ownership

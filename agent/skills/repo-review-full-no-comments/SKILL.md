@@ -1,8 +1,8 @@
 ---
 name: repo-review-full-no-comments
 description: |-
-  Multi-skill review (same fan-out as `/repo-review-full`) that prints the
-  aggregated BLOCK/WARN/NIT report instead of posting inline comments. Routes every
+  Multi-skill review (same fan-out and Astra judge as `/repo-review-full`) that
+  prints final BLOCK/WARN/NIT/LOW CONFIDENCE dispositions and the complete audit. Routes every
   host harness through Pi and works against an open PR or local branch. Requires
   the tinaudio-synth-setter-skills plugin.
 ---
@@ -213,7 +213,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >
 > ## Summary
 >
-> - B BLOCK, W WARN, N NIT across K skills
+> - B BLOCK, W WARN, N NIT, L LOW CONFIDENCE across K skills
 > - PR-health flags: <M merge-conflict / F failing-check>  (omit if zero or in local-branch mode)
 > - Reviewed at: <full-sha-from-git-rev-parse-HEAD>
 > - <next-step tip>
@@ -261,7 +261,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >
 >   ## Summary
 >
->   - 0 BLOCK, 0 WARN, 0 NIT
+>   - 0 BLOCK, 0 WARN, 0 NIT, 0 LOW CONFIDENCE
 >   - Reviewed at: <sha>
 >   - Progress: branch <head_ref>; HEAD <current_head>; upstream <current_upstream>; worktree <worktree_state>; unchanged review count 0.
 >   ```
@@ -294,6 +294,6 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 - Like `/repo-review-full`, this skill depends on the
   `tinaudio-synth-setter-skills` plugin being enabled. If a sub-skill
   invocation fails, surface the error — don't silently skip.
-- Preserve every skill's candidate through aggregation. The final Sol signal
-  filter may drop a semantic duplicate before delivery while retaining the
-  original skill attribution for each kept finding.
+- Preserve every skill's candidate and stable ID through aggregation. The final
+  Astra judge may reclassify or drop it; every original field, final class, and
+  rationale remains in the audit.

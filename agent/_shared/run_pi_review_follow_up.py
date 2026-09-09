@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, model_validator
 if __package__:
     from agent._shared.pi_review_routing import (
         PINNED_REVIEW_MODELS,
-        WorkerFinding,
+        ReviewAdjudication,
         WorkerReport,
         extract_report,
         parse_worker_report,
@@ -28,7 +28,7 @@ if __package__:
 else:
     from pi_review_routing import (
         PINNED_REVIEW_MODELS,
-        WorkerFinding,
+        ReviewAdjudication,
         WorkerReport,
         extract_report,
         parse_worker_report,
@@ -285,7 +285,7 @@ class FollowUpResult(BaseModel, strict=True, extra="forbid"):
     status: Literal["complete", "stale", "failed"]
     attempts: tuple[FollowUpAttempt, ...]
     diagnostics: tuple[FollowUpDiagnostic, ...]
-    late_findings: tuple[WorkerFinding, ...]
+    late_findings: tuple[ReviewAdjudication, ...]
     posted_review_url: str | None
     child_exit_code: int | None
     log_tail: str = Field(max_length=_LOG_TAIL_CHARS)

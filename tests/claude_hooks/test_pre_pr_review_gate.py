@@ -159,6 +159,23 @@ def test_gate_does_not_fire_on_nit_only_sentinel(tmp_path: Path) -> None:
     assert result.returncode == 0, (result.returncode, result.stderr)
 
 
+def test_gate_does_not_fire_on_low_confidence_only_sentinel(tmp_path: Path) -> None:
+    """LOW CONFIDENCE is body-only and outside both required-action gates.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n## Low-confidence observations\n\n"
+        "- **[correctness:low-confidence] [low confidence]** "
+        "`src/example.py:9` — plausible but unproven. Explicitly ignorable.\n",
+    )
+
+    result = _run_gate(review)
+
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
 def test_gate_allows_clean_pass_sentinel(tmp_path: Path) -> None:
     """A clean PASS sentinel (no bracketed findings) passes (exit 0).
 

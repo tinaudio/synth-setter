@@ -56,6 +56,48 @@ def _manifest(tmp_path: Path, *, output_path: Path | None = None) -> Path:
     return manifest
 
 
+def test_follow_up_result_retains_drop_adjudication_for_audit() -> None:
+    """Keep dropped late candidates in the durable follow-up result."""
+    payload = json.loads(_valid_result())
+    payload["late_findings"] = [
+        {
+            "id": "1" * 64,
+            "skill": "correctness-review",
+            "original_severity": "block",
+            "path": "agent/example.py",
+            "line": 42,
+            "description": "Claimed defect.",
+            "final_disposition": "drop",
+            "rationale": "The changed code cannot reach the claimed path.",
+        }
+    ]
+
+    result = FollowUpResult.model_validate_json(json.dumps(payload))
+
+    assert result.late_findings[0].original_severity == "block"
+    assert result.late_findings[0].final_disposition == "drop"
+
+
+def test_follow_up_result_unknown_adjudication_skill_rejected() -> None:
+    """Reject late audit rows without valid worker provenance."""
+    payload = json.loads(_valid_result())
+    payload["late_findings"] = [
+        {
+            "id": "1" * 64,
+            "skill": "unknown-review",
+            "original_severity": "warn",
+            "path": "agent/example.py",
+            "line": 42,
+            "description": "Claimed concern.",
+            "final_disposition": "warn",
+            "rationale": "The changed path is reachable.",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="Unknown review skill"):
+        FollowUpResult.model_validate_json(json.dumps(payload))
+
+
 def _result_path(manifest: Path) -> Path:
     return Path(f"{manifest}.result.json")
 

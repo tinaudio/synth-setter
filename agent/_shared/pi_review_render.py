@@ -14,13 +14,31 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 if __package__:
+    from agent._shared.pi_review_routing import ReviewAdjudication
     from agent._shared.review_sentinel import make_review_path
 else:
+    from pi_review_routing import ReviewAdjudication
     from review_sentinel import make_review_path
+
+_SKILL_TAGS = {
+    "code-health": "code-health",
+    "comment-hygiene": "comment-hygiene",
+    "correctness-review": "correctness",
+    "gha-workflow-validator": "gha",
+    "lance-review": "lance",
+    "ml-data-pipeline": "ml-pipeline",
+    "ml-test": "ml-test",
+    "python-style": "python-style",
+    "shell-style": "shell-style",
+    "synth-setter-project-standards": "synth-setter",
+    "tdd-implementation": "tdd-impl",
+    "tdd-refactor": "tdd-refactor",
+}
 
 
 class ReviewFinding(BaseModel, strict=True, extra="forbid"):
@@ -69,12 +87,18 @@ class ReviewPayload(BaseModel, strict=True, extra="forbid"):
         :type: tuple[ReviewFinding, ...]
 
         Aggregated findings in review order.
+
+    .. attribute :: event
+        :type: Literal["APPROVE", "COMMENT", "REQUEST_CHANGES"] | None
+
+        GitHub review event for posted mode, or ``None`` for legacy dry-run payloads.
     """
 
     pr_number: int | None = Field(default=None, gt=0)
     repo: str = Field(min_length=1)
     review_body: str = Field(min_length=1)
     findings: tuple[ReviewFinding, ...]
+    event: Literal["APPROVE", "COMMENT", "REQUEST_CHANGES"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +156,97 @@ class RenderContext:
     next_step: str
 
 
+def _adjudication_sections(adjudications: Sequence[ReviewAdjudication]) -> str:
+    """Render body-only findings and the complete final-judge audit.
+
+    :param adjudications: Candidate-order final decisions, including drops.
+    :returns: Markdown sections for optional findings and audit evidence.
+    """
+    if not adjudications:
+        return ""
+    sections: list[str] = []
+    nits = [item for item in adjudications if item.final_disposition == "nit"]
+    low_confidence = [item for item in adjudications if item.final_disposition == "low-confidence"]
+    if nits:
+        sections.extend(
+            [
+                "## Nits",
+                "",
+                *(
+                    f"- **[{_SKILL_TAGS[item.skill]}:nit]** `{item.path}:{item.line}` — "
+                    f"{item.description}"
+                    for item in nits
+                ),
+            ]
+        )
+    if low_confidence:
+        sections.extend(
+            [
+                "## Low-confidence observations",
+                "",
+                "Explicitly ignorable: these observations create no reply or merge obligation.",
+                "",
+                *(
+                    f"- **[{_SKILL_TAGS[item.skill]}:low-confidence] [low confidence]** "
+                    f"`{item.path}:{item.line}` — {item.description} "
+                    f"Rationale: {item.rationale}"
+                    for item in low_confidence
+                ),
+            ]
+        )
+    sections.extend(["## Final judge audit", ""])
+    sections.extend(
+        f"- `{item.id}` — {item.skill} at `{item.path}:{item.line}`; "
+        f"original `{item.original_severity}` → final `{item.final_disposition}`; "
+        f"finding: {item.description}; rationale: {item.rationale}"
+        for item in adjudications
+    )
+    return "\n".join(sections)
+
+
+def build_adjudicated_review(
+    *,
+    pr_number: int | None,
+    repo: str,
+    review_body: str,
+    adjudications: Sequence[ReviewAdjudication],
+) -> ReviewPayload:
+    """Build one delivery payload from final judge decisions.
+
+    :param pr_number: Pull request number, or ``None`` for local mode.
+    :param repo: GitHub repository identity.
+    :param review_body: Lead-in, provider incidents, and PR-health Markdown.
+    :param adjudications: Complete candidate-order final judge output.
+    :returns: Payload with BLOCK/WARN inline and optional findings body-only.
+    """
+    inline = tuple(
+        ReviewFinding(
+            path=item.path,
+            line=item.line,
+            body=(f"**[{_SKILL_TAGS[item.skill]}:{item.final_disposition}]** {item.description}"),
+        )
+        for item in adjudications
+        if item.final_disposition in {"block", "warn"}
+    )
+    final_classes = {item.final_disposition for item in adjudications}
+    event: Literal["APPROVE", "COMMENT", "REQUEST_CHANGES"]
+    if "block" in final_classes:
+        event = "REQUEST_CHANGES"
+    elif final_classes - {"drop"}:
+        event = "COMMENT"
+    else:
+        event = "APPROVE"
+    audit = _adjudication_sections(adjudications)
+    body = f"{review_body.rstrip()}\n\n{audit}" if audit else review_body
+    return ReviewPayload(
+        pr_number=pr_number,
+        repo=repo,
+        review_body=body,
+        findings=inline,
+        event=event,
+    )
+
+
 def _validated_payload(payload: ReviewPayload | Mapping[str, object]) -> ReviewPayload:
     """Return strict payload data from a model or mapping.
 
@@ -170,13 +285,13 @@ def _summary_lines(review: ReviewPayload, context: RenderContext) -> list[str]:
     counts = {
         severity: review.review_body.count(f":{severity}]")
         + sum(f":{severity}]" in finding.body for finding in review.findings)
-        for severity in ("block", "warn", "nit")
+        for severity in ("block", "warn", "nit", "low-confidence")
     }
     lines = [
         "## Summary",
         "",
-        f"- {counts['block']} BLOCK, {counts['warn']} WARN, {counts['nit']} NIT "
-        f"across {context.skill_count} skills",
+        f"- {counts['block']} BLOCK, {counts['warn']} WARN, {counts['nit']} NIT, "
+        f"{counts['low-confidence']} LOW CONFIDENCE across {context.skill_count} skills",
         f"- Reviewed at: {context.head_sha}",
         "- Progress: "
         f"branch {context.head_ref}; HEAD {context.head_sha}; "
@@ -244,7 +359,7 @@ def render_zero_diff(context: RenderContext) -> str:
         "PASS — no findings across all skills (code-health, correctness, comment-hygiene, "
         "python-style, shell-style, synth-setter, tdd-impl, ml-test).\n\n"
         "## Summary\n\n"
-        "- 0 BLOCK, 0 WARN, 0 NIT\n"
+        "- 0 BLOCK, 0 WARN, 0 NIT, 0 LOW CONFIDENCE\n"
         f"- Reviewed at: {context.head_sha}\n"
         "- Progress: "
         f"branch {context.head_ref}; HEAD {context.head_sha}; "

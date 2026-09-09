@@ -516,19 +516,13 @@ Severity semantics, uniform across every checklist:
   obligation to act. Emit `nit` rather than `warn` whenever a reviewer could
   reasonably decline the change without harming the codebase.
 
-## Step 5: Aggregate findings
+## Step 5: Aggregate and adjudicate findings
 
-Once every parallel agent returns, ingest each validated worker result's structured `findings`. **BLOCK and WARN become entries in the `findings` JSON array** (Step 6) — each posts as its own inline unresolved thread. Posting WARNs inline (rather than collapsing them into a body bullet list) is deliberate: a bullet inside a long review body is easy to scroll past, while an unresolved inline thread forces an explicit reply or resolution before the PR ships. The severity tag on the comment body lets reviewers filter or batch-resolve, and `post_review.py` already keeps every thread unresolved.
+Once every parallel agent returns, ingest every validated worker finding as an immutable judge candidate. Worker severity remains advisory until the final judge classifies the candidate. Do not render, deduplicate, calculate events, or separate inline and body-only findings before adjudication.
 
-**NIT findings go to the `## Nits` section of `review_body`, never to the `findings` array.** That is what makes NIT non-blocking in practice: under "Conversations must be resolved" branch protection an inline thread is a merge obligation, so an inline NIT would be a WARN by another name. The body bullet is the whole point — visible, ignorable.
+After adjudication, final BLOCK and WARN findings become entries in the `findings` JSON array (Step 6), each as an inline unresolved thread. Final NIT and LOW CONFIDENCE findings are body-only. NIT is a valid small optional improvement. LOW CONFIDENCE is a plausible unproven concern or an observation with questionable net benefit; label it visibly `[low confidence]` and state that it is explicitly ignorable, requires no reply, and creates no gate. DROP appears only in the audit.
 
-Prefix each finding body with the `[<skill>:<severity>]` scheme so reviewers can see which checklist surfaced it — using the short-tag form from the table below (`[<short-tag>:block]` / `[<short-tag>:warn]` / `[<short-tag>:nit]`), not the full skill name.
-
-Severity → severity tag:
-
-- `BLOCK` → `block`
-- `WARN` → `warn`
-- `NIT` → `nit`
+Prefix delivered findings with the final `[<skill>:<disposition>]` using the short-tag form below.
 
 Skill → tag (short form for comment body):
 
@@ -547,7 +541,7 @@ Skill → tag (short form for comment body):
 | `lance-review`                   | `lance`           |
 | `correctness-review`             | `correctness`     |
 
-Each BLOCK or WARN becomes one entry in the `findings` array, with `<severity>` set to `block` or `warn`:
+Each final BLOCK or WARN becomes one entry in the `findings` array:
 
 ```json
 {
@@ -557,19 +551,21 @@ Each BLOCK or WARN becomes one entry in the `findings` array, with `<severity>` 
 }
 ```
 
-The shape is identical for both severities — only the tag changes. `post_review.py` anchors the entry, posts it as an inline review comment on the GitHub review, and leaves the thread unresolved.
+The shape is identical for both dispositions. `post_review.py` anchors the entry, posts it as an inline review comment, and leaves the thread unresolved.
 
-Each NIT becomes one bullet under `## Nits` in `review_body`, carrying its own `path:line` because it has no inline anchor to supply one:
+Each final NIT becomes one bullet under `## Nits` in `review_body`:
 
 ```markdown
 - **[<short-tag>:nit]** `<path>:<line>` — <description>
 ```
 
-Do not deterministically dedupe findings across skills during aggregation. Preserve every candidate and its originating skill for the final semantic signal filter; that filter may drop a duplicate only after inspecting the diff and recording an evidence-based decision.
+Each final LOW CONFIDENCE finding becomes one bullet under `## Low-confidence observations` in `review_body` and includes `[low confidence]`. Begin that section with `Explicitly ignorable: these observations create no reply or merge obligation.` Never put LOW CONFIDENCE in the `findings` array.
 
-### Final signal filter
+Do not deterministically dedupe findings across skills during aggregation. Preserve every candidate and its originating skill for the final semantic judge; only the judge may classify a duplicate as DROP.
 
-After aggregation, but before rendering any finding or calculating the review event, run one final read-only `pr-review-filter` agent pinned exactly to `openai-codex/gpt-5.6-sol` with `high` thinking and at most 8 turns. This cross-cutting gate is the explicit exception to the rule that mechanical checklists do not spend Sol.
+### Final review judge
+
+After aggregation, but before rendering any finding or calculating the review event, run one final read-only `pr-review-filter` agent pinned exactly to `openai-codex/gpt-6-astra` with `high` thinking and at most 8 turns. This judge may promote or demote worker severity based on the diff.
 
 If there are no checklist findings, skip the model call and continue with PR-health output. Otherwise, write an immutable filter-input JSON file under the assignment directory using this exact top-level shape; `candidates` contains every BLOCK, WARN, and NIT:
 
@@ -603,11 +599,11 @@ Launch the filter with the prompt `Read and execute the complete review-filter a
   --output "$assignment_dir/review-filter-retained.json"
 ```
 
-The validator requires exactly one keep/drop decision for every immutable candidate ID. Retain only IDs listed in `review-filter-retained.json`, preserving their original skill, severity, path, line, and description. Record the Sol attempt and retained/dropped counts in the Pi review audit. If Sol is unavailable, the agent fails, or extraction/validation is malformed, fail closed through terminal failure delivery; never post or render unfiltered checklist findings.
+The validator requires exactly one `block|warn|nit|low-confidence|drop` decision for every unique immutable candidate ID and writes candidate-order adjudications to `review-filter-retained.json`. Each row preserves the original ID, skill provenance, severity, path, line, and description alongside final disposition and rationale; keep DROP rows in the audit. A rationale demoting worker BLOCK must address the claimed defect or hard-rule evidence. Record the Astra attempt and counts for all five final classes in the Pi review audit. If Astra is unavailable, the agent fails, or extraction/validation is malformed, fail closed through terminal failure delivery; never post or render unadjudicated checklist findings.
 
 ## Step 6: Build the findings JSON
 
-Same shape `post_review.py` consumes. The `findings` array holds **every BLOCK and every WARN** from Step 5; the Step 5 NITs and the PR-health BLOCKs from Step 2 are folded into `review_body` separately because neither is anchored to a diff line.
+Same shape `post_review.py` consumes. Build it from `review-filter-retained.json` in original candidate order. The `findings` array holds every final BLOCK and WARN. Final NIT and LOW CONFIDENCE findings and Step 2 PR-health BLOCKs are folded into `review_body`; final DROP findings appear only in `## Final judge audit`.
 
 Before writing any other `review_body` content, inspect the audit rows for
 `authentication` and `quota/capacity` statuses. If either status occurred,
@@ -626,11 +622,11 @@ status/model/diagnostic triples. This incident summary must appear before every
 other `review_body` section, including the review lead-in, `## PR health`, and
 `## Pi review audit`. Omit it only when neither status occurred.
 
-`review_body` carries two optional appended sections in this order: `## PR health` (Step 2 BLOCKs) then `## Nits` (Step 5 NITs). Omit either section when its source produced nothing. `## Nits` goes last because it is the only advisory section — nothing below it is a merge obligation.
+After provider incidents and the lead-in, `review_body` carries `## PR health`, `## Nits`, `## Low-confidence observations`, and `## Final judge audit` in that order, omitting empty optional sections. The audit includes every adjudication, including DROP, with original identity/provenance/fields, original severity, final class, and rationale.
 
 **Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Insert a `## PR health` section after the `## Provider incidents` summary when present, listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
 
-**Fold the Step 5 NITs into `review_body`** as a `## Nits` section placed after `## PR health` (or after the lead-in when PR health is absent), one bullet per NIT in the Step 5 format. Omit the section when no checklist emitted a NIT.
+**Fold final NITs and LOW CONFIDENCE observations into `review_body`** using the Step 5 formats. Neither class may create an inline thread, required reply, or gate.
 
 Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the `BLOCK: <PR> — ` prefix and prepend `- **[<calling-skill>:block]** `, leaving the `[pr-health] …` body unchanged. Substitute `<calling-skill>` with the calling skill's name (`repo-review-full` or `repo-review-full-no-comments`). For example, `BLOCK: 897 — [pr-health] Failing check: ci/test (FAILURE) — https://…` becomes `- **[repo-review-full:block]** [pr-health] Failing check: ci/test (FAILURE) — https://…` when called from `repo-review-full`.
 
@@ -646,9 +642,9 @@ Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the
 }
 ```
 
-The `findings` array carries every retained BLOCK and every retained WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` and `## Nits` section formats. When every free-pool path failed and only Codex-origin reports survived, add `Free-pool review failed; only Codex ran.` immediately below the optional `## Provider incidents` summary and before the ordinary review lead-in.
+The `findings` array carries every final BLOCK and WARN. The exact lead-in wording is up to the calling skill. Both modes reuse the same body-only and audit formats. When every free-pool path failed and only Codex-origin reports survived, add `Free-pool review failed; only Codex ran.` immediately below provider incidents and before the lead-in.
 
-When the calling skill submits via `post_review.py` (i.e. `repo-review-full`), add a top-level `"event"`: `REQUEST_CHANGES` if any finding is a BLOCK (any `[*:block]`, including the folded PR-health BLOCKs), else `COMMENT` if any WARN or NIT exists, else `APPROVE`. A NIT-only review is `COMMENT`, not `APPROVE` — there is something to say — and `COMMENT` blocks nothing. `repo-review-full-no-comments` renders to chat and never posts, so it omits `"event"`.
+When the calling skill submits via `post_review.py`, set `event=REQUEST_CHANGES` if a final BLOCK or PR-health BLOCK exists; otherwise set `COMMENT` if any final WARN, NIT, or LOW CONFIDENCE exists; otherwise set `APPROVE`. Optional-only reviews therefore contain no inline payload and never request changes. `repo-review-full-no-comments` omits `event`.
 
 Write the JSON to a temp file:
 
@@ -663,7 +659,7 @@ Return to your orchestrator brief's Step 7 for the final delivery step.
 ## Notes
 
 - WARN findings are posted inline (as their own unresolved threads) rather than collapsed into a body bullet list. The earlier collapse design optimized for keeping BLOCKs visible, but in practice body bullets were silently ignored — every review converged on `event=COMMENT` with zero inline threads, and the WARNs never got addressed. The inline form forces an explicit reply or resolution before merge under "Conversations must be resolved" branch protection, and the `[<short-tag>:<severity>]` prefix lets reviewers filter or batch-resolve.
-- Aggregation preserves cross-skill candidates so provenance is never lost; the final Sol filter is the only stage allowed to remove a semantically duplicate or otherwise low-signal candidate.
+- Aggregation preserves cross-skill candidates and stable identities. The Astra judge is the only stage allowed to reclassify or drop them, and every decision remains in the audit.
 - NIT exists so that "ignorable" is a severity a checklist can express instead of a judgment the author has to make about every WARN. Before it existed, checklists either inflated a preference to WARN — spending an unresolved thread on it — or dropped it silently; `comment-hygiene`'s C13–C14 were dropped for exactly that reason. Body placement is the mechanism, not a presentation choice: an inline NIT would be a merge obligation under branch protection, and `pre-pr-review-gate.sh` deliberately never matches `:nit]` in either sub-gate.
 - Most of this pipeline depends on the `tinaudio-synth-setter-skills` plugin being enabled; the repo-local `lance-review` and `correctness-review` skills are the standing exceptions (they run from `agent/skills/<name>/SKILL.md` even with the plugin absent, and `correctness-review` runs on every diff). If a sub-skill invocation fails, surface the error — don't silently skip. Falling back to `repo-review` (MVP) is the user's call, not the skill's.
 - Claude Code and Codex both invoke the Pi-native main agent → flat Tintin

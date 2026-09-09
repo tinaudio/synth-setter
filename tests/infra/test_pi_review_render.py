@@ -54,7 +54,7 @@ def test_render_markdown_groups_findings_and_preserves_audit() -> None:
     assert "## Pi review audit" in report
     assert report.count("### `src/example.py`") == 1
     assert "**L42** — **[correctness:block]** Broken boundary." in report
-    assert "1 BLOCK, 1 WARN, 0 NIT across 2 skills" in report
+    assert "1 BLOCK, 1 WARN, 0 NIT, 0 LOW CONFIDENCE across 2 skills" in report
     assert "Reviewed at: " + "a" * 40 in report
 
 
@@ -85,7 +85,7 @@ def test_render_markdown_counts_body_nits_apart_from_warns() -> None:
 
     report = render_markdown(payload, context=context)
 
-    assert "0 BLOCK, 1 WARN, 1 NIT across 2 skills" in report
+    assert "0 BLOCK, 1 WARN, 1 NIT, 0 LOW CONFIDENCE across 2 skills" in report
 
 
 def test_render_markdown_counts_pr_health_severities() -> None:
@@ -109,7 +109,7 @@ def test_render_markdown_counts_pr_health_severities() -> None:
 
     report = render_markdown(payload, context=context)
 
-    assert "1 BLOCK, 0 WARN, 0 NIT across 1 skills" in report
+    assert "1 BLOCK, 0 WARN, 0 NIT, 0 LOW CONFIDENCE across 1 skills" in report
 
 
 def _init_git_repo(path: Path) -> str:
