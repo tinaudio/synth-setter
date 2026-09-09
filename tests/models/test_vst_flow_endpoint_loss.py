@@ -274,6 +274,7 @@ def test_train_step_mixed_loss_keeps_row_weights_paired_with_rows() -> None:
     with torch.no_grad():
         field.row[0] = 1.0
     target = _target()
+    target[1, 0] = 3.0
     module._weight_time = lambda t: torch.tensor(  # pyright: ignore[reportAttributeAccessIssue]
         [[1.0], [3.0]], device=t.device
     )
@@ -281,7 +282,7 @@ def test_train_step_mixed_loss_keeps_row_weights_paired_with_rows() -> None:
     outputs = module._train_step(_batch(target))  # noqa: SLF001
 
     expected_first = (1.0 + math.log(2.0)) / 11.0
-    expected_second = (1.0 + math.log(2.0)) / 11.0
+    expected_second = (4.0 + math.log(2.0)) / 11.0
     assert outputs.loss.item() == pytest.approx((expected_first + 3.0 * expected_second) / 2.0)
     torch.testing.assert_close(outputs.per_param_flow_mse[8:10], torch.full((2,), 2.0))
     outputs.loss.backward()
@@ -315,8 +316,8 @@ def test_endpoint_prediction_to_model_softmaxes_only_onehot_spans() -> None:
     torch.testing.assert_close(endpoint[0, 10:], prediction[0, 10:])
 
 
-def test_mixed_endpoint_cfg_combines_converted_branch_endpoints() -> None:
-    """CFG extrapolates model-space endpoints rather than softmaxing extrapolated logits."""
+def test_mixed_endpoint_cfg_converts_guided_logits_to_valid_endpoint() -> None:
+    """CFG logits convert to a valid model-space categorical endpoint."""
     module = _module(
         endpoint_loss="mixed",
         vector_field=_ConditionedLogitField(torch.zeros(_WIDTH)),
@@ -327,10 +328,9 @@ def test_mixed_endpoint_cfg_combines_converted_branch_endpoints() -> None:
 
     velocity = module._velocity_field(conditioning, 2.0, None)(x, t)  # noqa: SLF001
 
-    conditional = 2 * torch.softmax(torch.tensor([2.0, 0.0]), dim=0) - 1
-    unconditional = 2 * torch.softmax(torch.tensor([0.0, 2.0]), dim=0) - 1
-    expected_endpoint = 2 * conditional - unconditional
+    expected_endpoint = 2 * torch.softmax(torch.tensor([4.0, -2.0]), dim=0) - 1
     torch.testing.assert_close(velocity[0, 8:10], expected_endpoint / 0.5)
+    assert torch.all(expected_endpoint.abs() <= 1.0)
 
 
 def test_sample_mixed_endpoint_finishes_on_typed_endpoint_without_sampling_classes() -> None:
@@ -398,7 +398,7 @@ def test_load_checkpoint_with_other_endpoint_loss_raises(tmp_path: Path) -> None
 
 
 def test_load_legacy_checkpoint_without_endpoint_loss_counts_as_mse(tmp_path: Path) -> None:
-    """A pre-feature checkpoint retains the old MSE objective contract.
+    """Checkpoints without endpoint-loss metadata default to the MSE objective.
 
     :param tmp_path: Checkpoint directory.
     """
@@ -412,7 +412,7 @@ def test_load_legacy_checkpoint_without_endpoint_loss_counts_as_mse(tmp_path: Pa
 
 
 def test_vst_flow_config_defaults_endpoint_loss_to_mse() -> None:
-    """The shipped flow config preserves the legacy objective by default."""
+    """The shipped flow config defaults endpoint_loss to MSE."""
     path = Path(__file__).parents[2] / "src/synth_setter/configs/model/vst_flow.yaml"
 
     config = OmegaConf.load(path)
