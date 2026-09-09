@@ -437,12 +437,12 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     )
     assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
     wandb_binary = wandb_binaries[0]
-    assert read_run_project(wandb_binary) == "synth-setter-citest"
+    actual_project = read_run_project(wandb_binary)
     assert read_run_labels(wandb_binary) == (
         "generate-dataset-smoke-shard",
         ("generate_dataset", "smoke-shard"),
     )
-    assert read_run_project(wandb_binary) == expected_project
+    assert actual_project == expected_project
     rows = read_history_rows(
         wandb_binary,
         until=lambda scanned: (
