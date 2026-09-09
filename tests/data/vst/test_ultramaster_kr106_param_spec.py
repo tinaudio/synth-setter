@@ -435,6 +435,7 @@ def test_ultramaster_kr106_single_note_preset_fixes_omitted_safe_states() -> Non
     assert plugin.parameters["transpose"].raw_value == 0.0  # type: ignore[attr-defined]
     assert plugin.parameters["power"].raw_value == 1.0  # type: ignore[attr-defined]
     assert plugin.parameters["bypass"].raw_value == 0.0  # type: ignore[attr-defined]
+    assert plugin.parameters["chorus_off"].raw_value == 0.0  # type: ignore[attr-defined]
 
 
 @pytest.mark.slow
