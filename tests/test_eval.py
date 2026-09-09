@@ -170,7 +170,7 @@ def test_evaluate_slap_experiment_checkpoint_end_to_end(
         cfg_slap_train_lance.trainer.devices = 1
         cfg_slap_train_lance.trainer.precision = "32-true"
     HydraConfig().set_config(cfg_slap_train_lance)
-    _, train_objects = train(cfg_slap_train_lance)
+    train_metrics, train_objects = train(cfg_slap_train_lance)
     checkpoint_path = train_objects["trainer"].checkpoint_callback.best_model_path
 
     GlobalHydra.instance().clear()
@@ -192,17 +192,36 @@ def test_evaluate_slap_experiment_checkpoint_end_to_end(
         cfg.logger = None
         cfg.ckpt_path = checkpoint_path
         cfg.mode = "test"
-        cfg.trainer.limit_test_batches = 1
+        cfg.trainer.limit_test_batches = 1.0
+        cfg.trainer.precision = "32-true"
         cfg.trainer.enable_model_summary = False
     HydraConfig().set_config(cfg)
 
     metric_dict, object_dict = evaluate(cfg)
     GlobalHydra.instance().clear()
 
-    assert isinstance(object_dict["model"], SLAPModule)
+    model = object_dict["model"]
+    assert isinstance(model, SLAPModule)
+    assert model._ema_optimizer_steps.item() == train_objects["trainer"].global_step == 1
     assert torch.isfinite(metric_dict["loss/test/total_loss"])
+    assert metric_dict["retrieval/test/gallery_size"] == 4
+    for modality in ("audio", "param"):
+        assert metric_dict[f"retrieval/test/{modality}/embedding_variance"] > 0
+    for direction in ("audio_to_param", "param_to_audio"):
+        assert 0 < metric_dict[f"retrieval/test/{direction}/mrr"] <= 1
+        assert 0 <= metric_dict[f"retrieval/test/{direction}/recall_at_1"] <= 1
+    for name, value in model.state_dict().items():
+        if name.startswith(("audio_ema.", "param_ema.")):
+            torch.testing.assert_close(
+                value.cpu(), train_objects["model"].state_dict()[name].cpu(), rtol=0, atol=0
+            )
     metrics_path = Path(cfg.paths.output_dir) / "metrics" / "metrics.json"
-    assert math.isfinite(json.loads(metrics_path.read_text())["loss/test/total_loss"])
+    saved_metrics = json.loads(metrics_path.read_text())
+    for name, value in metric_dict.items():
+        if name.startswith(("retrieval/test/", "loss/test/")):
+            # Same fp32 checkpoint and gallery: allow only floating-point reduction roundoff.
+            assert float(value) == pytest.approx(float(train_metrics[name]), rel=1e-5, abs=1e-7)
+            assert saved_metrics[name] == pytest.approx(float(value), rel=1e-5, abs=1e-7)
 
 
 @pytest.mark.slow

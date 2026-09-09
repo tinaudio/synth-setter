@@ -349,11 +349,27 @@ def _assert_slap_train_artifacts(
         assert metric_name in metric_dict
         assert torch.isfinite(metric_dict[metric_name])
 
+    for stage in ("val", "test"):
+        assert metric_dict[f"retrieval/{stage}/gallery_size"] == 4
+        for direction in ("audio_to_param", "param_to_audio"):
+            assert 0 < metric_dict[f"retrieval/{stage}/{direction}/mrr"] <= 1
+            assert 0 <= metric_dict[f"retrieval/{stage}/{direction}/recall_at_1"] <= 1
+        for modality in ("audio", "param"):
+            assert metric_dict[f"retrieval/{stage}/{modality}/embedding_variance"] > 0
+
     checkpoint_callback = trainer.checkpoint_callback
     assert isinstance(checkpoint_callback, ValidationAlignedModelCheckpoint)
     best_checkpoint = Path(checkpoint_callback.best_model_path)
     assert best_checkpoint.parent == Path(cfg.paths.output_dir) / "checkpoints"
     assert best_checkpoint.stat().st_size > 0
+    checkpoint = torch.load(best_checkpoint, map_location="cpu", weights_only=False)
+    assert checkpoint["state_dict"]["_ema_optimizer_steps"].item() == trainer.global_step
+    model = object_dict["model"]
+    assert isinstance(model, SLAPModule)
+    assert model._ema_optimizer_steps.item() == trainer.global_step
+    for name, value in model.state_dict().items():
+        if name.startswith(("audio_ema.", "param_ema.")):
+            torch.testing.assert_close(value.cpu(), checkpoint["state_dict"][name], rtol=0, atol=0)
     return trainer
 
 
