@@ -139,7 +139,8 @@ SESSION_RECORDING_NOTE_END_SECONDS = 4.0
 _SESSION_RECORDING_BUFFER_SIZE = 2048
 
 # Plugin-flush parameters used by the post-load / pre-render flush pattern; see
-# ``_flush_plugin``. Mirror of the values used in ``synth_setter.data.vst.core.render_params``.
+# ``_flush_plugin``. The interactive tool uses a fixed 32 s flush; the offline renderer
+# derives its block count from ``renderer_backend.PEDALBOARD_FLUSH_SECONDS`` (#3245).
 _PLUGIN_FLUSH_DURATION_SECONDS = 32.0
 _PLUGIN_FLUSH_BUFFER_SIZE = 2048
 

@@ -1296,7 +1296,8 @@ class RenderConfig(BaseModel):
     renderer_backend: RendererBackend
     # Audio/shard geometry, retry budgets, and the cadence knobs
     # (plugin_reload_cadence #1999, gui_toggle_cadence #714,
-    # param_sample_cadence #489) are documented field-by-field on the
+    # param_sample_cadence #489, post_{load,param,render}_flush_blocks #3245)
+    # are documented field-by-field on the
     # authoritative RenderConfig in pipeline/schemas/spec.py; this block is
     # an abridged sketch, not the definition.
     ...

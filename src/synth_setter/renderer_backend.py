@@ -5,6 +5,8 @@ Interpreter-only (like ``param_spec_name``) so the launcher-pure
 without pulling ``synth_setter.data.vst`` at import time.
 """
 
+import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -29,6 +31,68 @@ PYFDN_CANONICAL_SOURCE_SHA256 = "5a215ebf9c4f8300774bee0f1e8e6ce5dd4052cb8c422ae
 PYFDN_SOURCE_CHANNELS = 1
 PYFDN_SOURCE_SAMPLE_RATE_HZ = 44_100
 PYFDN_SOURCE_TOTAL_FRAMES = 176_400
+
+
+@dataclass(frozen=True)
+class FlushBlocks:
+    """Silent host blocks processed after preset load, parameter writes, and the note render.
+
+    A block is the host's audio callback. Zero skips that step entirely, including any
+    host reset.
+
+    .. attribute :: post_load
+
+       Blocks after the preset loads, before parameter writes.
+
+    .. attribute :: post_param
+
+       Blocks after parameter writes, before the note is scheduled.
+
+    .. attribute :: post_render
+
+       Blocks after the note render, scrubbing voice state.
+    """
+
+    post_load: int
+    post_param: int
+    post_render: int
+
+
+PEDALBOARD_BLOCK_SIZE = 2048
+# Silence Pedalboard processes per flush step so preset state settles deterministically (#489).
+PEDALBOARD_FLUSH_SECONDS = 32.0
+# Compatibility window measured against Surge identity and Cardinal audio-thread restoration.
+DAWDREAMER_PRESET_SETTLE_BLOCKS = 8
+DAWDREAMER_FLUSH_BLOCKS = FlushBlocks(
+    post_load=DAWDREAMER_PRESET_SETTLE_BLOCKS, post_param=0, post_render=0
+)
+NO_FLUSH_BLOCKS = FlushBlocks(post_load=0, post_param=0, post_render=0)
+FLUSHING_BACKENDS = frozenset({"dawdreamer", "pedalboard"})
+
+
+def pedalboard_flush_blocks(sample_rate: float) -> FlushBlocks:
+    """Return the block counts that cover ``PEDALBOARD_FLUSH_SECONDS`` at ``sample_rate``.
+
+    :param sample_rate: Render sample rate in Hz.
+    :returns: Whole-block counts, rounded up, applied to every flush step.
+    """
+    blocks = math.ceil(PEDALBOARD_FLUSH_SECONDS * sample_rate / PEDALBOARD_BLOCK_SIZE)
+    return FlushBlocks(post_load=blocks, post_param=blocks, post_render=blocks)
+
+
+def default_flush_blocks(renderer_backend: str, sample_rate: float) -> FlushBlocks:
+    """Return the flush steps a backend runs when the config leaves them unset.
+
+    :param renderer_backend: Configured renderer backend.
+    :param sample_rate: Render sample rate in Hz.
+    :returns: Backend defaults; all zeros for backends that never flush.
+    """
+    if renderer_backend == "pedalboard":
+        return pedalboard_flush_blocks(sample_rate)
+    if renderer_backend == "dawdreamer":
+        return DAWDREAMER_FLUSH_BLOCKS
+    return NO_FLUSH_BLOCKS
+
 
 IN_PROCESS_PLUGIN_NAMES = frozenset(
     {TORCHSYNTH_PLUGIN_NAME, FAUST_PLUGIN_NAME, PYFDN_PLUGIN_NAME, SURGEPY_PLUGIN_NAME}

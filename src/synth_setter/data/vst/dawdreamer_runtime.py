@@ -8,10 +8,9 @@ from importlib import import_module
 from importlib.metadata import version as distribution_version
 from typing import Protocol
 
+from synth_setter.renderer_backend import DAWDREAMER_PRESET_SETTLE_BLOCKS
 from synth_setter.renderer_backend import RendererBackend as RendererBackend
 
-# Compatibility window measured against Surge identity and Cardinal audio-thread restoration.
-_PRESET_SETTLE_CALLBACKS = 8
 _SUPPORTED_PYTHON_MINOR = (3, 12)
 _SUPPORTED_TARGETS = {
     ("Darwin", "arm64"),
@@ -38,15 +37,17 @@ def settle_dawdreamer_preset(
     *,
     sample_rate: float,
     block_size: int,
+    blocks: int = DAWDREAMER_PRESET_SETTLE_BLOCKS,
 ) -> None:
     """Activate preset-dependent state before inspecting or writing parameters.
 
     :param engine: DawDreamer engine whose graph contains the preset-loaded plugin.
     :param sample_rate: Engine sample rate in Hz.
     :param block_size: Engine processing block size in samples.
+    :param blocks: Number of silent block-length callbacks to process.
     """
     block_duration = block_size / sample_rate
-    for _ in range(_PRESET_SETTLE_CALLBACKS):
+    for _ in range(blocks):
         engine.render(block_duration)
 
 
