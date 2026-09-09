@@ -90,10 +90,13 @@ sha_check() { echo "$1  $2" | sha256sum -c - >/dev/null || die "checksum mismatc
 # report the rest instead of failing the whole step on one rename. `apt-cache
 # policy` is the reliable probe: pure-virtual packages (libasound2 on 24.04)
 # and obsoleted ones (libgl1-mesa-glx) still print via `apt-cache show`.
+# awk consumes all of apt's output; `grep -q` would exit early and, under
+# pipefail, apt-cache's SIGPIPE marks every existing package as missing.
 apt_install() {
   local pkg present=() missing=()
   for pkg in "$@"; do
-    if apt-cache policy "$pkg" 2>/dev/null | grep -q '^ *Candidate: [^(]'; then
+    if apt-cache policy "$pkg" 2>/dev/null \
+        | awk '/^ *Candidate: / && $2 != "(none)" {found = 1} END {exit !found}'; then
       present+=("$pkg")
     else
       missing+=("$pkg")
