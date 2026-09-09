@@ -24,6 +24,7 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_metrics_on_dir,
     compute_mfcc,
     compute_mldr,
+    compute_mldr_mid_side,
     compute_mss,
     compute_rms,
     compute_sot,
@@ -591,6 +592,117 @@ def test_compute_mldr_silent_inputs_are_finite() -> None:
     assert np.isfinite(dist)
 
 
+def test_compute_mldr_mid_side_identical_stereo_returns_zero() -> None:
+    """Identical stereo pairs have zero mid/side MLDR distance."""
+    stereo = np.concatenate([_sine(seconds=2.0), _tremolo(depth=0.5)], axis=0)
+
+    assert compute_mldr_mid_side(stereo, stereo) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_compute_mldr_mid_side_matches_mldr_on_supplied_mid_side_signals() -> None:
+    """The stereo score equals MLDR applied to the supplied original M/S signals."""
+    sqrt_two = np.sqrt(2.0)
+    target_ms = np.concatenate([_sine(seconds=2.0), _tremolo(depth=0.2)], axis=0)
+    pred_ms = np.concatenate([_tremolo(depth=0.8), _sine(seconds=2.0)], axis=0)
+    target_lr = np.stack(
+        ((target_ms[0] + target_ms[1]) / sqrt_two, (target_ms[0] - target_ms[1]) / sqrt_two)
+    )
+    pred_lr = np.stack(
+        ((pred_ms[0] + pred_ms[1]) / sqrt_two, (pred_ms[0] - pred_ms[1]) / sqrt_two)
+    )
+
+    score = compute_mldr_mid_side(target_lr, pred_lr)
+
+    assert score == pytest.approx(compute_mldr(target_ms, pred_ms), rel=1e-8, abs=1e-8)
+
+
+def test_compute_mldr_mid_side_detects_right_channel_polarity_change() -> None:
+    """Mid/side MLDR detects a polarity change hidden by per-channel energy."""
+    target = np.concatenate([_sine(seconds=2.0), _tremolo(depth=0.9)], axis=0)
+    pred = target.copy()
+    pred[1] *= -1
+
+    assert compute_mldr(target, pred) == pytest.approx(0.0, abs=1e-9)
+    assert compute_mldr_mid_side(target, pred) > 0.0
+
+
+def test_compute_mldr_mid_side_integer_input_matches_float64_input() -> None:
+    """Mid/side addition occurs after widening, so integer samples cannot overflow."""
+    target = np.tile(
+        np.array(
+            [[30_000, 20_000, -30_000, -20_000], [20_000, 30_000, -20_000, -30_000]],
+            dtype=np.int16,
+        ),
+        (1, 1_000),
+    )
+    pred = np.roll(target, 97, axis=1)
+
+    integer_score = compute_mldr_mid_side(target, pred, sample_rate=1_000)
+
+    assert integer_score == pytest.approx(
+        compute_mldr_mid_side(
+            target.astype(np.float64), pred.astype(np.float64), sample_rate=1_000
+        ),
+        abs=1e-12,
+    )
+
+
+def test_compute_mldr_mid_side_near_silent_side_is_finite() -> None:
+    """A nearly centred stereo pair remains finite after mid/side conversion."""
+    left = _tremolo(depth=0.5)[0]
+    stereo = np.stack((left, left + 1e-12))
+
+    assert np.isfinite(compute_mldr_mid_side(stereo, stereo))
+
+
+@pytest.mark.parametrize(
+    ("target", "pred"),
+    [
+        (np.zeros((1, 10)), np.zeros((1, 10))),
+        (np.zeros((3, 10)), np.zeros((3, 10))),
+        (np.zeros((2, 10)), np.zeros((2, 9))),
+        (np.zeros((2, 0)), np.zeros((2, 0))),
+        (np.zeros(10), np.zeros(10)),
+    ],
+)
+def test_compute_mldr_mid_side_nonmatching_stereo_shape_raises(
+    target: np.ndarray, pred: np.ndarray
+) -> None:
+    """Only matching channel-first stereo arrays satisfy the public contract.
+
+    :param target: Invalid target shape.
+    :param pred: Invalid prediction shape.
+    """
+    with pytest.raises(ValueError, match=r"matching nonempty stereo.*\(2, T\)"):
+        compute_mldr_mid_side(target, pred)
+
+
+def test_compute_mldr_mid_side_finite_energy_overflow_is_rescaled() -> None:
+    """Finite transformed values are safely rescaled before energy squaring."""
+    stereo = np.full((2, 10), 1e200)
+
+    result = compute_mldr_mid_side(stereo, stereo)
+
+    assert result == pytest.approx(0.0)
+
+
+def test_compute_mldr_mid_side_finite_overflowing_transform_raises() -> None:
+    """Finite values whose mid/side sum overflows cannot produce a metric."""
+    stereo = np.full((2, 10), np.finfo(np.float64).max)
+
+    with pytest.raises(ValueError, match="finite"):
+        compute_mldr_mid_side(stereo, stereo)
+
+
+def test_compute_mldr_mid_side_nonfinite_audio_raises() -> None:
+    """Non-finite stereo samples cannot enter metric aggregation."""
+    stereo = np.zeros((2, 10), dtype=np.float64)
+    stereo[0, 0] = np.nan
+
+    with pytest.raises(ValueError, match="finite"):
+        compute_mldr_mid_side(stereo, stereo)
+
+
 # ---------------------------------------------------------------------------
 # compute_mfcc
 # ---------------------------------------------------------------------------
@@ -770,6 +882,19 @@ def test_compute_metrics_on_dir_returns_expected_keys(tmp_path: Path) -> None:
         assert np.isfinite(value)
 
 
+def test_compute_metrics_on_dir_stereo_adds_mid_side_metric(tmp_path: Path) -> None:
+    """A real stereo WAV pair includes a finite mid/side MLDR score.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    stereo = np.concatenate([_sine(seconds=0.5), _tremolo(depth=0.5, seconds=0.5)], axis=0)
+    sample_dir = _make_sample_dir(tmp_path, "0", stereo, stereo)
+
+    metrics = compute_metrics_on_dir(sample_dir)
+
+    assert metrics["mldr_mid_side"] == pytest.approx(0.0, abs=1e-9)
+
+
 def test_compute_metrics_on_dir_pyfdn_adds_reverb_metrics(tmp_path: Path) -> None:
     """Selecting pyFDN augments the historical metric set with reverb errors.
 
@@ -934,6 +1059,47 @@ def test_aggregate_metrics_pyfdn_preserves_reverb_columns(
 # ---------------------------------------------------------------------------
 # main (Click CLI)
 # ---------------------------------------------------------------------------
+
+
+def test_main_mixed_channel_files_export_optional_mid_side_metric(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real WAV evaluation exports stereo scores and preserves mono omissions.
+
+    :param tmp_path: Pytest fixture providing isolated input and output directories.
+    :param monkeypatch: Keeps unrelated expensive metrics deterministic and runs workers in-
+        process.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    mono = _tremolo(depth=0.5, seconds=2.0)
+    stereo_target = np.concatenate([_sine(seconds=2.0), mono], axis=0)
+    stereo_pred = stereo_target.copy()
+    stereo_pred[1] *= -1
+    _make_sample_dir(audio_root, "mono", mono, mono)
+    _make_sample_dir(audio_root, "stereo", stereo_target, stereo_pred)
+    _make_sample_dir(audio_root, "identity", stereo_target, stereo_target)
+    metrics_dir = tmp_path / "metrics"
+    monkeypatch.setattr(cam, "ProcessPoolExecutor", ThreadPoolExecutor)
+    for metric_name in ("compute_mss", "compute_wmfcc", "compute_sot", "compute_rms"):
+        monkeypatch.setattr(cam, metric_name, lambda *_args: 0.0)
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    per_sample = pd.read_csv(metrics_dir / "metrics.csv", index_col=0)
+    assert pd.isna(per_sample.loc["mono", "mldr_mid_side"])
+    assert per_sample.loc["stereo", "mldr_mid_side"] > 0.0
+    flattened = cam.load_aggregated_metrics(metrics_dir / "aggregated_metrics.csv")
+    assert flattened["mldr_mid_side_mean"] == pytest.approx(
+        (per_sample.loc["stereo", "mldr_mid_side"] + per_sample.loc["identity", "mldr_mid_side"])
+        / 2
+    )
+    assert np.isfinite(flattened["mldr_mid_side_std"])
 
 
 def test_main_pyfdn_writes_reverb_aggregate_rows(

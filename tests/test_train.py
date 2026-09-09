@@ -91,7 +91,7 @@ from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 from tests.helpers.wandb_offline import read_history_rows
 
-NUM_AUDIO_METRICS = 5
+NUM_STEREO_AUDIO_METRICS = 6
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
@@ -1302,12 +1302,12 @@ def test_train_eval_surge_xt(
 
     METRICS_FILE_EXPECTATIONS = {
         "aggregated_metrics.csv": {
-            "rows": NUM_AUDIO_METRICS,
+            "rows": NUM_STEREO_AUDIO_METRICS,
             "columns": {"mean", "std"},
         },
         "metrics.csv": {
             "rows": NUM_FIXTURE_SAMPLES,
-            "columns": {"mss", "wmfcc", "sot", "rms", "mldr"},
+            "columns": {"mss", "wmfcc", "sot", "rms", "mldr", "mldr_mid_side"},
         },
     }
 
@@ -1815,7 +1815,7 @@ def test_train_eval_surge_fake_writes_audio_and_metrics_outputs(
 
     metrics_dir = tmp_path / "metrics"
     for metrics_file, expected_rows in {
-        "aggregated_metrics.csv": NUM_AUDIO_METRICS,
+        "aggregated_metrics.csv": NUM_STEREO_AUDIO_METRICS,
         "metrics.csv": NUM_FIXTURE_SAMPLES,
     }.items():
         assert (metrics_dir / metrics_file).is_file(), f"{metrics_file} not found"

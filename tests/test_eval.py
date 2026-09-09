@@ -1527,7 +1527,7 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
 
     assert metric_dict["audio/mss_mean"] == pytest.approx(0.5)
     assert metric_dict["audio/rms_std"] == pytest.approx(0.01)
-    for key in ("mss", "wmfcc", "sot", "rms", "mldr"):
+    for key in ("mss", "wmfcc", "sot", "rms", "mldr", "mldr_mid_side"):
         for stat in ("mean", "std"):
             value = metric_dict[f"audio/{key}_{stat}"]
             assert isinstance(value, float) and math.isfinite(value)
