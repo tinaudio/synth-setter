@@ -916,6 +916,28 @@ def test_train_pyfdn_identity_uses_spec_width_batches(
 
 
 @pytest.mark.slow
+def test_train_pyfdn_diffvox_identity_uses_82_coordinate_batches(tmp_path: Path) -> None:
+    """The train entrypoint resolves the DiffVox synth and model width.
+
+    :param tmp_path: Pinned as the one-step training output directory.
+    """
+    identity = "pyfdn_diffvox"
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name=identity)
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1
+    assert_log_per_param_mse_wired(trainer, identity)
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["params"].shape == (2, 82)
+    datamodule.teardown("fit")
+
+
+@pytest.mark.slow
 def test_train_file_uri_hydrates_marker_staged_local_dataset_root(
     cfg_train_lance: DictConfig, tmp_path: Path
 ) -> None:
