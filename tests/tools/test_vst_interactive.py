@@ -1429,6 +1429,40 @@ class TestValidateMetricsDf:
 
         vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
+    def test_optional_metric_allows_missing_values_in_mixed_collection(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """An optional stereo metric may be absent only from mono sample rows.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
+        df = pd.DataFrame({"mss": [0.1, 0.2], "mldr_mid_side": [float("nan"), 0.3]})
+        spec = vst_interactive._MetricsFileSpec(
+            rows=2,
+            columns=frozenset({"mss"}),
+            optional_columns=frozenset({"mldr_mid_side"}),
+        )
+
+        vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
+
+    def test_optional_aggregate_row_allows_single_stereo_sample_std_nan(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """One applicable stereo sample may leave only its optional std undefined.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
+        df = pd.DataFrame(
+            {"metric": ["mss", "mldr_mid_side"], "mean": [0.1, 0.2], "std": [0.01, float("nan")]}
+        )
+        spec = vst_interactive._MetricsFileSpec(
+            rows=1,
+            columns=frozenset({"mean", "std"}),
+            optional_rows=frozenset({"mldr_mid_side"}),
+        )
+
+        vst_interactive._validate_metrics_df(Path("aggregated_metrics.csv"), df, spec)
+
     def test_wrong_rows_raises_valueerror(self, vst_interactive: ModuleType) -> None:
         """Row count mismatch raises ``ValueError`` mentioning expected and actual.
 
