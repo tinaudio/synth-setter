@@ -189,6 +189,7 @@ def decode_clip(
     num_samples: int,
     amplitude_scale: float,
     downmix: bool = False,
+    peak_normalize: bool = False,
 ) -> np.ndarray:
     """Decode one source clip onto the render contract's audio grid.
 
@@ -199,6 +200,9 @@ def decode_clip(
     :param amplitude_scale: Gain applied after length-pinning.
     :param downmix: Average a multichannel source to mono before channel mapping, so
         stereo corpora can serve a narrower contract.
+    :param peak_normalize: Rescale the resampled clip to unit peak before length-pinning;
+        float impulse-response corpora carry arbitrary, often above-unity, levels. Silence
+        is left untouched.
     :returns: ``(channels, num_samples)`` float32 audio.
     :raises AudioDecodeError: The encoded container or codec cannot be decoded.
     :raises ValueError: Source or scaled samples are invalid, or channels mismatch.
@@ -212,7 +216,7 @@ def decode_clip(
         raise ValueError("source audio contains non-finite samples")
     source_min = source.min(initial=0.0)
     source_max = source.max(initial=0.0)
-    if source_min < -_PCM16_DECODE_FULL_SCALE or source_max > 1.0:
+    if not peak_normalize and (source_min < -_PCM16_DECODE_FULL_SCALE or source_max > 1.0):
         raise ValueError("source audio leaves [-1, 1]")
 
     try:
@@ -222,6 +226,9 @@ def decode_clip(
         raise AudioDecodeError("pedalboard could not decode the audio container") from exc
     if downmix and audio.shape[0] > 1:
         audio = audio.mean(axis=0, keepdims=True)
+    peak = np.abs(audio).max(initial=0.0)
+    if peak_normalize and peak > 0.0:
+        audio = audio / peak
     if audio.shape[0] == 1 < channels:
         audio = np.repeat(audio, channels, axis=0)
     elif audio.shape[0] != channels:
@@ -256,6 +263,7 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         num_samples: int,
         amplitude_scale: float,
         downmix: bool,
+        peak_normalize: bool,
         rows: int,
         addresses: Sequence[int] | None = None,
     ) -> None:
@@ -270,6 +278,7 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         :param num_samples: Target sample count per clip.
         :param amplitude_scale: Gain applied to decoded audio.
         :param downmix: Whether multichannel sources are averaged to mono first.
+        :param peak_normalize: Whether each clip is rescaled to unit peak.
         :param rows: Number of rows served.
         :param addresses: Lance row addresses of the served rows, in serving order;
             ``None`` serves the first ``rows`` stored rows.
@@ -283,6 +292,8 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
         self.num_samples = num_samples
         self.amplitude_scale = amplitude_scale
         self.downmix = downmix
+        self.peak_normalize = peak_normalize
+        self.peak_normalize = peak_normalize
         self.rows = rows
         self.addresses = list(addresses) if addresses is not None else None
         self._dataset: lance.LanceDataset | None = None
@@ -340,6 +351,7 @@ class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
             num_samples=self.num_samples,
             amplitude_scale=self.amplitude_scale,
             downmix=self.downmix,
+            peak_normalize=self.peak_normalize,
         )
         mel = make_spectrogram(audio, self.sample_rate).astype(np.float32)
         return {"audio": torch.from_numpy(audio), "mel": torch.from_numpy(mel)}
@@ -385,6 +397,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         row_limit: int | None = None,
         row_filter: str | None = None,
         downmix: bool = False,
+        peak_normalize: bool = False,
         conditioning: str = "mel",
         sketch: SketchControls = None,
         use_saved_mean_and_variance: bool = False,
@@ -409,6 +422,8 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             ``None`` serves every row. Applied before ``row_limit``.
         :param downmix: Average multichannel sources to mono before mapping onto the
             contract's channel count; off, a channel-count mismatch raises.
+        :param peak_normalize: Rescale every clip to unit peak; off, a source outside
+            ``[-1, 1]`` raises.
         :param conditioning: Conditioning mode; only ``mel`` is accepted.
         :param sketch: Optional live sketch-control specification.
         :param use_saved_mean_and_variance: Whether to standardize mel with saved statistics.
@@ -446,6 +461,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.row_limit = row_limit
         self.row_filter = row_filter
         self.downmix = downmix
+        self.peak_normalize = peak_normalize
         self.conditioning = conditioning
         self.sketch_controls = resolve_sketch_controls(sketch)
         if (
@@ -594,6 +610,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
                 num_samples=self.num_samples,
                 amplitude_scale=self.amplitude_scale,
                 downmix=self.downmix,
+                peak_normalize=self.peak_normalize,
                 rows=rows,
                 addresses=addresses,
             ),
@@ -648,11 +665,14 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         """
         if self._predict_dataset is None:
             raise RuntimeError("predict split is not built; call setup('predict') first")
+        # A forked worker inherits Lance's native runtime state and can hang or die on
+        # its first object-store read; spawning starts each worker with a fresh runtime.
         return DataLoader(
             self._predict_dataset,
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
+            multiprocessing_context="spawn" if self.num_workers > 0 else None,
         )
 
     def on_before_batch_transfer(

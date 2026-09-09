@@ -1655,6 +1655,7 @@ def test_rir_corpus_config_serves_decodable_rows_downmixed_onto_pyfdn(
     assert cfg.datamodule.audio_column == "source_bytes"
     assert cfg.datamodule.channels == 1
     assert cfg.datamodule.downmix is True
+    assert cfg.datamodule.peak_normalize is True
     assert "audio_decodable = true" in cfg.datamodule.row_filter
     if path_rule is not None:
         assert path_rule in cfg.datamodule.row_filter

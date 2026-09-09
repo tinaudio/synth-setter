@@ -22,6 +22,9 @@ row_filter: null
 # Average multichannel sources to mono before mapping onto the render contract;
 # off, a channel-count mismatch raises.
 downmix: false
+# Rescale every clip to unit peak; float impulse-response corpora carry arbitrary
+# levels and the mel front-end assumes normalized audio. Off, out-of-range raises.
+peak_normalize: false
 
 conditioning: mel
 

@@ -8,3 +8,4 @@ dataset_version: 1
 audio_column: source_bytes
 row_filter: "audio_decodable = true AND source_path LIKE 'Omni_ir_%'"
 downmix: true
+peak_normalize: true

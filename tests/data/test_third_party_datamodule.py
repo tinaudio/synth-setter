@@ -93,6 +93,7 @@ def _datamodule(
     row_limit: int | None = None,
     row_filter: str | None = None,
     downmix: bool = False,
+    peak_normalize: bool = False,
     num_workers: int = 0,
     use_saved_mean_and_variance: bool = False,
     mel_stats_uri: str | None = None,
@@ -110,6 +111,7 @@ def _datamodule(
     :param row_limit: Cap on served rows, or ``None`` for the whole corpus.
     :param row_filter: Optional Lance SQL predicate selecting the served rows.
     :param downmix: Whether multichannel sources are averaged before channel mapping.
+    :param peak_normalize: Whether each clip is rescaled to unit peak before length-pinning.
     :param num_workers: Dataloader worker processes.
     :param use_saved_mean_and_variance: Whether mel is standardized.
     :param mel_stats_uri: Statistics source when standardization is on.
@@ -130,6 +132,7 @@ def _datamodule(
         row_limit=row_limit,
         row_filter=row_filter,
         downmix=downmix,
+        peak_normalize=peak_normalize,
         num_workers=num_workers,
         use_saved_mean_and_variance=use_saved_mean_and_variance,
         mel_stats_uri=mel_stats_uri,
@@ -523,6 +526,76 @@ def test_decode_clip_downmix_of_identical_channels_matches_mono_decode() -> None
     mono = decode_clip(wav_bytes(clip, _SOURCE_SAMPLE_RATE), **common)
 
     assert np.allclose(stereo, mono, atol=1e-6)
+
+
+def _float_wav_bytes(clip: np.ndarray) -> bytes:
+    """Encode one mono clip as a 32-bit float WAV, which can carry samples beyond ±1.
+
+    :param clip: ``(frames,)`` float32 samples.
+    :returns: WAV container bytes.
+    """
+    buffer = io.BytesIO()
+    sf.write(buffer, clip.astype(np.float32), _SOURCE_SAMPLE_RATE, format="WAV", subtype="FLOAT")
+    return buffer.getvalue()
+
+
+_DECODE_CONTRACT = {
+    "sample_rate": _SOURCE_SAMPLE_RATE,
+    "channels": 1,
+    "num_samples": int(_DURATION_SECONDS * _SOURCE_SAMPLE_RATE),
+    "amplitude_scale": 1.0,
+}
+
+
+def test_decode_clip_peak_normalize_brings_a_hot_float_source_to_unit_peak() -> None:
+    """An unnormalized float impulse response peaking above 1 is served at unit peak."""
+    clip = _tone(_DURATION_SECONDS) * 4.0
+
+    audio = decode_clip(_float_wav_bytes(clip), peak_normalize=True, **_DECODE_CONTRACT)
+
+    assert np.isclose(np.abs(audio).max(), 1.0)
+    assert np.allclose(audio[0], clip / np.abs(clip).max(), atol=1e-6)
+
+
+def test_decode_clip_peak_normalize_raises_a_quiet_source_to_unit_peak() -> None:
+    """Peak normalization scales up as well as down, so corpus level is irrelevant."""
+    clip = _tone(_DURATION_SECONDS) * 0.1
+
+    audio = decode_clip(_float_wav_bytes(clip), peak_normalize=True, **_DECODE_CONTRACT)
+
+    assert np.isclose(np.abs(audio).max(), 1.0)
+
+
+def test_decode_clip_peak_normalize_leaves_silence_silent() -> None:
+    """An all-zero clip has no peak to scale by and must not become NaN."""
+    clip = np.zeros(int(_DURATION_SECONDS * _SOURCE_SAMPLE_RATE), dtype=np.float32)
+
+    audio = decode_clip(_float_wav_bytes(clip), peak_normalize=True, **_DECODE_CONTRACT)
+
+    assert np.all(audio == 0.0)
+
+
+def test_decode_clip_without_peak_normalize_rejects_a_hot_float_source() -> None:
+    """The existing storage-range guard still stands when normalization is off."""
+    clip = _tone(_DURATION_SECONDS) * 4.0
+
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        decode_clip(_float_wav_bytes(clip), **_DECODE_CONTRACT)
+
+
+def test_predict_dataloader_workers_are_spawned_not_forked(tmp_path: Path) -> None:
+    """Workers start fresh processes: a forked child inherits Lance's native runtime and hangs.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS)])
+    datamodule = _datamodule(tmp_path / "corpus.lance", num_workers=1)
+    datamodule.setup("predict")
+
+    loader = datamodule.predict_dataloader()
+
+    assert loader.multiprocessing_context.get_start_method() == "spawn"
+    assert sum(len(batch["audio"]) for batch in loader) == 1
 
 
 def test_multichannel_source_disagreeing_with_contract_raises() -> None:
