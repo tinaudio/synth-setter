@@ -390,6 +390,99 @@ class DiscreteArrayParameter(ContinuousArrayParameter):
         return np.rint(super().decode(encoded)).astype(np.int64)
 
 
+# Below this model-space norm a (cos, sin) pair has no usable direction.
+_ANGLE_PAIR_MIN_NORM = 1e-6
+
+
+class AngleArrayParameter(Parameter):
+    """A fixed-shape array of radians encoded as one ``(cos, sin)`` pair per angle.
+
+    Model space then sees ``(cos θ, sin θ)`` directly, so ``+π`` and ``-π`` share one
+    encoding and MSE against the pair equals ``2 - 2cos(θ̂ - θ)``: seam-aware without
+    a dedicated loss. Decode projects any predicted pair onto the unit circle.
+    """
+
+    def __init__(self, name: str, shape: tuple[int, ...]) -> None:
+        """Bind the native angle-array shape.
+
+        :param name: Logical parameter name.
+        :param shape: Non-empty native array shape with positive dimensions.
+        :raises ValueError: The shape cannot describe at least one angle.
+        """
+        super().__init__(name)
+        if not shape or any(
+            not isinstance(size, Integral) or isinstance(size, bool) or size <= 0
+            for size in shape
+        ):
+            raise ValueError("shape must contain positive integer dimensions")
+        self.shape = tuple(int(size) for size in shape)
+
+    def __len__(self) -> int:
+        return 2 * math.prod(self.shape)
+
+    def sample(self, rng: np.random.Generator) -> np.ndarray:
+        """Draw one native float64 array of radians uniform over ``[-π, π)``.
+
+        :param rng: Generator that owns the deterministic sample stream.
+        :returns: Radians shaped ``self.shape``.
+        """
+        return rng.uniform(-np.pi, np.pi, size=self.shape)
+
+    def encode(self, raw_value: object) -> np.ndarray:
+        """Encode radians as a flat C-order float32 vector of ``(cos, sin)`` pairs in ``[0, 1]``.
+
+        :param raw_value: Finite radians shaped ``self.shape``; any real value is accepted
+            because angles are periodic.
+        :returns: Values shaped ``(len(self),)`` in ``[0, 1]``.
+        :raises ValueError: The input has the wrong shape or non-finite values.
+        """
+        raw = np.asarray(raw_value, dtype=np.float64)
+        if raw.shape != self.shape:
+            raise ValueError(f"{self.name} must have shape {self.shape}, got {raw.shape}")
+        if not np.isfinite(raw).all():
+            raise ValueError(f"{self.name} must contain only finite values")
+        pairs = np.stack((np.cos(raw), np.sin(raw)), axis=-1)
+        return ((pairs + 1.0) / 2.0).reshape(-1, order="C").astype(np.float32)
+
+    def encoded_names(self) -> tuple[str, ...]:
+        """Return ``<name>.<coordinate>.cos`` / ``.sin`` labels in encoding order.
+
+        :returns: Labels ordered identically to :meth:`encode`.
+        """
+        return tuple(
+            f"{self.name}.{'.'.join(str(coordinate) for coordinate in index)}.{component}"
+            for index in np.ndindex(self.shape)
+            for component in ("cos", "sin")
+        )
+
+    def decode(self, encoded: np.ndarray) -> np.ndarray:
+        """Decode ``(cos, sin)`` pairs in ``[0, 1]`` to radians in ``[-π, π]``.
+
+        Pairs are projected onto the unit circle first, so an off-circle model prediction
+        decodes to the angle of its direction; a directionless pair decodes to ``0``.
+
+        :param encoded: Finite values shaped ``(len(self),)`` in ``[0, 1]``.
+        :returns: Float64 radians shaped ``self.shape``.
+        :raises ValueError: The input has the wrong shape or invalid values.
+        """
+        values = np.asarray(encoded)
+        expected_shape = (len(self),)
+        if values.shape != expected_shape:
+            raise ValueError(
+                f"encoded {self.name} must have shape {expected_shape}, got {values.shape}"
+            )
+        if not np.isfinite(values).all():
+            raise ValueError(f"encoded {self.name} must contain only finite values")
+        if np.any((values < 0.0) | (values > 1.0)):
+            raise ValueError(f"encoded {self.name} values must be within [0, 1]")
+        pairs = (values.astype(np.float64) * 2.0 - 1.0).reshape(-1, 2)
+        norms = np.linalg.norm(pairs, axis=-1)
+        angles = np.where(
+            norms < _ANGLE_PAIR_MIN_NORM, 0.0, np.arctan2(pairs[:, 1], pairs[:, 0])
+        )
+        return angles.reshape(self.shape, order="C")
+
+
 class NoteDurationParameter(Parameter):
     """A special parameter for sampling note durations."""
 
