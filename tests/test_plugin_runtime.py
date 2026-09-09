@@ -6,6 +6,7 @@ import errno
 import json
 import multiprocessing
 import os
+import sys
 import threading
 import traceback
 from collections.abc import Iterator
@@ -238,7 +239,20 @@ def test_renderer_construction_before_rotation_consumes_validated_old_bytes(
     assert managed_plugin_digest(bundle) != expected_digest
 
 
-@pytest.mark.parametrize("consumer", ["load", "version"])
+@pytest.mark.parametrize(
+    "consumer",
+    [
+        "load",
+        pytest.param(
+            "version",
+            marks=pytest.mark.xfail(
+                sys.platform == "darwin",
+                reason="macOS spawn can outlive the consumer lease timeout; see #3298",
+                strict=False,
+            ),
+        ),
+    ],
+)
 def test_validated_bundle_lease_blocks_same_path_reinstall_until_consumer_opens_a(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
