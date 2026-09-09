@@ -709,16 +709,16 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
 
 
 @pytest.fixture(scope="function")
-def cfg_dataset_kr106_2m(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose the production-scale KR-106 dataset experiment with temporary paths.
+def cfg_dataset_kr106_smoke(tmp_path: Path) -> Iterator[DictConfig]:
+    """Compose the KR-106 smoke experiment with temporary paths.
 
     :param tmp_path: Per-test output/work/log root.
-    :yields DictConfig: KR-106 cfg with ``tmp_path``-pinned paths.
+    :yields DictConfig: KR-106 smoke cfg with ``tmp_path``-pinned paths.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
-            overrides=["experiment=generate_dataset/ultramaster-kr106-lance-2m-40k-10k"],
+            overrides=["experiment=generate_dataset/ultramaster-kr106-lance-smoke"],
         )
         with open_dict(cfg):
             _set_workspace_root(cfg)
