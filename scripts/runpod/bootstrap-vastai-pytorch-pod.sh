@@ -121,8 +121,33 @@ if [[ -d /root/.ssh ]]; then
   [[ -f /root/.ssh/authorized_keys ]] && chmod 600 /root/.ssh/authorized_keys
 fi
 
+# Some vastai image builds dump the container env into /etc/environment
+# unquoted (NVIDIA_REQUIRE_CUDA=cuda>=12.8 ...). dpkg postinsts such as
+# install-info source that file, so the bare `<`/`>` become redirections and
+# apt-get aborts. Quote any unquoted value carrying shell metacharacters.
+unsafe_env_re="^[A-Za-z_][A-Za-z0-9_]*=[^\"'].*[<>|&;\`\$()]"
+if [[ -f /etc/environment ]] && grep -qE "$unsafe_env_re" /etc/environment; then
+  log "quoting unsafe values in /etc/environment (backup: /etc/environment.pre-bootstrap)"
+  cp -n /etc/environment /etc/environment.pre-bootstrap
+  python3 - <<'PY'
+import re, pathlib
+p = pathlib.Path("/etc/environment")
+out = []
+for line in p.read_text().splitlines():
+    m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)=(.*)$', line)
+    v = m.group(2) if m else None
+    if m and v and v[0] not in "\"'" and re.search(r'[<>|&;`$()\s]', v):
+        v = v.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        line = f'{m.group(1)}="{v}"'
+    out.append(line)
+p.write_text("\n".join(out) + "\n")
+PY
+fi
+
 # ------------------------------------------------------- 1. apt layer ----
 log "1/12 apt: build toolchain, VST runtime, headless X stack, CLI tools"
+# Finish any package left half-configured by an earlier aborted run.
+dpkg --configure -a
 apt-get update --error-on=any
 apt_install ca-certificates curl wget gnupg git jq unzip xz-utils sudo \
   software-properties-common make ninja-build flex build-essential cmake pkg-config \
