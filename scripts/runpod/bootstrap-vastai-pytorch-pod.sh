@@ -11,19 +11,20 @@
 #   SS_BRANCH=internal-feat/runpod-vastai-bootstrap   # branch that carries this script
 #   SS_URL="https://raw.githubusercontent.com/tinaudio/synth-setter/${SS_BRANCH}/scripts/runpod/bootstrap-vastai-pytorch-pod.sh"
 #
-# Option A — run automatically at pod startup. In the RunPod template, set the
-# environment variable PROVISIONING_SCRIPT to ${SS_URL}: the vastai/pytorch
-# entrypoint downloads and runs it as root on first boot (log in
-# /var/log/portal/provisioning.log). Add SS_GIT_REF=<branch> as another env var
-# to check out something other than main.
+# Option A — run automatically at pod startup (works on RunPod, not only
+# Vast). PROVISIONING_SCRIPT is read by the image itself, not by the Vast host:
+# the entrypoint's boot step /etc/vast_boot.d/75-provisioning-manifest.sh hands
+# it to the bundled `provisioner`, which downloads and runs it as root once
+# (guarded by /.provisioning_complete). In the RunPod template add the env vars
+#   PROVISIONING_SCRIPT=${SS_URL}
+#   SS_GIT_REF=main            # optional: branch to check out
+# Output goes to the provisioner's log under /var/log/portal (no
+# /workspace/bootstrap.log in this mode). Delete /.provisioning_complete to
+# force a re-run on the next boot.
 #
 # Option B — run once over SSH after the pod is up:
 #   curl -fsSL "${SS_URL}" -o /tmp/bootstrap.sh
 #   bash /tmp/bootstrap.sh 2>&1 | tee /workspace/bootstrap.log
-#
-# Option C — RunPod "Container Start Command" (keeps the image's own
-# entrypoint so SSH/Jupyter still come up):
-#   bash -c 'curl -fsSL "<SS_URL>" -o /tmp/bootstrap.sh && bash /tmp/bootstrap.sh >/workspace/bootstrap.log 2>&1; exec /opt/instance-tools/bin/entrypoint.sh'
 #
 # Every step is idempotent, so re-running after a failure resumes cheaply.
 #
