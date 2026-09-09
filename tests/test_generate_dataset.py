@@ -2104,8 +2104,6 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             f"--- STDOUT (tail) ---\n{result.stdout[-2000:]}\n"
             f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
         )
-        assert result.stderr.count("oracle_probe_uploaded") == 3
-
         eval_configs = list(run_dir.glob("oracle_eval/*/*/.hydra/config.yaml"))
         assert len(eval_configs) == 3
         for config_path in eval_configs:

@@ -3394,7 +3394,7 @@ class TestMainDispatchBranches:
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
-        monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
+        monkeypatch.setattr(gd, "finalize_tracked", MagicMock())
         monkeypatch.setattr(gd.r2_io, "download_dir_no_overwrite", MagicMock())
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
