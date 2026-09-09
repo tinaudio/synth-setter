@@ -862,15 +862,15 @@ def test_from_hydra_real_vst_lance_render_stages_then_resume_skips(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_from_hydra_real_kr106_writes_finite_consumable_lance_shard(
-    cfg_dataset_kr106_2m: DictConfig,
+def test_from_hydra_real_kr106_smoke_writes_finite_consumable_lance_shard(
+    cfg_dataset_kr106_smoke: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """The public operator renders, validates, and finalizes a real KR-106 row.
+    """The public operator renders and finalizes a real KR-106 DawDreamer row.
 
-    :param cfg_dataset_kr106_2m: Composed production-scale KR-106 experiment.
+    :param cfg_dataset_kr106_smoke: Composed KR-106 DawDreamer smoke experiment.
     :param fake_r2_remote: Local filesystem backing the real rclone transport.
     :param monkeypatch: Configures the single local worker process.
     :param tmp_path: Render and finalize workspace.
@@ -883,17 +883,16 @@ def test_from_hydra_real_kr106_writes_finite_consumable_lance_shard(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-    with open_dict(cfg_dataset_kr106_2m):
-        cfg_dataset_kr106_2m.train_val_test_sizes = [2, 0, 0]
-        cfg_dataset_kr106_2m.mask_degenerate_bins = True
-        cfg_dataset_kr106_2m.synth.plugin_path = str(_KR106_PLUGIN_VST3)
-        cfg_dataset_kr106_2m.synth.plugin_state_path = str(_KR106_PRESET)
-        cfg_dataset_kr106_2m.render.samples_per_shard = 2
-        cfg_dataset_kr106_2m.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
-        cfg_dataset_kr106_2m.logger = None
+    with open_dict(cfg_dataset_kr106_smoke):
+        cfg_dataset_kr106_smoke.train_val_test_sizes = [2, 0, 0]
+        cfg_dataset_kr106_smoke.synth.plugin_path = str(_KR106_PLUGIN_VST3)
+        cfg_dataset_kr106_smoke.synth.plugin_state_path = str(_KR106_PRESET)
+        cfg_dataset_kr106_smoke.render.samples_per_shard = 2
+        cfg_dataset_kr106_smoke.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
+        cfg_dataset_kr106_smoke.logger = None
 
-    spec = spec_from_cfg(cfg_dataset_kr106_2m)
-    from_hydra(cfg_dataset_kr106_2m)
+    spec = spec_from_cfg(cfg_dataset_kr106_smoke)
+    from_hydra(cfg_dataset_kr106_smoke)
 
     shard = spec.shards[0]
     assert shard_has_complete_attempt(spec, shard.shard_id)
