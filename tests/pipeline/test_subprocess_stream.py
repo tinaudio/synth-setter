@@ -791,7 +791,7 @@ class TestSyncFacade:
     def test_sync_facade_runs_from_worker_thread(self, leak_marker: str) -> None:
         """The facade works off the main thread.
 
-        Production runs it inside ``_render_and_upload_shard`` worker
+        Production runs it inside ``render_and_upload_shard`` worker
         threads, where asyncio's child watcher must not depend on the main
         thread's signal handling.
 

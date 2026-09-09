@@ -56,7 +56,7 @@ from synth_setter.pipeline.data.lance_staging import (
     invalidate_staged_attempt,
     split_for_shard,
 )
-from synth_setter.pipeline.data.stats import WelfordState, merge_welford
+from synth_setter.pipeline.data.stats import WelfordState, merge_welford, save_welford
 from synth_setter.pipeline.data.stats import finalize as finalize_welford
 from synth_setter.pipeline.schemas.lance_attempt import (
     LanceDatasetCard,
@@ -123,13 +123,16 @@ class CheckedLanceWinner:
     welford: WelfordState
 
 
-def staged_complete_attempts(spec: DatasetSpec) -> dict[int, list[StagedLanceAttempt]]:
+def staged_complete_attempts(
+    spec: DatasetSpec, *, root_uri: str | None = None
+) -> dict[int, list[StagedLanceAttempt]]:
     """Discover every complete staged attempt in one recursive listing.
 
     :param spec: Validated dataset spec.
+    :param root_uri: Optional branch-specific staging root.
     :returns: Complete attempts grouped by shard id; shards with none are absent.
     """
-    root_uri = spec.r2.workers_shards_root_uri()
+    root_uri = spec.r2.workers_shards_root_uri() if root_uri is None else root_uri
     root_key = root_uri.removeprefix(f"{r2_io.R2_URI_SCHEME}{spec.r2.bucket}/")
     entries = r2_io.list_entries(root_uri, recursive=True)
     by_shard_dir: dict[str, dict[str, r2_io.RemoteEntry]] = {}
@@ -179,19 +182,25 @@ def select_winner(attempts: Sequence[StagedLanceAttempt]) -> StagedLanceAttempt:
 
 
 def _load_fragment_metadata(
-    spec: DatasetSpec, attempt: StagedLanceAttempt
+    spec: DatasetSpec,
+    attempt: StagedLanceAttempt,
+    *,
+    staging_dir_uri: str | None = None,
 ) -> lance.fragment.FragmentMetadata:
     """Parse one strict sidecar into Lance-owned fragment metadata.
 
     :param spec: Validated dataset spec.
     :param attempt: Staged attempt whose sidecar is loaded.
+    :param staging_dir_uri: Optional branch-specific sidecar directory.
     :returns: Deserialized Lance fragment metadata.
     :raises ValueError: The sidecar or nested Lance metadata is invalid.
     """
-    uri = (
-        f"{spec.r2.shard_staging_dir_uri(attempt.shard_id)}"
-        f"{attempt.name}{LANCE_FRAGMENT_SIDECAR_SUFFIX}"
+    staging_dir_uri = (
+        spec.r2.shard_staging_dir_uri(attempt.shard_id)
+        if staging_dir_uri is None
+        else staging_dir_uri
     )
+    uri = f"{staging_dir_uri}{attempt.name}{LANCE_FRAGMENT_SIDECAR_SUFFIX}"
     with r2_io.downloaded_to_tempfile(uri) as sidecar_path:
         try:
             sidecar = LanceFragmentSidecar.model_validate_json(sidecar_path.read_bytes())
@@ -208,18 +217,26 @@ def _load_fragment_metadata(
         ) from exc
 
 
-def _load_welford_state(spec: DatasetSpec, attempt: StagedLanceAttempt) -> WelfordState:
+def _load_welford_state(
+    spec: DatasetSpec,
+    attempt: StagedLanceAttempt,
+    *,
+    staging_dir_uri: str | None = None,
+) -> WelfordState:
     """Load and validate one staged Welford archive.
 
     :param spec: Validated dataset spec defining the expected mel shape.
     :param attempt: Staged attempt whose statistics are loaded.
+    :param staging_dir_uri: Optional branch-specific sidecar directory.
     :returns: Validated ``(count, mean, m2)`` state.
     :raises ValueError: The archive contract is malformed or numerically invalid.
     """
-    uri = (
-        f"{spec.r2.shard_staging_dir_uri(attempt.shard_id)}"
-        f"{attempt.name}{LANCE_SHARD_STATS_SUFFIX}"
+    staging_dir_uri = (
+        spec.r2.shard_staging_dir_uri(attempt.shard_id)
+        if staging_dir_uri is None
+        else staging_dir_uri
     )
+    uri = f"{staging_dir_uri}{attempt.name}{LANCE_SHARD_STATS_SUFFIX}"
     with r2_io.downloaded_to_tempfile(uri) as stats_path:
         try:
             stats_archive = np.load(stats_path)
@@ -465,22 +482,34 @@ def _select_checked_winners(
 
 
 def _reduce_and_upload_stats(
-    spec: DatasetSpec, winners: dict[int, CheckedLanceWinner], work_dir: Path
+    spec: DatasetSpec,
+    winners: dict[int, CheckedLanceWinner],
+    work_dir: Path,
+    progress_callback: FinalizeProgressCallback | None = None,
 ) -> None:
-    """Reduce the train winners' Welford sidecars into ``stats.npz`` and upload it.
+    """Reduce the train winners' Welford sidecars; upload ``welford.npz`` + ``stats.npz``.
 
     :param spec: Validated dataset spec.
     :param winners: Checked winner per shard id.
-    :param work_dir: Scratch directory the ``stats.npz`` is staged in.
+    :param work_dir: Scratch directory the archives are staged in.
+    :param progress_callback: Optional sink receiving one event per upload.
     """
     train_lo, train_hi = spec.split_shard_ranges["train"]
     state: WelfordState = (0, 0, 0)
     for shard_id in range(train_lo, train_hi):
         state = merge_welford(state, winners[shard_id].welford)
+    expected_shape = dataset_field_shapes(spec.render, spec.num_params)[MEL_SPEC_FIELD][1:]
+    welford_npz = work_dir / "welford.npz"
+    save_welford(welford_npz, state, expected_shape=expected_shape)
+    r2_io.upload(welford_npz, spec.r2.welford_uri())
+    report_finalize_progress(progress_callback, "artifact_uploaded")
+    logger.info("uploaded_welford", uri=spec.r2.welford_uri())
+
     mean, std = finalize_welford(state, mask_degenerate=spec.mask_degenerate_bins)
     stats_npz = work_dir / STATS_NPZ_FILENAME
     np.savez(stats_npz, mean=mean, std=std)
     r2_io.upload(stats_npz, spec.r2.stats_uri())
+    report_finalize_progress(progress_callback, "artifact_uploaded")
     logger.info("uploaded_stats", uri=spec.r2.stats_uri())
 
 
@@ -528,8 +557,8 @@ def finalize_lance_fragments(  # noqa: DOC502
     (``finalize_dataset.finalize_lance``) guards the split before delegating.
 
     Progress events fire one ``shard_processed`` per checked winner, then one
-    ``artifact_uploaded`` per committed split plus the ``stats.npz`` and
-    ``dataset.json`` uploads.
+    ``artifact_uploaded`` per committed split plus the ``welford.npz``,
+    ``stats.npz``, and ``dataset.json`` uploads.
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for the staged ``stats.npz`` / ``dataset.json``.
@@ -552,7 +581,6 @@ def finalize_lance_fragments(  # noqa: DOC502
         report_finalize_progress(progress_callback, "artifact_uploaded")
         logger.info("committed_winner_fragments", fragment_count=hi - lo, split=split)
 
-    _reduce_and_upload_stats(spec, winners, work_dir)
-    report_finalize_progress(progress_callback, "artifact_uploaded")
+    _reduce_and_upload_stats(spec, winners, work_dir, progress_callback)
     _write_dataset_card(spec, winners, work_dir)
     report_finalize_progress(progress_callback, "artifact_uploaded")

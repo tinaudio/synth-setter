@@ -132,7 +132,7 @@ def test_finalize_lance_fragments_reports_shard_then_artifact_progress(
 
     The fragment finalize decodes no rows, so ``shard_processed`` marks a selected +
     structural-checked winner; ``artifact_uploaded`` marks each committed split manifest
-    plus the ``stats.npz`` and ``dataset.json`` uploads.
+    plus the ``welford.npz``, ``stats.npz``, and ``dataset.json`` uploads.
 
     :param fake_r2_remote: Root the ``r2:`` remote resolves to.
     :param tmp_path: Scratch dir for local shard datasets.
@@ -146,7 +146,7 @@ def test_finalize_lance_fragments_reports_shard_then_artifact_progress(
 
     finalize_lance_fragments(spec, work_dir, events.append)
 
-    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 5
+    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 6
 
 
 def test_finalize_from_spec_threads_lance_progress_through_the_entrypoint(
@@ -169,7 +169,7 @@ def test_finalize_from_spec_threads_lance_progress_through_the_entrypoint(
     finalize_from_spec(spec, tmp_path / "work", events.append)
 
     # One more artifact than finalize_lance_fragments: the dataset.complete marker.
-    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 6
+    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 7
 
 
 def test_finalize_split_commit_is_one_atomic_manifest_version(
@@ -203,9 +203,16 @@ def test_finalize_stats_npz_matches_direct_recompute_over_train_mel_rows(
 
     finalize_from_spec(spec, tmp_path / "work")
 
-    stats_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "stats.npz"
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    stats_path = run_root / "stats.npz"
+    welford_path = run_root / "welford.npz"
     with np.load(stats_path) as stats:
         stats_mean, stats_std = stats["mean"], stats["std"]
+    with np.load(welford_path) as welford:
+        assert welford["count"].dtype == np.dtype(np.int64)
+        assert welford["count"].shape == ()
+        assert welford["mean"].dtype == np.dtype(np.float32)
+        assert welford["m2"].dtype == np.dtype(np.float32)
     train_mel = np.concatenate(
         [shard_arrays(spec, sid)[MEL_SPEC_FIELD] for sid in (0, 1)], axis=0
     ).astype(np.float64)
@@ -522,7 +529,7 @@ def test_finalize_skips_empty_split_and_still_completes(
     assert (run_root / "val.lance" / "_versions").exists()
     assert not (run_root / "test.lance").exists()
     assert (run_root / "dataset.complete").exists()
-    assert events == ["shard_processed"] * 3 + ["artifact_uploaded"] * 5
+    assert events == ["shard_processed"] * 3 + ["artifact_uploaded"] * 6
 
 
 def test_finalize_reports_checked_shards_before_later_winner_fails(

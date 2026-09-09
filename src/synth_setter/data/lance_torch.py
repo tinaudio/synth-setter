@@ -129,18 +129,22 @@ class LanceMapDataset(SafeLanceDataset):
         *,
         columns: Sequence[str] | None = None,
         storage_options: dict[str, str] | None = None,
+        version: int | None = None,
         include_sample_id: bool = False,
-    ):
+    ) -> None:
         """Open the dataset lazily for map-style access.
 
         :param uri: Dataset directory (local path or ``s3://`` URI).
         :param columns: Columns each item carries; ``None`` reads all.
         :param storage_options: Object-store config for a cloud ``uri`` (see
             :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
+        :param version: Exact local Lance version retained across worker reopens.
         :param include_sample_id: Add int64 row offsets scoped to this pinned split version.
         :raises ValueError: If the source already contains the reserved ``sample_id`` column.
         """
         options: dict[str, Any] = _dataset_options(storage_options) or {}
+        if version is not None:
+            options["version"] = version
         if include_sample_id:
             snapshot = lance.dataset(str(uri), **options)
             if "sample_id" in snapshot.schema.names:

@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,7 @@ TARGET_MARKERS: dict[str, str] = {
 # workflow file -> the make target it must invoke instead of inline pytest.
 WORKFLOW_TARGETS: dict[str, tuple[str, ...]] = {
     "test.yml": ("test-fast", "test-ci-unit"),
-    "cpu-slow.yml": ("test-ci-slow",),
+    "cpu-slow.yml": ("test-ci-slow", "test-ci-slow-pr-r2-e2e"),
     "nightly.yml": ("test-ci-nightly",),
 }
 
@@ -271,6 +272,44 @@ def test_ci_workflow_fast_lane_exceeds_wall_clock_limit_terminates(project_root:
 
 
 @pytest.mark.infra
+def test_ci_workflow_ubuntu_installs_rclone_before_tests(project_root: Path) -> None:
+    """Ubuntu installs the pinned rclone action before either pytest tier.
+
+    :param project_root: Session fixture locating the workflow.
+    """
+    workflow = (project_root / ".github" / "workflows" / "test.yml").read_text()
+
+    install = workflow.index("uses: ./.github/actions/install-rclone")
+    assert install < workflow.index("make test-fast")
+    assert install < workflow.index("make test-ci-unit")
+    assert workflow.count('      - ".github/actions/install-rclone/**"') == 2
+
+
+def test_coverage_patches_python_subprocesses(project_root: Path) -> None:
+    """Coverage starts automatically in public Python CLI subprocesses.
+
+    :param project_root: Session fixture locating coverage configuration.
+    """
+    with (project_root / "pyproject.toml").open("rb") as file:
+        config = tomllib.load(file)
+
+    assert config["tool"]["coverage"]["run"]["patch"] == ["subprocess"]
+
+
+def test_ci_r2_e2e_appends_coverage_before_xml_report(project_root: Path) -> None:
+    """The targeted R2 E2E preserves earlier slow-lane data in coverage.xml.
+
+    :param project_root: Session fixture locating the Makefile.
+    """
+    makefile = (project_root / "Makefile").read_text()
+    recipe = _recipe(makefile, "test-ci-slow-pr-r2-e2e")
+
+    assert "tests/integration/test_pyfdn_growing_lance_r2_e2e.py" in recipe
+    assert "$(CI_COV_APPEND)" in recipe
+    assert "CI_COV_APPEND := --cov-append $(CI_COV)" in makefile
+    assert "CI_COV := " in makefile and "--cov-report=xml" in makefile
+
+
 def test_ci_workflow_test_tiers_change_triggers(project_root: Path) -> None:
     """Push and pull-request filters include the Makefile tier definitions.
 

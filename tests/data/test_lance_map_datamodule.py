@@ -27,6 +27,7 @@ from synth_setter.data.lance_datamodule import LanceVSTDataModule, PrepareBatchC
 from synth_setter.data.lance_torch import LanceMapDataset
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot
 from tests.helpers.lance_fixtures import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLES,
@@ -91,6 +92,29 @@ def _params_in_order(loader: torch.utils.data.DataLoader) -> np.ndarray:
     :return: ``(total_rows, num_params)`` array.
     """
     return torch.cat([_unwrap(batch["params"]) for batch in loader]).numpy()
+
+
+def _mel_in_order(loader: torch.utils.data.DataLoader) -> np.ndarray:
+    """Concatenate normalized mel tensors across one loader epoch.
+
+    :param loader: Loader whose epoch is materialized.
+    :returns: All normalized mel rows.
+    """
+    return torch.cat([_unwrap(batch["mel"]) for batch in loader]).numpy()
+
+
+def test_growing_active_record_with_persistent_workers_raises(dataset_root: Path) -> None:
+    """Growing reloads reject workers that could retain stale dataset handles.
+
+    :param dataset_root: Frozen baseline dataset root.
+    """
+    with pytest.raises(ValueError, match="persistent_workers"):
+        LanceVSTDataModule(
+            dataset_root=dataset_root,
+            growing_active_record=dataset_root / "active.json",
+            persistent_workers=True,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
 
 
 class _DDPIndexRecorder(LightningModule):
