@@ -790,12 +790,25 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
 
 
 @pytest.mark.slow
-def test_train_pyfdn_pitchshift_identity_uses_45_coordinate_batches(tmp_path: Path) -> None:
-    """The train entrypoint resolves the pitch-shift synth and model width.
+@pytest.mark.parametrize(
+    ("identity", "width"),
+    [
+        ("pyfdn_pitchshift_n8_mono_householder", 45),
+        ("pyfdn_gotz_n8_mono_fixed_delays", 144),
+        ("pyfdn_gotz_n8_mono_learned_delays", 152),
+        ("pyfdn_gotz_n8_mono_fixed_delays_givens", 172),
+        ("pyfdn_gotz_n8_mono_learned_delays_givens", 180),
+    ],
+)
+def test_train_pyfdn_identity_uses_spec_width_batches(
+    tmp_path: Path, identity: str, width: int
+) -> None:
+    """The train entrypoint resolves each non-default pyFDN synth and its model width.
 
     :param tmp_path: Pinned as the one-step training output directory.
+    :param identity: Registered pyFDN synth and ParamSpec name.
+    :param width: Encoded width every training batch must carry.
     """
-    identity = "pyfdn_pitchshift_n8_mono_householder"
     cfg = build_fake_train_cfg(tmp_path, param_spec_name=identity)
 
     HydraConfig().set_config(cfg)
@@ -807,7 +820,7 @@ def test_train_pyfdn_pitchshift_identity_uses_45_coordinate_batches(tmp_path: Pa
     datamodule = object_dict["datamodule"]
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
-    assert batch["params"].shape == (2, 45)
+    assert batch["params"].shape == (2, width)
     datamodule.teardown("fit")
 
 
@@ -1389,7 +1402,9 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
 @pytest.mark.slow
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
-def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> None:
+def test_train_fast_dev_run_lance_datamodule(
+    cfg_train_lance: DictConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Run train, validation, and test steps with split-specific Lance workers.
 
     Exercises config wiring, ``LanceVSTDataModule`` setup, and real Lance batch
@@ -1401,7 +1416,12 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     indices returning rows in the requested order.
 
     :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
+    :param monkeypatch: Fixes worker memory below the automatic materialization threshold.
     """
+    monkeypatch.setattr(
+        "synth_setter.utils.utils._effective_available_memory_bytes",
+        lambda: 31 * 1024**3,
+    )
     with open_dict(cfg_train_lance):
         cfg_train_lance.datamodule.num_workers = 1
     HydraConfig().set_config(cfg_train_lance)
@@ -1414,6 +1434,7 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
     assert train_split.is_dir()
     assert datamodule.num_workers == 1
     assert datamodule.val_num_workers == 0
+    assert datamodule.high_memory_materialization is False
 
 
 @pytest.mark.parametrize(

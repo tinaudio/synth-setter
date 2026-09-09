@@ -2511,6 +2511,9 @@ class TestCheckedInLaunchConfigs:
         assert cfg.cmd is not None
         tokens = shlex.split(cfg.cmd)
         assert "experiment=${EXPERIMENT:-surge/flow_simple_440k}" in tokens
+        assert not any(
+            token.startswith("datamodule.high_memory_materialization=") for token in tokens
+        )
         assert "training.upload_checkpoints_during_training=true" in tokens
 
     def test_default_train_config_selects_the_smoke_experiment(self) -> None:
@@ -2538,12 +2541,7 @@ class TestCheckedInLaunchConfigs:
         cfg = load_launch_config(self._LAUNCH_DIR / name)
         assert cfg.cmd is not None
         scientific = ("datamodule", "trainer.", "render=", "callbacks.", "test=")
-        operational = ("datamodule.high_memory_materialization=",)
-        offending = [
-            token
-            for token in shlex.split(cfg.cmd)
-            if token.startswith(scientific) and not token.startswith(operational)
-        ]
+        offending = [token for token in shlex.split(cfg.cmd) if token.startswith(scientific)]
         assert not offending, f"scientific overrides belong in the experiment: {offending}"
 
     @pytest.mark.parametrize(
