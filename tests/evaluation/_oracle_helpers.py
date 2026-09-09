@@ -39,12 +39,17 @@ class OracleAudioMetricBounds:
     .. attribute :: rms_min
 
         RMS-envelope cosine-similarity lower bound (strict ``>``).
+
+    .. attribute :: mldr_max
+
+        Multi-scale loudness-dynamic-range distance upper bound (strict ``<``).
     """
 
     mss_max: float
     wmfcc_max: float
     sot_max: float
     rms_min: float
+    mldr_max: float
 
 
 ORACLE_AUDIO_METRIC_BOUNDS = OracleAudioMetricBounds(
@@ -52,6 +57,9 @@ ORACLE_AUDIO_METRIC_BOUNDS = OracleAudioMetricBounds(
     wmfcc_max=30.0,
     sot_max=0.5,
     rms_min=0.95,
+    # Oracle re-renders of Surge XT score up to ~1.15: the log envelope ratio is
+    # sensitive in the near-silent tail of short renders, where phase jitter moves it.
+    mldr_max=4.0,
 )
 
 

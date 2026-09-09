@@ -52,9 +52,10 @@ Project terminology for synth-setter. Grouped by domain.
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Predict** | Evaluation stage 1: load a trained checkpoint, run inference on test data, output predicted parameter tensors.                              |
 | **Render**  | Evaluation stage 2: feed predicted parameters into the VST plugin to produce audio waveforms for both predictions and ground-truth targets. |
-| **Metrics** | Evaluation stage 3: compute distance metrics (MSS, wMFCC, SOT, RMS) between predicted and target audio.                                     |
+| **Metrics** | Evaluation stage 3: compute distance metrics (MSS, wMFCC, SOT, RMS, MLDR) between predicted and target audio.                               |
 | **MSS**     | Multi-Scale Spectrogram distance. Captures temporal characteristics at three mel-scale windows (fine, mid, coarse).                         |
 | **SOT**     | Spectral Optimal Transport. Wasserstein distance on normalized STFT bins.                                                                   |
+| **MLDR**    | Multi-scale Loudness Dynamic Range. L1 distance of log short/long energy-envelope ratios at two scales (DiffVox, arXiv:2504.14735).         |
 
 ## IDs & Provenance
 

@@ -1769,10 +1769,10 @@ class _MaterializingPipelineRunner:
             pd.DataFrame(
                 {
                     metric: np.full(self.num_samples, 0.5)
-                    for metric in ("mss", "wmfcc", "sot", "rms")
+                    for metric in ("mss", "wmfcc", "sot", "rms", "mldr")
                 }
             ).to_csv(metrics_dir / "metrics.csv", index=False)
-            pd.DataFrame({"mean": np.full(4, 0.5), "std": np.zeros(4)}).to_csv(
+            pd.DataFrame({"mean": np.full(5, 0.5), "std": np.zeros(5)}).to_csv(
                 metrics_dir / "aggregated_metrics.csv", index=False
             )
             return

@@ -23,6 +23,7 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_metrics,
     compute_metrics_on_dir,
     compute_mfcc,
+    compute_mldr,
     compute_mss,
     compute_rms,
     compute_sot,
@@ -486,6 +487,111 @@ def test_compute_mss_grows_with_frequency_separation() -> None:
 
 
 # ---------------------------------------------------------------------------
+# compute_mldr
+# ---------------------------------------------------------------------------
+
+
+def _tremolo(depth: float, rate_hz: float = 4.0, seconds: float = 2.0) -> np.ndarray:
+    """Amplitude-modulated 440 Hz tone with the given modulation ``depth`` in ``[0, 1]``.
+
+    :param depth: Fraction of the carrier amplitude swept by the modulator.
+    :param rate_hz: Modulation rate in Hz.
+    :param seconds: Length in seconds.
+    :return: ``(1, N)`` float32 array.
+    """
+    carrier = _sine(seconds=seconds)
+    t = np.arange(carrier.shape[-1], dtype=np.float32) / _SR
+    envelope = 1.0 - depth * 0.5 * (1.0 + np.sin(2 * np.pi * rate_hz * t))
+    return (carrier * envelope).astype(np.float32)
+
+
+def test_compute_mldr_identical_inputs_returns_zero() -> None:
+    """``compute_mldr(x, x)`` is exactly 0."""
+    audio = _tremolo(depth=0.5)
+    assert compute_mldr(audio, audio) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_compute_mldr_steady_tone_vs_tremolo_is_positive() -> None:
+    """A modulated envelope differs in loudness dynamic range from a steady one."""
+    dist = compute_mldr(_sine(seconds=2.0), _tremolo(depth=0.9))
+    assert np.isfinite(dist)
+    assert dist > 0
+
+
+def test_compute_mldr_is_symmetric() -> None:
+    """``compute_mldr(a, b) == compute_mldr(b, a)``."""
+    a = _sine(seconds=2.0)
+    b = _tremolo(depth=0.9)
+    assert compute_mldr(a, b) == pytest.approx(compute_mldr(b, a), abs=1e-9)
+
+
+def test_compute_mldr_is_invariant_to_overall_gain() -> None:
+    """LDR is a ratio of envelopes, so a global gain change nearly cancels.
+
+    Not exactly zero: the energy floor applied before the log bites at zero crossings, and
+    which samples it floors depends on the gain.
+    """
+    audio = _tremolo(depth=0.5)
+    assert compute_mldr(audio, 0.25 * audio) == pytest.approx(0.0, abs=1e-3)
+
+
+def test_compute_mldr_grows_with_modulation_depth() -> None:
+    """Deeper tremolo sits further from a steady tone than shallow tremolo."""
+    steady = _sine(seconds=2.0)
+    assert compute_mldr(steady, _tremolo(depth=0.3)) < compute_mldr(steady, _tremolo(depth=0.9))
+
+
+def test_compute_mldr_stereo_equals_mean_of_independent_channel_scores() -> None:
+    """Channels are scored as independent rows, so a stereo pair averages its two mono scores.
+
+    The channels differ so that a flattened alignment roll, which would leak the left tail into the
+    right head, cannot reproduce the per-channel result.
+    """
+    left = (_sine(seconds=2.0), _tremolo(depth=0.9))
+    right = (_tremolo(depth=0.3, rate_hz=1.5), _sine(seconds=2.0, freq=880.0))
+    stereo_target = np.concatenate([left[0], right[0]], axis=0)
+    stereo_pred = np.concatenate([left[1], right[1]], axis=0)
+
+    stereo = compute_mldr(stereo_target, stereo_pred)
+
+    per_channel_mean = (compute_mldr(*left) + compute_mldr(*right)) / 2
+    assert stereo == pytest.approx(per_channel_mean, rel=1e-6)
+
+
+def test_compute_mldr_matches_diffvox_reference_value() -> None:
+    """A frozen value from DiffVox's ``MLDRLoss`` pins the coefficients, alignment, and reduction.
+
+    Reference: ``loss/ldr.py`` of github.com/SonyResearch/diffvox with ``torchcomp==0.2.1`` and
+    ``torchlpc==0.7.2``, ``s_taus=[50, 100]``, ``l_taus=[1000, 2000]``, on this exact signal
+    pair. The tolerance covers the reference's float32 ``ms2coef`` coefficient.
+    """
+    sr = 44100
+    t = np.arange(3 * sr) / sr
+    target = (0.5 * np.sin(2 * np.pi * 220 * t) * (1 + 0.5 * np.sin(2 * np.pi * 3 * t)))[None]
+    noise = np.random.default_rng(0).standard_normal(3 * sr)
+    pred = (target[0] * np.exp(-t) + 0.05 * noise)[None]
+
+    dist = compute_mldr(target.astype(np.float32), pred.astype(np.float32), sr)
+
+    assert dist == pytest.approx(1.9981863186, rel=1e-4)
+
+
+def test_compute_mldr_mismatched_shapes_raise() -> None:
+    """A mono target against a stereo prediction is rejected instead of broadcast."""
+    target = _sine(seconds=1.0)
+    pred = np.repeat(target, 2, axis=0)
+    with pytest.raises(ValueError, match="shape"):
+        compute_mldr(target, pred)
+
+
+def test_compute_mldr_silent_inputs_are_finite() -> None:
+    """Digital silence is floored before the logarithm instead of producing NaN."""
+    silence = np.zeros((1, 2 * _SR), dtype=np.float32)
+    dist = compute_mldr(_sine(seconds=2.0), silence)
+    assert np.isfinite(dist)
+
+
+# ---------------------------------------------------------------------------
 # compute_mfcc
 # ---------------------------------------------------------------------------
 
@@ -653,13 +759,13 @@ def test_compute_sot_grows_with_frequency_separation() -> None:
 
 
 def test_compute_metrics_on_dir_returns_expected_keys(tmp_path: Path) -> None:
-    """End-to-end on a single sample dir returns finite ``mss/wmfcc/sot/rms``.
+    """End-to-end on a single sample dir returns finite ``mss/wmfcc/sot/rms/mldr``.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     sample_dir = _make_sample_dir(tmp_path, "0", _sine(seconds=0.5), _sine(seconds=0.5))
     metrics = compute_metrics_on_dir(sample_dir)
-    assert set(metrics.keys()) == {"mss", "wmfcc", "sot", "rms"}
+    assert set(metrics.keys()) == {"mss", "wmfcc", "sot", "rms", "mldr"}
     for value in metrics.values():
         assert np.isfinite(value)
 
@@ -677,6 +783,7 @@ def test_compute_metrics_on_dir_pyfdn_adds_reverb_metrics(tmp_path: Path) -> Non
     metrics = compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
 
     assert set(metrics) == {
+        "mldr",
         "mss",
         "octave_edc_rmse_db",
         "octave_rt60_log_rmse",
