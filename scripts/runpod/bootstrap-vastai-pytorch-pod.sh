@@ -29,7 +29,9 @@
 # Every step is idempotent, so re-running after a failure resumes cheaply.
 #
 # Tunables (env vars):
-#   SS_REPO_DIR        checkout path            (default /workspace/synth-setter)
+#   SS_REPO_DIR        checkout path            (default /workspace/synth-setter,
+#                      the persistent volume; /home/build/synth-setter is
+#                      symlinked to it and SSH logins land there)
 #   SS_GIT_REF         ref to check out         (default main)
 #   SS_VENV            project venv             (default $SS_REPO_DIR/.venv; the
 #                      devcontainer bakes /venv/main, but vastai's /venv/main
@@ -64,6 +66,7 @@ SS_REPO_DIR="${SS_REPO_DIR:-/workspace/synth-setter}"
 SS_GIT_REF="${SS_GIT_REF:-main}"
 SS_VENV="${SS_VENV:-$SS_REPO_DIR/.venv}"
 SS_TORCH_BACKEND="${SS_TORCH_BACKEND:-cu128}"
+readonly IMAGE_WORKDIR=/home/build/synth-setter
 readonly VST3_DIR=/usr/lib/vst3
 readonly STUDIORACK_PLUGINS_DIR=/opt/studiorack
 readonly PY_INSTALL_DIR=/opt/uv/python
@@ -172,8 +175,18 @@ if [[ ! -d "$SS_REPO_DIR/.git" ]]; then
   git -C "$SS_REPO_DIR" remote add origin https://github.com/tinaudio/synth-setter.git
 fi
 git -C "$SS_REPO_DIR" fetch origin
-git -C "$SS_REPO_DIR" checkout -B "$SS_GIT_REF" "origin/$SS_GIT_REF" 2>/dev/null \
-  || git -C "$SS_REPO_DIR" checkout --detach "$SS_GIT_REF"
+if git -C "$SS_REPO_DIR" show-ref --verify -q "refs/heads/$SS_GIT_REF"; then
+  # Rerun: fast-forward only, so local commits on the pod are never discarded.
+  git -C "$SS_REPO_DIR" checkout -q "$SS_GIT_REF"
+  git -C "$SS_REPO_DIR" pull -q --ff-only origin "$SS_GIT_REF" || warn "could not fast-forward $SS_GIT_REF; left as is"
+else
+  git -C "$SS_REPO_DIR" checkout -B "$SS_GIT_REF" "origin/$SS_GIT_REF" 2>/dev/null \
+    || git -C "$SS_REPO_DIR" checkout --detach "$SS_GIT_REF"
+fi
+# The image's WORKDIR is /home/build/synth-setter; alias it so paths, docs,
+# and muscle memory match while the clone itself lives on the /workspace volume.
+mkdir -p "$(dirname "$IMAGE_WORKDIR")"
+[[ "$IMAGE_WORKDIR" == "$SS_REPO_DIR" ]] || ln -sfn "$SS_REPO_DIR" "$IMAGE_WORKDIR"
 cd "$SS_REPO_DIR"
 
 # ------------------------------------------------------- 4. python env ----
@@ -349,9 +362,12 @@ fi
 unset __ss_root
 EOF
 fi
-# Fallback activation for shells opened outside the checkout.
-grep -qs "ss-default-venv" "$HOME/.bashrc" || cat >>"$HOME/.bashrc" <<EOF
-# ss-default-venv
+# Land interactive logins in the checkout with its venv active, like the
+# image's WORKDIR. Appended after the image's own `cd ${WORKSPACE}` line so it
+# wins; interactive-only so scp/rsync/non-login commands keep their cwd.
+grep -qs "ss-login-landing" "$HOME/.bashrc" || cat >>"$HOME/.bashrc" <<EOF
+# ss-login-landing
+if [[ \$- == *i* && -d "${IMAGE_WORKDIR}" ]]; then cd "${IMAGE_WORKDIR}"; fi
 [[ -z "\${VIRTUAL_ENV:-}" && -f "${SS_VENV}/bin/activate" ]] && source "${SS_VENV}/bin/activate"
 EOF
 # Persisted history + agent autonomy defaults, as post-create.sh seeds them.
