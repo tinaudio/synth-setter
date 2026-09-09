@@ -36,6 +36,8 @@ from synth_setter.models.components.simulator_control import (
     learned_control_signal,
 )
 from synth_setter.models.vst_flow_matching_module import (
+    _LEGACY_PARAMETERIZATION,
+    _PARAMETERIZATION_KEY,
     ControlTokenBranches,
     TrainStepOutputs,
     VSTFlowMatchingModule,
@@ -254,6 +256,14 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         state = payload.get("state_dict") if isinstance(payload, dict) else None
         if not isinstance(state, dict):
             raise ValueError(f"{checkpoint} holds no Lightning state_dict")
+        # Loaded through load_state_dict, so the base module's own load hook never sees
+        # the stamp; endpoint weights have velocity shapes and would freeze as velocities.
+        stamped = payload.get(_PARAMETERIZATION_KEY, _LEGACY_PARAMETERIZATION)
+        if stamped != "velocity":
+            raise ValueError(
+                f"{checkpoint} trained parameterization={stamped!r}; simulator feedback "
+                "requires a velocity base"
+            )
         result = self.load_state_dict(state, strict=False)
         # A frozen pretrained backbone is stripped on save and re-resolved from its own
         # weights, so its absence is expected; nothing else may be.

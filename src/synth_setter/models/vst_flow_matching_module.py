@@ -35,13 +35,13 @@ _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_TIME_SHAPE = "batch 1"
 _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 _PARAM_SHAPE = "params"
-# Checkpoint key recording what the field was trained to predict. Kept outside
-# hyper_parameters, which Lightning overwrites with load-time kwargs before the load
-# hook runs; checkpoints predating the key trained a velocity field.
+# Stored outside hyper_parameters because Lightning overwrites those with load-time
+# kwargs before the load hook runs; a checkpoint without the key trained a velocity field.
 _PARAMETERIZATION_KEY = "parameterization"
 _LEGACY_PARAMETERIZATION = "velocity"
 
 Parameterization = Literal["velocity", "endpoint"]
+_PARAMETERIZATIONS: frozenset[str] = frozenset(("velocity", "endpoint"))
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import (
@@ -367,11 +367,17 @@ class VSTFlowMatchingModule(LightningModule):
         :param test_sketch_cfg_strength: Sketch guidance strength at test and prediction;
             defaults to ``test_cfg_strength``.
         :param compile: Whether to compile the encoder and vector field during fit setup.
-        :raises ValueError: The ParamSpec width differs from ``num_params``, or
-            ``audio_loss`` is combined with a nonzero ``rectified_sigma_min`` or
-            ``compile=True`` (#2585).
+        :raises ValueError: The ParamSpec width differs from ``num_params``,
+            ``parameterization`` is not a known value, or ``audio_loss`` is combined with
+            a nonzero ``rectified_sigma_min`` or ``compile=True`` (#2585).
         """
         super().__init__()
+        if parameterization not in _PARAMETERIZATIONS:
+            # Hydra passes strings through unchecked; a typo would silently train velocity.
+            raise ValueError(
+                f"parameterization must be one of {sorted(_PARAMETERIZATIONS)}, "
+                f"got {parameterization!r}"
+            )
 
         # Saving hyperparameters deep-copies them, which a weight-normalized frozen encoder
         # inside the audio term cannot survive; the term is training-time only, so it is not

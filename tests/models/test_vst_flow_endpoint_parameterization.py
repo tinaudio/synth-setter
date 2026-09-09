@@ -67,6 +67,22 @@ class _ConstantField(torch.nn.Module):
         return z, torch.ones(z.shape[0], dtype=torch.bool, device=z.device)
 
 
+class _DisplacementEndpointField(_ConstantField):
+    """Endpoint predictor ``x_t + (1 - t) * row``: state- and time-dependent, velocity ``row``."""
+
+    def forward(
+        self, x: torch.Tensor, t: torch.Tensor, conditioning: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """Predict the endpoint the straight line through ``x`` at velocity ``row`` reaches.
+
+        :param x: Parameter state shaped ``(batch, _WIDTH)``.
+        :param t: Flow time shaped ``(batch, 1)``.
+        :param conditioning: Ignored.
+        :returns: ``x + (1 - t) * row``.
+        """
+        return x + (1 - t) * self.row
+
+
 class _RecordingAudioLoss(torch.nn.Module):
     """Audio term that keeps the estimate it was handed and contributes nothing."""
 
@@ -97,18 +113,20 @@ def _module(
     parameterization: str,
     field_row: torch.Tensor | None = None,
     audio_loss: torch.nn.Module | None = None,
+    vector_field: torch.nn.Module | None = None,
 ) -> VSTFlowMatchingModule:
-    """Build a tiny raw-audio flow module around a constant field.
+    """Build a tiny raw-audio flow module around a stub field.
 
     :param parameterization: ``"velocity"`` or ``"endpoint"``.
-    :param field_row: Row the field always predicts; zeros when omitted.
+    :param field_row: Row the constant field always predicts; zeros when omitted.
     :param audio_loss: Optional audio term to attach.
+    :param vector_field: Field replacing the constant one built from ``field_row``.
     :returns: Configured module with guidance dropout disabled.
     """
     row = torch.zeros(_WIDTH) if field_row is None else field_row
     return VSTFlowMatchingModule(
         encoder=_WaveformEncoder(),
-        vector_field=_ConstantField(row),
+        vector_field=vector_field or _ConstantField(row),
         optimizer=torch.optim.Adam,  # pyright: ignore[reportArgumentType]
         scheduler=None,  # pyright: ignore[reportArgumentType]
         num_params=_WIDTH,
@@ -138,9 +156,9 @@ def _batch(params_value: float, noise_value: float) -> dict[str, torch.Tensor]:
 @pytest.mark.parametrize(
     ("parameterization", "expected_loss"),
     [
-        # A zero prediction misses the clean row (2.0) by 2.0 -> squared 4.0.
+        # Endpoint targets the clean row.
         pytest.param("endpoint", 4.0, id="endpoint-scores-x1"),
-        # A zero prediction misses the displacement (2.0 - 1.0) by 1.0 -> squared 1.0.
+        # Velocity targets the source-to-clean displacement.
         pytest.param("velocity", 1.0, id="velocity-scores-x1-minus-x0"),
     ],
 )
@@ -171,6 +189,22 @@ def test_sample_endpoint_parameterization_lands_on_the_predicted_endpoint() -> N
     torch.testing.assert_close(sample, endpoint.expand(_BATCH, -1), atol=1e-3, rtol=0.0)
 
 
+def test_sample_endpoint_parameterization_integrates_a_state_dependent_field() -> None:
+    """A field predicting ``x_t + (1 - t) * c`` is the velocity ``c``, so noise moves by ``c``.
+
+    Unlike a constant endpoint, every RK4 stage sees a different state and time here, so a
+    wrong intermediate conversion would change where the trajectory lands.
+    """
+    displacement = torch.tensor([0.5, -0.25, 1.0, 0.0, -1.0, 0.75])
+    module = _module("endpoint", vector_field=_DisplacementEndpointField(displacement))
+    torch.manual_seed(0)
+    noise = torch.randn(_BATCH, _WIDTH)
+
+    sample = module._sample(None, noise, steps=8, cfg_strength=1.0)  # noqa: SLF001
+
+    torch.testing.assert_close(sample, noise + displacement, atol=1e-5, rtol=0.0)
+
+
 def test_sample_velocity_parameterization_integrates_the_predicted_velocity() -> None:
     """Under the default flag a constant prediction is a velocity, so noise moves by it."""
     velocity = torch.tensor([0.5, -0.25, 1.0, 0.0, -1.0, 0.75])
@@ -181,6 +215,37 @@ def test_sample_velocity_parameterization_integrates_the_predicted_velocity() ->
     sample = module._sample(None, noise, steps=8, cfg_strength=1.0)  # noqa: SLF001
 
     torch.testing.assert_close(sample, noise + velocity, atol=1e-5, rtol=0.0)
+
+
+def test_module_unknown_parameterization_raises() -> None:
+    """An unknown flag is refused at construction instead of silently training velocity."""
+    with pytest.raises(ValueError, match="parameterization"):
+        _module("midpoint")
+
+
+def test_train_step_endpoint_parameterization_loss_decreases_on_one_fixed_batch() -> None:
+    """Fitting one batch under endpoint prediction drives the loss well below its start."""
+    from synth_setter.models.components.vector_field import VectorField
+
+    torch.manual_seed(0)
+    module = _module(
+        "endpoint",
+        vector_field=VectorField(
+            field_dim=_WIDTH, hidden_dim=32, conditioning_dim=_CONDITIONING_DIM, num_blocks=2
+        ),
+    )
+    batch = _batch(params_value=0.5, noise_value=-0.5)
+    optimizer = torch.optim.Adam(module.parameters(), lr=1e-2)
+    initial = module._train_step(batch).loss.item()  # noqa: SLF001
+    for _ in range(200):
+        loss = module._train_step(batch).loss  # noqa: SLF001
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    final = module._train_step(batch).loss.item()  # noqa: SLF001
+
+    assert final < initial * 0.1
 
 
 def test_audio_term_endpoint_parameterization_receives_the_raw_prediction() -> None:

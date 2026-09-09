@@ -570,6 +570,19 @@ def test_finetune_module_learned_arm_without_encoder_raises(tmp_path: Path) -> N
         _finetune(_base_checkpoint(tmp_path), control_mode="learned_audio")
 
 
+def test_finetune_module_with_endpoint_base_checkpoint_raises(tmp_path: Path) -> None:
+    """An endpoint-stamped base is refused even under the default velocity finetune config.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    payload = {"state_dict": _base_module().state_dict(), "parameterization": "endpoint"}
+    path = tmp_path / "endpoint-base.ckpt"
+    torch.save(payload, path)
+
+    with pytest.raises(ValueError, match="parameterization"):
+        _finetune(path)
+
+
 def test_finetune_module_with_endpoint_parameterization_raises(tmp_path: Path) -> None:
     """The one-step estimate assumes a velocity field, so an endpoint base is refused.
 

@@ -537,10 +537,10 @@ def test_train_torchsynth_flow_endpoint_one_step_writes_stamped_checkpoint(
     cfg_torchsynth_flow_endpoint_train: DictConfig,
     tmp_path: Path,
 ) -> None:
-    """Train and validate one endpoint-parameterized step and stamp the checkpoint.
+    """Train one endpoint-parameterized step, then evaluate the stamped checkpoint it wrote.
 
     :param cfg_torchsynth_flow_endpoint_train: Composed tiny endpoint flow config.
-    :param tmp_path: Output root containing the checkpoint artifact.
+    :param tmp_path: Output root containing the checkpoint and evaluation artifacts.
     """
     HydraConfig().set_config(cfg_torchsynth_flow_endpoint_train)
 
@@ -555,10 +555,21 @@ def test_train_torchsynth_flow_endpoint_one_step_writes_stamped_checkpoint(
         metric_dict
     )
 
-    checkpoint = torch.load(
-        tmp_path / "checkpoints" / "last.ckpt", map_location="cpu", weights_only=False
-    )
+    checkpoint_path = tmp_path / "checkpoints" / "last.ckpt"
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     assert checkpoint["parameterization"] == "endpoint"
+
+    eval_cfg = cfg_torchsynth_flow_endpoint_train.copy()
+    with open_dict(eval_cfg):
+        eval_cfg.paths.output_dir = str(tmp_path / "evaluation")
+        eval_cfg.paths.log_dir = str(tmp_path / "evaluation")
+        eval_cfg.ckpt_path = str(checkpoint_path)
+        eval_cfg.mode = "validate"
+    HydraConfig().set_config(eval_cfg)
+    eval_metric_dict, eval_object_dict = evaluate(eval_cfg)
+
+    assert eval_object_dict["model"].hparams["parameterization"] == "endpoint"
+    assert torch.isfinite(eval_metric_dict["val/param_mse"])
 
 
 @pytest.mark.dataloader_multiprocess
