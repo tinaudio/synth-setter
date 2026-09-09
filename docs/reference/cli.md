@@ -115,6 +115,19 @@ Use a compatible experiment for the dataset and its columns; for example,
 [training experiments](../../src/synth_setter/configs/experiment/), and the selected
 [datamodule config](../../src/synth_setter/configs/datamodule/).
 
+For a controlled endpoint-loss A/B run, keep the finalized dataset, one-hot parameter schema,
+and seed identical. All four combinations require endpoint parameterization:
+
+```bash
+synth-setter-train experiment=surge/flow_simple seed=12345 model.parameterization=endpoint model.endpoint_loss=mse model.endpoint_time_weighting=uniform
+synth-setter-train experiment=surge/flow_simple seed=12345 model.parameterization=endpoint model.endpoint_loss=mse model.endpoint_time_weighting=flowmol3
+synth-setter-train experiment=surge/flow_simple seed=12345 model.parameterization=endpoint model.endpoint_loss=mixed model.endpoint_time_weighting=uniform
+synth-setter-train experiment=surge/flow_simple seed=12345 model.parameterization=endpoint model.endpoint_loss=mixed model.endpoint_time_weighting=flowmol3
+```
+
+These commands define comparable configurations; they do not establish a measured quality
+improvement for either objective or weighting.
+
 ## Launch with SkyPilot
 
 Before either RunPod recipe, run the required balance preflight. It fails open when the balance

@@ -1183,8 +1183,10 @@ def test_train_surge_simple_flow_default_width_matches_fake_batch(
 
 
 @pytest.mark.slow
-def test_train_cardinal_mixed_endpoint_loss_advances_real_entrypoint(tmp_path: Path) -> None:
-    """A real optimizer step runs the opt-in CE objective from Hydra configuration.
+def test_train_cardinal_mixed_endpoint_time_weighting_advances_real_entrypoint(
+    tmp_path: Path,
+) -> None:
+    """A real optimizer step runs the opt-in weighted CE objective from Hydra configuration.
 
     :param tmp_path: Hydra output and log directory; no dataset is read.
     """
@@ -1196,6 +1198,7 @@ def test_train_cardinal_mixed_endpoint_loss_advances_real_entrypoint(tmp_path: P
     with open_dict(cfg):
         cfg.model.compile = False
         cfg.model.endpoint_loss = "mixed"
+        cfg.model.endpoint_time_weighting = "flowmol3"
         cfg.model.parameterization = "endpoint"
         cfg.model.vector_field.num_layers = 1
         cfg.model.vector_field.d_model = 32
@@ -1207,6 +1210,7 @@ def test_train_cardinal_mixed_endpoint_loss_advances_real_entrypoint(tmp_path: P
     metric_dict, object_dict = train(cfg)
 
     assert object_dict["trainer"].global_step == 1
+    assert object_dict["model"].hparams["endpoint_time_weighting"] == "flowmol3"
     assert_finite_train_loss(metric_dict)
 
 
