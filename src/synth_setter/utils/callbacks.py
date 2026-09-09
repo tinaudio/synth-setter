@@ -28,7 +28,7 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from matplotlib.figure import Figure
 
 from synth_setter.data.vst import param_specs
-from synth_setter.metrics import spec_quantized_per_param_mse
+from synth_setter.metrics import spec_per_param_abs_cosine_distance, spec_quantized_per_param_mse
 from synth_setter.models.components.transformer import LearntProjection
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
@@ -954,7 +954,7 @@ def _distributed_metric_mean(
 
 
 class LogPerParamMSE(Callback):
-    """Log validation and test MSE broken down by ParamSpec parameter."""
+    """Log validation/test MSE and array alignment distances by ParamSpec parameter."""
 
     def __init__(self, param_spec: str) -> None:
         """Select the ParamSpec whose dimension names label emitted metrics.
@@ -988,6 +988,12 @@ class LogPerParamMSE(Callback):
                     weight,
                 )
             )
+            batch_metrics.extend(
+                (f"per_param_abs_cosine_distance/{name}", distance, weight)
+                for name, distance in spec_per_param_abs_cosine_distance(
+                    predictions, params, self.param_spec
+                ).items()
+            )
 
         for metric_name, metric, metric_weight in batch_metrics:
             values = metric.detach().cpu().numpy()
@@ -1000,19 +1006,22 @@ class LogPerParamMSE(Callback):
     def _log(self, pl_module: LightningModule, stage: Literal["test", "val"]) -> None:
         metrics = {}
         for metric_name, total in self.metric_totals.items():
-            per_param_mse = _distributed_metric_mean(
+            mean = _distributed_metric_mean(
                 total,
                 self.metric_counts[metric_name],
                 pl_module.device,
             )
+            if metric_name.startswith("per_param_abs_cosine_distance/"):
+                metrics[f"{stage}/{metric_name}"] = mean.item()
+                continue
             metrics.update(
                 {
-                    f"{stage}/{metric_name}/{param.name}": per_param_mse[span].mean()
+                    f"{stage}/{metric_name}/{param.name}": mean[span].mean()
                     for param, span in self.param_spec.encoded_slices()
                 }
             )
             if metric_name == _SPEC_QUANTIZED_PER_PARAM_MSE:
-                metrics[f"{stage}/param_mse_spec_quantized"] = per_param_mse.mean()
+                metrics[f"{stage}/param_mse_spec_quantized"] = mean.mean()
         pl_module.log_dict(metrics)
 
     def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
