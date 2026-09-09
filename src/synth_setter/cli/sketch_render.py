@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import math
 import subprocess
 import tempfile
@@ -514,6 +515,15 @@ def _run_id(sketch_path: Path, content_path: Path) -> str:
 @click.option("--content-cfg", type=float, multiple=True, default=(2.0,), show_default=True)
 @click.option("--sketch-cfg", type=float, multiple=True, default=(2.0,), show_default=True)
 @click.option("--sample-steps", type=int)
+@click.option(
+    "--inference-runtime",
+    type=click.Choice(["torch", "browser"]),
+    default="torch",
+    show_default=True,
+)
+@click.option(
+    "--browser-port", type=click.IntRange(min=0, max=65535), default=0, show_default=True
+)
 @click.option("--seed", type=int)
 @click.option("--output-dir", type=click.Path(file_okay=False, path_type=Path))
 @click.option("--upload-prefix", help="Exact r2:// directory receiving this pair's arms.")
@@ -536,6 +546,8 @@ def main(
     content_cfg: tuple[float, ...],
     sketch_cfg: tuple[float, ...],
     sample_steps: int | None,
+    inference_runtime: str,
+    browser_port: int,
     seed: int | None,
     output_dir: Path | None,
     upload_prefix: str | None,
@@ -558,6 +570,8 @@ def main(
     :param content_cfg: Content guidance strengths.
     :param sketch_cfg: Sketch guidance strengths.
     :param sample_steps: Optional integration-step override.
+    :param inference_runtime: Native PyTorch or real browser ONNX Runtime Web inference.
+    :param browser_port: Loopback port for browser inference; zero selects an available port.
     :param seed: Initial-noise seed shared across every CFG arm.
     :param output_dir: Local pair output directory.
     :param upload_prefix: Exact R2 pair destination.
@@ -604,7 +618,11 @@ def main(
         int(selected_stats_sha256, 16)
     except ValueError as exc:
         raise click.ClickException("--stats-sha256 must be hexadecimal") from exc
-    selected_device = _resolve_device(device or settings.device)
+    selected_device = (
+        torch.device("cpu")
+        if inference_runtime == "browser"
+        else _resolve_device(device or settings.device)
+    )
     selected_seed = settings.seed if seed is None else seed
     run_id = _run_id(sketch_wav, content_wav)
     pair_output = output_dir or settings.output_dir / run_id
@@ -656,17 +674,44 @@ def main(
         if arm_dir.exists():
             raise click.ClickException(f"refusing to overwrite existing arm: {arm_dir}")
         arm_dir.mkdir(parents=True)
-        prediction = (
-            model.sample_batch(
+        if inference_runtime == "browser":
+            from synth_setter.evaluation.browser_flow import sample_in_browser
+
+            prediction = sample_in_browser(
+                model,
                 batch,
-                noise=noise,
+                noise,
                 content_cfg_strength=content_strength,
                 sketch_cfg_strength=sketch_strength,
                 sample_steps=selected_steps,
+                output_dir=arm_dir / "browser",
+                port=browser_port,
             )
-            .detach()
-            .cpu()
-        )
+            (arm_dir / "browser/provenance.json").write_text(
+                json.dumps(
+                    {
+                        "checkpoint": checkpoint_source,
+                        "checkpoint_sha256": selected_checkpoint_sha256.lower(),
+                        "stats": stats,
+                        "stats_sha256": selected_stats_sha256.lower(),
+                        "render": render.model_dump(mode="json"),
+                        "seed": selected_seed,
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            prediction = (
+                model.sample_batch(
+                    batch,
+                    noise=noise,
+                    content_cfg_strength=content_strength,
+                    sketch_cfg_strength=sketch_strength,
+                    sample_steps=selected_steps,
+                )
+                .detach()
+                .cpu()
+            )
         write_wav(sketch_audio, str(arm_dir / "sketch.wav"), render.sample_rate, render.channels)
         write_wav(content_audio, str(arm_dir / "target.wav"), render.sample_rate, render.channels)
         _render_wav(prediction, render, arm_dir / "pred.wav")
