@@ -644,15 +644,17 @@ Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the
 
 The `findings` array carries every final BLOCK and WARN. The exact lead-in wording is up to the calling skill. Both modes reuse the same body-only and audit formats. When every free-pool path failed and only Codex-origin reports survived, add `Free-pool review failed; only Codex ran.` immediately below provider incidents and before the lead-in.
 
-When the calling skill submits via `post_review.py`, set `event=REQUEST_CHANGES` if a final BLOCK or PR-health BLOCK exists; otherwise set `COMMENT` if any final WARN, NIT, or LOW CONFIDENCE exists; otherwise set `APPROVE`. Optional-only reviews therefore contain no inline payload and never request changes. `repo-review-full-no-comments` omits `event`.
-
-Write the JSON to a temp file:
+Write the lead-in, provider incidents, PR health, and Pi audit to `$assignment_dir/review-body.md`; do not add adjudicated finding or final-judge audit sections manually. Build the delivery payload only through the deterministic helper so final classifications, audit rows, and the event cannot drift:
 
 ```bash
-cat > /tmp/<calling-skill>-findings.json <<'JSON'
-... payload ...
-JSON
+"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_payload.py \
+  --adjudications "$assignment_dir/review-filter-retained.json" \
+  --review-body "$assignment_dir/review-body.md" \
+  --repo "$repo" --pr-number "$N" \
+  --output "/tmp/<calling-skill>-findings.json"
 ```
+
+Omit `--pr-number` in local-branch mode. The helper sets `REQUEST_CHANGES` for a final or PR-health BLOCK, `COMMENT` for WARN/NIT/LOW CONFIDENCE only, and `APPROVE` when every candidate is dropped. Optional-only reviews contain no inline payload. The no-comments renderer ignores the event after validating it.
 
 Return to your orchestrator brief's Step 7 for the final delivery step.
 

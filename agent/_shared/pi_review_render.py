@@ -221,6 +221,20 @@ def _adjudication_sections(adjudications: Sequence[ReviewAdjudication]) -> str:
     return "\n".join(sections)
 
 
+def _insert_before_pi_audit(review_body: str, adjudication_sections: str) -> str:
+    """Place final dispositions before provider-attempt audit evidence.
+
+    :param review_body: Lead-in, incidents, health, and Pi audit Markdown.
+    :param adjudication_sections: Optional findings and final-judge audit.
+    :returns: Review body in the canonical section order.
+    """
+    marker = "## Pi review audit"
+    prefix, separator, suffix = review_body.partition(marker)
+    if not separator:
+        return f"{review_body.rstrip()}\n\n{adjudication_sections}"
+    return f"{prefix.rstrip()}\n\n{adjudication_sections}\n\n{marker}{suffix}"
+
+
 def build_adjudicated_review(
     *,
     pr_number: int | None,
@@ -257,7 +271,7 @@ def build_adjudicated_review(
     else:
         event = "APPROVE"
     audit = _adjudication_sections(adjudications)
-    body = f"{review_body.rstrip()}\n\n{audit}" if audit else review_body
+    body = _insert_before_pi_audit(review_body, audit) if audit else review_body
     return ReviewPayload(
         pr_number=pr_number,
         repo=repo,

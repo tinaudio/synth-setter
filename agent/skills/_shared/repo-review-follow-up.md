@@ -99,10 +99,11 @@ not present in the runtime manifest.
 8. Re-fetch `headRefOid` immediately before delivery. On any head or PR-state
    drift, record `stale` and post nothing. For `mode: "no-comments"`, retain all
    late adjudications, including drops, in the runtime result without GitHub writes. For
-   `mode: "full"`, submit one `COMMENT` review through
-   `agent/skills/_shared/post_review.py`. Its body must identify late
-   Codex-verified follow-up findings and include the originating skill/model
-   audit rows. Never approve or request changes from follow-up; each final BLOCK
+   `mode: "full"`, write that identity and the originating skill/model audit
+   rows to a review-body file, then build the payload through
+   `agent/_shared/pi_review_payload.py --follow-up` using the validated
+   adjudication file. Submit that payload through
+   `agent/skills/_shared/post_review.py`. Never approve or request changes from follow-up; each final BLOCK
    and WARN remains an unresolved inline thread. Final NITs and LOW CONFIDENCE
    observations are body-only. Mark LOW CONFIDENCE visibly `[low confidence]`
    and explicitly ignorable with no required reply or gate. DROP is audit-only.

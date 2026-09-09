@@ -112,6 +112,22 @@ def test_gate_blocks_when_description_quotes_comment_hygiene_block(tmp_path: Pat
     assert result.returncode == 2, (result.returncode, result.stderr)
 
 
+def test_gate_blocks_annotated_block_marker(tmp_path: Path) -> None:
+    """Match delivered BLOCK tags carrying an accepted confidence annotation.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n"
+        "- **L42** — **[correctness:block] [low confidence]** claimed defect.\n",
+    )
+
+    result = _run_gate(review, env={"REVIEW_COMMENT_GATE": "off"})
+
+    assert result.returncode == 2, (result.returncode, result.stderr)
+
+
 def test_gate_off_mode_allows_sentinel_with_block_finding(tmp_path: Path) -> None:
     """``REVIEW_BLOCK_GATE=off`` is the documented escape hatch (exit 0).
 

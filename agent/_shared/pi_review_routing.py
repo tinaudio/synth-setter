@@ -538,6 +538,21 @@ class ReviewAdjudication(BaseModel, strict=True, extra="forbid"):
             raise ValueError("Review judge rationale must be non-empty")
         return self
 
+    def verify_fingerprint(self) -> None:
+        """Reject an identity that does not match this finding's evidence.
+
+        :raises ValueError: If the stored identity is not the canonical fingerprint.
+        """
+        expected_id = finding_fingerprint(
+            skill=self.skill,
+            severity=self.original_severity,
+            path=self.path,
+            line=self.line,
+            description=self.description,
+        )
+        if self.id != expected_id:
+            raise ValueError("review adjudication fingerprint does not match its evidence")
+
 
 class ReviewFilterReport(BaseModel, strict=True, extra="forbid"):
     """Complete disposition partition returned by the final review judge.

@@ -15,6 +15,7 @@ from typing import Any, cast
 import pytest
 import sh
 
+from agent._shared.pi_review_routing import finding_fingerprint
 from agent._shared.run_pi_review_follow_up import (
     _MAX_LOG_BYTES,
     FollowUpResult,
@@ -61,7 +62,13 @@ def test_follow_up_result_retains_drop_adjudication_for_audit() -> None:
     payload = json.loads(_valid_result())
     payload["late_findings"] = [
         {
-            "id": "1" * 64,
+            "id": finding_fingerprint(
+                skill="correctness-review",
+                severity="block",
+                path="agent/example.py",
+                line=42,
+                description="Claimed defect.",
+            ),
             "skill": "correctness-review",
             "original_severity": "block",
             "path": "agent/example.py",
@@ -76,6 +83,26 @@ def test_follow_up_result_retains_drop_adjudication_for_audit() -> None:
 
     assert result.late_findings[0].original_severity == "block"
     assert result.late_findings[0].final_disposition == "drop"
+
+
+def test_follow_up_result_mismatched_adjudication_fingerprint_rejected() -> None:
+    """Reject detached audit rows whose evidence no longer matches their identity."""
+    payload = json.loads(_valid_result())
+    payload["late_findings"] = [
+        {
+            "id": "1" * 64,
+            "skill": "correctness-review",
+            "original_severity": "block",
+            "path": "agent/example.py",
+            "line": 42,
+            "description": "Claimed defect.",
+            "final_disposition": "drop",
+            "rationale": "The changed code cannot reach the claimed path.",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="fingerprint"):
+        FollowUpResult.model_validate_json(json.dumps(payload))
 
 
 def test_follow_up_result_unknown_adjudication_skill_rejected() -> None:

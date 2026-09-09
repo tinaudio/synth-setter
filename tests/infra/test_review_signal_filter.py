@@ -17,6 +17,7 @@ from agent._shared.pi_review_render import (
 from agent._shared.pi_review_routing import (
     REVIEW_FILTER_MODEL,
     build_review_filter_prompt,
+    finding_fingerprint,
     parse_review_filter_report,
 )
 
@@ -209,7 +210,7 @@ def test_review_adjudication_promotions_and_demotions_render_by_final_class() ->
     payload = build_adjudicated_review(
         pr_number=3013,
         repo="tinaudio/synth-setter",
-        review_body="Review lead-in.",
+        review_body="Review lead-in.\n\n## Pi review audit\n\nAttempt row.",
         adjudications=adjudications,
     )
     rendered = render_markdown(
@@ -232,6 +233,7 @@ def test_review_adjudication_promotions_and_demotions_render_by_final_class() ->
     assert "**[correctness:nit]** `agent/example.py:42`" in rendered
     assert "original `block` → final `nit`" in rendered
     assert "original `warn` → final `block`" in rendered
+    assert rendered.index("## Final judge audit") < rendered.index("## Pi review audit")
 
 
 def test_review_adjudication_final_warn_renders_inline() -> None:
@@ -267,6 +269,122 @@ def test_review_adjudication_final_warn_renders_inline() -> None:
     assert payload.event == "COMMENT"
     assert len(payload.findings) == 1
     assert payload.findings[0].body.startswith("**[correctness:warn]**")
+
+
+def test_review_payload_cli_builds_delivery_from_adjudications(tmp_path: Path) -> None:
+    """Build production delivery JSON through the deterministic adjudication helper.
+
+    :param tmp_path: Temporary input and output paths.
+    """
+    adjudications = parse_review_filter_report(
+        json.dumps(
+            {
+                "target": "PR #3013",
+                "decisions": [
+                    {
+                        "id": "1" * 64,
+                        "disposition": "warn",
+                        "rationale": "Valid defect with a non-blocking workaround.",
+                    },
+                    {
+                        "id": "2" * 64,
+                        "disposition": "drop",
+                        "rationale": "Optional preference rather than a defect.",
+                    },
+                ],
+            }
+        ),
+        filter_input=_filter_input(),
+    )
+    adjudications = tuple(
+        item.model_copy(
+            update={
+                "id": finding_fingerprint(
+                    skill=item.skill,
+                    severity=item.original_severity,
+                    path=item.path,
+                    line=item.line,
+                    description=item.description,
+                )
+            }
+        )
+        for item in adjudications
+    )
+    adjudications_path = tmp_path / "adjudications.json"
+    adjudications_path.write_text(json.dumps([item.model_dump() for item in adjudications]))
+    review_body_path = tmp_path / "review-body.md"
+    review_body_path.write_text("Review lead-in.\n")
+    output_path = tmp_path / "payload.json"
+
+    result = sh.Command(sys.executable)(
+        REPO_ROOT / "agent/_shared/pi_review_payload.py",
+        "--adjudications",
+        adjudications_path,
+        "--review-body",
+        review_body_path,
+        "--repo",
+        "tinaudio/synth-setter",
+        "--pr-number",
+        "3013",
+        "--output",
+        output_path,
+    )
+    payload = json.loads(output_path.read_text())
+
+    assert str(result) == ""
+    assert payload["event"] == "COMMENT"
+    assert payload["findings"][0]["body"].startswith("**[correctness:warn]**")
+    assert "final `drop`" in payload["review_body"]
+
+
+def test_review_payload_cli_follow_up_all_drop_forces_comment(tmp_path: Path) -> None:
+    """Keep an all-DROP detached follow-up from approving the PR.
+
+    :param tmp_path: Temporary input and output paths.
+    """
+    candidate = json.loads(_filter_input())["candidates"][0]
+    candidate_id = finding_fingerprint(
+        skill=candidate["skill"],
+        severity=candidate["severity"],
+        path=candidate["path"],
+        line=candidate["line"],
+        description=candidate["description"],
+    )
+    adjudication = {
+        "id": candidate_id,
+        "skill": candidate["skill"],
+        "original_severity": candidate["severity"],
+        "path": candidate["path"],
+        "line": candidate["line"],
+        "description": candidate["description"],
+        "final_disposition": "drop",
+        "rationale": "The claimed path is unreachable.",
+    }
+    adjudications_path = tmp_path / "adjudications.json"
+    adjudications_path.write_text(json.dumps([adjudication]))
+    review_body_path = tmp_path / "review-body.md"
+    review_body_path.write_text("Late review lead-in.\n")
+    output_path = tmp_path / "payload.json"
+
+    sh.Command(sys.executable)(
+        REPO_ROOT / "agent/_shared/pi_review_payload.py",
+        "--adjudications",
+        adjudications_path,
+        "--review-body",
+        review_body_path,
+        "--repo",
+        "tinaudio/synth-setter",
+        "--pr-number",
+        "3013",
+        "--output",
+        output_path,
+        "--follow-up",
+    )
+    payload = json.loads(output_path.read_text())
+
+    assert payload["event"] == "COMMENT"
+    assert payload["findings"] == []
+    assert "final `drop`" in payload["review_body"]
 
 
 def test_review_adjudication_pr_health_block_requests_changes() -> None:
@@ -584,6 +702,7 @@ def test_review_filter_is_final_astra_pass_in_foreground_and_follow_up() -> None
     no_comments = (REPO_ROOT / "agent/skills/repo-review-full-no-comments/SKILL.md").read_text()
     agent = (REPO_ROOT / ".pi/agents/pr-review-filter.md").read_text()
 
+    assert "pi_review_payload.py --follow-up" in follow_up
     assert all(
         field in follow_up
         for field in (

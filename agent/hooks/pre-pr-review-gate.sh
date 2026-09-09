@@ -441,7 +441,7 @@ fi
 # `|| true`: tolerate grep's no-match exit-1, like the comment sub-gate above.
 if [[ "$REVIEW_BLOCK_GATE" != "off" ]]; then
   block_findings=$(sed -nE \
-    's/^- (\*\*L[0-9]+\*\* — )?\*\*(\[[a-z][a-z0-9-]*:block\])\*\*.*/\2/p' \
+    's/^- (\*\*L[0-9]+\*\* — )?\*\*(\[[a-z][a-z0-9-]*:block\])( \[low confidence\])?\*\*.*/\2/p' \
     "$REVIEW_PATH" | grep -vFx '[comment-hygiene:block]' || true)
   block_count=$(printf '%s' "$block_findings" | grep -c . || true)
   if [[ "$block_count" -gt 0 ]]; then

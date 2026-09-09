@@ -300,6 +300,8 @@ class FollowUpResult(BaseModel, strict=True, extra="forbid"):
         """
         if self.status == "failed" and not self.diagnostics:
             raise ValueError("failed result requires a diagnostic")
+        for finding in self.late_findings:
+            finding.verify_fingerprint()
         return self
 
 
