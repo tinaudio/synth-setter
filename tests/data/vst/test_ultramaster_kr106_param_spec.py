@@ -13,6 +13,7 @@ from hydra import compose, initialize_config_module
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
+    ContinuousParameter,
     DiscreteLiteralParameter,
     decode_model_output,
 )
@@ -203,6 +204,20 @@ def test_ultramaster_kr106_spec_round_trip_preserves_values() -> None:
     assert decoded_note["note_start_and_end"] == pytest.approx(
         note["note_start_and_end"], abs=1e-6
     )
+
+
+def test_ultramaster_kr106_master_volume_samples_calibrated_range() -> None:
+    """Post-chorus gain remains variable within its calibrated ceiling."""
+    master_volume = next(
+        param
+        for param in param_specs["ultramaster_kr106"].synth_params
+        if param.name == "master_volume"
+    )
+
+    assert isinstance(master_volume, ContinuousParameter)
+    assert master_volume.min == 0.0
+    assert master_volume.max == 0.25
+    assert master_volume.constant_val_p == 0.0
 
 
 def test_ultramaster_kr106_command_and_silence_states_are_not_sampled() -> None:

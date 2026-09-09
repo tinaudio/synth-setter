@@ -37,6 +37,7 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
 )
 from synth_setter.pipeline.data.lance_shard import (
+    commit_lance_branch,
     commit_lance_dataset,
     iter_lance_column_rows,
     lance_fragment,
@@ -205,6 +206,55 @@ def test_recommitting_winner_set_is_idempotent(tmp_path: Path) -> None:
     decoded = _read_columns(train_uri)
     assert decoded[PARAM_ARRAY_FIELD].shape[0] == _ROWS_PER_SHARD
     np.testing.assert_array_equal(decoded[PARAM_ARRAY_FIELD], written[PARAM_ARRAY_FIELD])
+
+
+def test_branch_overwrite_uses_branch_data_namespace_and_preserves_versions(
+    tmp_path: Path,
+) -> None:
+    """A branch overwrite reads branch-staged fragments without changing main.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    train_uri = tmp_path / "train.lance"
+    baseline = _worker_writes_fragment(train_uri, schema, _arange_arrays(0))[0]
+    commit_lance_dataset(train_uri, schema, [baseline])
+    branch = lance.dataset(str(train_uri)).create_branch("append-test", 1)
+    old_branch_version = branch.version
+
+    replacement_arrays = _arange_arrays(_VALUE_STRIDE)
+    replacement = _worker_writes_fragment(
+        Path(branch.uri), schema, replacement_arrays
+    )[0]
+    published = commit_lance_branch(branch, schema, [replacement])
+
+    assert published.version > old_branch_version
+    np.testing.assert_array_equal(
+        np.stack(
+            list(
+                published.checkout_version(old_branch_version)
+                .to_table(columns=[PARAM_ARRAY_FIELD])[PARAM_ARRAY_FIELD]
+                .to_numpy(zero_copy_only=False)
+            )
+        ),
+        _arange_arrays(0)[PARAM_ARRAY_FIELD],
+    )
+    np.testing.assert_array_equal(
+        np.stack(
+            published.to_table(columns=[PARAM_ARRAY_FIELD])[PARAM_ARRAY_FIELD].to_numpy(
+                zero_copy_only=False
+            )
+        ),
+        replacement_arrays[PARAM_ARRAY_FIELD],
+    )
+    np.testing.assert_array_equal(
+        np.stack(
+            lance.dataset(str(train_uri))
+            .to_table(columns=[PARAM_ARRAY_FIELD])[PARAM_ARRAY_FIELD]
+            .to_numpy(zero_copy_only=False)
+        ),
+        _arange_arrays(0)[PARAM_ARRAY_FIELD],
+    )
 
 
 def test_fragment_not_colocated_with_dataset_fails_on_read(tmp_path: Path) -> None:
