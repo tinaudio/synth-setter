@@ -320,17 +320,18 @@ is isolated and receives the complete `RenderConfig` for every backend.
 | **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std)                           |
 | **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`) |
 
-Four metrics are computed for every (predicted, target) audio pair. Passing
+Five metrics are computed for every (predicted, target) audio pair. Passing
 `--renderer-backend pyfdn` adds two impulse-response metrics:
 
-| Metric                   | Full Name                     | Method                                              | Range     |
-| ------------------------ | ----------------------------- | --------------------------------------------------- | --------- |
-| **MSS**                  | Multi-Scale Spectrogram       | L1 on mel spectrograms at 3 time scales             | \[0, ∞) ↓ |
-| **wMFCC**                | Weighted MFCC                 | DTW cost between MFCC sequences                     | \[0, ∞) ↓ |
-| **SOT**                  | Spectral Optimal Transport    | Wasserstein distance on normalized STFT bins        | \[0, ∞) ↓ |
-| **RMS**                  | RMS Amplitude Envelope        | Cosine similarity of RMS envelopes                  | [-1, 1] ↑ |
-| **octave_rt60_log_rmse** | Octave-band RT60 log-RMSE     | RMSE of valid paired natural-log RT60 estimates     | \[0, ∞) ↓ |
-| **octave_edc_rmse_db**   | Octave-band energy-decay RMSE | pyFDN `MatchEnergyDecay` over target-valid EDC bins | \[0, ∞) ↓ |
+| Metric                   | Full Name                          | Method                                                                                                | Range     |
+| ------------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------------------- | --------- |
+| **MSS**                  | Multi-Scale Spectrogram            | L1 on mel spectrograms at 3 time scales                                                               | \[0, ∞) ↓ |
+| **wMFCC**                | Weighted MFCC                      | DTW cost between MFCC sequences                                                                       | \[0, ∞) ↓ |
+| **SOT**                  | Spectral Optimal Transport         | Wasserstein distance on normalized STFT bins                                                          | \[0, ∞) ↓ |
+| **RMS**                  | RMS Amplitude Envelope             | Cosine similarity of RMS envelopes                                                                    | [-1, 1] ↑ |
+| **MLDR**                 | Multi-scale Loudness Dynamic Range | L1 of log short/long energy-envelope ratios at 2 scales ([DiffVox](https://arxiv.org/abs/2504.14735)) | \[0, ∞) ↓ |
+| **octave_rt60_log_rmse** | Octave-band RT60 log-RMSE          | RMSE of valid paired natural-log RT60 estimates                                                       | \[0, ∞) ↓ |
+| **octave_edc_rmse_db**   | Octave-band energy-decay RMSE      | pyFDN `MatchEnergyDecay` over target-valid EDC bins                                                   | \[0, ∞) ↓ |
 
 **Key behaviors:**
 

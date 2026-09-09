@@ -88,6 +88,8 @@ from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _Record
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 
+NUM_AUDIO_METRICS = 5
+
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
 _ORACLE_EXPERIMENT = "surge/fake_oracle"
@@ -1216,7 +1218,6 @@ def test_train_eval_surge_xt(
     """
     from pedalboard.io import AudioFile
 
-    NUM_AUDIO_METRICS = 4  # mss, wmfcc, sot, rms
     METRICS_FILE_EXPECTATIONS = {
         "aggregated_metrics.csv": {
             "rows": NUM_AUDIO_METRICS,
@@ -1224,7 +1225,7 @@ def test_train_eval_surge_xt(
         },
         "metrics.csv": {
             "rows": NUM_FIXTURE_SAMPLES,
-            "columns": {"mss", "wmfcc", "sot", "rms"},
+            "columns": {"mss", "wmfcc", "sot", "rms", "mldr"},
         },
     }
 
@@ -1312,6 +1313,9 @@ def test_train_eval_surge_xt(
         )
         assert per_sample["rms"].min() > bounds.rms_min, (
             f"oracle rms too low: {per_sample['rms'].tolist()}"
+        )
+        assert per_sample["mldr"].max() < bounds.mldr_max, (
+            f"oracle mldr too high: {per_sample['mldr'].tolist()}"
         )
 
 
@@ -1697,7 +1701,7 @@ def test_train_eval_surge_fake_writes_audio_and_metrics_outputs(
 
     metrics_dir = tmp_path / "metrics"
     for metrics_file, expected_rows in {
-        "aggregated_metrics.csv": 4,
+        "aggregated_metrics.csv": NUM_AUDIO_METRICS,
         "metrics.csv": NUM_FIXTURE_SAMPLES,
     }.items():
         assert (metrics_dir / metrics_file).is_file(), f"{metrics_file} not found"
@@ -2036,7 +2040,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
 
     assert set(metrics) == {
         f"val_audio/{name}_{stat}"
-        for name in ("mss", "wmfcc", "sot", "rms")
+        for name in ("mss", "wmfcc", "sot", "rms", "mldr")
         for stat in ("mean", "std")
     }
     bounds = ORACLE_AUDIO_METRIC_BOUNDS
@@ -2044,6 +2048,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     assert metrics["val_audio/wmfcc_mean"] < bounds.wmfcc_max
     assert metrics["val_audio/sot_mean"] < bounds.sot_max
     assert metrics["val_audio/rms_mean"] > bounds.rms_min
+    assert metrics["val_audio/mldr_mean"] < bounds.mldr_max
 
     uploaded = fake_r2_remote / cfg_surge_real_train.r2.bucket / "probes"
     landed = sorted(p.relative_to(uploaded).as_posix() for p in uploaded.rglob("*") if p.is_file())

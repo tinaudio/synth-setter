@@ -85,7 +85,7 @@ from tests.helpers.wandb_offline import read_history_rows, read_run_project
 # The predict-mode oracle eval (surge/fake_oracle) dumps one mean+std per audio
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
 # only keys in ``metrics.json`` (see ``synth_setter.evaluation.compute_audio_metrics``).
-_ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms")
+_ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms", "mldr")
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _REAL_PLUGIN_VST3 = (
@@ -358,7 +358,13 @@ def test_cfg_dataset_default_plugin_reload_cadence_is_once(
 
 
 @pytest.mark.fake_vst
+@pytest.mark.parametrize(
+    ("project_env", "expected_project"),
+    [(None, "synth-setter-generate-dataset"), ("synth-setter-citest", "synth-setter-citest")],
+)
 def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
+    project_env: str | None,
+    expected_project: str,
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -375,6 +381,8 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     the assigned split dataset (#1776), and (3) a second ``from_hydra`` pass
     renders nothing because the probe finds all shards already staged.
 
+    :param project_env: Optional project override for isolated CI runs.
+    :param expected_project: Project persisted by the worker's W&B run.
     :param cfg_dataset: Hydra cfg composed with ``generate_dataset/smoke-shard``
         and ``tmp_path``-pinned paths (the same ``tmp_path`` ``fake_r2_remote``
         backs ``r2:`` against).
@@ -385,7 +393,9 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
     monkeypatch.setenv("WANDB_MODE", "offline")
-    monkeypatch.setenv("WANDB_PROJECT", "synth-setter-citest")
+    monkeypatch.delenv("WANDB_PROJECT", raising=False)
+    if project_env is not None:
+        monkeypatch.setenv("WANDB_PROJECT", project_env)
     monkeypatch.setattr(
         "synth_setter.pipeline.ci.validate_shard.LANCE_VALIDATION_BATCH_SIZE_BYTES",
         1,
@@ -426,7 +436,7 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     )
     assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
     wandb_binary = wandb_binaries[0]
-    assert read_run_project(wandb_binary) == "synth-setter-citest"
+    assert read_run_project(wandb_binary) == expected_project
     rows = read_history_rows(
         wandb_binary,
         until=lambda scanned: (
@@ -2063,6 +2073,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             assert metrics[f"{metric_prefix}audio/wmfcc_mean"] < bounds.wmfcc_max, (split, metrics)
             assert metrics[f"{metric_prefix}audio/sot_mean"] < bounds.sot_max, (split, metrics)
             assert metrics[f"{metric_prefix}audio/rms_mean"] > bounds.rms_min, (split, metrics)
+            assert metrics[f"{metric_prefix}audio/mldr_mean"] < bounds.mldr_max, (split, metrics)
     finally:
         r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{prefix_root}/")
 
