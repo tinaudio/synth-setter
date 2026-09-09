@@ -348,6 +348,7 @@ class VSTDataModule(LightningDataModule):
         conditioning: Conditioning = "mel",
         sketch: SketchControls = None,
         pin_memory: bool = True,
+        include_audio: bool = False,
         *,
         param_spec_name: ParamSpecName,
         download_dataset_txids: dict[str, str] | None = None,
@@ -373,6 +374,7 @@ class VSTDataModule(LightningDataModule):
         :param sketch: Optional sketch-control spec adding its stored column to
             every split's read set (#2612).
         :param pin_memory: Whether dataloaders pin returned tensors.
+        :param include_audio: Whether all splits include target audio for render-feedback loss.
         :param param_spec_name: Registry key selecting parameter width.
         :param download_dataset_txids: Per-split transaction uuids pinning the
             source snapshots. Each split has independent transaction history.
@@ -407,6 +409,7 @@ class VSTDataModule(LightningDataModule):
         )
         self.sketch_controls: SketchControlSpec | None = resolve_sketch_controls(sketch)
         self.pin_memory = pin_memory
+        self.include_audio = include_audio
         self.param_spec_name = param_spec_name
         self.download_dataset_txids = materialize_config.download_dataset_txids
         self.download_dataset_row_limit = materialize_config.download_dataset_row_limit
@@ -455,7 +458,9 @@ class VSTDataModule(LightningDataModule):
         :returns: Columns the loaders read, keyed by split.
         """
         return {
-            split: self._loader_columns(read_audio=split == predict_split)
+            split: self._loader_columns(
+                read_audio=self.include_audio or split == predict_split
+            )
             for split in _MATERIALIZE_SPLITS
         }
 

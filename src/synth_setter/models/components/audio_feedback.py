@@ -21,10 +21,9 @@ from jaxtyping import Float, Shaped, jaxtyped
 from torch import Tensor, nn
 from torch.nn import functional
 
-from synth_setter.data.torchsynth_grad_render import (
-    differentiable_decode,
-    render_torchsynth_grad,
-    validate_torchsynth_params,
+from synth_setter.models.components.differentiable_renderer import (
+    DifferentiableRenderer,
+    TorchSynthDifferentiableRenderer,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,6 +34,7 @@ _TIME_BUCKETS = 4
 _BATCH_ANY_SHAPE = "batch ..."
 _BUCKETS_SHAPE = "buckets"
 _BATCH_AUDIO_SHAPE = "batch samples"
+_BATCH_CHANNEL_AUDIO_SHAPE = "batch channels samples"
 _BATCH_PARAMS_SHAPE = "batch params"
 _BATCH_SHAPE = "batch"
 _BATCH_TIME_SHAPE = "batch 1"
@@ -44,22 +44,19 @@ _SCALAR_SHAPE = ""
 @jaxtyped(typechecker=beartype)
 def _log_non_finite_estimate(
     theta_hat: Float[Tensor, _BATCH_PARAMS_SHAPE],
-    params: Float[Tensor, _BATCH_PARAMS_SHAPE],
 ) -> None:
     """Report how far the estimate ran before it went non-finite.
 
-    ``differentiable_decode`` clamps every finite input into range, so non-finite decoded
-    params mean ``theta_hat`` arrived corrupt — the extremes bound the last finite weights.
+    Renderer inputs must be finite, so the extremes bound the last finite estimates.
 
     :param theta_hat: One-step parameter estimate in model space.
-    :param params: Decoded renderer parameters holding at least one non-finite entry.
     """
     finite = theta_hat[torch.isfinite(theta_hat)]
     has_finite = bool(finite.numel())
     logger.error(
         "non_finite_audio_estimate non_finite_rows=%d theta_hat_finite_min=%s "
         "theta_hat_finite_max=%s",
-        int((~torch.isfinite(params).all(dim=-1)).sum().item()),
+        int((~torch.isfinite(theta_hat).all(dim=-1)).sum().item()),
         finite.min().item() if has_finite else "none",
         finite.max().item() if has_finite else "none",
     )
@@ -177,6 +174,7 @@ class AudioFeedbackLoss(nn.Module):
         signal_length: int,
         render_batch_size: int,
         distance: nn.Module,
+        renderer: DifferentiableRenderer | None = None,
     ) -> None:
         """Configure the render geometry and the term's weighting.
 
@@ -188,6 +186,8 @@ class AudioFeedbackLoss(nn.Module):
             training batch size, which shorter batches pad up to.
         :param distance: Module mapping ``(rendered, target)`` to a per-sample distance. It
             owns the space, so no conditioning choice can change what this term measures.
+        :param renderer: Tensor-native model-space renderer; defaults to TorchSynth for
+            checkpoint and configuration compatibility.
         :raises ValueError: Non-finite/non-positive ``lambda_audio``, out-of-range
             ``t_min``, non-positive ``render_batch_size``, or a trainable ``metric``.
         """
@@ -207,6 +207,15 @@ class AudioFeedbackLoss(nn.Module):
         self.sample_rate = sample_rate
         self.signal_length = signal_length
         self.render_batch_size = render_batch_size
+        self.renderer = (
+            renderer
+            if renderer is not None
+            else TorchSynthDifferentiableRenderer(
+                sample_rate=sample_rate,
+                signal_length=signal_length,
+                render_batch_size=render_batch_size,
+            )
+        )
 
     @jaxtyped(typechecker=beartype)
     def audio_weight(
@@ -224,36 +233,31 @@ class AudioFeedbackLoss(nn.Module):
         self,
         theta_hat: Float[Tensor, _BATCH_PARAMS_SHAPE],
         t: Float[Tensor, _BATCH_TIME_SHAPE],
-        target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
+        target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE]
+        | Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE],
         keep: Shaped[Tensor, _BATCH_SHAPE] | None = None,
     ) -> Float[Tensor, _SCALAR_SHAPE]:
         """Render the estimate and return the weighted latent distance to the target.
 
         :param theta_hat: One-step parameter estimate in model space ``[-1, 1]``.
         :param t: Flow time shaped ``(batch, 1)``.
-        :param target_audio: Observed audio shaped ``(batch, signal_length)``.
+        :param target_audio: Observed audio shaped ``(batch, signal_length)`` or
+            ``(batch, channels, signal_length)``; channelized audio is downmixed.
         :param keep: Optional CFG keep mask shaped ``(batch,)``; rows at ``False`` are
             zero-weighted because their estimate is drawn from the marginal, making the
             residual against that row's own audio near-arbitrary.
         :returns: Scalar weighted audio loss.
         """
-        params = differentiable_decode(theta_hat)
-        if not torch.isfinite(params).all():
-            _log_non_finite_estimate(theta_hat, params)
-        validate_torchsynth_params(params)
+        if not torch.isfinite(theta_hat).all():
+            _log_non_finite_estimate(theta_hat)
+        self.renderer.validate(theta_hat)
         weight = self.audio_weight(t).squeeze(-1)
         if keep is not None:
             weight = weight * keep
         if torch.count_nonzero(weight).item() == 0:
             return theta_hat.sum() * 0.0
 
-        rendered = render_torchsynth_grad(
-            params,
-            sample_rate=self.sample_rate,
-            signal_length=self.signal_length,
-            render_batch_size=self.render_batch_size,
-        )
-        # The stored target was hard-clamped by render_torchsynth; a straight-through
-        # clamp matches that contract without zeroing gradient on clipped samples.
-        rendered = rendered + (rendered.clamp(-1.0, 1.0) - rendered).detach()
+        rendered = self.renderer(theta_hat)
+        if target_audio.ndim == 3:
+            target_audio = target_audio.mean(dim=1)
         return (weight * self.distance(rendered, target_audio)).mean()

@@ -544,6 +544,7 @@ class LanceVSTDataModule(VSTDataModule):
         conditioning: Conditioning = "mel",
         sketch: SketchControls = None,
         pin_memory: bool = True,
+        include_audio: bool = False,
         param_spec_name: ParamSpecName,
         persistent_workers: bool = False,
         prefetch_factor: int | None = None,
@@ -568,6 +569,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param sketch: Optional sketch-control spec adding its stored column to
             every split's read set (#2612).
         :param pin_memory: Whether dataloaders pin returned tensors.
+        :param include_audio: Whether all splits include target audio for render-feedback loss.
         :param param_spec_name: Registry key selecting parameter width.
         :param persistent_workers: Whether positive worker counts persist between iterators.
         :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
@@ -596,6 +598,7 @@ class LanceVSTDataModule(VSTDataModule):
             conditioning=conditioning,
             sketch=sketch,
             pin_memory=pin_memory,
+            include_audio=include_audio,
             param_spec_name=param_spec_name,
             download_dataset_txids=download_dataset_txids,
             download_dataset_row_limit=download_dataset_row_limit,
@@ -735,7 +738,7 @@ class LanceVSTDataModule(VSTDataModule):
             name: self._build_lance_split(
                 shard_paths[name],
                 ot=self.ot if name == "train" else False,
-                read_audio=name == "predict",
+                read_audio=self.include_audio or name == "predict",
                 stats=predict_stats if name == "predict" else split_stats,
                 include_sample_id=self.eval_sample_ids and name in ("val", "test"),
             )
@@ -756,7 +759,8 @@ class LanceVSTDataModule(VSTDataModule):
         if self.fake:
             self._splits = {
                 name: self._build_fake_split(
-                    num_params=num_params, read_audio=name == "predict"
+                    num_params=num_params,
+                    read_audio=self.include_audio or name == "predict",
                 )
                 for name in split_names
             }

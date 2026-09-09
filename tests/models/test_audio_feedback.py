@@ -409,12 +409,11 @@ def test_latent_loss_with_all_zero_weights_skips_render_and_preserves_scalar_con
     def fail_render(*args: object, **kwargs: object) -> torch.Tensor:
         raise AssertionError("renderer must not run")
 
-    monkeypatch.setattr(
-        "synth_setter.models.components.audio_feedback.render_torchsynth_grad", fail_render
-    )
+    loss = _loss()
+    monkeypatch.setattr(loss.renderer, "forward", fail_render)
     theta = torch.zeros(_BATCH, _ENCODED_WIDTH, dtype=torch.float64, requires_grad=True)
 
-    value = _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH))
+    value = loss(theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH))
 
     assert value.shape == torch.Size([])
     assert value.device == theta.device
@@ -436,13 +435,12 @@ def test_latent_loss_with_partially_zero_weights_still_renders(
         render_calls += 1
         return params[:, :1].expand(-1, _SIGNAL_LENGTH)
 
-    monkeypatch.setattr(
-        "synth_setter.models.components.audio_feedback.render_torchsynth_grad", fake_render
-    )
+    loss = _loss()
+    monkeypatch.setattr(loss.renderer, "forward", fake_render)
     theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
     keep = torch.tensor([True, False, False, False])
 
-    value = _loss()(
+    value = loss(
         theta,
         torch.full((_BATCH, 1), 0.9),
         torch.zeros(_BATCH, _SIGNAL_LENGTH),
@@ -538,6 +536,20 @@ def test_latent_loss_of_a_perfect_estimate_is_zero() -> None:
     target_audio = _render(params)
 
     value = _loss().forward(params * 2 - 1, torch.full((_BATCH, 1), 0.9), target_audio)
+
+    assert value.item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_latent_loss_accepts_single_channel_dataset_audio() -> None:
+    """Stored mono channel axes are removed before scoring renderer output."""
+    params = _encoded_rows(_BATCH).clamp(0.01, 0.99)
+    target_audio = _render(params).unsqueeze(1)
+
+    value = _loss().forward(
+        params * 2 - 1,
+        torch.full((_BATCH, 1), 0.9),
+        target_audio,
+    )
 
     assert value.item() == pytest.approx(0.0, abs=1e-6)
 

@@ -864,6 +864,23 @@ class TestLanceMapDataModuleFlows:
         assert _unwrap(predict_batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
         assert _unwrap(predict_batch["audio"]).dtype == torch.float32
 
+    def test_include_audio_reads_training_target_without_changing_conditioning(
+        self, dataset_root: Path
+    ) -> None:
+        """Audio-feedback training projects waveforms alongside stored mel conditioning.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            include_audio=True,
+        ) as module:
+            train_batch = next(iter(module.train_dataloader()))
+        assert _unwrap(train_batch["mel"]).shape == (2, *MEL_SHAPE)
+        assert _unwrap(train_batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
+
     def test_embedding_spec_routes_music2latent_to_conditioning(
         self, dataset_root: Path
     ) -> None:

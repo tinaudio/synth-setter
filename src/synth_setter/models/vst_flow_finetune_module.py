@@ -23,9 +23,9 @@ from beartype import beartype
 from jaxtyping import Float, Shaped, jaxtyped
 from torch import Tensor
 
-from synth_setter.data.torchsynth_grad_render import (
-    differentiable_decode,
-    render_torchsynth_grad,
+from synth_setter.models.components.differentiable_renderer import (
+    DifferentiableRenderer,
+    TorchSynthDifferentiableRenderer,
 )
 from synth_setter.models.components.pretrained_flow import (
     PretrainedBaseMixin,
@@ -141,6 +141,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         control_t_min: float = DEFAULT_CONTROL_T_MIN,
         cost: torch.nn.Module | None = None,
         control_encoder: torch.nn.Module | None = None,
+        renderer: DifferentiableRenderer | None = None,
         **base_kwargs: object,
     ) -> None:
         r"""Load a pretrained flow, freeze it, and attach the control this run trains.
@@ -164,6 +165,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
             ``gradient_spectral``.
         :param control_encoder: Trainable waveform encoder over the render residual;
             required by ``learned_audio``.
+        :param renderer: Tensor-native model-space renderer; defaults to TorchSynth.
         :param \*\*base_kwargs: Remaining :class:`VSTFlowMatchingModule` arguments.
         """
         _validate_arm(
@@ -186,7 +188,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         )
         # Lightning collects the subclass frame's init args, so these land in hparams and
         # get deep-copied; the group admits large weight-normalized pretrained encoders.
-        self.save_hyperparameters(ignore=["cost", "control_encoder"], logger=False)
+        self.save_hyperparameters(ignore=["cost", "control_encoder", "renderer"], logger=False)
         self.num_params = num_params
         self.base_checkpoint_sha256 = (
             load_pretrained_flow(self, base_checkpoint) if base_checkpoint is not None else None
@@ -201,6 +203,15 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         self.sample_rate = sample_rate
         self.signal_length = signal_length
         self.render_batch_size = render_batch_size
+        self.renderer = (
+            renderer
+            if renderer is not None
+            else TorchSynthDifferentiableRenderer(
+                sample_rate=sample_rate,
+                signal_length=signal_length,
+                render_batch_size=render_batch_size,
+            )
+        )
         self.control_dim = self._control_signal_width()
         self.vector_field = ControlledFlow(
             flow=self.vector_field,
@@ -288,19 +299,10 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
     ) -> Float[Tensor, _BATCH_AUDIO_SHAPE]:
         """Render a model-space estimate through the production differentiable renderer.
 
-        The decode is what makes the estimate mean what it says: the renderer reads ``[0, 1]``
-        and clamps, so feeding it model-space ``[-1, 1]`` directly still produces audio — just
-        not the audio those parameters describe.
-
         :param theta_hat: One-step estimate in model space ``[-1, 1]``.
         :returns: Audio shaped ``(batch, signal_length)``.
         """
-        return render_torchsynth_grad(
-            differentiable_decode(theta_hat),
-            sample_rate=self.sample_rate,
-            signal_length=self.signal_length,
-            render_batch_size=self.render_batch_size,
-        )
+        return self.renderer(theta_hat)
 
     @jaxtyped(typechecker=beartype)
     def _control_signal(

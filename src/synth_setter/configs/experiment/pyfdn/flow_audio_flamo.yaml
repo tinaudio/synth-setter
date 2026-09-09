@@ -1,0 +1,24 @@
+# @package _global_
+
+defaults:
+  - /experiment/pyfdn/flow
+  - override /model/audio_loss: mss
+  - _self_
+
+run_name: flow_audio_flamo
+tags: [pyfdn, flow, audio_feedback, flamo]
+
+datamodule:
+  include_audio: true
+
+model:
+  audio_loss:
+    sample_rate: 44100
+    signal_length: 176400
+    distance:
+      sample_rate: 44100
+    renderer:
+      _target_: synth_setter.models.components.differentiable_renderer.FlamoFDNDifferentiableRenderer
+      param_spec: ${synth.param_spec_name}
+      sample_rate: 44100
+      signal_length: 176400
