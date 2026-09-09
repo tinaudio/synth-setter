@@ -88,6 +88,7 @@ from tests.helpers.wandb_offline import read_history_rows, read_run_labels, read
 # metric; predict leaves ``trainer.callback_metrics`` empty, so these are the
 # only keys in ``metrics.json`` (see ``synth_setter.evaluation.compute_audio_metrics``).
 _ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms", "mldr")
+_ORACLE_EVAL_SUBPROCESS_TIMEOUT_SECONDS = 1200
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _REAL_PLUGIN_VST3 = (
@@ -2093,26 +2094,23 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
         "SYNTH_SETTER_WORKSPACE": str(tmp_path),
     }
     try:
-        try:
-            result = subprocess.run(  # noqa: S603 — args are test-controlled literals
-                [
-                    sys.executable,
-                    "-m",
-                    "synth_setter.cli.generate_dataset",
-                    "experiment=generate_dataset/smoke-shard-with-oracle-eval",
-                    "oracle_eval.upload=true",
-                    f"r2.prefix_root={prefix_root}",
-                    f"run_id={run_id}",
-                    f"hydra.run.dir={run_dir}",
-                ],
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=600,
-            )
-        except subprocess.TimeoutExpired:
-            pytest.xfail("#2947: inline oracle evaluation can exceed 600 seconds in CI")
+        result = subprocess.run(  # noqa: S603 — args are test-controlled literals
+            [
+                sys.executable,
+                "-m",
+                "synth_setter.cli.generate_dataset",
+                "experiment=generate_dataset/smoke-shard-with-oracle-eval",
+                "oracle_eval.upload=true",
+                f"r2.prefix_root={prefix_root}",
+                f"run_id={run_id}",
+                f"hydra.run.dir={run_dir}",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_ORACLE_EVAL_SUBPROCESS_TIMEOUT_SECONDS,
+        )
         assert result.returncode == 0, (
             f"generate-dataset CLI exited {result.returncode}\n"
             f"--- STDOUT (tail) ---\n{result.stdout[-2000:]}\n"
