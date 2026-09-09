@@ -300,6 +300,9 @@ def _validate_metrics_df(
     :raises ValueError: The table does not satisfy the expected metrics contract.
     """
     optional_row_mask = metrics_df.iloc[:, 0].isin(expected.optional_rows)
+    optional_row_names = metrics_df.loc[optional_row_mask].iloc[:, 0]
+    if optional_row_names.duplicated().any():
+        raise ValueError(f"{metrics_path} contains duplicate optional metric rows")
     required_row_count = len(metrics_df) - int(optional_row_mask.sum())
     if required_row_count != expected.rows:
         raise ValueError(

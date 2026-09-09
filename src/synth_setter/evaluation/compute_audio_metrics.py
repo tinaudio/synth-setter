@@ -654,12 +654,21 @@ def compute_mldr_mid_side(
     pred_float = np.asarray(pred, dtype=np.float64)
     if not np.isfinite(target_float).all() or not np.isfinite(pred_float).all():
         raise ValueError("target and pred must contain only finite values")
-    target_mid_side = np.stack(
-        ((target_float[0] + target_float[1]) / scale, (target_float[0] - target_float[1]) / scale)
-    )
-    pred_mid_side = np.stack(
-        ((pred_float[0] + pred_float[1]) / scale, (pred_float[0] - pred_float[1]) / scale)
-    )
+    with np.errstate(over="ignore"):
+        target_mid_side = np.stack(
+            (
+                (target_float[0] + target_float[1]) / scale,
+                (target_float[0] - target_float[1]) / scale,
+            )
+        )
+        pred_mid_side = np.stack(
+            (
+                (pred_float[0] + pred_float[1]) / scale,
+                (pred_float[0] - pred_float[1]) / scale,
+            )
+        )
+    if not np.isfinite(target_mid_side).all() or not np.isfinite(pred_mid_side).all():
+        raise ValueError("mid/side transformed audio must contain only finite values")
     return compute_mldr(target_mid_side, pred_mid_side, sample_rate)
 
 

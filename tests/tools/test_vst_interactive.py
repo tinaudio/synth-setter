@@ -1463,6 +1463,27 @@ class TestValidateMetricsDf:
 
         vst_interactive._validate_metrics_df(Path("aggregated_metrics.csv"), df, spec)
 
+    def test_duplicate_optional_aggregate_rows_raise(self, vst_interactive: ModuleType) -> None:
+        """An optional metric name may occur at most once in an aggregate table.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
+        df = pd.DataFrame(
+            {
+                "metric": ["mss", "mldr_mid_side", "mldr_mid_side"],
+                "mean": [0.1, 0.2, 0.3],
+                "std": [0.01, 0.02, 0.03],
+            }
+        )
+        spec = vst_interactive._MetricsFileSpec(
+            rows=1,
+            columns=frozenset({"mean", "std"}),
+            optional_rows=frozenset({"mldr_mid_side"}),
+        )
+
+        with pytest.raises(ValueError, match="duplicate optional metric rows"):
+            vst_interactive._validate_metrics_df(Path("aggregated_metrics.csv"), df, spec)
+
     def test_optional_aggregate_row_nan_mean_raises(self, vst_interactive: ModuleType) -> None:
         """An optional aggregate row still requires a finite mean.
 

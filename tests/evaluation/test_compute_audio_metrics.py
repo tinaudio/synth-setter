@@ -677,6 +677,14 @@ def test_compute_mldr_mid_side_nonmatching_stereo_shape_raises(
         compute_mldr_mid_side(target, pred)
 
 
+def test_compute_mldr_mid_side_finite_overflowing_transform_raises() -> None:
+    """Finite values whose mid/side sum overflows cannot produce a metric."""
+    stereo = np.full((2, 10), np.finfo(np.float64).max)
+
+    with pytest.raises(ValueError, match="finite"):
+        compute_mldr_mid_side(stereo, stereo)
+
+
 def test_compute_mldr_mid_side_nonfinite_audio_raises() -> None:
     """Non-finite stereo samples cannot enter metric aggregation."""
     stereo = np.zeros((2, 10), dtype=np.float64)
