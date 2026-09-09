@@ -234,6 +234,41 @@ def test_review_adjudication_promotions_and_demotions_render_by_final_class() ->
     assert "original `warn` → final `block`" in rendered
 
 
+def test_review_adjudication_final_warn_renders_inline() -> None:
+    """Render a judge-confirmed WARN as an unresolved inline finding."""
+    adjudications = parse_review_filter_report(
+        json.dumps(
+            {
+                "target": "PR #3013",
+                "decisions": [
+                    {
+                        "id": "1" * 64,
+                        "disposition": "warn",
+                        "rationale": "Valid defect with a non-blocking workaround.",
+                    },
+                    {
+                        "id": "2" * 64,
+                        "disposition": "drop",
+                        "rationale": "Optional preference rather than a defect.",
+                    },
+                ],
+            }
+        ),
+        filter_input=_filter_input(),
+    )
+
+    payload = build_adjudicated_review(
+        pr_number=3013,
+        repo="tinaudio/synth-setter",
+        review_body="Review lead-in.",
+        adjudications=adjudications,
+    )
+
+    assert payload.event == "COMMENT"
+    assert len(payload.findings) == 1
+    assert payload.findings[0].body.startswith("**[correctness:warn]**")
+
+
 def test_review_adjudication_pr_health_block_requests_changes() -> None:
     """Keep non-diff PR-health failures blocking after final adjudication."""
     adjudications = parse_review_filter_report(

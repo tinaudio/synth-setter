@@ -96,6 +96,22 @@ def test_gate_blocks_when_sentinel_lists_synth_setter_block_finding(tmp_path: Pa
     assert "unresolved BLOCK finding" in result.stderr
 
 
+def test_gate_blocks_when_description_quotes_comment_hygiene_block(tmp_path: Path) -> None:
+    """Exclude comment-hygiene only when it is the leading disposition.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n"
+        "- **L42** — **[correctness:block]** mishandles [comment-hygiene:block] rows.\n",
+    )
+
+    result = _run_gate(review, env={"REVIEW_COMMENT_GATE": "off"})
+
+    assert result.returncode == 2, (result.returncode, result.stderr)
+
+
 def test_gate_off_mode_allows_sentinel_with_block_finding(tmp_path: Path) -> None:
     """``REVIEW_BLOCK_GATE=off`` is the documented escape hatch (exit 0).
 
