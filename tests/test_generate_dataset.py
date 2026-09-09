@@ -36,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -88,6 +89,7 @@ from tests.helpers.wandb_offline import read_history_rows, read_run_labels, read
 # only keys in ``metrics.json`` (see ``synth_setter.evaluation.compute_audio_metrics``).
 _ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms", "mldr")
 _ORACLE_EVAL_SUBPROCESS_TIMEOUT_SECONDS = 1200
+_WANDB_RUN_DISCOVERY_TIMEOUT_SECONDS = 10.0
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _REAL_PLUGIN_VST3 = (
@@ -433,11 +435,12 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     ):
         from_hydra(cfg_dataset)
 
-    wandb_binaries = list(
-        Path(cfg_dataset.paths.output_dir).glob("wandb/offline-run-*/run-*.wandb")
-    )
-    if not wandb_binaries:
-        pytest.xfail("#2954: offline W&B run discovery can be empty under the full suite")
+    wandb_pattern = "wandb/offline-run-*/run-*.wandb"
+    wandb_binaries = list(Path(cfg_dataset.paths.output_dir).glob(wandb_pattern))
+    deadline = time.monotonic() + _WANDB_RUN_DISCOVERY_TIMEOUT_SECONDS
+    while not wandb_binaries and time.monotonic() < deadline:
+        time.sleep(0.05)
+        wandb_binaries = list(Path(cfg_dataset.paths.output_dir).glob(wandb_pattern))
     assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
     wandb_binary = wandb_binaries[0]
     actual_project = read_run_project(wandb_binary)
