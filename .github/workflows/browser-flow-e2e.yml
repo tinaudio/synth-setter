@@ -1,0 +1,114 @@
+name: Browser SurgePy flow E2E
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/browser-flow-e2e.yml"
+      - "docs/guides/surgepy-browser-evaluation.md"
+      - "src/synth_setter/**"
+      - "tests/integration/test_browser_surgepy_e2e.py"
+      - "pyproject.toml"
+      - "uv.lock"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/browser-flow-e2e.yml"
+      - "docs/guides/surgepy-browser-evaluation.md"
+      - "src/synth_setter/**"
+      - "tests/integration/test_browser_surgepy_e2e.py"
+      - "pyproject.toml"
+      - "uv.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-flow-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-flow:
+    name: Real browser ONNX to SurgePy evaluation
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+      HYDRA_FULL_ERROR: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - name: Install CPU dependencies
+        run: uv sync --frozen --python 3.12.13 --extra cpu --no-default-groups --group dev
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/synth_setter/web/package-lock.json
+      - name: Install browser dependencies
+        run: |
+          npm ci --prefix src/synth_setter/web
+          cd src/synth_setter/web
+          npx playwright install chromium
+      - name: Configure real R2 artifacts
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: "true"
+      - name: Verify real prerequisites
+        run: |
+          test -n "${RCLONE_CONFIG_R2_ACCESS_KEY_ID}"
+          test -n "${RCLONE_CONFIG_R2_SECRET_ACCESS_KEY}"
+          test -n "${RCLONE_CONFIG_R2_ENDPOINT}"
+          uv run --extra cpu python -c "import surgepy; import onnxruntime"
+          rclone lsd --checksum r2:experiments/browser-evaluation >/dev/null
+      - name: Run browser sampler unit contracts
+        run: npm test --prefix src/synth_setter/web
+      - name: Run real browser production path
+        run: |
+          mkdir -p logs
+          uv run --extra cpu pytest tests/integration/test_browser_surgepy_e2e.py -v \
+            --basetemp=logs/browser-e2e --junitxml=logs/browser-e2e.xml \
+            --cov=synth_setter.evaluation.browser_flow --cov=synth_setter.models.flow_onnx \
+            --cov-report=xml:coverage.xml
+      - name: Require an executed E2E test
+        run: |
+          uv run --extra cpu python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse("logs/browser-e2e.xml").findall(".//testcase")
+          assert len(cases) == 1, "Expected exactly one browser E2E test"
+          assert cases[0].find("skipped") is None, "Browser E2E must execute, not skip"
+          PY
+      - name: Upload production-path evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: browser-surgepy-e2e-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            logs/browser-e2e.xml
+            logs/browser-e2e/**/browser-cli.log
+            logs/browser-e2e/**/browser.png
+            logs/browser-e2e/**/*.wav
+            logs/browser-e2e/**/metrics.csv
+            logs/browser-e2e/**/params.csv
+            logs/browser-e2e/**/browser/input.json
+            logs/browser-e2e/**/browser/prediction.json
+            logs/browser-e2e/**/browser/provenance.json
+            coverage.xml
+      - name: Upload browser coverage
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: ./.github/actions/upload-coverage
+        with:
+          flags: browser-e2e
+          token: ${{ secrets.CODECOV_TOKEN }}

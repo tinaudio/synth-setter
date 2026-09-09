@@ -236,6 +236,8 @@ Further reading (mostly for contributors and maintainers):
   storage provenance spec, SkyPilot integration, implementation plans
 - [`docs/reference/`](docs/reference/) — configuration reference, Docker,
   GitHub Actions, W&B integration
+- **[SurgePy browser evaluation](docs/guides/surgepy-browser-evaluation.md)** —
+  real checkpoint → ONNX Runtime Web → native audio/metrics, with the E2E CI playbook
 - [`docs/guides/vst-interactive.md`](docs/guides/vst-interactive.md) —
   human-in-the-loop tool for auditioning predicted VST parameters and
   capturing patches into a labeled dataset
