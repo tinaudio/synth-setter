@@ -461,9 +461,6 @@ class PlotLearntProjection(Callback):
         self.every_n_steps = every_n_steps
         self.sort_assignments = sort_assignments
 
-    def _get_assignment(self, pl_module):
-        return pl_module.vector_field.projection.assignment
-
     def _sort_assignments(self, assignment):
         assignment = assignment.abs()
         k = torch.arange(assignment.shape[-1], device=assignment.device)[None]
@@ -472,8 +469,8 @@ class PlotLearntProjection(Callback):
         assignment = assignment[sorted_idxs]
         return assignment
 
-    def _plot_assignments(self, pl_module):
-        assignment = self._get_assignment(pl_module)
+    def _plot_assignments(self, projection: LearntProjection):
+        assignment = projection.assignment
 
         if self.sort_assignments:
             assignment = self._sort_assignments(assignment)
@@ -482,7 +479,7 @@ class PlotLearntProjection(Callback):
 
         maxval = assignment.abs().max().item()
         img = ax.imshow(
-            assignment.cpu().numpy(),
+            assignment.detach().cpu().numpy(),
             aspect="equal",
             vmin=-maxval,
             vmax=maxval,
@@ -499,31 +496,31 @@ class PlotLearntProjection(Callback):
 
         return fig
 
-    def _get_value_similarity(self, pl_module):
-        proj = pl_module.vector_field.projection.in_projection  # num_params x d_embed x d_model
+    def _get_value_similarity(self, projection: LearntProjection):
+        proj = projection.in_projection  # num_params x d_embed x d_model
 
         sim_proj = torch.nn.functional.cosine_similarity(proj[None], proj[:, None], dim=-1)
 
         return sim_proj
 
-    def _get_output_similarity(self, pl_module):
-        proj = pl_module.vector_field.projection.out_projection.T  # num_params x d_embed x d_model
+    def _get_output_similarity(self, projection: LearntProjection):
+        proj = projection.out_projection.T  # num_params x d_embed x d_model
 
         sim_proj = torch.nn.functional.cosine_similarity(proj[None], proj[:, None], dim=-1)
 
         return sim_proj
 
-    def _plot_projections(self, pl_module):
+    def _plot_projections(self, projection: LearntProjection):
         fig, ax = plt.subplots(2, 1, figsize=(5, 10))
 
-        val_sim = self._get_value_similarity(pl_module)
-        out_sim = self._get_output_similarity(pl_module)
+        val_sim = self._get_value_similarity(projection)
+        out_sim = self._get_output_similarity(projection)
 
-        val_max = val_sim.abs().max()
-        out_max = out_sim.abs().max()
+        val_max = val_sim.abs().max().item()
+        out_max = out_sim.abs().max().item()
 
         val_im = ax[0].imshow(
-            val_sim.cpu().numpy(),
+            val_sim.detach().cpu().numpy(),
             aspect="equal",
             vmin=-val_max,
             vmax=val_max,
@@ -534,7 +531,7 @@ class PlotLearntProjection(Callback):
         ax[0].set_ylabel("params")
 
         out_im = ax[1].imshow(
-            out_sim.cpu().numpy(),
+            out_sim.detach().cpu().numpy(),
             aspect="equal",
             vmin=-out_max,
             vmax=out_max,
@@ -553,24 +550,23 @@ class PlotLearntProjection(Callback):
         return fig
 
     def _log_plots(self, fig_ass, fig_value, trainer):
-        _log_figure(trainer, "assignment", fig_ass)
-        _log_figure(trainer, "value", fig_value)
-
-        plt.close(fig_ass)
-        plt.close(fig_value)
+        try:
+            _log_figure(trainer, "assignment", fig_ass)
+            _log_figure(trainer, "value", fig_value)
+        finally:
+            plt.close(fig_ass)
+            plt.close(fig_value)
 
     def _do_plotting(self, trainer, pl_module):
         if not isinstance(pl_module, VSTFlowMatchingModule):
             return
 
-        if not hasattr(pl_module.vector_field, "projection"):
+        projection = getattr(pl_module.vector_field, "projection", None)
+        if not isinstance(projection, LearntProjection):
             return
 
-        if not isinstance(pl_module.vector_field, LearntProjection):
-            return
-
-        fig_ass = self._plot_assignments(pl_module)
-        fig_value = self._plot_projections(pl_module)
+        fig_ass = self._plot_assignments(projection)
+        fig_value = self._plot_projections(projection)
         self._log_plots(fig_ass, fig_value, trainer)
 
     def on_validation_epoch_end(self, trainer, pl_module) -> None:

@@ -1209,6 +1209,42 @@ def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> 
     assert cfg.test is False
 
 
+@pytest.mark.parametrize(
+    ("projection_name", "target_name", "expected_tokens"),
+    [
+        ("learnt", "LearntProjection", 128),
+        ("grouped", "GroupedParameterProjection", None),
+    ],
+)
+def test_vst_flow_projection_choice_composes(
+    projection_name: str,
+    target_name: str,
+    expected_tokens: int | None,
+) -> None:
+    """Compose learnt and grouped parameter-token projection choices.
+
+    :param projection_name: Hydra projection option selected under the VST flow model.
+    :param target_name: Expected projection class suffix.
+    :param expected_tokens: Configured token count, absent for spec-derived grouping.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_simple",
+            "model=vst_flow",
+            f"model/projection={projection_name}",
+            "synth=surge_simple",
+            "trainer=cpu",
+        ],
+    )
+
+    projection_config = cfg.model.vector_field.projection
+    projection = hydra.utils.instantiate(projection_config)
+
+    assert type(projection).__name__ == target_name
+    assert projection_config.get("num_tokens") == expected_tokens
+
+
 def test_vst_flow_dropout_defaults_match_flash_foley_policy() -> None:
     """Content, sketch-group, and global CFG dropout share Flash Foley's rate."""
     cfg = _compose("train.yaml", ["experiment=surge/flow_sketch_prelim"])
