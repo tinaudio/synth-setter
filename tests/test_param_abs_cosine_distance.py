@@ -63,6 +63,15 @@ def test_abs_cosine_angles_opposite_pairs_do_not_cancel() -> None:
     assert result["angles"].item() == pytest.approx(0.0)
 
 
+def test_abs_cosine_aligned_roundoff_keeps_distance_nonnegative() -> None:
+    """Cosine roundoff above one must not leak negative distances into logs."""
+    spec = ParamSpec([DirectionArrayParameter("direction", (7,))], [])
+
+    result = spec_per_param_abs_cosine_distance(torch.ones(1, 7), torch.ones(1, 7), spec)
+
+    assert 0.0 <= result["direction"].item() <= 1e-6
+
+
 def test_abs_cosine_angles_multiple_samples_keeps_pairs_within_each_sample() -> None:
     """Each prediction is compared only with its own sample's target angles."""
     spec = ParamSpec([AngleArrayParameter("angles", (2,))], [])
