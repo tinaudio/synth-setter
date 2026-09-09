@@ -9,6 +9,11 @@ import torch
 from beartype import beartype
 from jaxtyping import jaxtyped
 
+from synth_setter.models.vst_flow_matching_module import (
+    _LEGACY_PARAMETERIZATION,
+    _PARAMETERIZATION_KEY,
+)
+
 logger = logging.getLogger(__name__)
 
 _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
@@ -25,7 +30,8 @@ def load_pretrained_flow(module: torch.nn.Module, checkpoint: str | Path) -> str
     :param module: Freshly built module of the base run's shape.
     :param checkpoint: Path to a Lightning checkpoint of the base run.
     :returns: SHA-256 hex digest of the checkpoint file, the base's identity for provenance.
-    :raises ValueError: The payload has no ``state_dict``, or its keys do not match.
+    :raises ValueError: The payload has no ``state_dict``, its keys do not match, or it
+        trained a non-velocity parameterization.
     """
     with Path(checkpoint).open("rb") as file:
         digest = hashlib.file_digest(file, "sha256").hexdigest()
@@ -36,6 +42,14 @@ def load_pretrained_flow(module: torch.nn.Module, checkpoint: str | Path) -> str
     state = payload.get("state_dict") if isinstance(payload, dict) else None
     if not isinstance(state, dict):
         raise ValueError(f"{checkpoint} holds no Lightning state_dict")
+    # load_state_dict bypasses the base module's load hook, and endpoint weights have
+    # velocity shapes, so without this check they would freeze as a velocity field.
+    stamped = payload.get(_PARAMETERIZATION_KEY, _LEGACY_PARAMETERIZATION)
+    if stamped != "velocity":
+        raise ValueError(
+            f"{checkpoint} trained parameterization={stamped!r}; post-training arms "
+            "require a velocity base"
+        )
     result = module.load_state_dict(state, strict=False)
     # A frozen pretrained backbone is stripped on save and re-resolved from its own
     # weights, so its absence is expected; nothing else may be.

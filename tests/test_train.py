@@ -45,6 +45,7 @@ from synth_setter.models.components.pretrained_encoder import (
     ClapAudioEncoder,
     PretrainedConditioningEncoder,
 )
+from synth_setter.models.components.pupujepa_encoder import PupuJepaConditioningEncoder
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
 from synth_setter.models.components.transformer import (
@@ -595,6 +596,46 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         assert np.isfinite(logged_values).all()
 
 
+@pytest.mark.slow
+def test_train_torchsynth_flow_endpoint_one_step_writes_stamped_checkpoint(
+    cfg_torchsynth_flow_endpoint_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Train one endpoint-parameterized step, then evaluate the stamped checkpoint it wrote.
+
+    :param cfg_torchsynth_flow_endpoint_train: Composed tiny endpoint flow config.
+    :param tmp_path: Output root containing the checkpoint and evaluation artifacts.
+    """
+    HydraConfig().set_config(cfg_torchsynth_flow_endpoint_train)
+
+    metric_dict, object_dict = train(cfg_torchsynth_flow_endpoint_train)
+
+    assert object_dict["trainer"].global_step == 1
+    for key in ("train/loss", "val/param_mse"):
+        values = [value for name, value in metric_dict.items() if name.startswith(key)]
+        assert values, f"no {key} metric in {sorted(metric_dict)}"
+        assert all(torch.isfinite(value).all() for value in values)
+    assert any(name.startswith("train/per_param_endpoint_mse/") for name in metric_dict), sorted(
+        metric_dict
+    )
+
+    checkpoint_path = tmp_path / "checkpoints" / "last.ckpt"
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert checkpoint["parameterization"] == "endpoint"
+
+    eval_cfg = cfg_torchsynth_flow_endpoint_train.copy()
+    with open_dict(eval_cfg):
+        eval_cfg.paths.output_dir = str(tmp_path / "evaluation")
+        eval_cfg.paths.log_dir = str(tmp_path / "evaluation")
+        eval_cfg.ckpt_path = str(checkpoint_path)
+        eval_cfg.mode = "validate"
+    HydraConfig().set_config(eval_cfg)
+    eval_metric_dict, eval_object_dict = evaluate(eval_cfg)
+
+    assert eval_object_dict["model"].hparams["parameterization"] == "endpoint"
+    assert torch.isfinite(eval_metric_dict["val/param_mse"])
+
+
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 @pytest.mark.slow
@@ -871,6 +912,28 @@ def test_train_pyfdn_identity_uses_spec_width_batches(
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     assert batch["params"].shape == (2, width)
+    datamodule.teardown("fit")
+
+
+@pytest.mark.slow
+def test_train_pyfdn_diffvox_identity_uses_82_coordinate_batches(tmp_path: Path) -> None:
+    """The train entrypoint resolves the DiffVox synth and model width.
+
+    :param tmp_path: Pinned as the one-step training output directory.
+    """
+    identity = "pyfdn_diffvox"
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name=identity)
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1
+    assert_log_per_param_mse_wired(trainer, identity)
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["params"].shape == (2, 82)
     datamodule.teardown("fit")
 
 
@@ -2871,6 +2934,30 @@ def test_train_pupujepa_large_online_conditioning_returns_finite_loss(
 
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
+    _assert_model_predictions_change_with_conditioning(object_dict)
+
+
+def test_train_pupujepa_tiny_scratch_conditioning_trains_backbone_and_checkpoints_it(
+    cfg_torchsynth_pupujepa_tiny_scratch_train: DictConfig, tmp_path: Path
+) -> None:
+    """One step through from-scratch PupuJEPA moves the teacher and keeps it in the checkpoint.
+
+    :param cfg_torchsynth_pupujepa_tiny_scratch_train: Two-row checkpoint-free config.
+    :param tmp_path: Checkpoint output directory.
+    """
+    cfg = cfg_torchsynth_pupujepa_tiny_scratch_train
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    model = object_dict["model"]
+    assert isinstance(model.encoder, PupuJepaConditioningEncoder)
+    assert all(parameter.requires_grad for parameter in model.encoder.backbone.parameters())
+    checkpoint_path = tmp_path / "scratch.ckpt"
+    object_dict["trainer"].save_checkpoint(checkpoint_path)
+    state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)["state_dict"]
+    assert any(key.startswith("encoder.backbone.teacher_model.") for key in state)
     _assert_model_predictions_change_with_conditioning(object_dict)
 
 
