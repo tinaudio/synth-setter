@@ -25,6 +25,7 @@ from synth_setter.cli.clap_render import (
 from synth_setter.pipeline import r2_io
 
 _CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
+_CLI_HELP_TIMEOUT_SECONDS = 120
 
 
 def test_cli_whitespace_prompt_exits_before_creating_output() -> None:
@@ -267,17 +268,14 @@ def test_console_script_is_installed_and_callable() -> None:
     """The documented executable is installed by the package entrypoint."""
     executable = Path(sys.executable).with_name("synth-setter-clap")
 
-    try:
-        result = subprocess.run(  # noqa: S603 — fixed package entrypoint.
-            [str(executable), "--help"],
-            cwd=_CHECKOUT_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        pytest.xfail("#2915: heavyweight CLI cold imports can exceed 30 seconds in full CI")
+    result = subprocess.run(  # noqa: S603 — fixed package entrypoint.
+        [str(executable), "--help"],
+        cwd=_CHECKOUT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=_CLI_HELP_TIMEOUT_SECONDS,
+    )
 
     assert result.returncode == 0, result.stderr
     assert "TEXT_PROMPT" in result.stdout
