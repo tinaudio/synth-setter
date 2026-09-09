@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, MutableMapping
+from collections.abc import Callable, Iterator, MutableMapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 import torch
 from beartype import beartype
@@ -18,12 +18,6 @@ from synth_setter.conditioning import (
     SketchControls,
     conditioning_batch_key,
     resolve_sketch_controls,
-)
-from synth_setter.data.vst.param_spec import (
-    CategoricalParameter,
-    DiscreteLiteralParameter,
-    Parameter,
-    ParamSpec,
 )
 from synth_setter.metrics import (
     BestSwapParamMSE,
@@ -169,22 +163,33 @@ type _FieldTransform = Callable[
 type _TimeField = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
+@runtime_checkable
+class _ParamSpecLike(Protocol):
+    """Parameter layout contract needed by mixed endpoint objectives."""
+
+    @jaxtyped(typechecker=beartype)
+    def encoded_slices(self) -> Iterator[tuple[object, slice]]:
+        """Yield each logical parameter with its encoded span.
+
+        :returns: Logical parameters paired with their encoded slices.
+        """
+        ...
+
+
 @jaxtyped(typechecker=beartype)
-def _uses_onehot_classification(parameter: Parameter) -> bool:
+def _uses_onehot_classification(parameter: object) -> bool:
     """Return whether a parameter span represents one categorical draw.
 
     :param parameter: Typed logical parameter.
     :returns: True only for one-hot categorical or integer-literal spans.
     """
-    return isinstance(parameter, (CategoricalParameter, DiscreteLiteralParameter)) and (
-        parameter.encoding == "onehot"
-    )
+    return getattr(parameter, "encoding", None) == "onehot"
 
 
 @jaxtyped(typechecker=beartype)
 def endpoint_prediction_to_model(
     prediction: Float[torch.Tensor, "batch params"],
-    param_spec: ParamSpec,
+    param_spec: _ParamSpecLike,
 ) -> Float[torch.Tensor, "batch params"]:
     """Convert one-hot logits to model-space probabilities without changing numerical spans.
 
@@ -203,7 +208,7 @@ def endpoint_prediction_to_model(
 def mixed_endpoint_row_loss(
     prediction: Float[torch.Tensor, "batch params"],
     target: Float[torch.Tensor, "batch params"],
-    param_spec: ParamSpec,
+    param_spec: _ParamSpecLike,
 ) -> Float[torch.Tensor, "batch 1"]:
     """Average one classification or regression term per logical parameter and row.
 

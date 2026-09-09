@@ -33,10 +33,9 @@ jobs:
             patterns:
               - synth_setter.evaluation.compute_audio_metrics.*
               - synth_setter.evaluation.paired_retrieval.*
-          - name: evaluation-response
+          - name: evaluation-oracle
             patterns:
-              - synth_setter.evaluation.joint_transport.*
-              - synth_setter.evaluation.response_losses.*
+              - synth_setter.evaluation.oracle_probe.*
           - name: evaluation-predict-misc
             patterns:
               - synth_setter.evaluation.predict_vst_audio.x_[!_r]*
@@ -60,6 +59,10 @@ jobs:
           - name: evaluation-predict-render-artifacts-150-199
             patterns:
               - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1[5-9]?
+          - name: evaluation-response
+            patterns:
+              - synth_setter.evaluation.joint_transport.*
+              - synth_setter.evaluation.response_losses.*
           - name: tools
             patterns:
               - synth_setter.tools.*
