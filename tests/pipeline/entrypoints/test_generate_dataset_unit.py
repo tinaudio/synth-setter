@@ -3307,6 +3307,8 @@ class TestMainDispatchBranches:
         monkeypatch.setattr(gd.r2_io, "download_dir_no_overwrite", MagicMock())
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
+        upload_mock = MagicMock(return_value="r2://bucket/probes/dataset-oracle/probe")
+        monkeypatch.setattr(gd, "upload_oracle_probe", upload_mock)
 
         # Capture the resolved output_dir so the eval's dataset_root can be
         # pinned to the exact dir generate+finalize wrote the shards into.
@@ -3322,8 +3324,15 @@ class TestMainDispatchBranches:
 
         _call_hydra_main(gd.main)
 
-        # One invocation per split.
+        # One invocation and upload per split.
         assert oracle_mock.call_count == 3
+        assert upload_mock.call_count == 3
+        launch_ids = {call.kwargs["launch_id"] for call in upload_mock.call_args_list}
+        assert len(launch_ids) == 1
+        assert all(
+            call.kwargs["provenance"].source_render == call.kwargs["provenance"].candidate_render
+            for call in upload_mock.call_args_list
+        )
         output_dir = observed["output_dir"]
         assert isinstance(output_dir, Path)
         splits = ("train", "val", "test")
@@ -3359,6 +3368,73 @@ class TestMainDispatchBranches:
             assert run_dir.parent.name == split
             assert run_dir.parent.parent.parent == dataset_root
             assert call.kwargs["metric_prefix"] == prefix
+
+    def test_main_oracle_eval_upload_false_keeps_successful_evals_local(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An explicit upload false runs every inline eval without archiving it.
+
+        :param monkeypatch: Patches generation, finalization, download, eval, and upload seams.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"synth.plugin_path={TEST_PLUGIN_VST3}",
+            "finalize_inline=true",
+            "oracle_eval_inline=true",
+            "oracle_eval.upload=false",
+            "train_val_test_sizes=[12,4,4]",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+        monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
+        monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
+        monkeypatch.setattr(gd.r2_io, "download_dir_no_overwrite", MagicMock())
+        oracle_mock = MagicMock()
+        monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
+
+        def _fail_upload(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("oracle_eval.upload=false must not archive eval outputs")
+
+        monkeypatch.setattr(gd, "upload_oracle_probe", _fail_upload, raising=False)
+
+        _call_hydra_main(gd.main)
+
+        assert oracle_mock.call_count == 3
+
+    def test_main_oracle_eval_upload_quoted_false_raises_before_generation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Reject a string upload flag before local generation starts.
+
+        :param monkeypatch: Patches CLI arguments and the generation boundary.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"synth.plugin_path={TEST_PLUGIN_VST3}",
+            "finalize_inline=true",
+            "oracle_eval_inline=true",
+            'oracle_eval.upload="false"',
+            "train_val_test_sizes=[12,4,4]",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+        monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
+        generate_mock = MagicMock()
+        upload_spec_mock = MagicMock()
+        monkeypatch.setattr(gd, "generate", generate_mock)
+        monkeypatch.setattr(gd, "upload_spec", upload_spec_mock)
+
+        with pytest.raises(ValueError, match="oracle_eval.upload must be a boolean"):
+            _call_hydra_main(gd.main)
+
+        generate_mock.assert_not_called()
+        upload_spec_mock.assert_not_called()
 
     def test_run_oracle_eval_subprocess_builds_expected_argv(
         self,
@@ -3742,7 +3818,8 @@ class TestMainDispatchBranches:
     ) -> None:
         """Dispatch branch: ``oracle_eval_inline=true`` is logged-and-ignored, not raised.
 
-        SkyPilot hands the run to a worker pod; oracle eval runs out-of-band
+        Its upload value is likewise ignored rather than validated because SkyPilot
+        hands the run to a worker pod; oracle eval runs out-of-band
         via its own workflow. Asserts no eval subprocess fires and the INFO
         log mentions the override was ignored.
 
@@ -3761,6 +3838,7 @@ class TestMainDispatchBranches:
             f"synth.plugin_path={TEST_PLUGIN_VST3}",
             "skypilot_launch/compute=runpod/smoke",
             "oracle_eval_inline=true",
+            'oracle_eval.upload="not-a-bool"',
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(sl, "dispatch_via_skypilot", lambda *_a, **_k: None)

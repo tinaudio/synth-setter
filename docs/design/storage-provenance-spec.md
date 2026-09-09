@@ -36,10 +36,12 @@ intermediate-data/
 ├── data/{dataset_config_id}/{dataset_wandb_run_id}/
 ├── train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
 ├── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
-└── probes/{train_config_id}/{recovery_namespace}/step-{global_step}/
+└── probes/
+    ├── {train_config_id}/{recovery_namespace}/step-{global_step}/
+    └── dataset-oracle/{dataset_config_id}/{dataset_wandb_run_id}/{eval_launch_id}/{split}/
 ```
 
-The `data/`, `train/`, and `eval/` prefixes are the canonical per-run dataset footprint. `probes/` holds the opt-in validation audio probe's qualitative snapshots — `audio/` and `metrics/` per step, staged prediction tensors excluded (see `cli/train.py::_derive_probe_uri` and `evaluation/audio_probe.py::run_audio_probe`). `{recovery_namespace}` is the per-launch identifier (`{run_id}-{uuid}`, `cli/train.py::_make_recovery_namespace`) shared with mid-run recovery checkpoints, so concurrent runs of one config cannot interleave snapshots and a launch's probes correlate with its checkpoints by name.
+The `data/`, `train/`, and `eval/` prefixes are the canonical per-run dataset footprint. `probes/` holds bounded diagnostic snapshots outside the immutable dataset prefix. Training validation probes archive `audio/` and `metrics/` per step under a recovery namespace shared with checkpoints (see `cli/train.py::_derive_probe_uri` and `evaluation/audio_probe.py::run_audio_probe`). Inline dataset-oracle probes archive `.hydra/config.yaml`, `audio/`, `metrics/`, and strict `provenance.json`; predictions and process logs remain local. `{eval_launch_id}` is minted once per inline invocation, so all three splits share an identity while retries and concurrent launches cannot collide. Probe uploads intentionally bypass `evaluation.upload_output_dir_uri` and therefore do not create W&B `eval-results` lineage.
 
 ______________________________________________________________________
 
