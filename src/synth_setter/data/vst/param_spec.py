@@ -512,6 +512,122 @@ class AngleArrayParameter(Parameter):
         return angles.reshape(self.shape, order="C")
 
 
+# Below this model-space norm a direction vector has no usable orientation.
+_DIRECTION_MIN_NORM = 1e-6
+
+
+class DirectionArrayParameter(Parameter):
+    """A fixed-shape unit vector encoded component-wise into ``[0, 1]``.
+
+    Only the direction carries meaning, so ``u`` and ``3u`` encode identically and every
+    decoded value is unit length. Model predictions are projected onto the unit sphere as
+    a whole rather than clipped per component, which would tilt the direction.
+    """
+
+    def __init__(self, name: str, shape: tuple[int, ...]) -> None:
+        """Bind the native direction shape.
+
+        :param name: Logical parameter name.
+        :param shape: Non-empty native array shape with positive dimensions and at least two
+            components in total.
+        :raises ValueError: The shape cannot describe a direction.
+        """
+        super().__init__(name)
+        if not shape or any(
+            not isinstance(size, Integral) or isinstance(size, bool) or size <= 0
+            for size in shape
+        ):
+            raise ValueError("shape must contain positive integer dimensions")
+        if math.prod(shape) < 2:
+            raise ValueError("shape must describe at least two components")
+        self.shape = tuple(int(size) for size in shape)
+
+    def __len__(self) -> int:
+        return math.prod(self.shape)
+
+    def _project(self, vectors: np.ndarray) -> np.ndarray:
+        """Normalise the trailing ``len(self)`` axis, leaving directionless rows untouched.
+
+        :param vectors: Values shaped ``(..., len(self))``.
+        :returns: Unit-norm rows where a direction exists; other rows unchanged.
+        """
+        norms = np.linalg.norm(vectors, axis=-1, keepdims=True)
+        return np.where(norms < _DIRECTION_MIN_NORM, vectors, vectors / np.maximum(norms, 1e-300))
+
+    def sample(self, rng: np.random.Generator) -> np.ndarray:
+        """Draw one direction uniformly over the unit sphere.
+
+        :param rng: Generator that owns the deterministic sample stream.
+        :returns: Unit-norm float64 values shaped ``self.shape``.
+        """
+        gaussian = rng.standard_normal(len(self))
+        while np.linalg.norm(gaussian) < _DIRECTION_MIN_NORM:  # pragma: no cover - measure zero
+            gaussian = rng.standard_normal(len(self))
+        return (gaussian / np.linalg.norm(gaussian)).reshape(self.shape)
+
+    def encode(self, raw_value: object) -> np.ndarray:
+        """Encode a direction as a flat C-order float32 vector of ``(u/|u| + 1) / 2``.
+
+        :param raw_value: Finite, non-vanishing values shaped ``self.shape``; scale is ignored.
+        :returns: Values shaped ``(len(self),)`` in ``[0, 1]``.
+        :raises ValueError: The input has the wrong shape, non-finite values, or no norm.
+        """
+        raw = np.asarray(raw_value, dtype=np.float64)
+        if raw.shape != self.shape:
+            raise ValueError(f"{self.name} must have shape {self.shape}, got {raw.shape}")
+        if not np.isfinite(raw).all():
+            raise ValueError(f"{self.name} must contain only finite values")
+        flat = raw.reshape(-1, order="C")
+        if np.linalg.norm(flat) < _DIRECTION_MIN_NORM:
+            raise ValueError(f"{self.name} norm must be at least {_DIRECTION_MIN_NORM}")
+        return ((flat / np.linalg.norm(flat) + 1.0) / 2.0).astype(np.float32)
+
+    def encoded_names(self) -> tuple[str, ...]:
+        """Return one C-order coordinate label per component.
+
+        :returns: Labels ordered identically to :meth:`encode`.
+        """
+        return tuple(
+            f"{self.name}.{'.'.join(str(coordinate) for coordinate in index)}"
+            for index in np.ndindex(self.shape)
+        )
+
+    def model_to_encoded(self, model: np.ndarray) -> np.ndarray:
+        """Project each predicted vector onto the unit sphere, then map to ``[0, 1]``.
+
+        :param model: Model-space vectors shaped ``(..., len(self))``.
+        :returns: Unit vectors mapped into ``[0, 1]``; a directionless row passes through.
+        """
+        calculation_dtype = np.result_type(model.dtype, np.float64)
+        return (self._project(model.astype(calculation_dtype, copy=False)) + 1.0) / 2.0
+
+    def decode(self, encoded: np.ndarray) -> np.ndarray:
+        """Decode a ``[0, 1]`` vector to a unit direction in the native shape.
+
+        Off-sphere values decode to their direction; a directionless vector decodes to
+        the first basis vector so rendering stays deterministic.
+
+        :param encoded: Finite values shaped ``(len(self),)`` in ``[0, 1]``.
+        :returns: Unit-norm float64 values shaped ``self.shape``.
+        :raises ValueError: The input has the wrong shape or invalid values.
+        """
+        values = np.asarray(encoded)
+        expected_shape = (len(self),)
+        if values.shape != expected_shape:
+            raise ValueError(
+                f"encoded {self.name} must have shape {expected_shape}, got {values.shape}"
+            )
+        if not np.isfinite(values).all():
+            raise ValueError(f"encoded {self.name} must contain only finite values")
+        if np.any((values < 0.0) | (values > 1.0)):
+            raise ValueError(f"encoded {self.name} values must be within [0, 1]")
+        vector = values.astype(np.float64) * 2.0 - 1.0
+        if np.linalg.norm(vector) < _DIRECTION_MIN_NORM:
+            vector = np.zeros(len(self))
+            vector[0] = 1.0
+        return (vector / np.linalg.norm(vector)).reshape(self.shape, order="C")
+
+
 class NoteDurationParameter(Parameter):
     """A special parameter for sampling note durations."""
 

@@ -13,6 +13,7 @@ from synth_setter.data.vst.param_spec import (
     AngleArrayParameter,
     ContinuousArrayParameter,
     ContinuousParameter,
+    DirectionArrayParameter,
     DiscreteArrayParameter,
     DiscreteLiteralParameter,
     Parameter,
@@ -248,12 +249,7 @@ PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC = PyFDNParamSpec(
             min=PYFDN_RT_MIN_SECONDS,
             max=PYFDN_RT_MAX_SECONDS,
         ),
-        ContinuousArrayParameter(
-            name=PYFDN_HOUSEHOLDER_VECTOR_NAME,
-            shape=(PYFDN_ORDER,),
-            min=-1.0,
-            max=1.0,
-        ),
+        DirectionArrayParameter(name=PYFDN_HOUSEHOLDER_VECTOR_NAME, shape=(PYFDN_ORDER,)),
     ],
     feedback_matrix=_householder_vector_feedback_from_params,
 )

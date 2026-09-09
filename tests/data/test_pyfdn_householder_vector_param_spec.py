@@ -10,7 +10,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
     householder_feedback_matrix,
 )
-from synth_setter.data.vst.param_spec import ContinuousArrayParameter
+from synth_setter.data.vst.param_spec import DirectionArrayParameter
 
 
 def test_householder_vector_spec_layout_appends_one_eight_vector() -> None:
@@ -24,12 +24,19 @@ def test_householder_vector_spec_layout_appends_one_eight_vector() -> None:
     assert layout[-1] == ("householder_vector", 27, 35)
 
 
-def test_householder_vector_spec_vector_has_unit_box_domain() -> None:
-    """The reflection vector is learned in the same [-1, 1] box as the gain matrices."""
+def test_householder_vector_spec_vector_is_a_unit_direction() -> None:
+    """The reflection vector is a direction parameter, projected rather than clipped."""
     vector = PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC.synth_params[-1]
 
-    assert isinstance(vector, ContinuousArrayParameter)
-    assert (vector.shape, vector.min, vector.max) == ((8,), -1.0, 1.0)
+    assert isinstance(vector, DirectionArrayParameter)
+    assert vector.shape == (8,)
+
+
+def test_householder_vector_spec_samples_unit_norm_vectors() -> None:
+    """Sampled reflection vectors are unit length, so the target has no scale redundancy."""
+    params, _ = PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC.sample(np.random.default_rng(3))
+
+    assert np.isclose(np.linalg.norm(cast(np.ndarray, params["householder_vector"])), 1.0)
 
 
 def test_householder_feedback_matrix_all_ones_matches_fixed_householder_spec() -> None:
