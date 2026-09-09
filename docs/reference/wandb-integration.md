@@ -154,7 +154,20 @@ are sample-weighted across batches and distributed ranks. These keys appear when
 also requires the model's `test_step` to return `preds`. Scalar parameters get no
 cosine key. Existing MSE, angle metrics, and training losses are unchanged.
 
-### 2d. Callbacks — Non-W&B
+### 2d. Shared parameter workspace
+
+`synth-setter-create-wandb-parameter-workspace` creates a saved W&B view with a blank run query
+and regex-backed line plots for every training and validation per-parameter metric family. The
+regexes select metric prefixes rather than Surge leaf names, so pyFDN keys such as `delays` and
+`input_matrix` appear alongside the corresponding names from every other synth. The command
+prints the new view's URL and creates a distinct view on each invocation.
+
+Runs created before a metric family was logged remain empty for that family; workspace changes
+cannot reconstruct history that was never sent to W&B.
+
+Source: `src/synth_setter/tools/wandb_parameter_workspace.py`.
+
+### 2e. Callbacks — Non-W&B
 
 | Callback              | What it does                                           | Config                                                      |
 | --------------------- | ------------------------------------------------------ | ----------------------------------------------------------- |
@@ -164,7 +177,7 @@ cosine key. Existing MSE, angle metrics, and training losses are unchanged.
 | `ModelSummary`        | Prints param summary to console                        | `src/synth_setter/configs/callbacks/model_summary.yaml`     |
 | `PredictionWriter`    | Saves predictions to `.pt` files locally               | `src/synth_setter/utils/callbacks.py::PredictionWriter`     |
 
-### 2e. Gradient Watching
+### 2f. Gradient Watching
 
 If `cfg.watch_gradients` is set, `watch_gradients()` calls
 `WandbLogger.watch(model, log="gradients")` — logs gradient histograms per
