@@ -44,7 +44,7 @@ if _SKILL_TAGS.keys() != SUPPORTED_SKILLS:
     raise RuntimeError("Review skill tags must cover every supported review skill")
 _DELIVERED_FINDING_RE = re.compile(
     r"^- (?:\*\*L\d+\*\* — )?\*\*\[[a-z][a-z0-9-]*:"
-    r"(block|warn|nit|low-confidence)\]\*\*",
+    r"(block|warn|nit|low-confidence)\](?: \[low confidence\])?\*\*",
     re.MULTILINE,
 )
 
@@ -164,6 +164,15 @@ class RenderContext:
     next_step: str
 
 
+def _audit_text(value: str) -> str:
+    """Indent continuation lines so audit evidence cannot impersonate findings.
+
+    :param value: Original candidate or rationale text.
+    :returns: Text with Markdown continuation lines indented.
+    """
+    return "\n  ".join(value.splitlines())
+
+
 def _adjudication_sections(adjudications: Sequence[ReviewAdjudication]) -> str:
     """Render body-only findings and the complete final-judge audit.
 
@@ -182,7 +191,7 @@ def _adjudication_sections(adjudications: Sequence[ReviewAdjudication]) -> str:
                 "",
                 *(
                     f"- **[{_SKILL_TAGS[item.skill]}:nit]** `{item.path}:{item.line}` — "
-                    f"{item.description}"
+                    f"{_audit_text(item.description)}"
                     for item in nits
                 ),
             ]
@@ -196,8 +205,8 @@ def _adjudication_sections(adjudications: Sequence[ReviewAdjudication]) -> str:
                 "",
                 *(
                     f"- **[{_SKILL_TAGS[item.skill]}:low-confidence] [low confidence]** "
-                    f"`{item.path}:{item.line}` — {item.description} "
-                    f"Rationale: {item.rationale}"
+                    f"`{item.path}:{item.line}` — {_audit_text(item.description)} "
+                    f"Rationale: {_audit_text(item.rationale)}"
                     for item in low_confidence
                 ),
             ]
@@ -206,7 +215,7 @@ def _adjudication_sections(adjudications: Sequence[ReviewAdjudication]) -> str:
     sections.extend(
         f"- `{item.id}` — {item.skill} at `{item.path}:{item.line}`; "
         f"original `{item.original_severity}` → final `{item.final_disposition}`; "
-        f"finding: {item.description}; rationale: {item.rationale}"
+        f"finding: {_audit_text(item.description)}; rationale: {_audit_text(item.rationale)}"
         for item in adjudications
     )
     return "\n".join(sections)
@@ -231,7 +240,10 @@ def build_adjudicated_review(
         ReviewFinding(
             path=item.path,
             line=item.line,
-            body=(f"**[{_SKILL_TAGS[item.skill]}:{item.final_disposition}]** {item.description}"),
+            body=(
+                f"**[{_SKILL_TAGS[item.skill]}:{item.final_disposition}]** "
+                f"{_audit_text(item.description)}"
+            ),
         )
         for item in adjudications
         if item.final_disposition in {"block", "warn"}

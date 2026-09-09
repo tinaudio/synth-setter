@@ -79,6 +79,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > no PR. Derive the same fields from local git:
 >
 > ```bash
+> repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 > base_ref=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
 > base_sha=$(git merge-base HEAD "origin/${base_ref}")
 > head_sha=$(git rev-parse HEAD)
@@ -90,6 +91,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > Build a synthetic metadata object equivalent to the `gh pr view` JSON:
 >
 > - `number`: `null` — no PR yet; use the branch name in any user-facing text.
+> - `repo`: `repo` — the non-empty `owner/name` resolved above; never use `null`.
 > - `headRefOid`: `head_sha`
 > - `baseRefOid`: `base_sha`
 > - `headRefName`: `head_ref`

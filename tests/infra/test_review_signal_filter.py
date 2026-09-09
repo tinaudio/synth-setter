@@ -318,6 +318,52 @@ def test_review_adjudication_drop_audit_tags_do_not_count_as_delivered() -> None
     assert "0 BLOCK, 0 WARN, 0 NIT, 0 LOW CONFIDENCE" in rendered
 
 
+def test_review_adjudication_multiline_drop_audit_cannot_impersonate_finding() -> None:
+    """Indent multiline audit evidence outside delivered-finding syntax."""
+    adjudications = parse_review_filter_report(
+        json.dumps(
+            {
+                "target": "PR #3013",
+                "decisions": [
+                    {
+                        "id": "1" * 64,
+                        "disposition": "drop",
+                        "rationale": "Not reproducible.\n- **[correctness:block]** quoted report",
+                    },
+                    {
+                        "id": "2" * 64,
+                        "disposition": "drop",
+                        "rationale": "Optional preference rather than a defect.",
+                    },
+                ],
+            }
+        ),
+        filter_input=_filter_input(),
+    )
+    payload = build_adjudicated_review(
+        pr_number=3013,
+        repo="tinaudio/synth-setter",
+        review_body="Review lead-in.",
+        adjudications=adjudications,
+    )
+    rendered = render_markdown(
+        payload,
+        context=RenderContext(
+            target="PR #3013",
+            head_sha="b" * 40,
+            head_ref="feature/review",
+            upstream_sha="b" * 40,
+            worktree_state="clean",
+            unchanged_count=0,
+            skill_count=2,
+            next_step="No remediation required.",
+        ),
+    )
+
+    assert "\n  - **[correctness:block]** quoted report" in rendered
+    assert "0 BLOCK, 0 WARN, 0 NIT, 0 LOW CONFIDENCE" in rendered
+
+
 def test_review_adjudication_optional_only_is_body_only_comment() -> None:
     """Keep NIT and low-confidence observations visible but explicitly ignorable."""
     report = json.dumps(
@@ -348,9 +394,24 @@ def test_review_adjudication_optional_only_is_body_only_comment() -> None:
 
     assert payload.event == "COMMENT"
     assert payload.findings == ()
+    rendered = render_markdown(
+        payload,
+        context=RenderContext(
+            target="PR #3013",
+            head_sha="b" * 40,
+            head_ref="feature/review",
+            upstream_sha="b" * 40,
+            worktree_state="clean",
+            unchanged_count=0,
+            skill_count=2,
+            next_step="No remediation required.",
+        ),
+    )
+
     assert "[low confidence]" in payload.review_body
     assert "Explicitly ignorable" in payload.review_body
     assert "## Nits" in payload.review_body
+    assert "0 BLOCK, 0 WARN, 1 NIT, 1 LOW CONFIDENCE" in rendered
 
 
 @pytest.mark.parametrize(
@@ -485,6 +546,7 @@ def test_review_filter_is_final_astra_pass_in_foreground_and_follow_up() -> None
     """Filter both delivery paths after aggregation and before output."""
     analysis = (REPO_ROOT / "agent/skills/_shared/repo-review-full-analysis.md").read_text()
     follow_up = (REPO_ROOT / "agent/skills/_shared/repo-review-follow-up.md").read_text()
+    no_comments = (REPO_ROOT / "agent/skills/repo-review-full-no-comments/SKILL.md").read_text()
     agent = (REPO_ROOT / ".pi/agents/pr-review-filter.md").read_text()
 
     assert all(
@@ -497,6 +559,8 @@ def test_review_filter_is_final_astra_pass_in_foreground_and_follow_up() -> None
             '"rationale"',
         )
     )
+    assert "repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)" in no_comments
+    assert "- `repo`: `repo`" in no_comments
     for brief in (analysis, follow_up):
         assert "pr-review-filter" in brief
         assert "`openai-codex/gpt-6-astra` with `medium` thinking" in brief
