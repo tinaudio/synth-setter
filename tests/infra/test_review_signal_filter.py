@@ -234,6 +234,42 @@ def test_review_adjudication_promotions_and_demotions_render_by_final_class() ->
     assert "original `warn` → final `block`" in rendered
 
 
+def test_review_adjudication_pr_health_block_requests_changes() -> None:
+    """Keep non-diff PR-health failures blocking after final adjudication."""
+    adjudications = parse_review_filter_report(
+        json.dumps(
+            {
+                "target": "PR #3013",
+                "decisions": [
+                    {
+                        "id": "1" * 64,
+                        "disposition": "drop",
+                        "rationale": "Candidate duplicates the PR-health failure.",
+                    },
+                    {
+                        "id": "2" * 64,
+                        "disposition": "drop",
+                        "rationale": "Optional preference rather than a defect.",
+                    },
+                ],
+            }
+        ),
+        filter_input=_filter_input(),
+    )
+
+    payload = build_adjudicated_review(
+        pr_number=3013,
+        repo="tinaudio/synth-setter",
+        review_body=(
+            "## PR health\n\n"
+            "- **[repo-review-full:block]** [pr-health] Merge conflict with base branch."
+        ),
+        adjudications=adjudications,
+    )
+
+    assert payload.event == "REQUEST_CHANGES"
+
+
 def test_review_adjudication_optional_only_is_body_only_comment() -> None:
     """Keep NIT and low-confidence observations visible but explicitly ignorable."""
     report = json.dumps(
@@ -403,6 +439,16 @@ def test_review_filter_is_final_astra_pass_in_foreground_and_follow_up() -> None
     follow_up = (REPO_ROOT / "agent/skills/_shared/repo-review-follow-up.md").read_text()
     agent = (REPO_ROOT / ".pi/agents/pr-review-filter.md").read_text()
 
+    assert all(
+        field in follow_up
+        for field in (
+            '"id"',
+            '"skill"',
+            '"original_severity"',
+            '"final_disposition"',
+            '"rationale"',
+        )
+    )
     for brief in (analysis, follow_up):
         assert "pr-review-filter" in brief
         assert REVIEW_FILTER_MODEL in brief

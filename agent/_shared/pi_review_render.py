@@ -19,10 +19,10 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 if __package__:
-    from agent._shared.pi_review_routing import ReviewAdjudication
+    from agent._shared.pi_review_routing import SUPPORTED_SKILLS, ReviewAdjudication
     from agent._shared.review_sentinel import make_review_path
 else:
-    from pi_review_routing import ReviewAdjudication
+    from pi_review_routing import SUPPORTED_SKILLS, ReviewAdjudication
     from review_sentinel import make_review_path
 
 _SKILL_TAGS = {
@@ -39,6 +39,7 @@ _SKILL_TAGS = {
     "tdd-implementation": "tdd-impl",
     "tdd-refactor": "tdd-refactor",
 }
+assert _SKILL_TAGS.keys() == SUPPORTED_SKILLS
 
 
 class ReviewFinding(BaseModel, strict=True, extra="forbid"):
@@ -230,7 +231,7 @@ def build_adjudicated_review(
     )
     final_classes = {item.final_disposition for item in adjudications}
     event: Literal["APPROVE", "COMMENT", "REQUEST_CHANGES"]
-    if "block" in final_classes:
+    if "block" in final_classes or ":block]" in review_body:
         event = "REQUEST_CHANGES"
     elif final_classes - {"drop"}:
         event = "COMMENT"

@@ -129,10 +129,14 @@ not present in the runtime manifest.
      "diagnostics": [],
      "late_findings": [
        {
-         "severity": "warn",
+         "id": "<64-character lowercase hex candidate id>",
+         "skill": "correctness-review",
+         "original_severity": "warn",
          "path": "agent/example.py",
          "line": 42,
-         "description": "<validated late finding>"
+         "description": "<validated late finding>",
+         "final_disposition": "warn",
+         "rationale": "<evidence supporting the final disposition>"
        }
      ],
      "posted_review_url": null,
