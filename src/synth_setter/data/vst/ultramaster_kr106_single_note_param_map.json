@@ -448,18 +448,6 @@
       },
       "surgepy": null
     },
-    "transpose_offset": {
-      "pedalboard": {
-        "index": 43,
-        "name": "Transpose Offset"
-      },
-      "clap": null,
-      "dawdreamer": {
-        "index": 43,
-        "name": "Transpose Offset"
-      },
-      "surgepy": null
-    },
     "master_volume": {
       "pedalboard": {
         "index": 44,

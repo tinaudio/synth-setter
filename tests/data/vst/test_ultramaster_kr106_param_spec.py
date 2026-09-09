@@ -121,7 +121,6 @@ _SINGLE_NOTE_SYNTH_PARAMS = (
     "tuning",
     "porta_mode",
     "porta_rate",
-    "transpose_offset",
     "master_volume",
     "vcf_oversample",
     "ignore_velocity",
@@ -237,10 +236,10 @@ def test_ultramaster_kr106_single_note_spec_contains_only_audible_controls() -> 
     spec = param_specs["ultramaster_kr106_single_note"]
 
     assert tuple(spec.synth_param_names) == _SINGLE_NOTE_SYNTH_PARAMS
-    assert len(spec.synth_params) == 43
-    assert spec.synth_param_length == 78
+    assert len(spec.synth_params) == 42
+    assert spec.synth_param_length == 77
     assert spec.note_param_length == 3
-    assert spec.encoded_width == 81
+    assert spec.encoded_width == 80
 
 
 def test_ultramaster_kr106_single_note_spec_uses_canonical_host_values() -> None:
@@ -439,6 +438,7 @@ def test_ultramaster_kr106_single_note_preset_fixes_omitted_safe_states() -> Non
 
     assert plugin.parameters["arpeggio"].raw_value == 0.0  # type: ignore[attr-defined]
     assert plugin.parameters["transpose"].raw_value == 0.0  # type: ignore[attr-defined]
+    assert plugin.parameters["transpose_offset"].string_value == "0"  # type: ignore[attr-defined]
     assert plugin.parameters["power"].raw_value == 1.0  # type: ignore[attr-defined]
     assert plugin.parameters["bypass"].raw_value == 0.0  # type: ignore[attr-defined]
     assert plugin.parameters["chorus_off"].raw_value == 0.0  # type: ignore[attr-defined]

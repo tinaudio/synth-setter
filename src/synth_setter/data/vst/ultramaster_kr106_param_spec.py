@@ -309,6 +309,7 @@ _SINGLE_NOTE_EXCLUDED_PARAMS = frozenset(
         "program",
         "send_midi_sysex",
         "transpose",
+        "transpose_offset",
         "voices",
     }
 )
