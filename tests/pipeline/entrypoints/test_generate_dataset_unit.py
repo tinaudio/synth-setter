@@ -3295,6 +3295,7 @@ class TestMainDispatchBranches:
             f"synth.plugin_path={TEST_PLUGIN_VST3}",
             "finalize_inline=true",
             "oracle_eval_inline=true",
+            "oracle_eval.upload=true",
             # Override smoke-shard's [12, 0, 0] — the zero-size guard rejects
             # train_val_test_sizes with any zero split for oracle_eval_inline.
             "train_val_test_sizes=[12, 4, 4]",
@@ -3369,13 +3370,16 @@ class TestMainDispatchBranches:
             assert run_dir.parent.parent.parent == dataset_root
             assert call.kwargs["metric_prefix"] == prefix
 
-    def test_main_oracle_eval_upload_false_keeps_successful_evals_local(
+    @pytest.mark.parametrize("upload_override", [[], ["oracle_eval.upload=false"]])
+    def test_main_oracle_eval_upload_disabled_keeps_successful_evals_local(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        upload_override: list[str],
     ) -> None:
-        """An explicit upload false runs every inline eval without archiving it.
+        """Unrequested or explicitly disabled uploads keep inline evaluations local.
 
         :param monkeypatch: Patches generation, finalization, download, eval, and upload seams.
+        :param upload_override: Optional explicit archival opt-out.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -3385,7 +3389,7 @@ class TestMainDispatchBranches:
             f"synth.plugin_path={TEST_PLUGIN_VST3}",
             "finalize_inline=true",
             "oracle_eval_inline=true",
-            "oracle_eval.upload=false",
+            *upload_override,
             "train_val_test_sizes=[12,4,4]",
         ]
         monkeypatch.setattr("sys.argv", argv)

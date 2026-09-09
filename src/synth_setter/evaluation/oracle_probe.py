@@ -1,4 +1,11 @@
-"""Archive inline dataset oracle-evaluation artifacts without eval lineage."""
+"""Archive inline dataset oracle-evaluation artifacts without eval lineage.
+
+Publish a completed split with its source/candidate provenance::
+
+    uri = upload_oracle_probe(
+        eval_dir, r2=spec.r2, launch_id=launch_id, provenance=provenance
+    )
+"""
 
 from __future__ import annotations
 

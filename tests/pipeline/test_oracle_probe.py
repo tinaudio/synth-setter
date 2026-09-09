@@ -152,6 +152,21 @@ def test_upload_oracle_probe_payload_failure_leaves_no_provenance_record(
     assert not (landed / "provenance.json").exists()
 
 
+def test_oracle_probe_provenance_non_r2_source_rejected(
+    valid_dataset_spec_kwargs: dict[str, object],
+) -> None:
+    """Reject source locations outside the finalized R2 dataset namespace.
+
+    :param valid_dataset_spec_kwargs: Valid source dataset fields.
+    """
+    spec = DatasetSpec.model_validate(valid_dataset_spec_kwargs)
+    payload = _provenance(spec).model_dump()
+    payload["source_dataset_uri"] = "https://example.com/test.lance"
+
+    with pytest.raises(ValueError, match="source_dataset_uri must be an r2:// URI"):
+        OracleProbeProvenance.model_validate(payload)
+
+
 def test_new_oracle_probe_launch_id_returns_unique_names() -> None:
     """Independent inline invocations receive distinct destination components."""
     assert new_oracle_probe_launch_id() != new_oracle_probe_launch_id()
