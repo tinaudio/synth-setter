@@ -139,7 +139,8 @@ SESSION_RECORDING_NOTE_END_SECONDS = 4.0
 _SESSION_RECORDING_BUFFER_SIZE = 2048
 
 # Plugin-flush parameters used by the post-load / pre-render flush pattern; see
-# ``_flush_plugin``. Mirror of the values used in ``synth_setter.data.vst.core.render_params``.
+# ``_flush_plugin``. The interactive tool uses a fixed 32 s flush; the offline renderer
+# derives its block count from ``renderer_backend.PEDALBOARD_FLUSH_SECONDS`` (#3245).
 _PLUGIN_FLUSH_DURATION_SECONDS = 32.0
 _PLUGIN_FLUSH_BUFFER_SIZE = 2048
 
@@ -168,7 +169,8 @@ _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 # 0/0 → NaN (see ``compute_rms`` in ``synth_setter.evaluation.compute_audio_metrics``).
 SILENCE_PEAK_THRESHOLD = 1e-4
 
-_METRIC_COLUMNS: frozenset[str] = frozenset({"mss", "wmfcc", "sot", "rms"})
+_METRIC_COLUMNS: frozenset[str] = frozenset({"mss", "wmfcc", "sot", "rms", "mldr"})
+_STEREO_METRIC_COLUMNS: frozenset[str] = _METRIC_COLUMNS | {"mldr_mid_side"}
 
 
 # External I/O seams keep tests state-based without patching module globals (#844).
@@ -258,10 +260,25 @@ class _MetricsFileSpec:
     .. attribute :: columns
 
         Required metric columns.
+
+    .. attribute :: optional_columns
+
+        Metric columns that may be absent or null for inapplicable rows.
+
+    .. attribute :: optional_rows
+
+        Metric names allowed as additional optional rows beyond ``rows``.
+
+    .. attribute :: required_rows
+
+        Metric names that must occur in the first column.
     """
 
     rows: int
     columns: frozenset[str]
+    optional_columns: frozenset[str] = frozenset()
+    optional_rows: frozenset[str] = frozenset()
+    required_rows: frozenset[str] = frozenset()
 
 
 def _expected_prediction_filenames(num_samples: int) -> list[str]:
@@ -285,11 +302,22 @@ def _validate_metrics_df(
 
     :param metrics_path: Source path included in validation errors.
     :param metrics_df: Parsed metrics table.
-    :param expected: Required row count and column names.
+    :param expected: Required rows and columns plus optional columns and row labels.
     :raises ValueError: The table does not satisfy the expected metrics contract.
     """
-    if len(metrics_df) != expected.rows:
-        raise ValueError(f"{metrics_path}: expected {expected.rows} rows, got {len(metrics_df)}")
+    row_names = set(metrics_df.iloc[:, 0])
+    missing_rows = expected.required_rows - row_names
+    if missing_rows:
+        raise ValueError(f"{metrics_path}: missing required metric rows {sorted(missing_rows)}")
+    optional_row_mask = metrics_df.iloc[:, 0].isin(expected.optional_rows)
+    optional_row_names = metrics_df.loc[optional_row_mask].iloc[:, 0]
+    if optional_row_names.duplicated().any():
+        raise ValueError(f"{metrics_path} contains duplicate optional metric rows")
+    required_row_count = len(metrics_df) - int(optional_row_mask.sum())
+    if required_row_count != expected.rows:
+        raise ValueError(
+            f"{metrics_path}: expected {expected.rows} rows, got {required_row_count}"
+        )
     missing_columns = expected.columns - set(metrics_df.columns)
     if missing_columns:
         raise ValueError(
@@ -297,15 +325,32 @@ def _validate_metrics_df(
             f"got {sorted(metrics_df.columns)}"
         )
     expected_cols = sorted(expected.columns)
-    numeric = metrics_df[expected_cols].to_numpy()
+    required_metrics = metrics_df.loc[~optional_row_mask, expected_cols]
+    numeric = required_metrics.to_numpy()
     finite_mask = np.isfinite(numeric)
     if not finite_mask.all():
         bad_mask = ~finite_mask.all(axis=1)
-        bad_rows = metrics_df.loc[bad_mask, expected_cols]
+        bad_rows = required_metrics.loc[bad_mask, expected_cols]
         raise ValueError(
-            f"{metrics_path} contains NaN/Inf in {len(bad_rows)} of {len(metrics_df)} rows:\n"
+            f"{metrics_path} contains NaN/Inf in {len(bad_rows)} of {len(required_metrics)} rows:\n"
             f"{bad_rows}"
         )
+    optional_metrics = metrics_df.loc[optional_row_mask, expected_cols]
+    optional_values = optional_metrics.to_numpy()
+    optional_means_invalid = (
+        "mean" in optional_metrics and not np.isfinite(optional_metrics["mean"].to_numpy()).all()
+    )
+    if optional_values.size and (
+        optional_means_invalid
+        or np.isinf(optional_values).any()
+        or not np.isfinite(optional_values).any(axis=1).all()
+    ):
+        raise ValueError(f"{metrics_path} contains invalid optional metric rows")
+    present_optional = sorted(expected.optional_columns & set(metrics_df.columns))
+    if present_optional:
+        optional_values = metrics_df[present_optional].to_numpy()
+        if np.isinf(optional_values).any():
+            raise ValueError(f"{metrics_path} contains Inf in optional metric columns")
 
 
 @dataclass(frozen=True)
@@ -1056,9 +1101,14 @@ def _compute_and_validate_metrics(
     """
     metrics_file_expectations: dict[str, _MetricsFileSpec] = {
         "aggregated_metrics.csv": _MetricsFileSpec(
-            rows=len(_METRIC_COLUMNS), columns=frozenset({"mean", "std"})
+            rows=len(_STEREO_METRIC_COLUMNS),
+            columns=frozenset({"mean", "std"}),
+            required_rows=frozenset({"mldr_mid_side"}),
         ),
-        "metrics.csv": _MetricsFileSpec(rows=num_samples, columns=_METRIC_COLUMNS),
+        "metrics.csv": _MetricsFileSpec(
+            rows=num_samples,
+            columns=_STEREO_METRIC_COLUMNS,
+        ),
     }
     runner = subprocess_runner if subprocess_runner is not None else subprocess.check_call
     runner(  # noqa: S603

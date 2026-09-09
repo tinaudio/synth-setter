@@ -13,7 +13,6 @@ Typical usage:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -27,6 +26,10 @@ from torch import Tensor
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
+)
+from synth_setter.models.components.pretrained_flow import (
+    PretrainedBaseMixin,
+    load_pretrained_flow,
 )
 from synth_setter.models.components.simulator_control import (
     DEFAULT_CONTROL_T_MIN,
@@ -47,7 +50,6 @@ logger = logging.getLogger(__name__)
 
 type ControlMode = Literal["gradient_spectral", "learned_audio", "null"]
 
-_FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 _BATCH_PARAMS_SHAPE = "batch params"
 _BATCH_AUDIO_SHAPE = "batch samples"
 _BATCH_TIME_SHAPE = "batch 1"
@@ -63,6 +65,7 @@ def _validate_arm(
     control_encoder: torch.nn.Module | None,
     audio_loss: object | None,
     rectified_sigma_min: float,
+    parameterization: str,
     sketch_controls: object | None,
     compiled: bool,
 ) -> None:
@@ -74,6 +77,8 @@ def _validate_arm(
     :param audio_loss: The base module's audio term, which this module cannot also carry.
     :param rectified_sigma_min: Probability-path noise scale; only zero leaves the one-step
         estimate exact.
+    :param parameterization: What the base field predicts; the one-step estimate and the
+        control both assume a velocity.
     :param sketch_controls: Sketch-control spec, which the controlled field cannot route.
     :param compiled: Whether the run asked for ``torch.compile``.
     :raises ValueError: Any of those conditions holds.
@@ -94,6 +99,10 @@ def _validate_arm(
         raise ValueError(
             f"simulator feedback requires rectified_sigma_min=0, got {rectified_sigma_min}"
         )
+    if parameterization != "velocity":
+        raise ValueError(
+            f"simulator feedback requires parameterization='velocity', got {parameterization!r}"
+        )
     if sketch_controls is not None:
         # ControlledFlow takes no control_tokens, so a sketch spec would train the frozen
         # field under conditioning the base never saw and then fail at validation.
@@ -111,7 +120,7 @@ def _validate_arm(
         validate_audio_feedback_runtime(compiled=True, world_size=1)
 
 
-class VSTFlowFinetuneModule(VSTFlowMatchingModule):
+class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
     """Pretrained flow whose velocity a simulator-fed control network learns to correct."""
 
     @jaxtyped(typechecker=beartype)
@@ -122,7 +131,7 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         optimizer: Callable[..., torch.optim.Optimizer],
         scheduler: Callable[..., object] | None,
         *,
-        base_checkpoint: str | Path,
+        base_checkpoint: str | Path | None,
         num_params: int,
         sample_rate: int,
         signal_length: int,
@@ -140,7 +149,8 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         :param vector_field: Velocity field of the same shape the base run trained.
         :param optimizer: ``functools.partial``-style optimizer factory.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
-        :param base_checkpoint: Checkpoint holding the pretrained flow to refine.
+        :param base_checkpoint: Checkpoint holding the pretrained flow to refine, or ``None``
+            when a Lightning checkpoint of this finetune supplies every weight (eval, resume).
         :param num_params: Parameter-vector width the field operates on.
         :param sample_rate: Render sample rate in Hz.
         :param signal_length: Rendered samples per row; must match the target audio.
@@ -162,6 +172,7 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
             control_encoder=control_encoder,
             audio_loss=base_kwargs.get("audio_loss"),
             rectified_sigma_min=float(base_kwargs.get("rectified_sigma_min", 0.0)),  # pyright: ignore[reportArgumentType]
+            parameterization=str(base_kwargs.get("parameterization", "velocity")),
             sketch_controls=base_kwargs.get("sketch_controls"),
             compiled=bool(base_kwargs.get("compile", False)),
         )
@@ -177,7 +188,9 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         # get deep-copied; the group admits large weight-normalized pretrained encoders.
         self.save_hyperparameters(ignore=["cost", "control_encoder"], logger=False)
         self.num_params = num_params
-        self._load_pretrained(base_checkpoint)
+        self.base_checkpoint_sha256 = (
+            load_pretrained_flow(self, base_checkpoint) if base_checkpoint is not None else None
+        )
         self.requires_grad_(False)
 
         self.control_mode: ControlMode = control_mode
@@ -226,36 +239,6 @@ class VSTFlowFinetuneModule(VSTFlowMatchingModule):
         """Hold the pretrained encoder and field in eval mode."""
         self.encoder.eval()
         self.vector_field.flow.eval()
-
-    @jaxtyped(typechecker=beartype)
-    def _load_pretrained(self, checkpoint: str | Path) -> None:
-        """Restore every pretrained weight, refusing a checkpoint that does not fit.
-
-        Runs before the control is attached, so the module's own shape is exactly the base
-        run's: any missing or unexpected key means the wrong checkpoint, and a silent
-        ``strict=False`` here would "finetune" a randomly initialised field.
-
-        :param checkpoint: Path to a Lightning checkpoint of the base run.
-        :raises ValueError: The payload has no ``state_dict``, or its keys do not match.
-        """
-        digest = hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()
-        # The config records a mutable path, so without this two arms started from
-        # different flows would still read as comparable runs.
-        logger.info("base_checkpoint path=%s sha256=%s", checkpoint, digest)
-        payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-        state = payload.get("state_dict") if isinstance(payload, dict) else None
-        if not isinstance(state, dict):
-            raise ValueError(f"{checkpoint} holds no Lightning state_dict")
-        result = self.load_state_dict(state, strict=False)
-        # A frozen pretrained backbone is stripped on save and re-resolved from its own
-        # weights, so its absence is expected; nothing else may be.
-        missing = [k for k in result.missing_keys if not k.startswith(_FROZEN_BACKBONE_PREFIX)]
-        if missing or result.unexpected_keys:
-            raise ValueError(
-                f"{checkpoint} does not match this model: "
-                f"{len(missing)} missing key(s) {missing[:5]}, "
-                f"{len(result.unexpected_keys)} unexpected key(s) {result.unexpected_keys[:5]}"
-            )
 
     @jaxtyped(typechecker=beartype)
     def _control_signal_width(self) -> int:

@@ -61,7 +61,7 @@ ______________________________________________________________________
 
 ```
 dataset config
-  → [data-generation run] → dataset artifact
+  → [data-generation run] → [finalize run] → dataset artifact
                                ├→ [training run] → model artifact
                                │                      │
 eval dataset artifact ─────────┴→ [evaluation run] ←──┘

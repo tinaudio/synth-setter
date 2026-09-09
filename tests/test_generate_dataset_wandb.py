@@ -440,3 +440,56 @@ def test_generate_stamps_wandb_provenance_into_run_config_offline(
     assert json.loads(config["image_tag"]) == "test-image:abc123", config
     sha = json.loads(config["github_sha"])
     assert sha == "unknown" or re.fullmatch(r"[0-9a-f]{40}", sha), config
+
+
+def test_main_finalize_inline_logs_dataset_artifact_to_dedicated_finalize_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inline finalize opens its own offline W&B run carrying the dataset artifact.
+
+    ``generate`` and the R2-facing finalize body are stubbed so the only
+    side effect is the finalize-stage W&B run ``main()`` brackets around
+    ``finalize_inline=true``; its id is ``<generate run id>-finalize``.
+
+    :param tmp_path: Hosts ``PROJECT_ROOT`` so the offline run lands under the test tree.
+    :param monkeypatch: Pins the offline ``WANDB_*`` env, argv, and the I/O stubs.
+    """
+    import synth_setter.cli.generate_dataset as gd
+
+    _offline_wandb_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    plugin = Path(__file__).resolve().parent / "pipeline" / "fixtures" / "TestPlugin.vst3"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"synth.plugin_path={plugin}",
+            "finalize_inline=true",
+        ],
+    )
+    monkeypatch.setattr(gd, "write_spec_locally", lambda _spec, out: Path(out) / "input_spec.json")
+    monkeypatch.setattr(
+        gd, "upload_spec", lambda _spec: "r2://stub-bucket/stub-key/input_spec.json"
+    )
+    monkeypatch.setattr(gd.r2_io, "ensure_r2_env_loaded", lambda *_a, **_k: None)
+    monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset.finalize_from_spec",
+        lambda _spec, _work_dir, _cb=None: None,
+    )
+
+    gd.main()
+
+    assert wandb.run is None, "main() did not close the finalize wandb run on return"
+    finalize_dirs = list(tmp_path.rglob("wandb/offline-run-*-smoke-shard-*-finalize"))
+    assert len(finalize_dirs) == 1, f"expected one finalize offline-run dir, found {finalize_dirs}"
+    binary_files = glob.glob(str(finalize_dirs[0] / "run-*.wandb"))
+    assert len(binary_files) == 1, f"expected one .wandb binary, found {binary_files}"
+    payload = read_run_binary(
+        Path(binary_files[0]), until=lambda data: b"data-smoke-shard" in data
+    )
+    assert b"data-smoke-shard" in payload, "dataset artifact not recorded on the finalize run"

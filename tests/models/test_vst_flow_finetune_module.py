@@ -570,6 +570,28 @@ def test_finetune_module_learned_arm_without_encoder_raises(tmp_path: Path) -> N
         _finetune(_base_checkpoint(tmp_path), control_mode="learned_audio")
 
 
+def test_finetune_module_with_endpoint_base_checkpoint_raises(tmp_path: Path) -> None:
+    """An endpoint-stamped base is refused even under the default velocity finetune config.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    payload = {"state_dict": _base_module().state_dict(), "parameterization": "endpoint"}
+    path = tmp_path / "endpoint-base.ckpt"
+    torch.save(payload, path)
+
+    with pytest.raises(ValueError, match="parameterization"):
+        _finetune(path)
+
+
+def test_finetune_module_with_endpoint_parameterization_raises(tmp_path: Path) -> None:
+    """The one-step estimate assumes a velocity field, so an endpoint base is refused.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    with pytest.raises(ValueError, match="parameterization"):
+        _finetune(_base_checkpoint(tmp_path), overrides={"parameterization": "endpoint"})
+
+
 def test_finetune_module_gradient_arm_without_cost_raises(tmp_path: Path) -> None:
     """The equation-9 arm refuses to start without the differentiable cost it differentiates.
 
@@ -1102,3 +1124,89 @@ def test_controlled_sampling_scores_the_conditional_velocity(tmp_path: Path) -> 
     assert not torch.allclose(conditional, guided), "fixture cannot distinguish the two"
     assert torch.allclose(seen[0], conditional, atol=1e-6)
     assert not torch.allclose(seen[0], guided, atol=1e-6)
+
+
+def _fit_with_checkpointing(module: VSTFlowFinetuneModule, root: Path) -> Path:
+    """Fit one step and return the ``last.ckpt`` Lightning wrote.
+
+    :param module: Finetune module to fit.
+    :param root: Directory Lightning writes the checkpoint under.
+    :returns: Path to the saved checkpoint.
+    """
+    from lightning import Trainer
+    from lightning.pytorch.callbacks import ModelCheckpoint
+
+    trainer = Trainer(
+        max_steps=1,
+        accelerator="cpu",
+        logger=False,
+        default_root_dir=root,
+        callbacks=[ModelCheckpoint(dirpath=root, save_last=True)],
+        limit_val_batches=0,
+        enable_progress_bar=False,
+    )
+    trainer.fit(module, datamodule=_data())
+    return root / "last.ckpt"
+
+
+def test_finetune_without_base_checkpoint_takes_its_weights_from_a_lightning_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """Evaluating or resuming needs no base file: the finetune checkpoint alone restores the weights.
+
+    :param tmp_path: Directory for the base and finetune checkpoints.
+    """
+    from lightning import Trainer
+
+    trained = _finetune(_base_checkpoint(tmp_path), control_mode="null")
+    saved = _fit_with_checkpointing(trained, tmp_path / "run")
+
+    restored = _finetune(None, control_mode="null")  # pyright: ignore[reportArgumentType]
+    Trainer(accelerator="cpu", logger=False, enable_progress_bar=False).validate(
+        restored, datamodule=_data(), ckpt_path=saved, weights_only=False
+    )
+
+    for name, value in trained.state_dict().items():
+        torch.testing.assert_close(restored.state_dict()[name], value, msg=name)
+
+
+def test_finetune_fit_without_base_or_resume_checkpoint_raises(tmp_path: Path) -> None:
+    """A fresh fit with neither weight source would finetune a random field, so it is refused.
+
+    :param tmp_path: Unused output directory.
+    """
+    module = _finetune(None, control_mode="null")  # pyright: ignore[reportArgumentType]
+
+    with pytest.raises(ValueError, match="base_checkpoint"):
+        _trainer().fit(module, datamodule=_data())
+
+
+def test_finetune_checkpoint_records_the_base_digest_and_rejects_another_base(
+    tmp_path: Path,
+) -> None:
+    """The saved run names the base it started from, so a swapped base file cannot resume it.
+
+    :param tmp_path: Directory for the two base checkpoints and the finetune checkpoint.
+    """
+    import hashlib
+
+    from lightning import Trainer
+
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    torch.manual_seed(0)
+    base_a = _base_checkpoint(tmp_path / "a")
+    saved = _fit_with_checkpointing(_finetune(base_a, control_mode="null"), tmp_path / "run")
+
+    assert torch.load(saved, weights_only=False)["base_checkpoint_sha256"] == (
+        hashlib.sha256(base_a.read_bytes()).hexdigest()
+    )
+    # _base_module seeds itself, so shift one weight to make a genuinely different base.
+    other_base = _base_module()
+    with torch.no_grad():
+        next(other_base.vector_field.parameters()).add_(1.0)
+    other = _finetune(_base_checkpoint(tmp_path / "b", other_base), control_mode="null")
+    with pytest.raises(ValueError, match="base_checkpoint"):
+        Trainer(accelerator="cpu", logger=False, enable_progress_bar=False).validate(
+            other, datamodule=_data(), ckpt_path=saved, weights_only=False
+        )
