@@ -32,6 +32,7 @@ mode: test
 evaluation:
   render_vst: false
   compute_metrics: false
+  require_exact_param_oracle: false
   rerender_target: true
   # Third-party corpora carry no ground-truth patch; set with rerender_target=false
   # so target audio comes from the dataset instead of a re-render.

@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import hydra
 import pandas as pd
+import torch
 import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer
 from lightning.pytorch.loggers import Logger
@@ -129,6 +130,53 @@ def _log_metrics_csv_to_wandb(metrics_dir: Path, prefix: str = "") -> None:
         )
 
 
+def _assert_exact_oracle_predictions(predictions_dir: Path) -> float:
+    """Require every persisted prediction tensor to equal its target parameters.
+
+    :param predictions_dir: PredictionWriter output containing paired ``pred-*`` and
+        ``target-params-*`` tensors.
+    :returns: Exact parameter MSE, always zero after successful verification.
+    :raises ValueError: Artifacts are absent, empty, non-finite, structurally different,
+        or contain any unequal element.
+    """
+    prediction_files = sorted(predictions_dir.glob("pred-*.pt"))
+    if not prediction_files:
+        raise ValueError(f"no prediction artifacts found in {predictions_dir}")
+
+    for prediction_file in prediction_files:
+        suffix = prediction_file.name.removeprefix("pred-")
+        target_file = predictions_dir / f"target-params-{suffix}"
+        if not target_file.is_file():
+            raise ValueError(f"oracle target artifact is missing: {target_file}")
+        prediction = torch.load(prediction_file, map_location="cpu", weights_only=True)
+        target = torch.load(target_file, map_location="cpu", weights_only=True)
+        if not isinstance(prediction, torch.Tensor) or not isinstance(target, torch.Tensor):
+            raise ValueError(f"oracle artifacts must contain tensors: {prediction_file}")
+        if prediction.numel() == 0 or target.numel() == 0:
+            raise ValueError(f"oracle artifacts must not be empty: {prediction_file}")
+        if prediction.shape != target.shape:
+            raise ValueError(
+                f"oracle shape mismatch for {prediction_file.name}: "
+                f"prediction={tuple(prediction.shape)}, target={tuple(target.shape)}"
+            )
+        if prediction.dtype != target.dtype:
+            raise ValueError(
+                f"oracle dtype mismatch for {prediction_file.name}: "
+                f"prediction={prediction.dtype}, target={target.dtype}"
+            )
+        if not torch.isfinite(prediction).all() or not torch.isfinite(target).all():
+            raise ValueError(f"oracle artifacts contain non-finite values: {prediction_file}")
+        if not torch.equal(prediction, target):
+            max_difference = (
+                (prediction.to(torch.float64) - target.to(torch.float64)).abs().max().item()
+            )
+            raise ValueError(
+                f"oracle parameters differ for {prediction_file.name}; "
+                f"maximum absolute difference {max_difference}"
+            )
+    return 0.0
+
+
 def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: DOC502,DOC503
     """Render VST audio, compute audio metrics, and return their aggregated values.
 
@@ -138,9 +186,8 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
 
     :param cfg: Reads ``cfg.evaluation`` gates and metric settings, the complete
         ``cfg.render`` contract, and ``cfg.paths.output_dir`` for artifact roots.
-    :returns: ``{"<metric_prefix>audio/<name>_<stat>": value}`` when ``compute_metrics``
-        ran (``metric_prefix`` empty by default); empty dict otherwise. Always
-        rank-zero — the caller gates DDP duplication.
+    :returns: Verified oracle parameter MSE and requested audio metrics, with the
+        configured metric prefix. Always rank-zero — the caller gates DDP duplication.
     :raises ValueError: if ``evaluation.render_vst`` is enabled but ``cfg.render`` is
         unset, or the expected input directory for a stage is missing.
     :raises subprocess.CalledProcessError: propagated from a non-zero subprocess exit.
@@ -151,6 +198,20 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     predictions_dir = output_dir / "predictions"
     audio_dir = output_dir / "audio"
     metrics_dir = output_dir / "metrics"
+    prefix = cfg.evaluation.get("metric_prefix", "")
+
+    require_exact_oracle = cfg.evaluation.get("require_exact_param_oracle", False)
+    if not isinstance(require_exact_oracle, bool):
+        raise ValueError(
+            "evaluation.require_exact_param_oracle must be a boolean, "
+            f"got {require_exact_oracle!r}"
+        )
+    verified_metrics: dict[str, float] = {}
+    if require_exact_oracle:
+        verified_metrics[f"{prefix}oracle/param_mse"] = _assert_exact_oracle_predictions(
+            predictions_dir
+        )
+        _log_audio_metrics_to_wandb(verified_metrics)
 
     no_params = cfg.evaluation.get("no_params", False)
     if not isinstance(no_params, bool):
@@ -245,15 +306,13 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             ),
         )
         audio_metrics = _load_audio_metrics(metrics_dir)
-        # Namespace every key per caller so split passes do not overwrite each other.
-        prefix = cfg.evaluation.get("metric_prefix", "")
         if prefix:
             audio_metrics = {f"{prefix}{key}": value for key, value in audio_metrics.items()}
         _log_audio_metrics_to_wandb(audio_metrics)
         _log_metrics_csv_to_wandb(metrics_dir, prefix)
-        return audio_metrics
+        return {**verified_metrics, **audio_metrics}
 
-    return {}
+    return verified_metrics
 
 
 def _verify_checkpoint_sha256(checkpoint: Path, expected_sha256: str | None) -> None:

@@ -12,6 +12,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 import structlog
@@ -24,6 +25,7 @@ from synth_setter.utils.logging_utils import resolve_git_sha
 
 _PROVENANCE_FILENAME = "provenance.json"
 _UPLOAD_EXCLUDE = "predictions/**"
+OracleProbeRole = Literal["source", "candidate"]
 
 logger = structlog.get_logger(__name__)
 
@@ -126,6 +128,7 @@ def upload_oracle_probe(
     r2: R2Location,
     launch_id: str,
     provenance: OracleProbeProvenance,
+    role: OracleProbeRole | None = None,
 ) -> str:
     """Upload one eval split's durable probe artifacts and return its R2 URI.
 
@@ -133,12 +136,14 @@ def upload_oracle_probe(
     :param r2: Source dataset storage location; its bucket owns the probe.
     :param launch_id: Identity shared by all splits in one inline invocation.
     :param provenance: Source and candidate identities persisted with the probe.
+    :param role: Optional renderer role separating paired source and candidate archives.
     :returns: Destination URI containing config, audio, metrics, and provenance.
     """
+    role_component = "" if role is None else f"{role}/"
     destination = r2.uri(
         "probes/dataset-oracle/"
         f"{provenance.source_dataset_task}/{provenance.source_run_id}/"
-        f"{launch_id}/{provenance.source_split}"
+        f"{launch_id}/{role_component}{provenance.source_split}"
     )
     with tempfile.TemporaryDirectory(prefix="synth-setter-oracle-probe-") as temp_dir:
         archive_dir = Path(temp_dir)

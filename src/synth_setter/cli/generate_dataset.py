@@ -48,6 +48,7 @@ from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.evaluation.oracle_probe import (
     OracleProbeProvenance,
+    OracleProbeRole,
     new_oracle_probe_launch_id,
     upload_oracle_probe,
 )
@@ -117,6 +118,45 @@ _ORACLE_EVAL_TIMEOUT_PER_SAMPLE_SECONDS = 120.0
 
 # Finalized artifacts the eval datamodule opens; all must sit in dataset_root.
 _ORACLE_EVAL_REQUIRED_ARTIFACTS = ("train.lance", "val.lance", "test.lance", STATS_NPZ_FILENAME)
+_ORACLE_AUDIO_CONDITION_FIELDS = (
+    "channels",
+    "sample_rate",
+    "signal_duration_seconds",
+    "velocity",
+)
+
+
+def _resolve_oracle_candidate(cfg: DictConfig, source: RenderConfig) -> RenderConfig | None:
+    """Validate an optional packaged oracle renderer against the source conditions.
+
+    :param cfg: Dataset config with optional ``oracle_eval.candidate`` package aliases.
+    :param source: Generation renderer defining the parameter layout and audio conditions.
+    :returns: Validated candidate, or ``None`` when neither alias is selected.
+    :raises ValueError: Only one alias is selected or the candidate changes the parameter
+        layout or physical audio conditions.
+    """
+    candidate_synth = OmegaConf.select(cfg, "oracle_eval.candidate.synth")
+    candidate_render = OmegaConf.select(cfg, "oracle_eval.candidate.render")
+    if candidate_synth is None and candidate_render is None:
+        return None
+    if candidate_synth is None or candidate_render is None:
+        raise ValueError("oracle_eval.candidate requires both synth and render groups")
+
+    candidate = RenderConfig.from_cfg_nodes(candidate_render, candidate_synth)
+    if candidate.param_spec_name != source.param_spec_name:
+        raise ValueError(
+            "oracle candidate param_spec_name must match the source: "
+            f"candidate={candidate.param_spec_name!r}, source={source.param_spec_name!r}"
+        )
+    for field in _ORACLE_AUDIO_CONDITION_FIELDS:
+        candidate_value = getattr(candidate, field)
+        source_value = getattr(source, field)
+        if candidate_value != source_value:
+            raise ValueError(
+                f"oracle candidate {field} must match the source: "
+                f"candidate={candidate_value!r}, source={source_value!r}"
+            )
+    return candidate
 
 
 def _run_oracle_eval_subprocess(
@@ -128,6 +168,7 @@ def _run_oracle_eval_subprocess(
     num_workers: int,
     predict_file: Path,
     metric_prefix: str = "",
+    render_group: str = "vst",
 ) -> None:
     """Run the fake-oracle eval over one split of ``dataset_root``.
 
@@ -141,21 +182,15 @@ def _run_oracle_eval_subprocess(
         artifacts don't mix with the dataset files.
     :param run_id: Canonical ``spec.run_id``; the eval resumes this wandb run
         so its ``audio/*`` metrics land on the generate phase's run.
-    :param render: The generation ``RenderConfig``. The eval re-renders
-        predictions via ``predict_vst_audio``; the backend, lifecycle, plugin,
-        parameter spec, preset, and audio-shape fields are forwarded from this
-        config so evaluation matches generation.
+    :param render: Source or candidate ``RenderConfig`` used to re-render predictions.
     :param num_workers: Predict DataLoader worker count, forwarded verbatim from
         the generate run's ``datamodule`` config — no platform guard. On
         spawn-start-method platforms (Darwin) the caller must configure ``0``:
         workers pickle the dataset, but the Lance shard handle is not fork-safe.
     :param predict_file: Lance split dataset directory for the datamodule's
         predict dataloader (e.g. ``dataset_root / "train.lance"``).
-    :param metric_prefix: Prepended to every audio metric key the eval logs.
-        All splits resume one wandb run, so a bare key is overwritten by the
-        last split; pass ``"<split>/"``
-        to namespace it. Empty (the default) leaves keys bare — used for the
-        canonical ``test`` split.
+    :param metric_prefix: Prepended to every oracle and audio metric key.
+    :param render_group: Existing Hydra render group used to compose the eval subprocess.
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
         or ``stats.npz`` — e.g. a resume where ``finalize_from_spec``
         short-circuited on an existing R2 marker without staging ``stats.npz``
@@ -185,7 +220,7 @@ def _run_oracle_eval_subprocess(
         "logger=wandb",
         # Identity replays through the root synth group (#2565): select the row,
         # then restate each field so per-run overrides (stub plugins) survive.
-        "render=vst",
+        f"render={render_group}",
         f"synth={render.synth.name}",
         *(
             f"synth.{field}={value}"
@@ -211,6 +246,8 @@ def _run_oracle_eval_subprocess(
         # Override the datamodule's default predict_file (test.lance) so the caller
         # can route each invocation to a specific split independently.
         f"datamodule.predict_file={predict_file}",
+        "evaluation.require_exact_param_oracle=true",
+        "evaluation.rerender_target=false",
         "mode=predict",
     ]
     # +append: metric_prefix is absent from eval.yaml's evaluation group. Empty
@@ -1261,9 +1298,9 @@ def main(cfg: DictConfig) -> None:
     failing the trial; other ``RenderConfig`` validation errors still raise.
 
     :param cfg: Hydra-composed dataset cfg.
-    :raises ValueError: ``oracle_eval_inline=true`` without
-        ``finalize_inline=true``, with a zero-size train / val / test split,
-        or with a non-boolean ``oracle_eval.upload`` value.
+    :raises ValueError: Local inline oracle evaluation lacks finalized non-empty splits,
+        has a non-boolean upload value, or its candidate changes the source parameter
+        layout or audio conditions.
     """
     extras(cfg)
     render_cfg = cfg.get("render")
@@ -1279,9 +1316,16 @@ def main(cfg: DictConfig) -> None:
     overrides = list(HydraConfig.get().overrides.task)
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
+    candidate_render = (
+        _resolve_oracle_candidate(cfg, spec.render)
+        if sky_cfg.compute is None and cfg.oracle_eval_inline
+        else None
+    )
 
     if sky_cfg.compute is None:
         ensure_dawdreamer_runtime(spec.render.renderer_backend)
+        if candidate_render is not None:
+            ensure_dawdreamer_runtime(candidate_render.renderer_backend)
 
     upload_oracle_evals = False
     if sky_cfg.compute is None and cfg.oracle_eval_inline:
@@ -1341,35 +1385,56 @@ def main(cfg: DictConfig) -> None:
                 r2_io.download_dir_no_overwrite(
                     spec.r2.split_lance_uri(split), output_dir / f"{split}.lance"
                 )
-            oracle_probe_launch_id = new_oracle_probe_launch_id() if upload_oracle_evals else None
-            for split in splits:
-                # test stays bare; train/val are namespaced so the shared run
-                # keeps one summary key per split (see _run_oracle_eval_subprocess).
-                metric_prefix = "" if split == "test" else f"{split}/"
-                eval_dir = output_dir / "oracle_eval" / split / spec.run_id
-                _run_oracle_eval_subprocess(
-                    output_dir,
-                    eval_dir,
-                    spec.run_id,
-                    render=spec.render,
-                    num_workers=cfg.datamodule.num_workers,
-                    predict_file=output_dir / f"{split}.lance",
-                    metric_prefix=metric_prefix,
+            source_render_group = HydraConfig.get().runtime.choices.get("render", "vst")
+            render_cases: tuple[tuple[OracleProbeRole | None, RenderConfig, str], ...]
+            if candidate_render is None:
+                render_cases = ((None, spec.render, source_render_group),)
+            else:
+                candidate_render_group = HydraConfig.get().runtime.choices.get(
+                    "render@oracle_eval.candidate.render"
                 )
-                if oracle_probe_launch_id is not None:
-                    upload_oracle_probe(
-                        eval_dir,
-                        r2=spec.r2,
-                        launch_id=oracle_probe_launch_id,
-                        provenance=OracleProbeProvenance(
-                            source_dataset_uri=spec.r2.split_lance_uri(split),
-                            source_dataset_task=spec.task_name,
-                            source_split=split,
-                            source_run_id=spec.run_id,
-                            source_render=spec.render,
-                            candidate_render=spec.render,
-                        ),
+                if candidate_render_group is None:
+                    raise ValueError("oracle candidate render group choice is unavailable")
+                render_cases = (
+                    ("source", spec.render, source_render_group),
+                    ("candidate", candidate_render, candidate_render_group),
+                )
+            oracle_probe_launch_id = new_oracle_probe_launch_id() if upload_oracle_evals else None
+            run_root = output_dir / "oracle_eval"
+            for role, render, render_group in render_cases:
+                for split in splits:
+                    split_prefix = "" if split == "test" else f"{split}/"
+                    metric_prefix = split_prefix if role is None else f"{role}/{split_prefix}"
+                    run_dir = (
+                        run_root / split / spec.run_id
+                        if role is None
+                        else run_root / role / split / spec.run_id
                     )
+                    _run_oracle_eval_subprocess(
+                        output_dir,
+                        run_dir,
+                        spec.run_id,
+                        render=render,
+                        num_workers=cfg.datamodule.num_workers,
+                        predict_file=output_dir / f"{split}.lance",
+                        metric_prefix=metric_prefix,
+                        render_group=render_group,
+                    )
+                    if oracle_probe_launch_id is not None:
+                        upload_oracle_probe(
+                            run_dir,
+                            r2=spec.r2,
+                            launch_id=oracle_probe_launch_id,
+                            role=role,
+                            provenance=OracleProbeProvenance(
+                                source_dataset_uri=spec.r2.split_lance_uri(split),
+                                source_dataset_task=spec.task_name,
+                                source_split=split,
+                                source_run_id=spec.run_id,
+                                source_render=spec.render,
+                                candidate_render=render,
+                            ),
+                        )
         return
 
     if cfg.finalize_inline or cfg.oracle_eval_inline:

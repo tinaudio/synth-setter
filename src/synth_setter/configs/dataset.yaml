@@ -11,6 +11,9 @@ defaults:
   # ``render`` group names how (backend + knobs); experiments select both.
   - synth: ???
   - render: ???
+  # Select both aliases together; candidate audio-condition fields must match root render.
+  - synth@oracle_eval.candidate.synth: null
+  - render@oracle_eval.candidate.render: null
   - r2: default
   - paths: default
   - hydra: default

@@ -15,19 +15,20 @@ from synth_setter.evaluation.oracle_probe import (
     upload_oracle_probe,
 )
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.schemas.spec import DatasetSpec, Split
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, Split
 from synth_setter.utils.logging_utils import resolve_git_sha
 
 
-def _write_eval_artifacts(eval_dir: Path) -> None:
+def _write_eval_artifacts(eval_dir: Path, *, metric: float = 1.0) -> None:
     """Create the uploadable eval outputs plus excluded and unsafe files.
 
     :param eval_dir: Root directory for the synthetic eval run.
+    :param metric: Distinguishable audio metric persisted by the synthetic run.
     """
     for relative_path, contents in (
         (".hydra/config.yaml", "task_name: eval\n"),
         ("audio/sample_0/pred.wav", "audio"),
-        ("metrics/metrics.json", '{"audio/rms_mean": 1.0}\n'),
+        ("metrics/metrics.json", f'{{"audio/rms_mean": {metric}}}\n'),
         ("predictions/pred-0.pt", "tensor"),
         ("eval.log", "raw process output"),
         ("wandb/debug.log", "credential-adjacent client log"),
@@ -37,11 +38,17 @@ def _write_eval_artifacts(eval_dir: Path) -> None:
         path.write_text(contents)
 
 
-def _provenance(spec: DatasetSpec, split: Split = "test") -> OracleProbeProvenance:
-    """Build provenance from one generated dataset and identical oracle renders.
+def _provenance(
+    spec: DatasetSpec,
+    split: Split = "test",
+    *,
+    candidate_render: RenderConfig | None = None,
+) -> OracleProbeProvenance:
+    """Build provenance from one generated dataset and an oracle render.
 
     :param spec: Source dataset specification.
     :param split: Source split represented by the probe.
+    :param candidate_render: Evaluated render, or the source render when omitted.
     :returns: Validated provenance for the probe upload.
     """
     return OracleProbeProvenance(
@@ -50,7 +57,7 @@ def _provenance(spec: DatasetSpec, split: Split = "test") -> OracleProbeProvenan
         source_split=split,
         source_run_id=spec.run_id,
         source_render=spec.render,
-        candidate_render=spec.render,
+        candidate_render=candidate_render or spec.render,
     )
 
 
@@ -102,6 +109,62 @@ def test_upload_oracle_probe_materializes_only_probe_artifacts(
     assert OracleProbeProvenance.model_validate(payload) == _provenance(spec)
     assert payload["evaluation_git_sha"] == resolve_git_sha()
     assert payload["source_render"] == payload["candidate_render"]
+
+
+def test_upload_oracle_probe_roles_preserve_both_renderer_results(
+    tmp_path: Path,
+    fake_r2_remote: Path,
+    valid_dataset_spec_kwargs: dict[str, object],
+) -> None:
+    """Source and candidate archives retain separate metrics and render provenance.
+
+    :param tmp_path: Temporary eval-run root.
+    :param fake_r2_remote: Local rclone remote root.
+    :param valid_dataset_spec_kwargs: Valid source dataset fields.
+    """
+    spec = DatasetSpec.model_validate(valid_dataset_spec_kwargs)
+    source_eval_dir = tmp_path / "source"
+    candidate_eval_dir = tmp_path / "candidate"
+    _write_eval_artifacts(source_eval_dir, metric=1.0)
+    _write_eval_artifacts(candidate_eval_dir, metric=2.0)
+    candidate_render = spec.render.model_copy(update={"renderer_backend": "pedalboard"})
+
+    source_uri = upload_oracle_probe(
+        source_eval_dir,
+        r2=spec.r2,
+        launch_id="launch-roles",
+        role="source",
+        provenance=_provenance(spec),
+    )
+    candidate_uri = upload_oracle_probe(
+        candidate_eval_dir,
+        r2=spec.r2,
+        launch_id="launch-roles",
+        role="candidate",
+        provenance=_provenance(spec, candidate_render=candidate_render),
+    )
+
+    assert source_uri.endswith("/launch-roles/source/test")
+    assert candidate_uri.endswith("/launch-roles/candidate/test")
+    probe_root = (
+        fake_r2_remote
+        / spec.r2.bucket
+        / "probes"
+        / "dataset-oracle"
+        / spec.task_name
+        / spec.run_id
+        / "launch-roles"
+    )
+    assert json.loads((probe_root / "source/test/metrics/metrics.json").read_text()) == {
+        "audio/rms_mean": 1.0
+    }
+    assert json.loads((probe_root / "candidate/test/metrics/metrics.json").read_text()) == {
+        "audio/rms_mean": 2.0
+    }
+    candidate_payload = json.loads((probe_root / "candidate/test/provenance.json").read_text())
+    candidate_provenance = OracleProbeProvenance.model_validate(candidate_payload)
+    assert candidate_provenance.candidate_render == candidate_render
+    assert candidate_provenance.source_render == spec.render
 
 
 def test_upload_oracle_probe_payload_failure_leaves_no_provenance_record(
