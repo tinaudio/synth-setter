@@ -211,7 +211,8 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         CategoricalParameter(
             name="transpose_offset", values=list(range(-24, 37)), encoding="scalar"
         ),
-        ContinuousParameter(name="master_volume"),
+        # Bound post-chorus gain while retaining the control's nonlinear taper.
+        ContinuousParameter(name="master_volume", max=0.25),
         CategoricalParameter(name="voices", values=[6, 7, 8, 9, 10], encoding="scalar"),
         CategoricalParameter(
             name="vcf_oversample", values=["Off", "2x", "3x", "4x"], encoding="onehot"
