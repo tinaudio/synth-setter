@@ -2939,6 +2939,7 @@ def test_pyfdn_rir_eval_experiment_entrypoint_renders_only_impulse_responses(
     assert np.isfinite(rendered).all()
 
 
+@pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.xfail(
     not Path(os.environ.get("SYNTH_SETTER_PLUGIN_PATH", "plugins/Surge XT.vst3")).exists(),
