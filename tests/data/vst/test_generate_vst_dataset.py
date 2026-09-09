@@ -752,20 +752,25 @@ def _assert_round_trip_matches(
             f"{expected_synth_patches[i]} within tolerances "
             f"(abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
         )
-        assert decoded_note_params == pytest.approx(
-            expected_note_patches[i], rel=_RELATIVE_TOLERANCE, abs=_ABSOLUTE_TOLERANCE
-        ), (
-            f"sample {i}: decoded note params {decoded_note_params} do not match input "
-            f"{expected_note_patches[i]} within tolerances "
-            f"(abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
-        )
         assert isinstance(decoded_note_params, dict)
         assert decoded_note_params.keys() == {"pitch", "note_start_and_end"}
         assert isinstance(decoded_note_params["pitch"], int)
+        assert decoded_note_params["pitch"] == expected_note_patches[i]["pitch"], f"sample {i}"
+        # pytest.approx compares tuple values inside a mapping exactly, so the
+        # note window is compared on its own with the shared tolerances.
+        assert decoded_note_params["note_start_and_end"] == pytest.approx(
+            expected_note_patches[i]["note_start_and_end"],
+            rel=_RELATIVE_TOLERANCE,
+            abs=_ABSOLUTE_TOLERANCE,
+        ), (
+            f"sample {i}: decoded note window {decoded_note_params['note_start_and_end']} "
+            f"does not match input {expected_note_patches[i]['note_start_and_end']} within "
+            f"tolerances (abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
+        )
         assert isinstance(decoded_note_params["note_start_and_end"], tuple)
         start, end = decoded_note_params["note_start_and_end"]
-        assert isinstance(start, np.floating)
-        assert isinstance(end, np.floating)
+        assert isinstance(start, float)
+        assert isinstance(end, float)
 
     return RoundTripMetrics(
         mss_max=max(mss_values),

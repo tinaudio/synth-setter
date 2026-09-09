@@ -1,0 +1,35 @@
+# @package _global_
+
+# The cepstral-conditioning arm of the pyFDN A/B against flow_ast_online: same data,
+# model, and schedule; only the waveform front end differs.
+defaults:
+  - override /datamodule: pyfdn
+  - override /synth: pyfdn_n8_mono_householder
+  - override /render: pyfdn
+  - override /model: vst_flow
+  - override /conditioning: cepstrum_online
+  - override /callbacks: [default, log_per_param_mse]
+  - override /trainer: gpu_400k_steps
+  - _self_
+
+experiment_name: pyfdn
+run_name: flow-cepstrum-online
+tags: [pyfdn, flow, cepstrum-online]
+
+model:
+  compile: false
+  encoder:
+    frontend:
+      in_dim: 176_400
+
+callbacks:
+  model_checkpoint:
+    monitor: val/param_mse
+  early_stopping: null
+
+trainer:
+  val_check_interval: 2000
+  limit_val_batches: 20
+
+training:
+  val_audio_probe: true

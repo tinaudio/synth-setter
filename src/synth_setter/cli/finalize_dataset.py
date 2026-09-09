@@ -93,7 +93,7 @@ def _log_finalize_metrics(loggers: Sequence[Logger], metrics: Mapping[str, float
     """Log one finalization history row to W&B without making logging mandatory.
 
     No explicit step is passed because W&B auto-advances history for each
-    ``log`` call, including when finalize resumes the generation run.
+    ``log`` call, including when a re-run resumes the finalize run.
 
     :param loggers: Configured Lightning loggers; only ``WandbLogger`` entries receive metrics.
     :param metrics: Completed-progress values for one W&B history row.
@@ -351,44 +351,49 @@ def _log_dataset_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
             logger.warning(f"_log_dataset_artifact failed on {type(lg).__name__}: {exc}")
 
 
-def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
-    """Finalize the R2 prefix at ``cfg.dataset_root_uri``; idempotent on ``dataset.complete``.
+def finalize_loggers(cfg: DictConfig, spec: DatasetSpec) -> list[Logger]:
+    """Instantiate ``cfg.logger`` pinned to the run's dedicated finalize W&B run.
 
-    Loads R2 creds and the spec from ``input_spec.json`` under
-    ``cfg.dataset_root_uri``, delegates to
-    :func:`finalize_from_spec` for the marker-probe → dispatch → marker-upload
-    body, then logs live progress metrics and the canonical ``dataset``
-    artifact to any configured ``WandbLogger`` (resuming the data-generation
-    run pinned to ``spec.run_id`` so both land on the producer node of the
-    lineage DAG). The wandb run id is pinned and ``resume=allow`` is forced so
-    finalize attaches to the generation run rather than minting a new one;
-    both are no-ops when ``cfg`` carries no ``logger`` group (the wandb-free
-    default). On any failure the traceback and partial progress summary are
-    logged before the loggers close with status ``"failed"`` and the exception re-raises.
+    The run id is ``{spec.run_id}-finalize`` (``job_type=finalize``) so finalize
+    shows up as its own row next to the data-generation run rather than being
+    folded into it; ``resume=allow`` lets a re-run of an interrupted finalize
+    reattach to that same run.
 
-    :param cfg: Composed cfg with ``dataset_root_uri`` (the run-prefix dir
-        accepted by :func:`~synth_setter.pipeline.spec_io.load_spec_from_root`),
-        ``paths.output_dir`` (writable scratch dir; created if missing;
-        retained after the call), and an optional ``logger`` group instantiated
-        for W&B progress and artifact logging.
+    :param cfg: Composed cfg; ``logger.wandb.{id,job_type,resume}`` are updated in place.
+    :param spec: Validated dataset spec supplying ``run_id``.
+    :returns: Loggers list — empty when ``cfg.logger`` is omitted/null.
+    """
+    pin_wandb_run_id(cfg, f"{spec.run_id}-finalize", "finalize")
+    if OmegaConf.select(cfg, "logger.wandb") is not None:
+        OmegaConf.update(cfg, "logger.wandb.resume", "allow", force_add=True)
+    return instantiate_loggers(cfg.get("logger"))
+
+
+def finalize_tracked(cfg: DictConfig, spec: DatasetSpec, work_dir: Path) -> None:  # noqa: DOC503
+    """Run :func:`finalize_from_spec` inside its own W&B-tracked region.
+
+    Instantiates ``cfg.logger`` via :func:`finalize_loggers` (a no-op list when
+    the group is absent), streams live ``finalize/*`` progress rows and the
+    canonical ``data-{task_name}`` artifact to every ``WandbLogger``, and closes
+    the loggers with status ``"success"`` / ``"failed"`` in ``finally``. Any
+    failure — logger construction included — logs the sanitized traceback and
+    partial progress summary before the exception re-raises.
+
+    :param cfg: Composed cfg whose optional ``logger`` group is instantiated here.
+    :param spec: Validated dataset spec to finalize.
+    :param work_dir: Writable scratch dir forwarded to :func:`finalize_from_spec`.
     :raises ValueError: Propagated from :func:`finalize_from_spec` — a drifted
         ``spec.r2.prefix`` or an unsupported ``spec.output_format``.
     """
-    estimate_normalization_stats, configured_seed = _normalization_estimation_settings(cfg)
-    r2_io.ensure_r2_env_loaded()
-    spec = load_spec_from_root(cfg.dataset_root_uri)
-    pin_wandb_run_id(cfg, spec.run_id, "data-generation")
-    if OmegaConf.select(cfg, "logger.wandb") is not None:
-        OmegaConf.update(cfg, "logger.wandb.resume", "allow", force_add=True)
     loggers: list[Logger] = []
     status = "success"
     started_at: float | None = None
     log_summary: Callable[[float], None] | None = None
     try:
-        loggers = instantiate_loggers(cfg.get("logger"))
+        loggers = finalize_loggers(cfg, spec)
         started_at = perf_counter()
         report_progress, log_summary = _make_finalize_progress_logger(loggers, spec.num_shards)
-        work_dir = Path(cfg.paths.output_dir)
+        estimate_normalization_stats, configured_seed = _normalization_estimation_settings(cfg)
         if estimate_normalization_stats:
             finalize_from_spec(
                 spec,
@@ -403,15 +408,30 @@ def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
         _log_dataset_artifact(loggers, spec)
     except BaseException as error:
         status = "failed"
-        failed_elapsed_seconds = None
-        if log_summary is not None and started_at is not None:
-            failed_elapsed_seconds = perf_counter() - started_at
         _log_finalize_failure(error, spec)
-        if log_summary is not None and failed_elapsed_seconds is not None:
-            log_summary(failed_elapsed_seconds)
+        if log_summary is not None and started_at is not None:
+            log_summary(perf_counter() - started_at)
         raise
     finally:
         close_loggers(loggers, status)
+
+
+def finalize(cfg: DictConfig) -> None:
+    """Finalize the R2 prefix at ``cfg.dataset_root_uri``; idempotent on ``dataset.complete``.
+
+    Loads R2 creds and the spec from ``input_spec.json`` under
+    ``cfg.dataset_root_uri``, then delegates to :func:`finalize_tracked`.
+
+    :param cfg: Composed cfg with ``dataset_root_uri`` (the run-prefix dir
+        accepted by :func:`~synth_setter.pipeline.spec_io.load_spec_from_root`),
+        ``paths.output_dir`` (writable scratch dir; created if missing;
+        retained after the call), and an optional ``logger`` group instantiated
+        for W&B progress and artifact logging.
+    """
+    _normalization_estimation_settings(cfg)
+    r2_io.ensure_r2_env_loaded()
+    spec = load_spec_from_root(cfg.dataset_root_uri)
+    finalize_tracked(cfg, spec, Path(cfg.paths.output_dir))
 
 
 @hydra.main(

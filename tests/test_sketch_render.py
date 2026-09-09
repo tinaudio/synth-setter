@@ -576,7 +576,7 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
     monkeypatch.setattr(
         sketch_render,
         "compute_metrics_on_dir",
-        lambda *args: {"mss": 1.0, "wmfcc": 2.0, "sot": 3.0, "rms": 0.5},
+        lambda *args: {"mss": 1.0, "wmfcc": 2.0, "sot": 3.0, "rms": 0.5, "mldr": 0.7},
     )
 
     def invoke(seed: int, output: Path) -> Result:

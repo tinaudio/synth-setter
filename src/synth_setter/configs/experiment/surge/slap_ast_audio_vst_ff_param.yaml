@@ -2,14 +2,14 @@
 
 defaults:
   - /experiment/surge/base
-  - override /model: slap_ast_audio_mlp_param
+  - override /model: slap_ast_audio_vst_ff_param
   - override /datamodule: surge_lance
   - override /synth: surge_4
   - override /callbacks: default_slap
   - _self_
 
 experiment_name: surge-4-slap
-run_name: slap_ast_audio_mlp_param
+run_name: slap_ast_audio_vst_ff_param
 
 datamodule:
   conditioning: mel

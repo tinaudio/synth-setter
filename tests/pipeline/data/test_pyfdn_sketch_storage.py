@@ -365,7 +365,7 @@ def test_pyfdn_sketch_augmentation_round_trip_through_datamodule(
         AddEmbeddingsConfig(
             lance_uri=str(uri),
             embeddings=("pyfdn_sketch",),
-            batch_size=len(audio),
+            lance_batch_size=len(audio),
             build_index=False,
             num_workers=num_workers,
         )
@@ -457,7 +457,7 @@ def test_pyfdn_sketch_write_columns_preserves_rows_and_persists_identity(
     config = AddEmbeddingsConfig(
         lance_uri=str(uri),
         embeddings=("pyfdn_sketch",),
-        batch_size=2,
+        lance_batch_size=2,
         build_index=False,
     )
 

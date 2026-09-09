@@ -8,8 +8,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.param_spec import CategoricalParameter
 from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
+from synth_setter.data.vst.renderers import DawDreamerRenderer
+from synth_setter.resources import as_file, param_map
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _PLUGIN_PATH = _REPO_ROOT / "plugins" / "Ultramaster KR-106.vst3"
@@ -126,6 +129,56 @@ def test_ultramaster_kr106_preset_is_committed() -> None:
     """The registered baseline resolves to a captured plugin state."""
     preset = _REPO_ROOT / plugin_state_paths["ultramaster_kr106"]
     assert preset.is_file()
+
+
+def test_ultramaster_kr106_param_map_covers_full_spec_without_clap() -> None:
+    """The committed cross-host map covers every KR-106 control without CLAP provenance."""
+    with as_file(param_map("ultramaster_kr106")) as path:
+        joint_map = load_param_map(path)
+
+    assert set(joint_map.params) == set(_EXPECTED_SYNTH_PARAMS)
+    assert joint_map.clap is None
+    assert len(set(joint_map.dawdreamer_indices().values())) == len(_EXPECTED_SYNTH_PARAMS)
+    assert all(
+        identity.dawdreamer.name.casefold().replace(" ", "_") == name
+        for name, identity in joint_map.params.items()
+    )
+    assert all(
+        identity.dawdreamer.index < joint_map.dawdreamer.parameter_count
+        for identity in joint_map.params.values()
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+def test_ultramaster_kr106_dawdreamer_master_volume_controls_audio() -> None:
+    """The real mapped master-volume control changes valid DawDreamer audio."""
+    if platform.machine() != "x86_64":
+        pytest.skip("Ultramaster KR-106 is source-built only on x86_64")
+    assert _PLUGIN_PATH.is_dir(), f"Ultramaster KR-106 is not installed at {_PLUGIN_PATH}"
+
+    spec = param_specs["ultramaster_kr106"]
+    sampled_params, _ = spec.sample(np.random.default_rng(106))
+    synth_params = {**sampled_params, "master_volume": 1.0}
+    with as_file(param_map("ultramaster_kr106")) as path:
+        joint_map = load_param_map(path)
+    renderer = DawDreamerRenderer(
+        plugin_path=str(_PLUGIN_PATH),
+        sample_rate=44_100,
+        channels=2,
+        signal_duration_seconds=2.0,
+        plugin_state_path=str(_REPO_ROOT / plugin_state_paths["ultramaster_kr106"]),
+        parameter_map=joint_map,
+        reload_plugin_each_render=True,
+    )
+
+    audio = renderer.render(synth_params, 60, 100, (0.1, 1.5))
+    muted = renderer.render({**synth_params, "master_volume": 0.0}, 60, 100, (0.1, 1.5))
+
+    assert audio.shape == (2, 88_200)
+    assert np.isfinite(audio).all()
+    assert np.max(np.abs(audio)) > 1e-4
+    assert np.max(np.abs(muted)) == 0.0
 
 
 @pytest.mark.slow
