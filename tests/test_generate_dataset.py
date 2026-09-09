@@ -62,6 +62,7 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
     dataset_field_shapes,
 )
+from synth_setter.evaluation.oracle_probe import OracleProbeProvenance
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt, split_for_shard
@@ -2069,6 +2070,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
     prefix_root = (
         f"test-runs/test_oracle_eval_inline_writes_bounded_audio_metrics/{uuid.uuid4().hex[:12]}"
     )
+    run_id = f"oracle-probe-test-{uuid.uuid4().hex}"
     run_dir = tmp_path / "hydra_run"
     worktree_src = Path(__file__).resolve().parents[1] / "src"
     # Prepend this worktree's src so the subprocess imports the same
@@ -2086,7 +2088,9 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
                 "-m",
                 "synth_setter.cli.generate_dataset",
                 "experiment=generate_dataset/smoke-shard-with-oracle-eval",
+                "oracle_eval.upload=true",
                 f"r2.prefix_root={prefix_root}",
+                f"run_id={run_id}",
                 f"hydra.run.dir={run_dir}",
             ],
             env=env,
@@ -2100,7 +2104,6 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             f"--- STDOUT (tail) ---\n{result.stdout[-2000:]}\n"
             f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
         )
-
         eval_configs = list(run_dir.glob("oracle_eval/*/*/.hydra/config.yaml"))
         assert len(eval_configs) == 3
         for config_path in eval_configs:
@@ -2144,7 +2147,43 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             assert metrics[f"{metric_prefix}audio/sot_mean"] < bounds.sot_max, (split, metrics)
             assert metrics[f"{metric_prefix}audio/rms_mean"] > bounds.rms_min, (split, metrics)
             assert metrics[f"{metric_prefix}audio/mldr_mean"] < bounds.mldr_max, (split, metrics)
+
+        eval_run_ids = {path.parents[1].name for path in eval_configs}
+        assert len(eval_run_ids) == 1
+        eval_run_id = eval_run_ids.pop()
+        assert eval_run_id == run_id
+        probe_run_uri = (
+            f"r2://{cfg_dataset.r2.bucket}/probes/dataset-oracle/smoke-shard/{eval_run_id}/"
+        )
+        entries = r2_io.list_entries(probe_run_uri, recursive=True)
+        uploaded_paths = [entry.path for entry in entries]
+        launch_ids = {path.split("/", 1)[0] for path in uploaded_paths}
+        assert len(launch_ids) == 1
+        launch_id = launch_ids.pop()
+        assert not any("predictions/" in path for path in uploaded_paths)
+        assert not any(path.endswith(".log") or "/wandb/" in path for path in uploaded_paths)
+        for split in ("train", "val", "test"):
+            split_prefix = f"{launch_id}/{split}/"
+            assert f"{split_prefix}.hydra/config.yaml" in uploaded_paths
+            assert f"{split_prefix}metrics/metrics.json" in uploaded_paths
+            assert any(path.startswith(f"{split_prefix}audio/") for path in uploaded_paths)
+
+            provenance_path = tmp_path / f"{split}-provenance.json"
+            r2_io.download_to_path(
+                f"{probe_run_uri}{split_prefix}provenance.json", provenance_path
+            )
+            provenance = OracleProbeProvenance.model_validate_json(provenance_path.read_text())
+            assert provenance.source_dataset_uri.endswith(f"/{split}.lance")
+            assert provenance.source_split == split
+            assert provenance.source_run_id == eval_run_id
+            assert provenance.source_render == provenance.candidate_render
     finally:
+        eval_run_ids = {path.name for path in run_dir.glob("oracle_eval/*/*") if path.is_dir()}
+        for eval_run_id in eval_run_ids:
+            r2_io.purge_prefix(
+                cfg_dataset.r2.bucket,
+                f"probes/dataset-oracle/smoke-shard/{eval_run_id}/",
+            )
         r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{prefix_root}/")
 
 
