@@ -271,6 +271,26 @@ def test_pyfdn_cepstrum_online_experiment_sizes_ast_to_quefrency_grid() -> None:
             ],
             id="pitchshift",
         ),
+        pytest.param(
+            "train.yaml",
+            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_fixed_delays"],
+            id="gotz_fixed_delays",
+        ),
+        pytest.param(
+            "train.yaml",
+            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_learned_delays"],
+            id="gotz_learned_delays",
+        ),
+        pytest.param(
+            "train.yaml",
+            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_fixed_delays_givens"],
+            id="gotz_fixed_delays_givens",
+        ),
+        pytest.param(
+            "train.yaml",
+            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_learned_delays_givens"],
+            id="gotz_learned_delays_givens",
+        ),
     ],
 )
 def test_pyfdn_flow_composition_enables_per_param_metrics(
@@ -284,6 +304,25 @@ def test_pyfdn_flow_composition_enables_per_param_metrics(
     cfg = _compose(config_name, overrides)
 
     assert cfg.callbacks.log_per_param_mse.param_spec == cfg.synth.param_spec_name
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        "pyfdn_gotz_n8_mono_fixed_delays_givens",
+        "pyfdn_gotz_n8_mono_learned_delays_givens",
+    ],
+)
+def test_pyfdn_gotz_givens_hydra_selector_owns_codec_identity(identity: str) -> None:
+    """Each Givens selector propagates its incompatible codec identity through Hydra.
+
+    :param identity: Fixed- or learned-delay Givens synth identity.
+    """
+    cfg = _compose("train.yaml", ["experiment=pyfdn/flow", f"synth={identity}"])
+
+    assert cfg.synth.param_spec_name == identity
+    assert cfg.datamodule.param_spec_name == identity
+    assert cfg.model.param_spec == identity
 
 
 def test_pyfdn_pitchshift_hydra_identity_dispatches_matching_renderer() -> None:
