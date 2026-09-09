@@ -419,7 +419,7 @@ fi
 # NIT and LOW CONFIDENCE stay outside the alternation. `|| true`: no-match is 1.
 if [[ "$REVIEW_COMMENT_GATE" != "off" ]]; then
   comment_findings=$(grep -E \
-    '^- (\*\*L[0-9]+\*\* — )?\*\*\[comment-hygiene:(warn|block)\]\*\*' \
+    '^- (\*\*L[0-9]+\*\* — )?\*\*\[comment-hygiene:(warn|block)\]( \[low confidence\])?\*\*' \
     "$REVIEW_PATH" || true)
   comment_count=$(printf '%s' "$comment_findings" | grep -c . || true)
   if [[ "$comment_count" -gt 0 ]]; then
