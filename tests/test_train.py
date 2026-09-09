@@ -26,11 +26,14 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+import wandb
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
+from hydra.utils import instantiate
 from lightning.pytorch import Trainer
 from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationKeyError
+from PIL import Image
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
@@ -44,7 +47,11 @@ from synth_setter.models.components.pretrained_encoder import (
 )
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
-from synth_setter.models.components.transformer import ApproxEquivTransformer
+from synth_setter.models.components.transformer import (
+    ApproxEquivTransformer,
+    GroupedParameterProjection,
+    LearntProjection,
+)
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
@@ -83,12 +90,17 @@ from tests.helpers.eval_fakes import (
     fake_postprocessing_subprocess,
 )
 from tests.helpers.generic_launcher import run_generic_launcher_command
+from tests.helpers.grouped_projection_training import (
+    GROUPED_PROJECTION_SEED,
+    build_grouped_projection_config,
+)
 from tests.helpers.noise_capture import NoiseCaptureCallback
 from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _RecordingWandbLogger
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
+from tests.helpers.wandb_offline import read_history_rows
 
-NUM_AUDIO_METRICS = 5
+NUM_STEREO_AUDIO_METRICS = 6
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
@@ -177,6 +189,39 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     train(cfg_train)
 
 
+def test_train_grouped_projection_writes_strictly_loadable_checkpoint(tmp_path: Path) -> None:
+    """Train the grouped Hydra selection through the real flow and Lance entrypoint.
+
+    :param tmp_path: Isolated dataset, checkpoint, and log root.
+    """
+    cfg = build_grouped_projection_config(tmp_path, config_name="train.yaml")
+    HydraConfig().set_config(cfg)
+
+    metric_dict, object_dict = train(cfg)
+
+    projection = object_dict["model"].vector_field.projection
+    assert isinstance(projection, GroupedParameterProjection)
+    assert projection.num_tokens == sum(1 for _ in param_specs["surge_4"].encoded_slices())
+    assert object_dict["trainer"].global_step == 1
+    assert torch.isfinite(metric_dict["train/loss"])
+    checkpoint = tmp_path / "checkpoints" / "last.ckpt"
+    assert checkpoint.is_file()
+
+    restored = instantiate(cfg.model)
+    checkpoint_state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    restored.load_state_dict(checkpoint_state["state_dict"], strict=True)
+    trained = object_dict["model"].cpu().eval()
+    restored.eval()
+    generator = torch.Generator().manual_seed(GROUPED_PROJECTION_SEED)
+    params = torch.randn(2, param_specs["surge_4"].encoded_width, generator=generator)
+    time = torch.rand(2, 1, generator=generator)
+    conditioning = torch.randn(2, 16, generator=generator)
+    with torch.no_grad():
+        trained_output = trained.vector_field(params, time, conditioning)
+        restored_output = restored.vector_field(params, time, conditioning)
+    torch.testing.assert_close(restored_output, trained_output, atol=0.0, rtol=0.0)
+
+
 @pytest.mark.slow
 def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
     cfg_pyfdn_train: DictConfig,
@@ -229,6 +274,11 @@ def test_train_pyfdn_derived_feedback_one_step_predicts_widened_row(
     assert objects["trainer"].global_step == 1
     assert torch.isfinite(metrics[f"train/per_param_flow_mse/{control}"])
     assert torch.isfinite(metrics[f"val/per_param_mse_spec_quantized/{control}"])
+    assert 0.0 <= metrics[f"val/per_param_abs_cosine_distance/{control}"].item() <= 1.0
+    assert 0.0 <= metrics["val/per_param_abs_cosine_distance/delays"].item() <= 1.0
+    assert torch.isfinite(metrics[f"val/per_param_mse/{control}"])
+    assert torch.isfinite(metrics[f"val/per_param_mse_best_swap/{control}"])
+    assert torch.isfinite(metrics[f"val/per_param_mse_number_group_swap/{control}"])
 
 
 @pytest.mark.slow
@@ -1161,6 +1211,83 @@ def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) 
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+@pytest.mark.parametrize("accelerator", ["cpu"], indirect=True)
+@pytest.mark.parametrize("param_spec_name", ["surge_4"], indirect=True)
+@pytest.mark.parametrize("experiment_name", ["surge/flow_simple"], indirect=True)
+@pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)
+def test_train_flow_persists_projection_images_to_wandb(
+    cfg_surge_real_train: DictConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real flow fit persists both projection plots as decodable W&B media.
+
+    :param cfg_surge_real_train: One-step flow config over a real Surge XT render.
+    :param tmp_path: Isolated W&B run and media directory.
+    :param monkeypatch: Pins W&B to hermetic offline storage.
+    """
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    with open_dict(cfg_surge_real_train):
+        cfg_surge_real_train.model.compile = False
+        cfg_surge_real_train.model.vector_field.d_model = 32
+        cfg_surge_real_train.model.vector_field.d_ff = 32
+        cfg_surge_real_train.model.vector_field.num_layers = 1
+        cfg_surge_real_train.model.vector_field.projection.num_tokens = 8
+        cfg_surge_real_train.trainer.fast_dev_run = False
+        cfg_surge_real_train.trainer.limit_val_batches = 0
+        cfg_surge_real_train.trainer.enable_checkpointing = False
+        cfg_surge_real_train.callbacks = {
+            "plot_proj_ii": {
+                "_target_": "synth_setter.utils.callbacks.PlotLearntProjection",
+                "after_val": False,
+                "every_n_steps": 1,
+            }
+        }
+        cfg_surge_real_train.logger = {
+            "wandb": {
+                "_target_": "lightning.pytorch.loggers.wandb.WandbLogger",
+                "offline": True,
+                "save_dir": str(tmp_path),
+                "project": "plot-learnt-projection-test",
+                "id": "plot-learnt-projection",
+            }
+        }
+
+    HydraConfig().set_config(cfg_surge_real_train)
+    _, object_dict = train(cfg_surge_real_train)
+    wandb.finish()
+
+    model = object_dict["model"]
+    assert isinstance(model, VSTFlowMatchingModule)
+    assert isinstance(model.vector_field.projection, LearntProjection)
+    run_dir = next((tmp_path / "wandb").glob("offline-run-*-plot-learnt-projection"))
+    wandb_binary = next(run_dir.glob("run-*.wandb"))
+    rows = read_history_rows(
+        wandb_binary,
+        until=lambda history: all(
+            any(f"{key}/filenames" in row for row in history) for key in ("assignment", "value")
+        ),
+    )
+    for key in ("assignment", "value"):
+        row = next(row for row in rows if f"{key}/filenames" in row)
+        assert json.loads(row[f"{key}/_type"]) == "images/separated"
+        filename = json.loads(row[f"{key}/filenames"])[0]
+        with Image.open(run_dir / "files" / filename) as image:
+            image.load()
+            assert image.format == "PNG"
+            assert image.width == json.loads(row[f"{key}/width"])
+            assert image.height == json.loads(row[f"{key}/height"])
+            assert image.width > 0
+            assert image.height > 0
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
 @pytest.mark.parametrize("experiment_name", _SURGE_SMOKE_EXPERIMENTS, indirect=True)
 @pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)
 def test_train_surge_xt(cfg_surge_real_train: DictConfig, experiment_name: str) -> None:
@@ -1244,12 +1371,12 @@ def test_train_eval_surge_xt(
 
     METRICS_FILE_EXPECTATIONS = {
         "aggregated_metrics.csv": {
-            "rows": NUM_AUDIO_METRICS,
+            "rows": NUM_STEREO_AUDIO_METRICS,
             "columns": {"mean", "std"},
         },
         "metrics.csv": {
             "rows": NUM_FIXTURE_SAMPLES,
-            "columns": {"mss", "wmfcc", "sot", "rms", "mldr"},
+            "columns": {"mss", "wmfcc", "sot", "rms", "mldr", "mldr_mid_side"},
         },
     }
 
@@ -1757,7 +1884,7 @@ def test_train_eval_surge_fake_writes_audio_and_metrics_outputs(
 
     metrics_dir = tmp_path / "metrics"
     for metrics_file, expected_rows in {
-        "aggregated_metrics.csv": NUM_AUDIO_METRICS,
+        "aggregated_metrics.csv": NUM_STEREO_AUDIO_METRICS,
         "metrics.csv": NUM_FIXTURE_SAMPLES,
     }.items():
         assert (metrics_dir / metrics_file).is_file(), f"{metrics_file} not found"

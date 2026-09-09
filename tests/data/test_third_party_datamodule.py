@@ -91,6 +91,9 @@ def _datamodule(
     amplitude_scale: float = 1.0,
     dataset_version: int = 1,
     row_limit: int | None = None,
+    row_filter: str | None = None,
+    downmix: bool = False,
+    peak_normalize: bool = False,
     num_workers: int = 0,
     use_saved_mean_and_variance: bool = False,
     mel_stats_uri: str | None = None,
@@ -106,6 +109,9 @@ def _datamodule(
     :param amplitude_scale: Gain applied to decoded audio.
     :param dataset_version: Immutable Lance snapshot to serve.
     :param row_limit: Cap on served rows, or ``None`` for the whole corpus.
+    :param row_filter: Optional Lance SQL predicate selecting the served rows.
+    :param downmix: Whether multichannel sources are averaged before channel mapping.
+    :param peak_normalize: Whether each clip is rescaled to unit peak before length-pinning.
     :param num_workers: Dataloader worker processes.
     :param use_saved_mean_and_variance: Whether mel is standardized.
     :param mel_stats_uri: Statistics source when standardization is on.
@@ -124,6 +130,9 @@ def _datamodule(
         audio_column=audio_column,
         amplitude_scale=amplitude_scale,
         row_limit=row_limit,
+        row_filter=row_filter,
+        downmix=downmix,
+        peak_normalize=peak_normalize,
         num_workers=num_workers,
         use_saved_mean_and_variance=use_saved_mean_and_variance,
         mel_stats_uri=mel_stats_uri,
@@ -376,6 +385,259 @@ def test_row_limit_caps_served_rows(tmp_path: Path) -> None:
     datamodule.setup("predict")
 
     assert sum(len(batch["audio"]) for batch in datamodule.predict_dataloader()) == 3
+
+
+def _write_rir_corpus(path: Path, clips: Sequence[np.ndarray]) -> None:
+    """Write a corpus in the RIR publication shape: mixed media with a decodable flag.
+
+    Odd rows are marked as non-audio containers, mirroring SOFA/MAT/PDF objects
+    stored next to WAV impulse responses.
+
+    :param path: Destination Lance dataset.
+    :param clips: One clip per row.
+    """
+    write_blob_audio_corpus(
+        path,
+        clips,
+        sample_rate=_SOURCE_SAMPLE_RATE,
+        audio_column="source_bytes",
+        extra_columns={
+            "source_path": pa.array(
+                [f"IRs/{'stereo' if i % 2 == 0 else 'docs'}/row-{i}" for i in range(len(clips))]
+            ),
+            "audio_decodable": pa.array([i % 2 == 0 for i in range(len(clips))]),
+        },
+    )
+
+
+def test_row_filter_serves_only_matching_rows_in_stored_order(tmp_path: Path) -> None:
+    """A Lance predicate selects the served rows without rewriting the corpus.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    clips = [_tone(_DURATION_SECONDS, seed=i) for i in range(6)]
+    _write_rir_corpus(tmp_path / "corpus.lance", clips)
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        audio_column="source_bytes",
+        row_filter="audio_decodable = true AND source_path LIKE 'IRs/stereo/%'",
+    )
+    datamodule.setup("predict")
+    served = torch.cat([batch["audio"] for batch in datamodule.predict_dataloader()])
+
+    unfiltered = _datamodule(tmp_path / "corpus.lance", audio_column="source_bytes")
+    unfiltered.setup("predict")
+    stored = torch.cat([batch["audio"] for batch in unfiltered.predict_dataloader()])
+    assert len(served) == 3
+    assert torch.equal(served, stored[[0, 2, 4]])
+
+
+def test_row_filter_combined_with_row_limit_caps_matching_rows(tmp_path: Path) -> None:
+    """The row limit bounds the filtered selection, not the raw corpus.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_rir_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=i) for i in range(6)])
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        audio_column="source_bytes",
+        row_filter="audio_decodable = true",
+        row_limit=2,
+    )
+    datamodule.setup("predict")
+
+    assert sum(len(batch["audio"]) for batch in datamodule.predict_dataloader()) == 2
+
+
+def test_row_filter_matching_no_rows_raises(tmp_path: Path) -> None:
+    """An empty selection fails at setup instead of writing an empty sweep.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_rir_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=i) for i in range(2)])
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        audio_column="source_bytes",
+        row_filter="source_path LIKE 'nowhere/%'",
+    )
+    with pytest.raises(ValueError, match="row_filter"):
+        datamodule.setup("predict")
+
+
+@pytest.mark.parametrize("row_filter", ["", "   ", 7])
+def test_non_string_or_blank_row_filter_raises(tmp_path: Path, row_filter: object) -> None:
+    """A blank or non-string predicate is a config typo, not a whole-corpus sweep.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param row_filter: Rejected predicate value.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS)])
+
+    with pytest.raises(ValueError, match="row_filter"):
+        _datamodule(tmp_path / "corpus.lance", row_filter=row_filter)  # type: ignore[arg-type]
+
+
+def _stereo_wav_bytes(left: np.ndarray, right: np.ndarray) -> bytes:
+    """Encode one two-channel clip as WAV bytes.
+
+    :param left: ``(frames,)`` left-channel samples.
+    :param right: ``(frames,)`` right-channel samples.
+    :returns: WAV container bytes.
+    """
+    buffer = io.BytesIO()
+    with AudioFile(
+        buffer, "w", format="wav", samplerate=_SOURCE_SAMPLE_RATE, num_channels=2
+    ) as handle:
+        handle.write(np.stack([left, right]).astype(np.float32))
+    return buffer.getvalue()
+
+
+def test_decode_clip_downmix_averages_channels_onto_a_mono_contract() -> None:
+    """Opposite-phase stereo averages to silence, proving a mean rather than a channel pick."""
+    clip = _tone(_DURATION_SECONDS)
+
+    audio = decode_clip(
+        _stereo_wav_bytes(clip, -clip),
+        sample_rate=_TARGET_SAMPLE_RATE,
+        channels=1,
+        num_samples=_TARGET_SAMPLES,
+        amplitude_scale=1.0,
+        downmix=True,
+    )
+
+    assert audio.shape == (1, _TARGET_SAMPLES)
+    assert np.abs(audio).max() < 1e-4  # PCM16 quantization of the two channels
+
+
+def test_decode_clip_downmix_of_identical_channels_matches_mono_decode() -> None:
+    """A dual-mono source decodes exactly as its mono equivalent after downmixing."""
+    clip = _tone(_DURATION_SECONDS)
+    common = {
+        "sample_rate": _TARGET_SAMPLE_RATE,
+        "channels": 1,
+        "num_samples": _TARGET_SAMPLES,
+        "amplitude_scale": 1.0,
+    }
+
+    stereo = decode_clip(_stereo_wav_bytes(clip, clip), downmix=True, **common)
+    mono = decode_clip(wav_bytes(clip, _SOURCE_SAMPLE_RATE), **common)
+
+    assert np.allclose(stereo, mono, atol=1e-6)
+
+
+def _float_wav_bytes(clip: np.ndarray) -> bytes:
+    """Encode one mono clip as a 32-bit float WAV, which can carry samples beyond ±1.
+
+    :param clip: ``(frames,)`` float32 samples.
+    :returns: WAV container bytes.
+    """
+    buffer = io.BytesIO()
+    sf.write(buffer, clip.astype(np.float32), _SOURCE_SAMPLE_RATE, format="WAV", subtype="FLOAT")
+    return buffer.getvalue()
+
+
+_DECODE_CONTRACT = {
+    "sample_rate": _SOURCE_SAMPLE_RATE,
+    "channels": 1,
+    "num_samples": int(_DURATION_SECONDS * _SOURCE_SAMPLE_RATE),
+    "amplitude_scale": 1.0,
+}
+
+
+def test_decode_clip_peak_normalize_brings_a_hot_float_source_to_unit_peak() -> None:
+    """An unnormalized float impulse response peaking above 1 is served at unit peak."""
+    clip = _tone(_DURATION_SECONDS) * 4.0
+
+    audio = decode_clip(_float_wav_bytes(clip), peak_normalize=True, **_DECODE_CONTRACT)
+
+    assert np.isclose(np.abs(audio).max(), 1.0)
+    assert np.allclose(audio[0], clip / np.abs(clip).max(), atol=1e-6)
+
+
+def test_decode_clip_peak_normalize_raises_a_quiet_source_to_unit_peak() -> None:
+    """Peak normalization scales up as well as down, so corpus level is irrelevant."""
+    clip = _tone(_DURATION_SECONDS) * 0.1
+
+    audio = decode_clip(_float_wav_bytes(clip), peak_normalize=True, **_DECODE_CONTRACT)
+
+    assert np.isclose(np.abs(audio).max(), 1.0)
+
+
+def test_decode_clip_peak_normalize_leaves_silence_silent() -> None:
+    """An all-zero clip has no peak to scale by and must not become NaN."""
+    clip = np.zeros(int(_DURATION_SECONDS * _SOURCE_SAMPLE_RATE), dtype=np.float32)
+
+    audio = decode_clip(_float_wav_bytes(clip), peak_normalize=True, **_DECODE_CONTRACT)
+
+    assert np.all(audio == 0.0)
+
+
+def test_decode_clip_without_peak_normalize_rejects_a_hot_float_source() -> None:
+    """The existing storage-range guard still stands when normalization is off."""
+    clip = _tone(_DURATION_SECONDS) * 4.0
+
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        decode_clip(_float_wav_bytes(clip), **_DECODE_CONTRACT)
+
+
+def test_predict_dataloader_workers_are_spawned_not_forked(tmp_path: Path) -> None:
+    """Workers start fresh processes: a forked child inherits Lance's native runtime and hangs.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS)])
+    datamodule = _datamodule(tmp_path / "corpus.lance", num_workers=1)
+    datamodule.setup("predict")
+
+    loader = datamodule.predict_dataloader()
+
+    assert loader.multiprocessing_context.get_start_method() == "spawn"
+    assert sum(len(batch["audio"]) for batch in loader) == 1
+
+
+@pytest.mark.parametrize("switch", ["downmix", "peak_normalize"])
+@pytest.mark.parametrize("value", ["false", 0, None])
+def test_non_boolean_decode_switch_raises(tmp_path: Path, switch: str, value: object) -> None:
+    """A quoted or numeric switch value is a config typo that must not enable the switch.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param switch: Decode switch under test.
+    :param value: Rejected non-boolean value.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS)])
+
+    with pytest.raises(ValueError, match=switch):
+        _datamodule(tmp_path / "corpus.lance", **{switch: value})  # type: ignore[arg-type]
+
+
+def test_row_filter_starts_with_excludes_underscore_wildcard_decoys(tmp_path: Path) -> None:
+    """A literal-prefix predicate keeps `Omni_ir_*` and drops `OmniAir_*`, which LIKE would match.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    clips = [_tone(_DURATION_SECONDS, seed=i) for i in range(3)]
+    write_blob_audio_corpus(
+        tmp_path / "corpus.lance",
+        clips,
+        sample_rate=_SOURCE_SAMPLE_RATE,
+        audio_column="source_bytes",
+        extra_columns={
+            "source_path": pa.array(["Omni_ir_a.wav", "OmniAir_b.wav", "Omni_ir_c.wav"]),
+            "audio_decodable": pa.array([True, True, True]),
+        },
+    )
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        audio_column="source_bytes",
+        row_filter="starts_with(source_path, 'Omni_ir_')",
+    )
+    datamodule.setup("predict")
+
+    assert sum(len(batch["audio"]) for batch in datamodule.predict_dataloader()) == 2
 
 
 def test_multichannel_source_disagreeing_with_contract_raises() -> None:

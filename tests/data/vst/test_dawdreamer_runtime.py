@@ -127,3 +127,27 @@ def test_dawdreamer_backend_missing_package_raises_actionable_error(
 
     with pytest.raises(RuntimeError, match=r"DawDreamer.*uv sync.*worker"):
         ensure_dawdreamer_runtime("dawdreamer")
+
+
+def test_settle_dawdreamer_preset_honours_explicit_block_count() -> None:
+    """An explicit ``blocks`` count replaces the default."""
+
+    class Engine:
+        """Record the durations processed by the settlement contract."""
+
+        def __init__(self) -> None:
+            """Create an engine with no processed callbacks."""
+            self.durations: list[float] = []
+
+        def render(self, duration: float) -> None:
+            """Record one processed callback duration.
+
+            :param duration: Processing duration in seconds.
+            """
+            self.durations.append(duration)
+
+    engine = Engine()
+
+    settle_dawdreamer_preset(engine, sample_rate=44_100, block_size=2_048, blocks=3)
+
+    assert engine.durations == [pytest.approx(2_048 / 44_100)] * 3

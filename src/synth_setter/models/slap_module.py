@@ -17,20 +17,22 @@ from typing import Literal, cast
 
 import torch
 from beartype import beartype
-from jaxtyping import Float, jaxtyped
+from jaxtyping import Float, Int64, jaxtyped
 from lightning.pytorch import LightningModule
 from lightning.pytorch.core.optimizer import LightningOptimizer
 from torch import Tensor, nn
 from torch.amp.grad_scaler import GradScaler
 from torch.optim import Optimizer
 
+from synth_setter.evaluation.paired_retrieval import RetrievalBatches, gathered_retrieval_metrics
 from synth_setter.models.components.slap import BYOLLoss, SiameseArm
 from synth_setter.models.components.slap_ema import MovingAverageWeightUpdate
 
 OptimizerFactory = Callable[..., torch.optim.Optimizer]
 SchedulerFactory = Callable[..., torch.optim.lr_scheduler.LRScheduler]
+_BATCH_ROWS = "batch"
 type BatchTensor = Float[Tensor, "batch ..."]
-type ModelBatch = Mapping[str, BatchTensor | None]
+type ModelBatch = Mapping[str, BatchTensor | Int64[Tensor, _BATCH_ROWS] | None]
 type ScalarTensor = Float[Tensor, ""]
 
 
@@ -71,6 +73,7 @@ class SLAPModule(LightningModule):
         scheduler: SchedulerFactory | None = None,
         ma_callback: MovingAverageWeightUpdate | None = None,
         compile: bool | str = False,
+        retrieval_eval: bool = False,
     ) -> None:
         """Build online and moving-average modality arms.
 
@@ -83,6 +86,7 @@ class SLAPModule(LightningModule):
         :param scheduler: Optional partially configured scheduler factory.
         :param ma_callback: Target-weight update policy.
         :param compile: Whether and how to compile both online and target arms.
+        :param retrieval_eval: Score full held-out galleries; requires int64 ``sample_id`` batches.
         :raises ValueError: If arm names are ambiguous or required dependencies are absent.
         """
         super().__init__()
@@ -113,6 +117,8 @@ class SLAPModule(LightningModule):
         self.param_encoder = param_encoder
         self.audio_input_key: Literal["audio", "mel"] = audio_input_key
         self.loss_fn = loss_fn
+        self.retrieval_eval = retrieval_eval
+        self._retrieval_batches: RetrievalBatches = {}
         self.optimizer_factory = optimizer
         self.scheduler_factory = scheduler
         self.ma_callback = ma_callback or MovingAverageWeightUpdate()
@@ -204,12 +210,15 @@ class SLAPModule(LightningModule):
             state_dict["_ema_optimizer_steps"] = torch.tensor(completed_steps, dtype=torch.long)
 
     @jaxtyped(typechecker=beartype)
-    def _losses(self, batch: ModelBatch) -> dict[str, ScalarTensor]:
+    def _losses(
+        self, batch: ModelBatch, dataloader_idx: int | None = None
+    ) -> dict[str, ScalarTensor]:
         """Compute online predictions against moving-average projections.
 
         :param batch: Collated model batch carrying paired modalities.
+        :param dataloader_idx: Evaluation loader receiving predictions, or ``None`` for training.
         :returns: Scalar reference loss terms.
-        :raises ValueError: If either arm omits its required projector or predictor.
+        :raises ValueError: If arms omit required outputs or evaluation IDs are missing/invalid.
         """
         audio, params = _paired_inputs(batch, self.audio_input_key)
         _, _, audio_prediction = self.audio_encoder(audio)
@@ -224,6 +233,13 @@ class SLAPModule(LightningModule):
         qa, qt, za_ema, zt_ema = cast(
             tuple[BatchTensor, BatchTensor, BatchTensor, BatchTensor], values
         )
+        if self.retrieval_eval and dataloader_idx is not None:
+            ids = batch.get("sample_id")
+            if ids is None or ids.dtype != torch.int64 or ids.shape != (len(qa),):
+                raise ValueError("retrieval evaluation requires one int64 sample_id per row")
+            self._retrieval_batches.setdefault(dataloader_idx, []).append(
+                (qa.detach().cpu(), qt.detach().cpu(), ids.detach().cpu())
+            )
         return self.loss_fn(qa, qt, za_ema, zt_ema)
 
     @jaxtyped(typechecker=beartype)
@@ -240,14 +256,15 @@ class SLAPModule(LightningModule):
         return losses["total_loss"]
 
     @jaxtyped(typechecker=beartype)
-    def validation_step(self, batch: ModelBatch, batch_idx: int) -> None:
+    def validation_step(self, batch: ModelBatch, batch_idx: int, dataloader_idx: int = 0) -> None:
         """Log validation losses for checkpoint selection.
 
         :param batch: Collated paired-modality validation batch.
         :param batch_idx: Unused zero-based batch position.
+        :param dataloader_idx: Loader namespace for split-local source identities.
         """
         del batch_idx
-        losses = self._losses(batch)
+        losses = self._losses(batch, dataloader_idx)
         self.log_dict(
             {f"loss/val/{name}": value for name, value in losses.items()},
             on_step=False,
@@ -256,20 +273,74 @@ class SLAPModule(LightningModule):
         )
 
     @jaxtyped(typechecker=beartype)
-    def test_step(self, batch: ModelBatch, batch_idx: int) -> None:
+    def test_step(self, batch: ModelBatch, batch_idx: int, dataloader_idx: int = 0) -> None:
         """Log checkpoint-reloaded test losses.
 
         :param batch: Collated paired-modality test batch.
         :param batch_idx: Unused zero-based batch position.
+        :param dataloader_idx: Loader namespace for split-local source identities.
         """
         del batch_idx
-        losses = self._losses(batch)
+        losses = self._losses(batch, dataloader_idx)
         self.log_dict(
             {f"loss/test/{name}": value for name, value in losses.items()},
             on_step=False,
             on_epoch=True,
             sync_dist=True,
         )
+
+    @jaxtyped(typechecker=beartype)
+    def on_validation_epoch_start(self) -> None:
+        """Discard prior validation and sanity-check observations."""
+        self._retrieval_batches.clear()
+
+    @jaxtyped(typechecker=beartype)
+    def on_test_epoch_start(self) -> None:
+        """Discard observations from any previous evaluation run."""
+        self._retrieval_batches.clear()
+
+    @jaxtyped(typechecker=beartype)
+    def _log_retrieval(self, stage: Literal["val", "test"]) -> None:
+        """Log rank-global metrics without averaging rank-local retrieval scores.
+
+        :param stage: Logging namespace for the completed evaluation loop.
+        """
+        if not self.retrieval_eval:
+            return
+        try:
+            if stage == "val" and self.trainer.sanity_checking:
+                return
+            for index, metrics in gathered_retrieval_metrics(self._retrieval_batches).items():
+                loaders = (
+                    self.trainer.val_dataloaders
+                    if stage == "val"
+                    else self.trainer.test_dataloaders
+                )
+                suffix = (
+                    f"/dataloader_idx_{index}"
+                    if isinstance(loaders, (list, tuple)) and len(loaders) > 1
+                    else ""
+                )
+                self.log_dict(
+                    {
+                        f"retrieval/{stage}/{name}{suffix}": value
+                        for name, value in metrics.items()
+                    },
+                    sync_dist=False,
+                    add_dataloader_idx=False,
+                )
+        finally:
+            self._retrieval_batches.clear()
+
+    @jaxtyped(typechecker=beartype)
+    def on_validation_epoch_end(self) -> None:
+        """Score the full validation gallery, excluding partial sanity checks."""
+        self._log_retrieval("val")
+
+    @jaxtyped(typechecker=beartype)
+    def on_test_epoch_end(self) -> None:
+        """Score the full checkpoint-reloaded test gallery."""
+        self._log_retrieval("test")
 
     @jaxtyped(typechecker=beartype)
     def optimizer_step(

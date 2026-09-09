@@ -68,6 +68,7 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
             plugin_state_path=render_config.plugin_state_path,
             parameter_map=joint_map,
             reload_plugin_each_render=render_config.plugin_reload_cadence == "render",
+            flush_blocks=render_config.flush_blocks,
         )
     if backend == "surgepy":
         from synth_setter.data.vst.param_map import load_param_map
@@ -107,5 +108,6 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
             signal_duration_seconds=render_config.signal_duration_seconds,
             plugin_state_path=render_config.plugin_state_path,
             plugin=plugin,
+            flush_blocks=render_config.flush_blocks,
         )
     assert_never(backend)

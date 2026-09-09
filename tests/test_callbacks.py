@@ -11,11 +11,13 @@ real.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock
 
+import matplotlib.pyplot as plt
 import pytest
 import torch
 from lightning.pytorch import LightningModule, Trainer
@@ -24,7 +26,14 @@ from matplotlib.figure import Figure
 from torchsynth.signal import Signal
 
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.utils.callbacks import LogPerParamMSE, PredictionWriter, _log_figure
+from synth_setter.models.components.transformer import GroupedParameterProjection, LearntProjection
+from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.utils.callbacks import (
+    LogPerParamMSE,
+    PlotLearntProjection,
+    PredictionWriter,
+    _log_figure,
+)
 
 
 class _RecordingWandbLogger(WandbLogger):
@@ -61,6 +70,20 @@ class _RecordingTensorBoardExperiment:
         :param global_step: Global step the callback tagged the figure with.
         """
         self.figure_calls.append({"tag": tag, "figure": figure, "global_step": global_step})
+
+
+class _FailingTensorBoardExperiment:
+    def add_figure(self, tag: str, figure: object, global_step: int) -> None:
+        raise RuntimeError("logger unavailable")
+
+
+class _FailingTensorBoardLogger(TensorBoardLogger):
+    def __init__(self) -> None:
+        self._failing_experiment = _FailingTensorBoardExperiment()
+
+    @property
+    def experiment(self) -> _FailingTensorBoardExperiment:  # type: ignore[override]
+        return self._failing_experiment
 
 
 class _RecordingTensorBoardLogger(TensorBoardLogger):
@@ -119,6 +142,98 @@ def _trainer(
     :returns: The fake narrowed to ``Trainer`` for the call site's type checker.
     """
     return cast("Trainer", _FakeTrainer(loggers, global_step, is_global_zero))
+
+
+class _ProjectionField(torch.nn.Module):
+    """Minimal vector field exposing a projection to plotting callbacks."""
+
+    def __init__(self, projection: torch.nn.Module) -> None:
+        """Expose the supplied projection without adding a transformer.
+
+        :param projection: Projection exercised by the callback.
+        """
+        super().__init__()
+        self.projection = projection
+
+
+def _flow_module(projection: torch.nn.Module) -> VSTFlowMatchingModule:
+    return VSTFlowMatchingModule(
+        encoder=torch.nn.Identity(),
+        vector_field=_ProjectionField(projection),
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        num_params=3,
+    )
+
+
+def test_plot_learnt_projection_logs_assignment_and_similarity_figures() -> None:
+    """A learnt projection emits both real matplotlib plot artifacts."""
+    logger = _RecordingTensorBoardLogger()
+    trainer = _trainer([logger])
+    module = _flow_module(
+        LearntProjection(
+            d_model=2,
+            d_token=2,
+            num_params=3,
+            num_tokens=2,
+            initial_ffn=False,
+            final_ffn=False,
+        )
+    )
+
+    PlotLearntProjection().on_validation_epoch_end(trainer, module)
+
+    assert [call["tag"] for call in logger.experiment.figure_calls] == ["assignment", "value"]
+    assert all(isinstance(call["figure"], Figure) for call in logger.experiment.figure_calls)
+
+
+@pytest.mark.gpu
+def test_plot_learnt_projection_on_cuda_logs_cpu_backed_figures() -> None:
+    """CUDA projection tensors convert to matplotlib-compatible plot inputs."""
+    logger = _RecordingTensorBoardLogger()
+    trainer = _trainer([logger])
+    projection = LearntProjection(
+        d_model=2,
+        d_token=2,
+        num_params=3,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    ).cuda()
+
+    PlotLearntProjection().on_validation_epoch_end(trainer, _flow_module(projection))
+
+    assert [call["tag"] for call in logger.experiment.figure_calls] == ["assignment", "value"]
+
+
+def test_plot_learnt_projection_logging_error_closes_figures() -> None:
+    """A logger failure does not leak either generated matplotlib figure."""
+    trainer = _trainer([_FailingTensorBoardLogger()])
+    projection = LearntProjection(
+        d_model=2,
+        d_token=2,
+        num_params=3,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    )
+    open_figures = set(plt.get_fignums())
+
+    with pytest.raises(RuntimeError, match="logger unavailable"):
+        PlotLearntProjection().on_validation_epoch_end(trainer, _flow_module(projection))
+
+    assert set(plt.get_fignums()) == open_figures
+
+
+def test_plot_learnt_projection_with_grouped_projection_skips_plots() -> None:
+    """A grouped projection without learnt matrices is an explicit no-op."""
+    logger = _RecordingTensorBoardLogger()
+    trainer = _trainer([logger])
+    module = _flow_module(GroupedParameterProjection(d_model=2, param_spec_name="surge_simple"))
+
+    PlotLearntProjection().on_validation_epoch_end(trainer, module)
+
+    assert logger.experiment.figure_calls == []
 
 
 def test_log_per_param_mse_without_param_spec_raises_type_error() -> None:
@@ -487,7 +602,49 @@ def test_log_per_param_mse_emits_pyfdn_spec_quantized_graph_per_parameter(
 
     callback.on_validation_epoch_end(trainer, pl_module)
 
-    assert module.logged == pytest.approx(expected)
+    quantized_metrics = {
+        name: value for name, value in module.logged.items() if "mse_spec_quantized" in name
+    }
+    assert quantized_metrics == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("stage", ["val", "test"])
+@pytest.mark.parametrize(("reset", "expected"), [(False, 0.75), (True, 1.0)])
+def test_abs_cosine_logging_ragged_batches_returns_epoch_mean(
+    stage: str, reset: bool, expected: float
+) -> None:
+    """Each sample contributes equally, and epochs never reuse previous distances.
+
+    :param stage: Validation or test namespace.
+    :param reset: Whether a new epoch separates the two batches.
+    :param expected: Sample-weighted distance for the final epoch.
+    """
+    spec_name = "pyfdn_n8_mono_householder_vector"
+    spec = param_specs[spec_name]
+    callback = LogPerParamMSE(spec_name)
+    module = _RecordingModule()
+    trainer = cast(Trainer, None)
+    pl_module = cast(LightningModule, module)
+    hook_stage = "validation" if stage == "val" else "test"
+    start = getattr(callback, f"on_{hook_stage}_epoch_start")
+    batch_end = getattr(callback, f"on_{hook_stage}_batch_end")
+    end = getattr(callback, f"on_{hook_stage}_epoch_end")
+    span = {param.name: span for param, span in spec.encoded_slices()}["householder_vector"]
+    targets = torch.zeros(3, spec.encoded_width)
+    targets[:, span.start] = 1.0
+    predictions = torch.zeros_like(targets)
+    predictions[:, span.start + 1] = 1.0
+    start(trainer, pl_module)
+    batch_end(trainer, pl_module, {"preds": targets[:1]}, {"params": targets[:1]}, 0)
+    if reset:
+        end(trainer, pl_module)
+        start(trainer, pl_module)
+    batch_end(trainer, pl_module, {"preds": predictions}, {"params": targets}, 1)
+
+    end(trainer, pl_module)
+
+    key = f"{stage}/per_param_abs_cosine_distance/householder_vector"
+    assert module.logged[key] == pytest.approx(expected)
 
 
 def test_log_per_param_mse_weights_spec_quantized_error_by_sample_count() -> None:
@@ -548,6 +705,38 @@ def test_log_per_param_mse_weights_samples_across_distributed_ranks(
 
     assert module.logged["val/param_mse_spec_quantized"] == pytest.approx(0.75)
     assert module.sync_dist is False
+
+
+def test_abs_cosine_logging_distributed_ranks_weights_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rank sums and counts, not rank means, determine the logged distance.
+
+    :param monkeypatch: Supplies three remote perpendicular samples to the collective.
+    """
+    spec_name = "pyfdn_n8_mono_householder_vector"
+    callback = LogPerParamMSE(spec_name)
+    module = _RecordingModule()
+    trainer = cast(Trainer, None)
+    pl_module = cast(LightningModule, module)
+    targets = torch.ones(1, param_specs[spec_name].encoded_width)
+    callback.on_validation_epoch_start(trainer, pl_module)
+    callback.on_validation_batch_end(
+        trainer, pl_module, {"preds": targets}, {"params": targets}, 0
+    )
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+
+    def add_remote_samples(total_and_count: torch.Tensor) -> None:
+        total_and_count[:-1] += 3.0
+        total_and_count[-1] += 3.0
+
+    monkeypatch.setattr(torch.distributed, "all_reduce", add_remote_samples)
+
+    callback.on_validation_epoch_end(trainer, pl_module)
+
+    assert module.logged["val/per_param_abs_cosine_distance/householder_vector"] == pytest.approx(
+        0.75
+    )
 
 
 def test_log_per_param_mse_emits_optional_best_swap_metrics() -> None:
@@ -671,3 +860,72 @@ def test_log_figure_is_noop_on_non_zero_rank():
 
     assert wandb_logger.image_calls == []
     assert tb_logger.experiment.figure_calls == []
+
+
+def test_plot_learnt_projection_logs_similarity_for_projection_attribute() -> None:
+    """A flow model with a learnt projection emits assignment and similarity plots."""
+    projection = LearntProjection(
+        d_model=2,
+        d_token=2,
+        num_params=3,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    )
+    module = Mock(spec=VSTFlowMatchingModule)
+    module.vector_field = SimpleNamespace(projection=projection)
+    wandb_logger = _RecordingWandbLogger()
+
+    PlotLearntProjection().on_validation_epoch_end(_trainer([wandb_logger]), module)
+
+    assert [call["key"] for call in wandb_logger.image_calls] == ["assignment", "value"]
+
+
+@pytest.mark.parametrize(
+    ("steps", "expected_steps"),
+    [((0, 0), []), ((1, 1, 1), [1, 1]), ((1, 1, 2), [1, 1, 2, 2])],
+)
+def test_projection_plots_accumulated_batches_emit_once_per_optimizer_step(
+    steps: tuple[int, ...], expected_steps: list[int]
+) -> None:
+    """Accumulated batches must not duplicate optimizer-step images.
+
+    :param steps: Optimizer steps observed at successive batch ends.
+    :param expected_steps: Steps attached to the assignment and value images.
+    """
+    projection = LearntProjection(
+        d_model=2,
+        d_token=2,
+        num_params=3,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    )
+    module = Mock(spec=VSTFlowMatchingModule)
+    module.vector_field = SimpleNamespace(projection=projection)
+    logger = _RecordingWandbLogger()
+    callback = PlotLearntProjection(after_val=False, every_n_steps=1)
+
+    for step in steps:
+        callback.on_train_batch_end(_trainer([logger], global_step=step), module, None, None, 0)
+
+    assert [call["step"] for call in logger.image_calls] == expected_steps
+
+
+def test_plot_learnt_projection_logs_bfloat16_projection() -> None:
+    """Bfloat16 training parameters are converted before plotting."""
+    projection = LearntProjection(
+        d_model=2,
+        d_token=2,
+        num_params=3,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    ).to(dtype=torch.bfloat16)
+    module = Mock(spec=VSTFlowMatchingModule)
+    module.vector_field = SimpleNamespace(projection=projection)
+    wandb_logger = _RecordingWandbLogger()
+
+    PlotLearntProjection().on_validation_epoch_end(_trainer([wandb_logger]), module)
+
+    assert [call["key"] for call in wandb_logger.image_calls] == ["assignment", "value"]

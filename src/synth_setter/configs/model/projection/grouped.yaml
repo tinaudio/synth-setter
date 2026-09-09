@@ -1,0 +1,5 @@
+# @package model.vector_field.projection
+
+_target_: synth_setter.models.components.transformer.GroupedParameterProjection
+d_model: ${model.vector_field.d_model}
+param_spec_name: ${synth.param_spec_name}

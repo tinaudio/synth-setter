@@ -28,7 +28,7 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from matplotlib.figure import Figure
 
 from synth_setter.data.vst import param_specs
-from synth_setter.metrics import spec_quantized_per_param_mse
+from synth_setter.metrics import spec_per_param_abs_cosine_distance, spec_quantized_per_param_mse
 from synth_setter.models.components.transformer import LearntProjection
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
@@ -460,9 +460,7 @@ class PlotLearntProjection(Callback):
         self.after_val = after_val
         self.every_n_steps = every_n_steps
         self.sort_assignments = sort_assignments
-
-    def _get_assignment(self, pl_module):
-        return pl_module.vector_field.projection.assignment
+        self._last_plotted_step = 0
 
     def _sort_assignments(self, assignment):
         assignment = assignment.abs()
@@ -472,8 +470,8 @@ class PlotLearntProjection(Callback):
         assignment = assignment[sorted_idxs]
         return assignment
 
-    def _plot_assignments(self, pl_module):
-        assignment = self._get_assignment(pl_module)
+    def _plot_assignments(self, projection: LearntProjection) -> Figure:
+        assignment = projection.assignment
 
         if self.sort_assignments:
             assignment = self._sort_assignments(assignment)
@@ -482,7 +480,7 @@ class PlotLearntProjection(Callback):
 
         maxval = assignment.abs().max().item()
         img = ax.imshow(
-            assignment.cpu().numpy(),
+            assignment.detach().cpu().float().numpy(),
             aspect="equal",
             vmin=-maxval,
             vmax=maxval,
@@ -499,31 +497,31 @@ class PlotLearntProjection(Callback):
 
         return fig
 
-    def _get_value_similarity(self, pl_module):
-        proj = pl_module.vector_field.projection.in_projection  # num_params x d_embed x d_model
+    def _get_value_similarity(self, projection: LearntProjection) -> torch.Tensor:
+        proj = projection.in_projection  # num_params x d_embed x d_model
 
         sim_proj = torch.nn.functional.cosine_similarity(proj[None], proj[:, None], dim=-1)
 
         return sim_proj
 
-    def _get_output_similarity(self, pl_module):
-        proj = pl_module.vector_field.projection.out_projection.T  # num_params x d_embed x d_model
+    def _get_output_similarity(self, projection: LearntProjection) -> torch.Tensor:
+        proj = projection.out_projection.T  # num_params x d_embed x d_model
 
         sim_proj = torch.nn.functional.cosine_similarity(proj[None], proj[:, None], dim=-1)
 
         return sim_proj
 
-    def _plot_projections(self, pl_module):
+    def _plot_projections(self, projection: LearntProjection) -> Figure:
         fig, ax = plt.subplots(2, 1, figsize=(5, 10))
 
-        val_sim = self._get_value_similarity(pl_module)
-        out_sim = self._get_output_similarity(pl_module)
+        val_sim = self._get_value_similarity(projection)
+        out_sim = self._get_output_similarity(projection)
 
-        val_max = val_sim.abs().max()
-        out_max = out_sim.abs().max()
+        val_max = val_sim.abs().max().item()
+        out_max = out_sim.abs().max().item()
 
         val_im = ax[0].imshow(
-            val_sim.cpu().numpy(),
+            val_sim.detach().cpu().float().numpy(),
             aspect="equal",
             vmin=-val_max,
             vmax=val_max,
@@ -534,7 +532,7 @@ class PlotLearntProjection(Callback):
         ax[0].set_ylabel("params")
 
         out_im = ax[1].imshow(
-            out_sim.cpu().numpy(),
+            out_sim.detach().cpu().float().numpy(),
             aspect="equal",
             vmin=-out_max,
             vmax=out_max,
@@ -552,25 +550,24 @@ class PlotLearntProjection(Callback):
 
         return fig
 
-    def _log_plots(self, fig_ass, fig_value, trainer):
-        _log_figure(trainer, "assignment", fig_ass)
-        _log_figure(trainer, "value", fig_value)
+    def _log_plots(self, fig_ass: Figure, fig_value: Figure, trainer: Trainer) -> None:
+        try:
+            _log_figure(trainer, "assignment", fig_ass)
+            _log_figure(trainer, "value", fig_value)
+        finally:
+            plt.close(fig_ass)
+            plt.close(fig_value)
 
-        plt.close(fig_ass)
-        plt.close(fig_value)
-
-    def _do_plotting(self, trainer, pl_module):
+    def _do_plotting(self, trainer: Trainer, pl_module: LightningModule) -> None:
         if not isinstance(pl_module, VSTFlowMatchingModule):
             return
 
-        if not hasattr(pl_module.vector_field, "projection"):
+        projection = getattr(pl_module.vector_field, "projection", None)
+        if not isinstance(projection, LearntProjection):
             return
 
-        if not isinstance(pl_module.vector_field, LearntProjection):
-            return
-
-        fig_ass = self._plot_assignments(pl_module)
-        fig_value = self._plot_projections(pl_module)
+        fig_ass = self._plot_assignments(projection)
+        fig_value = self._plot_projections(projection)
         self._log_plots(fig_ass, fig_value, trainer)
 
     def on_validation_epoch_end(self, trainer, pl_module) -> None:
@@ -583,11 +580,13 @@ class PlotLearntProjection(Callback):
         if self.every_n_steps is None:
             return
 
-        if trainer.global_step % self.every_n_steps != 0:
+        step = trainer.global_step
+        if step == 0 or step == self._last_plotted_step or step % self.every_n_steps != 0:
             return
 
         with torch.no_grad():
             self._do_plotting(trainer, pl_module)
+        self._last_plotted_step = step
 
 
 def _plain_cpu_tensor(tensor: torch.Tensor) -> torch.Tensor:
@@ -951,7 +950,7 @@ def _distributed_metric_mean(
 
 
 class LogPerParamMSE(Callback):
-    """Log validation and test MSE broken down by ParamSpec parameter."""
+    """Log validation/test MSE and array alignment distances by ParamSpec parameter."""
 
     def __init__(self, param_spec: str) -> None:
         """Select the ParamSpec whose dimension names label emitted metrics.
@@ -985,6 +984,12 @@ class LogPerParamMSE(Callback):
                     weight,
                 )
             )
+            batch_metrics.extend(
+                (f"per_param_abs_cosine_distance/{name}", distance, weight)
+                for name, distance in spec_per_param_abs_cosine_distance(
+                    predictions, params, self.param_spec
+                ).items()
+            )
 
         for metric_name, metric, metric_weight in batch_metrics:
             values = metric.detach().cpu().numpy()
@@ -997,19 +1002,22 @@ class LogPerParamMSE(Callback):
     def _log(self, pl_module: LightningModule, stage: Literal["test", "val"]) -> None:
         metrics = {}
         for metric_name, total in self.metric_totals.items():
-            per_param_mse = _distributed_metric_mean(
+            mean = _distributed_metric_mean(
                 total,
                 self.metric_counts[metric_name],
                 pl_module.device,
             )
+            if metric_name.startswith("per_param_abs_cosine_distance/"):
+                metrics[f"{stage}/{metric_name}"] = mean.item()
+                continue
             metrics.update(
                 {
-                    f"{stage}/{metric_name}/{param.name}": per_param_mse[span].mean()
+                    f"{stage}/{metric_name}/{param.name}": mean[span].mean()
                     for param, span in self.param_spec.encoded_slices()
                 }
             )
             if metric_name == _SPEC_QUANTIZED_PER_PARAM_MSE:
-                metrics[f"{stage}/param_mse_spec_quantized"] = per_param_mse.mean()
+                metrics[f"{stage}/param_mse_spec_quantized"] = mean.mean()
         pl_module.log_dict(metrics)
 
     def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
