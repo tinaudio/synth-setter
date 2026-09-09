@@ -460,6 +460,7 @@ class PlotLearntProjection(Callback):
         self.after_val = after_val
         self.every_n_steps = every_n_steps
         self.sort_assignments = sort_assignments
+        self._last_plotted_step = 0
 
     def _get_assignment(self, pl_module):
         return pl_module.vector_field.projection.assignment
@@ -583,11 +584,13 @@ class PlotLearntProjection(Callback):
         if self.every_n_steps is None:
             return
 
-        if trainer.global_step % self.every_n_steps != 0:
+        step = trainer.global_step
+        if step == 0 or step == self._last_plotted_step or step % self.every_n_steps != 0:
             return
 
         with torch.no_grad():
             self._do_plotting(trainer, pl_module)
+        self._last_plotted_step = step
 
 
 def _plain_cpu_tensor(tensor: torch.Tensor) -> torch.Tensor:

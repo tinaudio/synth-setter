@@ -16,8 +16,6 @@ from synth_setter.data.vst import param_specs
 from synth_setter.models.components.transformer import LearntProjection
 from synth_setter.utils import register_resolvers
 
-_COSINE_EPSILON = 1e-8
-
 
 def wandb_dir_to_ckpt_and_hparams(
     wandb_dir: Path, ckpt_type: Literal["best", "last"]
@@ -326,9 +324,10 @@ def plot_assignment(proj: LearntProjection, spec: str):
 
 
 def cosine_self_sim(x: np.ndarray) -> np.ndarray:
-    dot_prod = np.einsum("ik,jk->ij", x, x)
-    norms = np.maximum(np.linalg.norm(x, axis=1), _COSINE_EPSILON)
-    return dot_prod / np.outer(norms, norms)
+    vectors = x.astype(np.float64)
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    normalized = np.divide(vectors, norms, out=np.zeros_like(vectors), where=norms != 0)
+    return normalized @ normalized.T
 
 
 def plot_embeds(proj: LearntProjection, spec: str):

@@ -58,3 +58,22 @@ def test_cosine_self_sim_with_zero_vector_returns_zero_similarity() -> None:
     similarity = cosine_self_sim(vectors)
 
     np.testing.assert_array_equal(similarity, np.array([[0.0, 0.0], [0.0, 1.0]]))
+
+
+def test_cosine_self_sim_with_float16_zero_vector_returns_finite_similarity() -> None:
+    """Zero vectors have finite zero cosine similarity in float16."""
+    vectors = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float16)
+
+    similarity = cosine_self_sim(vectors)
+
+    assert np.isfinite(similarity).all()
+    np.testing.assert_array_equal(similarity, np.array([[0.0, 0.0], [0.0, 1.0]]))
+
+
+def test_cosine_self_sim_with_tiny_nonzero_vector_preserves_cosine() -> None:
+    """Cosine similarity is invariant to nonzero vector magnitude."""
+    vectors = np.array([[1e-9, 0.0], [1.0, 0.0]])
+
+    similarity = cosine_self_sim(vectors)
+
+    np.testing.assert_allclose(similarity, np.ones((2, 2)))
