@@ -46,6 +46,7 @@ def test_projection_zero_residual_matches_grouped(artifact: Path) -> None:
     projection = LanguageParameterProjection(
         16, "surge_4", "surge_4", embedding_path=str(artifact)
     )
+    projection.initialize_embeddings()
     x = torch.randn(2, param_specs["surge_4"].encoded_width)
     torch.testing.assert_close(projection.param_to_token(x), grouped.param_to_token(x))
 
@@ -58,6 +59,7 @@ def test_projection_checkpoint_without_artifact_preserves_tokens(artifact: Path)
     projection = LanguageParameterProjection(
         16, "surge_4", "surge_4", embedding_path=str(artifact)
     )
+    projection.initialize_embeddings()
     x = torch.randn(2, param_specs["surge_4"].encoded_width)
     expected = projection.param_to_token(x)
     state = projection.state_dict()
@@ -75,6 +77,7 @@ def test_projection_encoder_wrapper_freezes_only_decoders(artifact: Path) -> Non
     projection = LanguageParameterProjection(
         16, "surge_4", "surge_4", embedding_path=str(artifact)
     )
+    projection.initialize_embeddings()
     ParamTokenEmbed(projection)
     assert all(not parameter.requires_grad for parameter in projection.decoders.parameters())
     assert all(parameter.requires_grad for parameter in projection.text_adapter.parameters())
@@ -89,6 +92,7 @@ def test_projection_optimizer_step_opens_semantic_gradient_path(artifact: Path) 
     projection = LanguageParameterProjection(
         16, "surge_4", "surge_4", embedding_path=str(artifact)
     )
+    projection.initialize_embeddings()
     optimizer = torch.optim.Adam(projection.parameters(), lr=0.01)
     x = torch.randn(2, param_specs["surge_4"].encoded_width)
     projection.param_to_token(x).square().mean().backward()
@@ -113,6 +117,7 @@ def test_projection_semantic_change_affects_only_its_field(artifact: Path) -> No
     projection = LanguageParameterProjection(
         16, "surge_4", "surge_4", embedding_path=str(artifact)
     )
+    projection.initialize_embeddings()
     final_layer = projection.fusion[-1]
     assert isinstance(final_layer, torch.nn.Linear)
     torch.nn.init.constant_(final_layer.weight, 0.1)
@@ -132,6 +137,7 @@ def test_projection_numeric_gradient_is_field_and_batch_local(artifact: Path) ->
     projection = LanguageParameterProjection(
         16, "surge_4", "surge_4", embedding_path=str(artifact)
     )
+    projection.initialize_embeddings()
     x = torch.randn(2, param_specs["surge_4"].encoded_width, requires_grad=True)
     projection.param_to_token(x)[0, 0].sum().backward()
     _, span = next(param_specs["surge_4"].encoded_slices())
@@ -152,6 +158,7 @@ def test_projection_native_width_metadata_produces_model_width(tmp_path: Path) -
     projection = LanguageParameterProjection(
         16, "surge_4", "surge_4", embedding_dim=768, embedding_path=str(path)
     )
+    projection.initialize_embeddings()
     tokens = projection.param_to_token(torch.zeros(2, param_specs["surge_4"].encoded_width))
     assert tokens.shape == (2, count, 16)
 
@@ -182,6 +189,7 @@ def test_projection_same_width_wrong_semantics_rejects_checkpoint(artifact: Path
     projection = LanguageParameterProjection(
         16, "surge_4", "surge_4", embedding_path=str(artifact)
     )
+    projection.initialize_embeddings()
     restored = LanguageParameterProjection(16, "surge_4", "different-synth")
     with pytest.raises(ValueError, match="spec"):
         restored.load_state_dict(projection.state_dict())
@@ -199,6 +207,7 @@ def test_real_language_projection_checkpoint_reload_preserves_trained_tokens(
     embeddings = matryoshka_vectors(encode_param_language("surge_4", "surge_4"), 128)
     save_param_language(path, embeddings, "surge_4", "surge_4")
     projection = LanguageParameterProjection(16, "surge_4", "surge_4", embedding_path=str(path))
+    projection.initialize_embeddings()
     x = torch.randn(2, param_specs["surge_4"].encoded_width)
     optimizer = torch.optim.Adam(projection.parameters(), lr=0.01)
     projection.param_to_token(x).square().mean().backward()
@@ -222,6 +231,7 @@ def test_projection_cuda_compilation_preserves_forward_backward(artifact: Path) 
     projection = LanguageParameterProjection(
         16, "surge_4", "surge_4", embedding_path=str(artifact)
     )
+    projection.initialize_embeddings()
     model = ApproxEquivTransformer(
         projection,
         d_model=16,

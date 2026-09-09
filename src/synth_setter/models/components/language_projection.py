@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 from beartype import beartype
-from jaxtyping import Bool, Float, jaxtyped
+from jaxtyping import Float, jaxtyped
 from torch import Tensor, nn
 
 from synth_setter.models.components.transformer import GroupedParameterProjection
@@ -26,7 +26,7 @@ class LanguageParameterProjection(GroupedParameterProjection):
     """
 
     language_embeddings: Float[Tensor, "num_tokens embedding_dim"]
-    _language_ready: Bool[Tensor, ""]
+    _language_ready: bool
 
     @jaxtyped(typechecker=beartype)
     def __init__(
@@ -44,7 +44,7 @@ class LanguageParameterProjection(GroupedParameterProjection):
         :param param_spec_name: Registered field layout.
         :param synth_name: Dataset synth identity.
         :param embedding_dim: Finalized metadata width.
-        :param embedding_path: Local finalized artifact used on the first fresh forward.
+        :param embedding_path: Local artifact consumed by explicit initialization before forward.
         :raises ValueError: Embedding width is unsupported.
         """
         super().__init__(d_model, param_spec_name)
@@ -55,7 +55,7 @@ class LanguageParameterProjection(GroupedParameterProjection):
         self.embedding_dim = embedding_dim
         self.embedding_path = embedding_path
         self.register_buffer("language_embeddings", torch.zeros(self.num_tokens, embedding_dim))
-        self.register_buffer("_language_ready", torch.tensor(False))
+        self._language_ready = False
         self.text_adapter = nn.Linear(embedding_dim, d_model)
         residual_output = nn.Linear(d_model, d_model)
         nn.init.zeros_(residual_output.weight)
@@ -74,6 +74,7 @@ class LanguageParameterProjection(GroupedParameterProjection):
             "embedding_dim": str(self.embedding_dim),
             "model": EMBEDDING_MODEL,
             "revision": EMBEDDING_REVISION,
+            "initialized": str(self._language_ready),
         }
 
     @jaxtyped(typechecker=beartype)
@@ -83,16 +84,21 @@ class LanguageParameterProjection(GroupedParameterProjection):
         :param state: Saved semantic identity.
         :raises ValueError: Saved descriptions or dimension differ from this projection.
         """
-        if state != self.get_extra_state():
+        identity = dict(state)
+        initialized = identity.pop("initialized", None)
+        expected = self.get_extra_state()
+        expected.pop("initialized")
+        if identity != expected or initialized not in {"True", "False"}:
             raise ValueError("parameter language checkpoint does not match the current spec")
+        self._language_ready = initialized == "True"
 
     @jaxtyped(typechecker=beartype)
-    def _ensure_embeddings(self) -> None:
-        """Load fresh-run metadata once; restored checkpoints already contain the vectors.
+    def initialize_embeddings(self) -> None:
+        """Load and validate metadata at the caller's initialization boundary, never in forward.
 
         :raises ValueError: No artifact is supplied or its width differs from the configured width.
         """
-        if self._language_ready.item():
+        if self._language_ready:
             return
         if self.embedding_path is None:
             raise ValueError("fresh language projection requires a finalized embedding_path")
@@ -102,7 +108,7 @@ class LanguageParameterProjection(GroupedParameterProjection):
         if metadata.dimension != self.embedding_dim:
             raise ValueError("artifact dimension does not match projection embedding_dim")
         self.language_embeddings.copy_(torch.from_numpy(embeddings).to(self.language_embeddings))
-        self._language_ready.fill_(True)
+        self._language_ready = True
 
     @torch.compiler.disable()
     @jaxtyped(typechecker=beartype)
@@ -113,8 +119,10 @@ class LanguageParameterProjection(GroupedParameterProjection):
 
         :param params: Current flat parameter states, including unconstrained flow states.
         :returns: One token per logical field.
+        :raises ValueError: Initialization or checkpoint restoration has not supplied embeddings.
         """
-        self._ensure_embeddings()
+        if not self._language_ready:
+            raise ValueError("call initialize_embeddings with an embedding_path before forward")
         values = super().param_to_token(params)
         semantics = self.text_adapter(self.language_embeddings).unsqueeze(0).expand_as(values)
         return values + self.fusion(torch.cat((values, semantics), dim=-1))
