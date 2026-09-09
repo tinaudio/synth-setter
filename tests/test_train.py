@@ -28,6 +28,7 @@ import pytest
 import torch
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
+from hydra.utils import instantiate
 from lightning.pytorch import Trainer
 from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationKeyError
@@ -44,7 +45,10 @@ from synth_setter.models.components.pretrained_encoder import (
 )
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
-from synth_setter.models.components.transformer import ApproxEquivTransformer
+from synth_setter.models.components.transformer import (
+    ApproxEquivTransformer,
+    GroupedParameterProjection,
+)
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
@@ -83,6 +87,10 @@ from tests.helpers.eval_fakes import (
     fake_postprocessing_subprocess,
 )
 from tests.helpers.generic_launcher import run_generic_launcher_command
+from tests.helpers.grouped_projection_training import (
+    GROUPED_PROJECTION_SEED,
+    build_grouped_projection_config,
+)
 from tests.helpers.noise_capture import NoiseCaptureCallback
 from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _RecordingWandbLogger
 from tests.helpers.run_if import RunIf
@@ -173,6 +181,39 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
         cfg_train.datamodule.num_workers = 2
         cfg_train.trainer.fast_dev_run = True
     train(cfg_train)
+
+
+def test_train_grouped_projection_writes_strictly_loadable_checkpoint(tmp_path: Path) -> None:
+    """Train the grouped Hydra selection through the real flow and Lance entrypoint.
+
+    :param tmp_path: Isolated dataset, checkpoint, and log root.
+    """
+    cfg = build_grouped_projection_config(tmp_path, config_name="train.yaml")
+    HydraConfig().set_config(cfg)
+
+    metric_dict, object_dict = train(cfg)
+
+    projection = object_dict["model"].vector_field.projection
+    assert isinstance(projection, GroupedParameterProjection)
+    assert projection.num_tokens == sum(1 for _ in param_specs["surge_4"].encoded_slices())
+    assert object_dict["trainer"].global_step == 1
+    assert torch.isfinite(metric_dict["train/loss"])
+    checkpoint = tmp_path / "checkpoints" / "last.ckpt"
+    assert checkpoint.is_file()
+
+    restored = instantiate(cfg.model)
+    checkpoint_state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    restored.load_state_dict(checkpoint_state["state_dict"], strict=True)
+    trained = object_dict["model"].cpu().eval()
+    restored.eval()
+    generator = torch.Generator().manual_seed(GROUPED_PROJECTION_SEED)
+    params = torch.randn(2, param_specs["surge_4"].encoded_width, generator=generator)
+    time = torch.rand(2, 1, generator=generator)
+    conditioning = torch.randn(2, 16, generator=generator)
+    with torch.no_grad():
+        trained_output = trained.vector_field(params, time, conditioning)
+        restored_output = restored.vector_field(params, time, conditioning)
+    torch.testing.assert_close(restored_output, trained_output, atol=0.0, rtol=0.0)
 
 
 @pytest.mark.slow

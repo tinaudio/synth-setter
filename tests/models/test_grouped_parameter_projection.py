@@ -14,6 +14,7 @@ from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     GroupedParameterProjection,
     LearntProjection,
+    MutualAttentionProjection,
     PositionalEncoding,
 )
 from synth_setter.param_spec_name import ParamSpecName
@@ -207,6 +208,46 @@ def test_transformer_grouped_projection_forward_backward_and_pe(grouped_spec: Pa
     assert params.grad is not None and torch.count_nonzero(params.grad)
 
 
+def test_transformer_grouped_projection_overfits_fixed_velocity_batch(
+    grouped_spec: ParamSpec,
+) -> None:
+    """Learn a fixed coordinate-space velocity target to near-zero MSE.
+
+    :param grouped_spec: Registered mixed-width parameter specification.
+    """
+    torch.manual_seed(0)
+    transformer = ApproxEquivTransformer(
+        projection=_projection(),
+        num_layers=1,
+        d_model=8,
+        conditioning_dim=4,
+        num_heads=2,
+        d_ff=16,
+        learn_pe=True,
+        learn_projection=True,
+        pe_type="initial",
+        zero_init=False,
+    )
+    params = torch.randn(2, grouped_spec.encoded_width)
+    time = torch.tensor([[0.25], [0.75]])
+    conditioning = torch.randn(2, 4)
+    target_velocity = torch.randn(2, grouped_spec.encoded_width)
+    optimizer = torch.optim.Adam(transformer.parameters(), lr=1e-2)
+
+    for _ in range(300):
+        optimizer.zero_grad(set_to_none=True)
+        loss = torch.nn.functional.mse_loss(
+            transformer(params, time, conditioning), target_velocity
+        )
+        loss.backward()
+        optimizer.step()
+
+    final_loss = torch.nn.functional.mse_loss(
+        transformer(params, time, conditioning), target_velocity
+    ).item()
+    assert final_loss < 1e-4
+
+
 def test_transformer_grouped_projection_runs_under_torch_compile(grouped_spec: ParamSpec) -> None:
     """Run the typed grouped projection through the production compilation boundary.
 
@@ -231,6 +272,25 @@ def test_transformer_grouped_projection_runs_under_torch_compile(grouped_spec: P
 
     assert output.shape == (2, 8)
     assert params.grad is not None and torch.count_nonzero(params.grad)
+
+
+def test_transformer_accepts_mutual_attention_projection_constructor() -> None:
+    """Derive the legacy mutual-attention token count from its query embeddings."""
+    projection = MutualAttentionProjection(d_model=8, num_params=8, num_tokens=3)
+
+    transformer = ApproxEquivTransformer(
+        projection=projection,
+        num_layers=1,
+        d_model=8,
+        conditioning_dim=4,
+        num_heads=2,
+        d_ff=8,
+        learn_projection=True,
+    )
+
+    assert projection.num_tokens == projection.token_queries.shape[1]
+    assert isinstance(transformer.pe, PositionalEncoding)
+    assert transformer.pe.pe.shape == (1, 3, 8)
 
 
 def test_transformer_rejects_legacy_num_tokens_mismatch(grouped_spec: ParamSpec) -> None:

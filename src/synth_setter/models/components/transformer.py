@@ -404,9 +404,10 @@ class MutualAttentionProjection(nn.Module):
     ffn to 1d
     """
 
-    def __init__(self, d_model: int, num_params: int, num_tokens: int):
+    def __init__(self, d_model: int, num_params: int, num_tokens: int) -> None:
         super().__init__()
 
+        self.num_tokens = num_tokens
         scale = 1 / math.sqrt(d_model)
         self.token_queries = nn.Parameter(torch.randn(1, num_tokens, d_model) * scale)
         self.param_queries = nn.Parameter(torch.randn(1, num_params, d_model) * scale)
@@ -469,7 +470,7 @@ class ApproxEquivTransformer(nn.Module):
         adaln_mode: Literal["basic", "zero"] = "basic",
         zero_init: bool = True,
         outer_residual: bool = False,
-    ):
+    ) -> None:
         """Build the projected transformer vector field.
 
         :param projection: Bidirectional parameter-token projection exposing ``num_tokens``.

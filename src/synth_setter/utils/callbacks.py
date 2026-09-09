@@ -469,7 +469,7 @@ class PlotLearntProjection(Callback):
         assignment = assignment[sorted_idxs]
         return assignment
 
-    def _plot_assignments(self, projection: LearntProjection):
+    def _plot_assignments(self, projection: LearntProjection) -> Figure:
         assignment = projection.assignment
 
         if self.sort_assignments:
@@ -496,21 +496,21 @@ class PlotLearntProjection(Callback):
 
         return fig
 
-    def _get_value_similarity(self, projection: LearntProjection):
+    def _get_value_similarity(self, projection: LearntProjection) -> torch.Tensor:
         proj = projection.in_projection  # num_params x d_embed x d_model
 
         sim_proj = torch.nn.functional.cosine_similarity(proj[None], proj[:, None], dim=-1)
 
         return sim_proj
 
-    def _get_output_similarity(self, projection: LearntProjection):
+    def _get_output_similarity(self, projection: LearntProjection) -> torch.Tensor:
         proj = projection.out_projection.T  # num_params x d_embed x d_model
 
         sim_proj = torch.nn.functional.cosine_similarity(proj[None], proj[:, None], dim=-1)
 
         return sim_proj
 
-    def _plot_projections(self, projection: LearntProjection):
+    def _plot_projections(self, projection: LearntProjection) -> Figure:
         fig, ax = plt.subplots(2, 1, figsize=(5, 10))
 
         val_sim = self._get_value_similarity(projection)
@@ -549,7 +549,7 @@ class PlotLearntProjection(Callback):
 
         return fig
 
-    def _log_plots(self, fig_ass, fig_value, trainer):
+    def _log_plots(self, fig_ass: Figure, fig_value: Figure, trainer: Trainer) -> None:
         try:
             _log_figure(trainer, "assignment", fig_ass)
             _log_figure(trainer, "value", fig_value)
@@ -557,7 +557,7 @@ class PlotLearntProjection(Callback):
             plt.close(fig_ass)
             plt.close(fig_value)
 
-    def _do_plotting(self, trainer, pl_module):
+    def _do_plotting(self, trainer: Trainer, pl_module: LightningModule) -> None:
         if not isinstance(pl_module, VSTFlowMatchingModule):
             return
 

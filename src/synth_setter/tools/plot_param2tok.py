@@ -385,7 +385,7 @@ def plot_embeds(proj: LearntProjection, spec: str):
     return fig
 
 
-def plot_param2tok(proj: LearntProjection, out_dir: str, spec: str):
+def plot_param2tok(proj: LearntProjection, out_dir: str, spec: str) -> None:
     proj = _require_learnt_projection(proj)
     logger.info("Plotting assignment")
     assignment_fig = plot_assignment(proj, spec)
