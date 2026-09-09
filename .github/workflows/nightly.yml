@@ -41,6 +41,11 @@ jobs:
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
 
+      # File-URI hydration tests need only the binary; the nightly suite never
+      # configures the R2 remote or receives storage credentials.
+      - name: Install rclone
+        uses: ./.github/actions/install-rclone
+
       # ubuntu-latest has no CUDA/MPS device and no Surge XT VST3; gpu/mps/
       # requires_vst suites run on dev-snapshot via sibling workflows — see #1279.
       # Marker filter lives in `make test-ci-nightly` — see #1353.

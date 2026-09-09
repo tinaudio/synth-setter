@@ -204,6 +204,7 @@ def test_pi_project_settings_pin_review_pool_providers_only() -> None:
     assert settings["enabledModels"] == [
         "openai-codex/gpt-5.6-terra",
         "openai-codex/gpt-5.6-sol",
+        "openai-codex/gpt-6-astra",
         "openrouter/z-ai/glm-5.3-flash",
     ]
 

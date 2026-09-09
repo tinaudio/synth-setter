@@ -23,6 +23,6 @@ wandb:
     # ``wrap`` not ``redirect``: redirect's output.log never uploads in wandb 0.26.x
     # (#1465); wrap sees only this process, hence ``check_call_streamed``'s stderr tee.
     console: wrap
-    # Resumed sessions (generate → finalize → oracle eval) share one run id; multipart
+    # Resumed sessions (generate → oracle eval) share one run id; multipart
     # gives each its own logs/output_*.log instead of overwriting output.log — #1604.
     console_multipart: true

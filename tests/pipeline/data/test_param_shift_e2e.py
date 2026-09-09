@@ -119,7 +119,7 @@ def _shifted_dataset(tmp_path_factory: pytest.TempPathFactory) -> Path:
             f"render.velocity={_VELOCITY}",
             f"render.signal_duration_seconds={_DURATION_SECONDS}",
             f"param_shift_seed={_SEED}",
-            "batch_size=8",
+            "lance_batch_size=8",
             "build_index=false",
         ],
         check=True,

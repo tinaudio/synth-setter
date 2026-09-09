@@ -313,24 +313,32 @@ is isolated and receives the complete `RenderConfig` for every backend.
 
 ### 5.3 Metrics
 
-| Property    | Value                                                                                     |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| **Command** | `python -m synth_setter.evaluation.compute_audio_metrics {audio_dir} {output_dir}`        |
-| **Input**   | Directory of `sample_{N}/` subdirectories, each containing `pred.wav` and `target.wav`    |
-| **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std)                           |
-| **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`) |
+| Property    | Value                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------- |
+| **Command** | `python -m synth_setter.evaluation.compute_audio_metrics {audio_dir} {output_dir}`          |
+| **Input**   | Directory of `sample_{N}/` subdirectories, each containing `pred.wav` and `target.wav`      |
+| **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std; dataset-level rows NaN std) |
+| **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`)   |
 
-Four metrics are computed for every (predicted, target) audio pair. Passing
-`--renderer-backend pyfdn` adds two impulse-response metrics:
+Five metrics are computed for every (predicted, target) audio pair. Passing
+`--renderer-backend pyfdn` adds impulse-response metrics plus the octave-band
+room-acoustic metrics of Götz et al. (arXiv:2510.23158), implemented in
+`src/synth_setter/evaluation/acoustic_parameters.py`. `--fad` adds a
+dataset-level Fréchet Audio Distance on CLAP embeddings:
 
-| Metric                   | Full Name                     | Method                                              | Range     |
-| ------------------------ | ----------------------------- | --------------------------------------------------- | --------- |
-| **MSS**                  | Multi-Scale Spectrogram       | L1 on mel spectrograms at 3 time scales             | \[0, ∞) ↓ |
-| **wMFCC**                | Weighted MFCC                 | DTW cost between MFCC sequences                     | \[0, ∞) ↓ |
-| **SOT**                  | Spectral Optimal Transport    | Wasserstein distance on normalized STFT bins        | \[0, ∞) ↓ |
-| **RMS**                  | RMS Amplitude Envelope        | Cosine similarity of RMS envelopes                  | [-1, 1] ↑ |
-| **octave_rt60_log_rmse** | Octave-band RT60 log-RMSE     | RMSE of valid paired natural-log RT60 estimates     | \[0, ∞) ↓ |
-| **octave_edc_rmse_db**   | Octave-band energy-decay RMSE | pyFDN `MatchEnergyDecay` over target-valid EDC bins | \[0, ∞) ↓ |
+| Metric                   | Full Name                          | Method                                                                                                | Range     |
+| ------------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------------------- | --------- |
+| **MSS**                  | Multi-Scale Spectrogram            | L1 on mel spectrograms at 3 time scales                                                               | \[0, ∞) ↓ |
+| **wMFCC**                | Weighted MFCC                      | DTW cost between MFCC sequences                                                                       | \[0, ∞) ↓ |
+| **SOT**                  | Spectral Optimal Transport         | Wasserstein distance on normalized STFT bins                                                          | \[0, ∞) ↓ |
+| **RMS**                  | RMS Amplitude Envelope             | Cosine similarity of RMS envelopes                                                                    | [-1, 1] ↑ |
+| **MLDR**                 | Multi-scale Loudness Dynamic Range | L1 of log short/long energy-envelope ratios at 2 scales ([DiffVox](https://arxiv.org/abs/2504.14735)) | \[0, ∞) ↓ |
+| **octave_rt60_log_rmse** | Octave-band RT60 log-RMSE          | RMSE of valid paired natural-log RT60 estimates                                                       | \[0, ∞) ↓ |
+| **octave_edc_rmse_db**   | Octave-band energy-decay RMSE      | pyFDN `MatchEnergyDecay` over target-valid EDC bins                                                   | \[0, ∞) ↓ |
+| **t30_mape**             | Octave-band T30 % error            | pyFDN 30 dB Schroeder fit, 125 Hz–8 kHz, % error                                                      | \[0, ∞) ↓ |
+| **c50_mae_db**           | Octave-band C50 MAE                | flareverb clarity on band-passed responses, dB                                                        | \[0, ∞) ↓ |
+| **`<param>_pcc_<fc>hz`** | Per-band Pearson correlation       | Dataset-level, from `acoustic_param/` columns                                                         | [-1, 1] ↑ |
+| **fad_clap** (`--fad`)   | Fréchet Audio Distance             | Dataset-level, Gaussian fit of CLAP embeddings                                                        | \[0, ∞) ↓ |
 
 **Key behaviors:**
 

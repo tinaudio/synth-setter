@@ -11,10 +11,15 @@ from scipy.signal import sosfreqz
 
 import synth_setter.data.pyfdn_instrument as pyfdn_instrument
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
-from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
+from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
+    PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
+)
 from synth_setter.data.pyfdn_source import canonical_pyfdn_source_provenance
 from synth_setter.data.vst.param_spec import ParameterValues
 from synth_setter.data.vst.renderers import NonFiniteAudioError
+from synth_setter.param_spec_name import ParamSpecName
 
 
 @pytest.fixture
@@ -622,3 +627,60 @@ def test_pyfdn_renderer_implements_common_audio_renderer_signature() -> None:
         "note_start_and_end",
         "warmup",
     }
+
+
+def test_pyfdn_renderer_kronecker_spec_returns_finite_impulse_response() -> None:
+    """Kronecker patches carry kernel controls the renderer accepts alongside the matrix."""
+    params, _ = PYFDN_N8_MONO_KRONECKER_PARAM_SPEC.sample(np.random.default_rng(123))
+
+    audio = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_n8_mono_kronecker")).render(
+        params
+    )
+
+    assert audio.shape == (1, 176_400)
+    assert audio.dtype == np.float32
+    assert np.isfinite(audio).all()
+
+
+def test_pyfdn_renderer_kronecker_spec_rejects_patch_without_kernel_controls() -> None:
+    """A Householder patch carries no kernel controls, so the Kronecker topology is unprovable."""
+    params, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_n8_mono_kronecker"))
+
+    with pytest.raises(ValueError, match="kronecker"):
+        renderer.render(params)
+
+
+def test_pyfdn_renderer_kronecker_spec_rejects_stale_feedback_matrix() -> None:
+    """Kernel controls edited after decoding must not render the stale embedded matrix."""
+    params, _ = PYFDN_N8_MONO_KRONECKER_PARAM_SPEC.sample(np.random.default_rng(123))
+    params = dict(params)
+    params["kronecker_angles"] = np.asarray(params["kronecker_angles"]) + 0.5
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_n8_mono_kronecker"))
+
+    with pytest.raises(ValueError, match="feedback_matrix"):
+        renderer.render(params)
+
+
+def test_pyfdn_renderer_householder_vector_spec_returns_finite_impulse_response() -> None:
+    """Learnable-Householder patches carry the vector the renderer accepts with the matrix."""
+    params, _ = PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC.sample(np.random.default_rng(123))
+
+    audio = PyFDNRenderer(
+        param_spec_name=ParamSpecName("pyfdn_n8_mono_householder_vector")
+    ).render(params)
+
+    assert audio.shape == (1, 176_400)
+    assert audio.dtype == np.float32
+    assert np.isfinite(audio).all()
+
+
+def test_pyfdn_renderer_householder_vector_spec_rejects_stale_feedback_matrix() -> None:
+    """A vector edited after decoding must not render the stale embedded matrix."""
+    params, _ = PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC.sample(np.random.default_rng(123))
+    params = dict(params)
+    params["householder_vector"] = np.roll(np.asarray(params["householder_vector"]), 1)
+    renderer = PyFDNRenderer(param_spec_name=ParamSpecName("pyfdn_n8_mono_householder_vector"))
+
+    with pytest.raises(ValueError, match="feedback_matrix"):
+        renderer.render(params)

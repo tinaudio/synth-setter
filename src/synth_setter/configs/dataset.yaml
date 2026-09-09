@@ -16,7 +16,7 @@ defaults:
   - hydra: default
   - skypilot_launch: default
   - experiment: ???
-  - logger: wandb
+  - logger: wandb_dataset
   - extras: default
 
 task_name: ???
