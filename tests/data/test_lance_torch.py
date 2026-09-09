@@ -8,6 +8,7 @@ fakes or mocks anywhere in this module.
 from __future__ import annotations
 
 import multiprocessing
+import shutil
 import os
 import warnings
 from collections.abc import Callable, Iterator
@@ -363,6 +364,29 @@ class TestMapDataloader:
 
         assert item["mel_spec"].shape == (2, 128, 3)
         np.testing.assert_array_equal(item["param_array"].numpy(), arrays["param_array"][3])
+
+    def test_map_dataset_exact_version_remains_pinned_after_append(
+        self,
+        lance_dataset: tuple[Path, dict[str, np.ndarray]],
+        tmp_path: Path,
+    ) -> None:
+        """The reader and worker reopen contract retain the requested local version.
+
+        :param lance_dataset: Module-shared dataset and original arrays.
+        :param tmp_path: Isolated mutable dataset copy.
+        """
+        source, arrays = lance_dataset
+        dest = tmp_path / "versioned.lance"
+        shutil.copytree(source, dest)
+        version = lance.dataset(dest).version
+        lance.write_dataset(lance.dataset(dest).to_table(), dest, mode="append")
+
+        pinned = LanceMapDataset(dest, columns=["param_array"], version=version)
+
+        assert len(pinned) == len(arrays["param_array"])
+        np.testing.assert_array_equal(
+            pinned[0]["param_array"].numpy(), arrays["param_array"][0]
+        )
 
     def test_persistent_workers_without_workers_is_effectively_disabled(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]

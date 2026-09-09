@@ -35,7 +35,7 @@ from synth_setter.models.slap_module import SLAPModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import (
     _is_retryable_lance_read_error,
-    _retry_lance_read,
+    retry_lance_read,
 )
 from synth_setter.pipeline.data.lance_shard import (
     LANCE_DATA_STORAGE_VERSION,
@@ -235,7 +235,7 @@ def _open(uri: str) -> lance.LanceDataset:
     :returns: Open dataset.
     """
     target, storage_options = _lance_target(uri)
-    return _retry_lance_read(
+    return retry_lance_read(
         "slap_dataset_open", lambda: lance.dataset(target, storage_options=storage_options)
     )
 
@@ -248,7 +248,7 @@ def _transaction_uuid(dataset: lance.LanceDataset, version: int) -> str:
     :returns: Transaction UUID.
     :raises ValueError: The version has no transaction.
     """
-    transaction = _retry_lance_read(
+    transaction = retry_lance_read(
         "slap_transaction_read", lambda: dataset.read_transaction(version)
     )
     if transaction is None:
@@ -430,7 +430,7 @@ def _scan_batches(
     :raises Exception: A nonretryable scan failure.
     """
     yielded_rows = 0
-    batches = _retry_lance_read(
+    batches = retry_lance_read(
         "slap_batch_scan_open",
         lambda: dataset.to_batches(columns=columns, batch_size=batch_size),
     )
@@ -451,7 +451,7 @@ def _scan_batches(
                 )
                 return resumed, next(resumed, None)
 
-            batches, batch = _retry_lance_read("slap_batch_scan", resume)
+            batches, batch = retry_lance_read("slap_batch_scan", resume)
             if batch is None:
                 return
         yield batch

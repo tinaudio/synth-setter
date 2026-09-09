@@ -1,5 +1,5 @@
 defaults:
-  - model: slap_ast_audio_mlp_param
+  - model: slap_ast_audio_vst_ff_param
   - synth: surge_xt
   - _self_
 

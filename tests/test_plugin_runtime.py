@@ -292,7 +292,7 @@ def test_validated_bundle_lease_blocks_same_path_reinstall_until_consumer_opens_
     def _pause_after_validation(path: Path, **_kwargs: object) -> Iterator[Path]:
         with real_lease(path) as resolved:
             validated.set()
-            if not release_consumer.wait(10):
+            if not release_consumer.wait(_SPAWN_STARTUP_SECONDS):
                 raise RuntimeError("timed out waiting to release consumer")
             yield resolved
 
