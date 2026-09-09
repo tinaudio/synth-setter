@@ -62,6 +62,7 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
     dataset_field_shapes,
 )
+from synth_setter.evaluation.oracle_probe import OracleProbeProvenance
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt, split_for_shard
@@ -1122,22 +1123,35 @@ def test_from_hydra_surgepy_experiment_writes_consumable_shard(
     assert validate_all_shards_from_r2(spec) == []
 
 
-def test_from_hydra_pyfdn_pitchshift_writes_45_coordinate_shard(
+@pytest.mark.parametrize(
+    ("identity", "width"),
+    [
+        ("pyfdn_pitchshift_n8_mono_householder", 45),
+        ("pyfdn_gotz_n8_mono_fixed_delays", 144),
+        ("pyfdn_gotz_n8_mono_learned_delays", 152),
+        ("pyfdn_gotz_n8_mono_fixed_delays_givens", 172),
+        ("pyfdn_gotz_n8_mono_learned_delays_givens", 180),
+    ],
+)
+def test_from_hydra_pyfdn_identity_writes_shard_at_spec_width(
     cfg_dataset: DictConfig,
     fake_r2_remote: Path,
     monkeypatch: pytest.MonkeyPatch,
+    identity: str,
+    width: int,
 ) -> None:
-    """The Hydra entrypoint renders the pitch-shift identity through real pyFDN.
+    """The Hydra entrypoint renders each non-default pyFDN identity through real pyFDN.
 
-    :param cfg_dataset: Composed dataset configuration changed to pitch-shift pyFDN.
+    :param cfg_dataset: Composed dataset configuration changed to the identity.
     :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
     :param monkeypatch: Pins the worker contract.
+    :param identity: Registered pyFDN synth and ParamSpec name.
+    :param width: Encoded width the written shard must carry.
     """
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
-    identity = "pyfdn_pitchshift_n8_mono_householder"
     with open_dict(cfg_dataset):
-        cfg_dataset.task_name = "pyfdn-pitchshift-entrypoint-e2e"
+        cfg_dataset.task_name = f"{identity}-entrypoint-e2e"
         cfg_dataset.output_format = "lance"
         cfg_dataset.train_val_test_sizes = [1, 0, 0]
         cfg_dataset.synth.name = identity
@@ -1160,22 +1174,84 @@ def test_from_hydra_pyfdn_pitchshift_writes_45_coordinate_shard(
         cfg_dataset.render.param_sample_cadence = "sample"
         cfg_dataset.render.plugin_reload_cadence = "render"
         cfg_dataset.render.gui_toggle_cadence = "never"
-        cfg_dataset.r2.prefix = "fake-r2/pyfdn-pitchshift-run/"
+        cfg_dataset.r2.prefix = f"fake-r2/{identity}-run/"
         cfg_dataset.logger = None
 
     spec = spec_from_cfg(cfg_dataset)
 
     from_hydra(cfg_dataset)
 
-    assert spec.num_params == 45
+    assert spec.num_params == width
+    assert spec.render.param_spec_name == identity
+    assert validate_all_shards_from_r2(spec) == []
+    uploaded = list(fake_r2_remote.rglob(spec.shards[0].filename))
+    assert len(uploaded) == 1
+    param_type = lance.dataset(str(uploaded[0])).schema.field(PARAM_ARRAY_FIELD).type
+    assert isinstance(param_type, pa.FixedShapeTensorType)
+    assert tuple(param_type.shape) == (width,)
+
+
+def test_from_hydra_pyfdn_diffvox_writes_stereo_82_coordinate_shard(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Hydra entrypoint renders the DiffVox chain through real pyFDN to stereo rows.
+
+    :param cfg_dataset: Composed dataset configuration changed to the DiffVox identity.
+    :param fake_r2_remote: Local-filesystem root backing the ``r2:`` remote.
+    :param monkeypatch: Pins the worker contract.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    identity = "pyfdn_diffvox"
+    with open_dict(cfg_dataset):
+        cfg_dataset.task_name = "pyfdn-diffvox-entrypoint-e2e"
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.train_val_test_sizes = [1, 0, 0]
+        cfg_dataset.synth.name = identity
+        cfg_dataset.synth.param_spec_name = identity
+        cfg_dataset.synth.plugin_path = "pyfdn"
+        cfg_dataset.synth.plugin_state_path = ""
+        cfg_dataset.synth.synth_version = "0.4.2"
+        cfg_dataset.render.renderer_backend = "pyfdn"
+        cfg_dataset.render.pyfdn_excitation = "impulse"
+        cfg_dataset.render.sample_rate = 44_100
+        cfg_dataset.render.channels = 2
+        cfg_dataset.render.velocity = 0
+        cfg_dataset.render.signal_duration_seconds = 4.0
+        cfg_dataset.render.min_loudness = -100.0
+        cfg_dataset.render.audio_dtype = "float32"
+        cfg_dataset.render.mel_spec_dtype = "float32"
+        cfg_dataset.render.samples_per_render_batch = 1
+        cfg_dataset.render.samples_per_shard = 1
+        cfg_dataset.render.attempts_per_sample = 100
+        cfg_dataset.render.param_sample_cadence = "sample"
+        cfg_dataset.render.plugin_reload_cadence = "render"
+        cfg_dataset.render.gui_toggle_cadence = "never"
+        cfg_dataset.r2.prefix = "fake-r2/pyfdn-diffvox-run/"
+        cfg_dataset.logger = None
+
+    spec = spec_from_cfg(cfg_dataset)
+
+    from_hydra(cfg_dataset)
+
+    assert spec.num_params == 82
     assert spec.render.param_spec_name == identity
     assert validate_all_shards_from_r2(spec) == []
     shard = spec.shards[0]
     uploaded = list(fake_r2_remote.rglob(shard.filename))
     assert len(uploaded) == 1
-    param_type = lance.dataset(str(uploaded[0])).schema.field(PARAM_ARRAY_FIELD).type
+    schema = lance.dataset(str(uploaded[0])).schema
+    param_type = schema.field(PARAM_ARRAY_FIELD).type
+    audio_type = schema.field("audio").type
+    mel_type = schema.field("mel_spec").type
     assert isinstance(param_type, pa.FixedShapeTensorType)
-    assert tuple(param_type.shape) == (45,)
+    assert isinstance(audio_type, pa.FixedShapeTensorType)
+    assert isinstance(mel_type, pa.FixedShapeTensorType)
+    assert tuple(param_type.shape) == (82,)
+    assert tuple(audio_type.shape) == (2, 176_400)
+    assert tuple(mel_type.shape) == (2, 128, 401)
 
 
 @pytest.mark.parametrize(
@@ -1994,6 +2070,7 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
     prefix_root = (
         f"test-runs/test_oracle_eval_inline_writes_bounded_audio_metrics/{uuid.uuid4().hex[:12]}"
     )
+    run_id = f"oracle-probe-test-{uuid.uuid4().hex}"
     run_dir = tmp_path / "hydra_run"
     worktree_src = Path(__file__).resolve().parents[1] / "src"
     # Prepend this worktree's src so the subprocess imports the same
@@ -2011,7 +2088,9 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
                 "-m",
                 "synth_setter.cli.generate_dataset",
                 "experiment=generate_dataset/smoke-shard-with-oracle-eval",
+                "oracle_eval.upload=true",
                 f"r2.prefix_root={prefix_root}",
+                f"run_id={run_id}",
                 f"hydra.run.dir={run_dir}",
             ],
             env=env,
@@ -2025,7 +2104,6 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             f"--- STDOUT (tail) ---\n{result.stdout[-2000:]}\n"
             f"--- STDERR (tail) ---\n{result.stderr[-2000:]}"
         )
-
         eval_configs = list(run_dir.glob("oracle_eval/*/*/.hydra/config.yaml"))
         assert len(eval_configs) == 3
         for config_path in eval_configs:
@@ -2069,7 +2147,43 @@ def test_oracle_eval_inline_writes_bounded_audio_metrics(
             assert metrics[f"{metric_prefix}audio/sot_mean"] < bounds.sot_max, (split, metrics)
             assert metrics[f"{metric_prefix}audio/rms_mean"] > bounds.rms_min, (split, metrics)
             assert metrics[f"{metric_prefix}audio/mldr_mean"] < bounds.mldr_max, (split, metrics)
+
+        eval_run_ids = {path.parents[1].name for path in eval_configs}
+        assert len(eval_run_ids) == 1
+        eval_run_id = eval_run_ids.pop()
+        assert eval_run_id == run_id
+        probe_run_uri = (
+            f"r2://{cfg_dataset.r2.bucket}/probes/dataset-oracle/smoke-shard/{eval_run_id}/"
+        )
+        entries = r2_io.list_entries(probe_run_uri, recursive=True)
+        uploaded_paths = [entry.path for entry in entries]
+        launch_ids = {path.split("/", 1)[0] for path in uploaded_paths}
+        assert len(launch_ids) == 1
+        launch_id = launch_ids.pop()
+        assert not any("predictions/" in path for path in uploaded_paths)
+        assert not any(path.endswith(".log") or "/wandb/" in path for path in uploaded_paths)
+        for split in ("train", "val", "test"):
+            split_prefix = f"{launch_id}/{split}/"
+            assert f"{split_prefix}.hydra/config.yaml" in uploaded_paths
+            assert f"{split_prefix}metrics/metrics.json" in uploaded_paths
+            assert any(path.startswith(f"{split_prefix}audio/") for path in uploaded_paths)
+
+            provenance_path = tmp_path / f"{split}-provenance.json"
+            r2_io.download_to_path(
+                f"{probe_run_uri}{split_prefix}provenance.json", provenance_path
+            )
+            provenance = OracleProbeProvenance.model_validate_json(provenance_path.read_text())
+            assert provenance.source_dataset_uri.endswith(f"/{split}.lance")
+            assert provenance.source_split == split
+            assert provenance.source_run_id == eval_run_id
+            assert provenance.source_render == provenance.candidate_render
     finally:
+        eval_run_ids = {path.name for path in run_dir.glob("oracle_eval/*/*") if path.is_dir()}
+        for eval_run_id in eval_run_ids:
+            r2_io.purge_prefix(
+                cfg_dataset.r2.bucket,
+                f"probes/dataset-oracle/smoke-shard/{eval_run_id}/",
+            )
         r2_io.purge_prefix(cfg_dataset.r2.bucket, f"{prefix_root}/")
 
 

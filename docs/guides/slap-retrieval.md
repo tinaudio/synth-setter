@@ -64,7 +64,7 @@ them for training-time retrieval unless cross-split access is deliberate.
 
 ```bash
 synth-setter-export-slap \
-  model=slap_ast_audio_mlp_param \
+  model=slap_ast_audio_vst_ff_param \
   synth=surge_xt \
   source_root_uri=r2://bucket/source \
   output_root_uri=r2://bucket/slap \

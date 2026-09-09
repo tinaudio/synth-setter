@@ -71,6 +71,8 @@ docs:
         covers: "PupuJEPA conditioning profiles"
       - pattern: "src/synth_setter/configs/model/encoder/pupujepa_online.yaml"
         covers: "Online head sizing (max_seq_len) and backbone wiring"
+      - pattern: "src/synth_setter/configs/model/encoder/pupujepa_scratch.yaml"
+        covers: "From-scratch trainable backbone and head wiring"
       - pattern: "pyproject.toml"
         covers: "Exact timm runtime pin"
 
@@ -395,6 +397,20 @@ docs:
         covers: "PluginFormatMap schema and native-domain CSV row conversion"
       - pattern: "src/synth_setter/data/vst/surge_xt_clap_*.json"
         covers: "Committed raw dump + packaged pyname->CLAP map the CLI loads by default"
+
+  - doc: docs/reference/reverb-metrics.md
+    description: pyFDN response-loss and joint transport evaluation semantics
+    sources:
+      - pattern: "src/synth_setter/evaluation/response_losses.py"
+        covers: "Matching losses and target/prediction diagnostics"
+      - pattern: "src/synth_setter/evaluation/joint_transport.py"
+        covers: "Globally normalized transport grid"
+      - pattern: "src/synth_setter/evaluation/joint_transport.py"
+        covers: "Joint transport ground cost"
+      - pattern: "src/synth_setter/evaluation/compute_audio_metrics.py"
+        covers: "pyFDN metric columns and aggregation"
+      - pattern: "src/synth_setter/cli/eval.py"
+        covers: "Renderer-backend forwarding and persisted evaluation metrics"
 
   - doc: docs/design/eval-pipeline.md
     description: Evaluation pipeline design — predict, render, metrics, R2 integration
@@ -776,6 +792,15 @@ docs:
         covers: "Pi review triggers, automatic-review limit, trust boundary, secrets, and concurrency"
       - pattern: ".github/workflows/claude.yml"
         covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
+
+  # ── Growing Lance runbook ────────────────────────────────────────
+  - doc: docs/operations/growing-lance-runbook.md
+    description: Operator commands and failure behavior for bounded Lance train growth
+    sources:
+      - pattern: "src/synth_setter/cli/growing_lance.py"
+        covers: "init/grow/generate/materialize command surface, poll semantics, capacity exit"
+      - pattern: "src/synth_setter/pipeline/data/growing_lance.py"
+        covers: "Append/activation invariants the failure-behavior section documents"
 
   # ── RIR corpus publication runbook ───────────────────────────────
   - doc: docs/operations/rir-corpora-publication.md

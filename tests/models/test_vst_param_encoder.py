@@ -73,6 +73,7 @@ def test_param_encoder_backward_reaches_every_trainable_weight(
             assert weight.grad is None, name
     assert isinstance(encoder.patch_embed, ParamTokenEmbed)
     projection = encoder.patch_embed.projection
+    assert isinstance(projection, LearntProjection)
     assert not projection.out_projection.requires_grad
     assert projection.final_ffn is not None
     assert not any(p.requires_grad for p in projection.final_ffn.parameters())

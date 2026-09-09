@@ -62,3 +62,16 @@ teacher sequence at training or evaluation time. All profiles use the existing `
 head sized to the 100 time patches a four-second render emits, matching the cached profiles'
 sequence length. Frozen teachers run in float32 even when the surrounding trainer uses mixed
 precision.
+
+## Training from scratch
+
+`conditioning=pupujepa_tiny_scratch` and `conditioning=pupujepa_large_scratch` train the PupuJEPA
+architecture end to end like `conditioning=ast_online`: `PupuJepaAudioEncoder.from_scratch`
+builds a randomly initialised teacher with the selected variant's geometry, loads no checkpoint,
+and leaves every parameter trainable with train mode following the parent module. The same
+`EmbeddingPool` head sits on top. The pair is wrapped by `PupuJepaConditioningEncoder` rather than
+the frozen `PretrainedConditioningEncoder`, so Lightning checkpoints keep the learned backbone
+instead of stripping `encoder.backbone.*` state. A trainable teacher runs at the trainer's
+precision; only the STFT frontend stays in float32. Because chunking cannot bound activation memory
+under autograd, `max_batch_size` merely sets the forward chunk size and defaults to the variant
+cap.

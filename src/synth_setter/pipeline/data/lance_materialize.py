@@ -87,7 +87,7 @@ def _is_retryable_lance_read_error(error: BaseException) -> bool:
     )
 
 
-def _retry_lance_read[ReadResult](
+def retry_lance_read[ReadResult](
     operation_name: str, read: Callable[[], ReadResult]
 ) -> ReadResult:
     """Run one idempotent Lance read under the bounded retry policy.
@@ -270,10 +270,10 @@ def resolve_txid_version(ds: lance.LanceDataset, txid: str) -> int:
     :raises LookupError: No live version's transaction matches ``txid`` — the
         pin was cleaned up by ``cleanup_old_versions()`` or never existed.
     """
-    versions = _retry_lance_read("version_list", ds.versions)
+    versions = retry_lance_read("version_list", ds.versions)
     for entry in versions:
         version = entry["version"]
-        transaction = _retry_lance_read(
+        transaction = retry_lance_read(
             "transaction_read", lambda: ds.read_transaction(version)
         )
         if transaction is not None and transaction.uuid == txid:
@@ -296,7 +296,7 @@ def _open_source(source_uri: str) -> lance.LanceDataset:
         open_uri, storage_options = file_uri_to_path(source_uri).as_uri(), None
     else:
         open_uri, storage_options = source_uri, None
-    return _retry_lance_read(
+    return retry_lance_read(
         "source_open", lambda: lance.dataset(open_uri, storage_options=storage_options)
     )
 
@@ -309,7 +309,7 @@ def _transaction_uuid(ds: lance.LanceDataset, version: int) -> str:
     :returns: Transaction uuid for ``version``.
     :raises ValueError: The source version has no transaction record.
     """
-    transaction = _retry_lance_read(
+    transaction = retry_lance_read(
         "transaction_read", lambda: ds.read_transaction(version)
     )
     if transaction is None:
@@ -378,14 +378,14 @@ def _validate_materialized_destination(
             "delete the dataset and re-materialize"
         )
     try:
-        destination = _retry_lance_read(
+        destination = retry_lance_read(
             "destination_open", lambda: lance.dataset(str(dest_path))
         )
-        transaction = _retry_lance_read(
+        transaction = retry_lance_read(
             "destination_transaction_read",
             lambda: destination.read_transaction(destination.version),
         )
-        _retry_lance_read("destination_validate", destination.validate)
+        retry_lance_read("destination_validate", destination.validate)
     except (OSError, ValueError) as exc:
         raise ValueError(
             f"materialized dataset {dest_path} failed Lance validation; "
@@ -596,12 +596,15 @@ def _write_materialized_snapshot(
 
 # DOC502: the documented LookupError/ValueError propagate from
 # resolve_txid_version, _reuse_or_raise, and _transaction_uuid.
-def materialize_lance_subset(  # noqa: DOC502
+def materialize_lance_subset(  # noqa: DOC502, DOC503
     source_uri: str,
     dest_path: Path,
     *,
     txid: str | None,
     columns: Sequence[str],
+    version: int | None = None,
+    branch: str | None = None,
+    source_base_uri: str | None = None,
     limit: int | None = None,
     batch_size: int | None = None,
     high_memory_materialization: bool = False,
@@ -619,6 +622,10 @@ def materialize_lance_subset(  # noqa: DOC502
         unrelated dataset.
     :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
     :param columns: Columns to project, in scan order.
+    :param version: Explicit source version, used for native branch snapshots whose
+        transaction reader is unavailable in Lance 9. Mutually exclusive with ``txid``.
+    :param branch: Native branch selected from ``source_base_uri`` at ``version``.
+    :param source_base_uri: Parent dataset URI used to resolve inherited branch fragments.
     :param limit: First-N row cap, or ``None`` for all rows.
     :param batch_size: Optional scan batch-size override in rows.
     :param high_memory_materialization: Whether to opt into high-memory scanner and
@@ -629,6 +636,10 @@ def materialize_lance_subset(  # noqa: DOC502
     :raises ValueError: ``dest_path`` exists with a missing/unparsable
         sidecar or a sidecar whose request hash differs from this request.
     """
+    if txid is not None and version is not None:
+        raise ValueError("txid and version are mutually exclusive snapshot pins")
+    if branch is not None and (version is None or source_base_uri is None):
+        raise ValueError("branch materialization requires version and source_base_uri")
     dest_path = Path(dest_path)
     requested_columns = tuple(columns)
     if dest_path.exists() and txid is not None:
@@ -639,9 +650,15 @@ def materialize_lance_subset(  # noqa: DOC502
             columns=requested_columns,
             limit=limit,
         )
-    ds = _open_source(source_uri)
-    resolved_version = ds.version if txid is None else resolve_txid_version(ds, txid)
-    resolved_txid = _transaction_uuid(ds, resolved_version)
+    ds = _open_source(source_base_uri or source_uri)
+    if branch is not None:
+        ds = ds.checkout_version((branch, version))
+    resolved_version = (
+        version
+        if version is not None
+        else ds.version if txid is None else resolve_txid_version(ds, txid)
+    )
+    resolved_txid = None if version is not None else _transaction_uuid(ds, resolved_version)
     if dest_path.exists():
         return _reuse_or_raise(
             dest_path,

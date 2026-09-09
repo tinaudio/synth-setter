@@ -122,6 +122,7 @@ codex-doctor: ## Check Codex CLI, repo skill projection, and tinaudio skill plug
 # `--cov=scripts/ci` is needed alongside `--cov=src`: pytest-cov's `--cov`
 # overrides [tool.coverage.run].source in pyproject.toml.
 CI_COV := --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
+CI_COV_APPEND := --cov-append $(CI_COV)
 
 test-ci-unit: ## CI medium suite (test.yml): CPU-only, excludes slow/gpu/mps.
 	PYTEST_SESSION_BUDGET_SECONDS=1500 uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s $(CI_COV)
@@ -131,6 +132,9 @@ test-ci-slow: ## CI slow suite (cpu-slow.yml): slow CPU tests with live R2, excl
 
 test-ci-slow-pr: ## CI slow PR suite (cpu-slow.yml): slow CPU tests without live R2.
 	PYTEST_SESSION_BUDGET_SECONDS=4500 uv run pytest -vv -s -m "slow and not gpu and not mps and not requires_vst and not integration_r2" $(CI_COV)
+
+test-ci-slow-pr-r2-e2e: ## CI trusted-PR growing Lance E2E; append subprocess data to slow coverage.
+	PYTEST_SESSION_BUDGET_SECONDS=1200 uv run pytest -vv -s tests/integration/test_pyfdn_growing_lance_r2_e2e.py $(CI_COV_APPEND)
 
 test-ci-nightly: ## CI nightly suite (nightly.yml): all non-hardware, non-VST (unit + slow).
 	PYTEST_SESSION_BUDGET_SECONDS=4800 uv run pytest -vv -s -m "not gpu and not mps and not requires_vst"

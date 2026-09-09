@@ -1,12 +1,17 @@
 """Behavior tests for parameter-token embedding inside the token transformer encoder."""
 
+import pytest
 import torch
 
+from synth_setter.data.vst import param_spec_registry
+from synth_setter.data.vst.param_spec import ContinuousParameter, ParamSpec
 from synth_setter.models.components.transformer import (
     AudioSpectrogramTransformer,
+    GroupedParameterProjection,
     LearntProjection,
     ParamTokenEmbed,
 )
+from synth_setter.param_spec_name import ParamSpecName
 
 
 def _param_token_embed(
@@ -21,6 +26,13 @@ def _param_token_embed(
         final_ffn=False,
     )
     return ParamTokenEmbed(projection=projection)
+
+
+def test_learnt_projection_exposes_configured_token_count() -> None:
+    """Expose token count without requiring callers to inspect assignment weights."""
+    projection = _param_token_embed(num_tokens=11).projection
+
+    assert projection.num_tokens == 11
 
 
 def test_param_token_embed_maps_flat_params_to_token_sequence() -> None:
@@ -40,12 +52,14 @@ def test_param_token_embed_freezes_decoder_half_and_trains_encoder_half() -> Non
 
     embed(torch.rand(2, 7)).sum().backward()
 
-    assert not embed.projection.out_projection.requires_grad
-    assert embed.projection.initial_ffn is not None
+    projection = embed.projection
+    assert isinstance(projection, LearntProjection)
+    assert not projection.out_projection.requires_grad
+    assert projection.initial_ffn is not None
     encoder_side = [
-        embed.projection.in_projection,
-        embed.projection.assignment,
-        *embed.projection.initial_ffn.parameters(),
+        projection.in_projection,
+        projection.assignment,
+        *projection.initial_ffn.parameters(),
     ]
     assert all(
         weight.grad is not None and torch.count_nonzero(weight.grad) for weight in encoder_side
@@ -72,8 +86,40 @@ def test_param_token_embed_with_final_ffn_freezes_it_too() -> None:
 
     embed = ParamTokenEmbed(projection=projection)
 
+    assert isinstance(embed.projection, LearntProjection)
     assert embed.projection.final_ffn is not None
     assert all(not weight.requires_grad for weight in embed.projection.final_ffn.parameters())
+
+
+def test_param_token_embed_grouped_projection_freezes_every_decoder_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Freeze all unused field decoders while retaining trainable field encoders.
+
+    :param monkeypatch: Restores the process-local parameter registry after the test.
+    """
+    spec_name = "test_param_token_grouped"
+    monkeypatch.setitem(
+        param_spec_registry._param_specs,
+        ParamSpecName(spec_name),
+        ParamSpec(
+            synth_params=[ContinuousParameter("first"), ContinuousParameter("second")],
+            note_params=[],
+        ),
+    )
+    projection = GroupedParameterProjection(d_model=8, param_spec_name=spec_name)
+
+    embed = ParamTokenEmbed(projection=projection)
+
+    assert embed.num_tokens == 2
+    assert all(
+        not parameter.requires_grad
+        for head in projection.decoders
+        for parameter in head.parameters()
+    )
+    assert all(
+        parameter.requires_grad for head in projection.encoders for parameter in head.parameters()
+    )
 
 
 def test_token_transformer_with_param_embed_returns_conditioning_tokens() -> None:

@@ -15,6 +15,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from functools import cached_property
@@ -44,11 +45,14 @@ from synth_setter.pipeline.schemas.shard_metadata import (
 )
 from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
+    FLUSHING_BACKENDS,
     PYFDN_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
+    FlushBlocks,
     PyFDNExcitation,
     RendererBackend,
+    default_flush_blocks,
 )
 from synth_setter.synth_spec import SYNTHS, SynthSpec
 
@@ -171,6 +175,8 @@ def _current_platform() -> str:
 
 _GuiToggleCadence = Literal["never", "once", "render", "always_on"]
 _PluginReloadCadence = Literal["once", "render"]
+
+
 _ParamSampleCadence = Literal["sample", "shard"]
 type StorageDType = Literal["float16", "float32"]
 
@@ -349,6 +355,32 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             '``"render"`` reloads on every render (historical per-#489 behaviour).'
         ),
     )
+    post_load_flush_blocks: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Silent host blocks processed after the preset loads; Pedalboard also resets the "
+            "plugin afterwards. ``None`` keeps the backend default (Pedalboard: "
+            "``PEDALBOARD_FLUSH_SECONDS`` at the render sample rate; DawDreamer: its preset "
+            "settle). Zero skips the step. Only Pedalboard and DawDreamer flush."
+        ),
+    )
+    post_param_flush_blocks: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Silent host blocks processed after parameter writes and before the note; "
+            "``None`` keeps the backend default (Pedalboard flushes, DawDreamer does not)."
+        ),
+    )
+    post_render_flush_blocks: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Silent host blocks processed after the note render to scrub voice state; "
+            "``None`` keeps the backend default (Pedalboard flushes, DawDreamer does not)."
+        ),
+    )
     gui_toggle_cadence: _GuiToggleCadence = Field(
         default_factory=_default_gui_toggle_cadence,
         description=(
@@ -477,6 +509,43 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             )
         return self
 
+    def _explicit_flush_blocks(self) -> dict[str, int]:
+        """Return the flush-block fields the config sets, keyed by ``FlushBlocks`` step.
+
+        :returns: Step name to block count for every non-``None`` field.
+        """
+        fields = {
+            "post_load": self.post_load_flush_blocks,
+            "post_param": self.post_param_flush_blocks,
+            "post_render": self.post_render_flush_blocks,
+        }
+        return {step: blocks for step, blocks in fields.items() if blocks is not None}
+
+    @model_validator(mode="after")
+    def _validate_flush_blocks_backend(self) -> RenderConfig:
+        """Reject explicit flush-block counts on backends that never flush.
+
+        :returns: The validated config.
+        :raises ValueError: If a flush-block field is set for a non-flushing backend.
+        """
+        explicit = self._explicit_flush_blocks()
+        if explicit and self.renderer_backend not in FLUSHING_BACKENDS:
+            steps = ", ".join(f"{step}_flush_blocks" for step in explicit)
+            raise ValueError(
+                f"{steps} require renderer_backend in {sorted(FLUSHING_BACKENDS)}; "
+                f"got {self.renderer_backend!r}"
+            )
+        return self
+
+    @property
+    def flush_blocks(self) -> FlushBlocks:
+        """Per-step silent block counts with backend defaults filled in.
+
+        :returns: Resolved counts; a non-flushing backend resolves to all zeros.
+        """
+        defaults = default_flush_blocks(self.renderer_backend, self.sample_rate)
+        return replace(defaults, **self._explicit_flush_blocks())
+
     @model_validator(mode="after")
     def _validate_pyfdn_backend(self) -> RenderConfig:
         """Require canonical pyFDN geometry and fixed compatibility stubs.
@@ -504,7 +573,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         if self.plugin_path != PYFDN_PLUGIN_NAME or self.plugin_state_path:
             raise ValueError('pyfdn requires plugin_path="pyfdn" and no plugin_state_path')
         expected_rate = renderer_backend_contract.PYFDN_SOURCE_SAMPLE_RATE_HZ
-        expected_channels = renderer_backend_contract.PYFDN_SOURCE_CHANNELS
+        expected_channels = renderer_backend_contract.pyfdn_output_channels(self.param_spec_name)
         expected_duration = renderer_backend_contract.PYFDN_SOURCE_TOTAL_FRAMES / expected_rate
         if (self.sample_rate, self.channels, self.signal_duration_seconds) != (
             expected_rate,

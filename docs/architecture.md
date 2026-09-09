@@ -189,6 +189,29 @@ of W&B (5 GB total budget); at train end the best checkpoint is uploaded to R2
 and the `model-{config_id}` W&B artifact references it as an `s3://` URI. See
 [training-pipeline.md](design/training-pipeline.md) section 6.
 
+**Growing Lance train snapshots.** Long-running offline training can append to
+a native branch without mutating the finalized baseline. The
+`synth-setter-growing-lance init` contract pins the baseline transaction, its
+train-shard count, the producer spec, the total train-shard maximum, and the
+per-refresh request size. The `grow` driver loops enqueue (freezing
+`[high_watermark, min(H + N, max))`), waits for parallel polling `generate`
+workers to stage every position through branch-isolated claims, and finalizes
+each range as a native Lance `Append`. Cumulative Welford state
+and derived statistics are hash-bound before the `<branch>-ready` tag advances.
+At capacity all producer commands are safe no-ops and the daemons exit.
+Copy-paste commands and failure behavior:
+[operations/growing-lance-runbook.md](operations/growing-lance-runbook.md).
+
+`materialize` serializes writers with a file lock and incrementally appends new
+remote fragments to one local `train.lance`; version directories contain only
+remote identity and statistics metadata. `active.json` binds exact remote and
+local transactions and cannot regress. Set `training.growing_active_record` and
+`training.growing_refresh_epoch_interval=1` to rebuild only the train loader at
+epoch boundaries. Validation and test remain on baseline rows and statistics.
+DDP adopts only an exact identity available to every rank, while checkpoint
+resume validates and restores its exact local Lance version before considering
+a newer ready snapshot. Growing jobs require `persistent_workers=false`.
+
 **Storage conventions are shared.** All pipelines (data, training, eval) follow
 the same R2 path structure and ID conventions defined in
 [storage-provenance-spec.md](design/storage-provenance-spec.md).
