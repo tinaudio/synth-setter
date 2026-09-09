@@ -1244,6 +1244,7 @@ def test_train_cardinal_mixed_endpoint_time_weighting_overfits_fixed_batch(
     assert object_dict["trainer"].global_step == 200
     assert object_dict["model"].hparams["endpoint_time_weighting"] == "flowmol3"
     assert metric_dict["train/loss_step"].item() < 0.05
+    assert metric_dict["train/per_param_endpoint_mse/parameter_1_v"].item() < 0.05
 
 
 @pytest.mark.slow

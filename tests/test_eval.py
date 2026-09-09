@@ -1372,8 +1372,8 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
 
 
 @pytest.mark.slow
-def test_evaluate_loads_mixed_endpoint_checkpoint_and_samples(tmp_path: Path) -> None:
-    """Evaluation loads a mixed-endpoint checkpoint and runs the production sampler.
+def test_evaluate_loads_weighted_mixed_endpoint_checkpoint_and_samples(tmp_path: Path) -> None:
+    """Evaluation loads a weighted mixed-endpoint checkpoint and runs the production sampler.
 
     :param tmp_path: Checkpoint and evaluation output directory.
     """
@@ -1396,6 +1396,7 @@ def test_evaluate_loads_mixed_endpoint_checkpoint_and_samples(tmp_path: Path) ->
         cfg.mode = "test"
         cfg.model.compile = False
         cfg.model.endpoint_loss = "mixed"
+        cfg.model.endpoint_time_weighting = "flowmol3"
         cfg.model.parameterization = "endpoint"
         cfg.model.encoder.d_model = 16
         cfg.model.encoder.n_heads = 1
@@ -1433,6 +1434,7 @@ def test_evaluate_loads_mixed_endpoint_checkpoint_and_samples(tmp_path: Path) ->
 
     assert torch.isfinite(metric_dict["test/param_mse"])
     assert object_dict["model"].hparams.endpoint_loss == "mixed"
+    assert object_dict["model"].hparams.endpoint_time_weighting == "flowmol3"
 
 
 def test_evaluate_loads_compiled_cpu_training_checkpoint(
