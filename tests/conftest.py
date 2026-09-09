@@ -767,17 +767,26 @@ def cfg_dataset(cfg_dataset_global: DictConfig, tmp_path: Path) -> Iterator[Dict
     GlobalHydra.instance().clear()
 
 
-@pytest.fixture(scope="function")
-def cfg_dataset_kr106_smoke(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose the KR-106 smoke experiment with temporary paths.
+@pytest.fixture(
+    scope="function",
+    params=[
+        "ultramaster-kr106-lance-smoke",
+        "ultramaster-kr106-single-note-lance-smoke",
+    ],
+)
+def cfg_dataset_kr106_smoke(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> Iterator[DictConfig]:
+    """Compose each KR-106 smoke identity with temporary paths.
 
+    :param request: Parametrized KR-106 experiment stem.
     :param tmp_path: Per-test output/work/log root.
     :yields DictConfig: KR-106 smoke cfg with ``tmp_path``-pinned paths.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
-            overrides=["experiment=generate_dataset/ultramaster-kr106-lance-smoke"],
+            overrides=[f"experiment=generate_dataset/{request.param}"],
         )
         with open_dict(cfg):
             _set_workspace_root(cfg)

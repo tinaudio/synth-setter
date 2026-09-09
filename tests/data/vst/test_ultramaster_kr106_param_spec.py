@@ -84,6 +84,52 @@ _EXPECTED_SYNTH_PARAMS = (
     "oscillator_mode",
     "bypass",
 )
+_SINGLE_NOTE_SYNTH_PARAMS = (
+    "adsr_mode",
+    "bender_dco",
+    "bender_vcf",
+    "bender_lfo",
+    "lfo_rate",
+    "lfo_delay",
+    "dco_lfo",
+    "dco_pwm",
+    "dco_sub",
+    "dco_noise",
+    "hpf",
+    "vcf_freq",
+    "vcf_res",
+    "vcf_env",
+    "vcf_lfo",
+    "vcf_kbd",
+    "volume",
+    "attack",
+    "decay",
+    "sustain",
+    "release",
+    "hold",
+    "pulse",
+    "saw",
+    "sub_sw",
+    "chorus_i",
+    "chorus_ii",
+    "octave",
+    "lfo_mode",
+    "pwm_mode",
+    "vcf_env_inv",
+    "vca_mode",
+    "bender",
+    "tuning",
+    "porta_mode",
+    "porta_rate",
+    "transpose_offset",
+    "master_volume",
+    "voices",
+    "vcf_oversample",
+    "ignore_velocity",
+    "lfo_sync_host",
+    "lfo_quantize",
+    "oscillator_mode",
+)
 
 
 def test_ultramaster_kr106_spec_covers_every_host_parameter() -> None:
@@ -185,6 +231,47 @@ def test_ultramaster_kr106_onehot_identity_reuses_renderer_artifacts() -> None:
     assert onehot.plugin_path == scalar.plugin_path
     assert onehot.plugin_state_path == scalar.plugin_state_path
     assert onehot.synth_version == scalar.synth_version
+
+
+def test_ultramaster_kr106_single_note_spec_contains_only_audible_controls() -> None:
+    """The fresh single-note identity excludes controls without audible variation."""
+    spec = param_specs["ultramaster_kr106_single_note"]
+
+    assert tuple(spec.synth_param_names) == _SINGLE_NOTE_SYNTH_PARAMS
+    assert len(spec.synth_params) == 44
+    assert spec.synth_param_length == 81
+    assert spec.note_param_length == 3
+    assert spec.encoded_width == 84
+
+
+def test_ultramaster_kr106_single_note_spec_uses_canonical_host_values() -> None:
+    """Aliased host settings collapse to one renderer-native value."""
+    categorical_params = {
+        param.name: param
+        for param in param_specs["ultramaster_kr106_single_note"].synth_params
+        if isinstance(param, CategoricalParameter)
+    }
+
+    assert categorical_params["porta_mode"].values == ["Mono", "Poly I"]
+    assert categorical_params["porta_mode"].raw_values == [0.0, 0.5]
+    assert categorical_params["voices"].values == [6, 8, 10]
+    assert categorical_params["voices"].raw_values == [0.0, 0.5, 1.0]
+    assert categorical_params["vcf_oversample"].values == ["Off", "2x", "4x"]
+    assert categorical_params["vcf_oversample"].raw_values == [0.0, 1.0 / 3.0, 1.0]
+
+
+def test_ultramaster_kr106_single_note_spec_round_trip_preserves_values() -> None:
+    """A single-note sample survives the public ParamSpec codec."""
+    spec = param_specs["ultramaster_kr106_single_note"]
+    synth, note = spec.sample(np.random.default_rng(3309))
+
+    decoded_synth, decoded_note = spec.decode(spec.encode(synth, note))
+
+    assert decoded_synth == pytest.approx(synth, abs=1e-6)
+    assert decoded_note["pitch"] == note["pitch"]
+    assert decoded_note["note_start_and_end"] == pytest.approx(
+        note["note_start_and_end"], abs=1e-6
+    )
 
 
 def test_ultramaster_kr106_spec_round_trip_preserves_values() -> None:
@@ -293,6 +380,12 @@ def test_ultramaster_kr106_onehot_selector_renders_decoded_model_output() -> Non
     assert np.max(np.abs(audio)) > 1e-4
 
 
+def test_ultramaster_kr106_single_note_preset_is_committed() -> None:
+    """The single-note identity owns the baseline that fixes omitted safe states."""
+    preset = _REPO_ROOT / plugin_state_paths["ultramaster_kr106_single_note"]
+    assert preset.is_file()
+
+
 def test_ultramaster_kr106_param_map_covers_full_spec_without_clap() -> None:
     """The committed cross-host map covers every KR-106 control without CLAP provenance."""
     with as_file(param_map("ultramaster_kr106")) as path:
@@ -309,6 +402,82 @@ def test_ultramaster_kr106_param_map_covers_full_spec_without_clap() -> None:
         identity.dawdreamer.index < joint_map.dawdreamer.parameter_count
         for identity in joint_map.params.values()
     )
+
+
+def test_ultramaster_kr106_single_note_param_map_covers_curated_spec() -> None:
+    """The single-note map dispatches exactly its curated audible controls."""
+    with as_file(param_map("ultramaster_kr106_single_note")) as path:
+        joint_map = load_param_map(path)
+
+    assert joint_map.param_spec_name == "ultramaster_kr106_single_note"
+    assert tuple(joint_map.params) == _SINGLE_NOTE_SYNTH_PARAMS
+    assert joint_map.preset_resource == "presets/ultramaster_kr106_single_note-base.vstpreset"
+    assert joint_map.clap is None
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+def test_ultramaster_kr106_single_note_preset_fixes_omitted_safe_states() -> None:
+    """The real single-note baseline disables controls omitted for safety."""
+    if platform.machine() != "x86_64":
+        pytest.skip("Ultramaster KR-106 is source-built only on x86_64")
+    assert _PLUGIN_PATH.is_dir(), f"Ultramaster KR-106 is not installed at {_PLUGIN_PATH}"
+
+    from synth_setter.data.vst.core import load_plugin, load_preset
+
+    plugin = load_plugin(str(_PLUGIN_PATH))
+    load_preset(
+        plugin,
+        str(_REPO_ROOT / plugin_state_paths["ultramaster_kr106_single_note"]),
+    )
+
+    assert plugin.parameters["arpeggio"].raw_value == 0.0  # type: ignore[attr-defined]
+    assert plugin.parameters["transpose"].raw_value == 0.0  # type: ignore[attr-defined]
+    assert plugin.parameters["power"].raw_value == 1.0  # type: ignore[attr-defined]
+    assert plugin.parameters["bypass"].raw_value == 0.0  # type: ignore[attr-defined]
+
+
+@pytest.mark.slow
+@pytest.mark.requires_vst
+def test_ultramaster_kr106_single_note_dawdreamer_renders_audio() -> None:
+    """The curated parameters drive a real fresh KR-106 render."""
+    if platform.machine() != "x86_64":
+        pytest.skip("Ultramaster KR-106 is source-built only on x86_64")
+    assert _PLUGIN_PATH.is_dir(), f"Ultramaster KR-106 is not installed at {_PLUGIN_PATH}"
+
+    spec = param_specs["ultramaster_kr106_single_note"]
+    synth_params, _ = spec.sample(np.random.default_rng(3309))
+    synth_params.update(
+        {
+            "attack": 0.0,
+            "dco_noise": 0.0,
+            "master_volume": 0.5,
+            "porta_mode": 0.5,
+            "pulse": 1.0,
+            "saw": 1.0,
+            "sustain": 0.8,
+            "volume": 0.5,
+        }
+    )
+    with as_file(param_map("ultramaster_kr106_single_note")) as path:
+        joint_map = load_param_map(path)
+    renderer = DawDreamerRenderer(
+        plugin_path=str(_PLUGIN_PATH),
+        sample_rate=44_100,
+        channels=2,
+        signal_duration_seconds=1.0,
+        plugin_state_path=str(
+            _REPO_ROOT / plugin_state_paths["ultramaster_kr106_single_note"]
+        ),
+        parameter_map=joint_map,
+        reload_plugin_each_render=True,
+    )
+
+    audio = renderer.render(synth_params, 60, 100, (0.05, 0.75))
+
+    assert audio.shape == (2, 44_100)
+    assert np.isfinite(audio).all()
+    assert np.max(np.abs(audio)) > 1e-4
 
 
 @pytest.mark.slow

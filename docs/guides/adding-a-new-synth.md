@@ -144,19 +144,23 @@ The draft is a starting point, not a finished spec. Open
 A `ParamSpec` takes two lists: `synth_params` (the synth's parameters) and
 `note_params` (`pitch`, a `DiscreteLiteralParameter` whose MIDI window the
 registered specs set to 48–72 — widen or narrow it for your synth — plus
-`note_start_and_end`). Prune parameters that don't
-affect the rendered tone (bypass, MIDI-routing, polyphony, glide) so the model
-learns only meaningful dimensions. Curated widths vary widely across the
+`note_start_and_end`). Prune parameters that cannot affect the identity's
+rendering contract so the model learns only meaningful dimensions. Verify
+performance controls such as polyphony and glide against the real host before
+pruning them; their effect depends on the synth's voice-allocation behavior.
+Curated widths vary widely across the
 registered specs — from a 4-parameter toy spec to the full 162-parameter Surge
 patch:
 
-| Synth                        | `synth_params` | encoded width |
-| ---------------------------- | -------------- | ------------- |
-| `surge_4` (4-param toy spec) | 4              | 7             |
-| `cardinal`                   | 9              | 13            |
-| `surge_simple`               | 89             | 92            |
-| `obxf`                       | 94             | 187           |
-| `surge_xt`                   | 162            | 300           |
+| Synth                           | `synth_params` | encoded width |
+| ------------------------------- | -------------- | ------------- |
+| `surge_4` (4-param toy spec)    | 4              | 7             |
+| `cardinal`                      | 9              | 13            |
+| `surge_simple`                  | 89             | 92            |
+| `obxf`                          | 94             | 187           |
+| `ultramaster_kr106_single_note` | 44             | 84            |
+| `ultramaster_kr106`             | 58             | 246           |
+| `surge_xt`                      | 162            | 300           |
 
 The encoded width (`param_specs[name].encoded_width`) exceeds the curated count
 (`len(spec.synth_params)`) because onehot-encoded categoricals expand one

@@ -93,7 +93,6 @@ _REAL_PLUGIN_VST3 = (
     Path(PLUGIN_PATH) if Path(PLUGIN_PATH).is_absolute() else _REPO_ROOT / PLUGIN_PATH
 ).resolve()
 _KR106_PLUGIN_VST3 = _REPO_ROOT / "plugins" / "Ultramaster KR-106.vst3"
-_KR106_PRESET = _REPO_ROOT / "presets" / "ultramaster_kr106-base.vstpreset"
 
 # Moduleinfo-only VST3 bundle: extract_renderer_version reads its
 # Contents/moduleinfo.json and returns the pinned version without loading any
@@ -899,12 +898,14 @@ def test_from_hydra_real_kr106_smoke_writes_finite_consumable_lance_shard(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    synth_name = str(cfg_dataset_kr106_smoke.synth.name)
+    preset = _REPO_ROOT / str(cfg_dataset_kr106_smoke.synth.plugin_state_path)
     with open_dict(cfg_dataset_kr106_smoke):
         cfg_dataset_kr106_smoke.train_val_test_sizes = [2, 0, 0]
         cfg_dataset_kr106_smoke.synth.plugin_path = str(_KR106_PLUGIN_VST3)
-        cfg_dataset_kr106_smoke.synth.plugin_state_path = str(_KR106_PRESET)
+        cfg_dataset_kr106_smoke.synth.plugin_state_path = str(preset)
         cfg_dataset_kr106_smoke.render.samples_per_shard = 2
-        cfg_dataset_kr106_smoke.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
+        cfg_dataset_kr106_smoke.r2.prefix = f"fake-r2/{synth_name}-e2e/"
         cfg_dataset_kr106_smoke.logger = None
 
     spec = spec_from_cfg(cfg_dataset_kr106_smoke)

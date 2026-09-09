@@ -276,7 +276,6 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
     ],
 )
 
-
 def _onehot_voices_variant() -> ParamSpec:
     """Return an independent spec where only voices uses onehot encoding.
 
@@ -292,3 +291,52 @@ def _onehot_voices_variant() -> ParamSpec:
 
 
 ULTRAMASTER_KR106_ONEHOT_PARAM_SPEC = _onehot_voices_variant()
+
+
+_SINGLE_NOTE_EXCLUDED_PARAMS = frozenset(
+    {
+        "arpeggio",
+        "arp_limit_kbd",
+        "arp_mode",
+        "arp_quantize",
+        "arp_range",
+        "arp_rate",
+        "arp_sync_host",
+        "bypass",
+        "chorus_off",
+        "mono_retrigger",
+        "power",
+        "program",
+        "send_midi_sysex",
+        "transpose",
+    }
+)
+_SINGLE_NOTE_PARAM_OVERRIDES = {
+    "porta_mode": CategoricalParameter(
+        name="porta_mode",
+        values=["Mono", "Poly I"],
+        raw_values=[0.0, 0.5],
+        encoding="onehot",
+    ),
+    "vcf_oversample": CategoricalParameter(
+        name="vcf_oversample",
+        values=["Off", "2x", "4x"],
+        raw_values=[0.0, 1.0 / 3.0, 1.0],
+        encoding="onehot",
+    ),
+    "voices": CategoricalParameter(
+        name="voices",
+        values=[6, 8, 10],
+        raw_values=[0.0, 0.5, 1.0],
+        encoding="onehot",
+    ),
+}
+
+ULTRAMASTER_KR106_SINGLE_NOTE_PARAM_SPEC = ParamSpec(
+    [
+        deepcopy(_SINGLE_NOTE_PARAM_OVERRIDES.get(param.name, param))
+        for param in ULTRAMASTER_KR106_PARAM_SPEC.synth_params
+        if param.name not in _SINGLE_NOTE_EXCLUDED_PARAMS
+    ],
+    deepcopy(ULTRAMASTER_KR106_PARAM_SPEC.note_params),
+)

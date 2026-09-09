@@ -44,6 +44,9 @@ DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/surge-xt-dawdreamer-smoke": "surge-xt-dawdreamer-smoke",
     "generate_dataset/ultramaster-kr106-lance-2m-40k-10k": ("ultramaster-kr106-lance-2m-40k-10k"),
     "generate_dataset/ultramaster-kr106-lance-smoke": "ultramaster-kr106-lance-smoke",
+    "generate_dataset/ultramaster-kr106-single-note-lance-smoke": (
+        "ultramaster-kr106-single-note-lance-smoke"
+    ),
     "generate_dataset/smoke-shard-with-finalize": "smoke-shard",
     "generate_dataset/smoke-shard-with-oracle-eval": "smoke-shard",
 }
@@ -104,6 +107,20 @@ def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() ->
     assert spec.render.param_spec_name == "surge_xt"
     assert spec.render.samples_per_shard == 1
     assert spec.train_val_test_sizes == (1, 0, 0)
+
+
+def test_ultramaster_kr106_single_note_smoke_uses_curated_fresh_identity() -> None:
+    """The single-note smoke run reloads its 84-column identity for every row."""
+    spec = _compose_dataset_spec("generate_dataset/ultramaster-kr106-single-note-lance-smoke")
+
+    assert spec.render.synth.name == "ultramaster_kr106_single_note"
+    assert spec.render.param_spec_name == "ultramaster_kr106_single_note"
+    assert spec.render.renderer_backend == "dawdreamer"
+    assert spec.render.gui_toggle_cadence == "never"
+    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.samples_per_render_batch == 1
+    assert spec.num_params == 84
+    assert spec.train_val_test_sizes == (20, 0, 0)
 
 
 def test_ultramaster_kr106_smoke_experiment_renders_twenty_lance_rows() -> None:
