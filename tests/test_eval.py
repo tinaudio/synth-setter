@@ -2366,6 +2366,42 @@ def test_train_eval_pupujepa_large_online_conditioning_returns_finite_metric(
     assert validation_mse < 2.0
 
 
+def test_train_eval_pupujepa_tiny_scratch_restores_trained_backbone(
+    tmp_path: Path,
+    cfg_torchsynth_pupujepa_tiny_scratch_train: DictConfig,
+) -> None:
+    """Eval restores the from-scratch PupuJEPA backbone the train entrypoint learned.
+
+    :param tmp_path: Shared train/eval output directory.
+    :param cfg_torchsynth_pupujepa_tiny_scratch_train: Two-row checkpoint-free config.
+    """
+    cfg_train = cfg_torchsynth_pupujepa_tiny_scratch_train
+    HydraConfig().set_config(cfg_train)
+    _, train_objects = train(cfg_train)
+    trained_patch_embed = train_objects[
+        "model"
+    ].encoder.backbone.teacher_model.patch_embed.proj.weight.detach()
+    checkpoint_path = tmp_path / "pupujepa-tiny-scratch.ckpt"
+    train_objects["trainer"].save_checkpoint(checkpoint_path)
+
+    cfg_eval = cfg_train.copy()
+    with open_dict(cfg_eval):
+        cfg_eval.ckpt_path = str(checkpoint_path)
+        cfg_eval.mode = "validate"
+        cfg_eval.trainer.limit_val_batches = 1
+    HydraConfig().set_config(cfg_eval)
+    try:
+        metric_dict, eval_objects = evaluate(cfg_eval)
+    finally:
+        GlobalHydra.instance().clear()
+
+    restored_patch_embed = eval_objects[
+        "model"
+    ].encoder.backbone.teacher_model.patch_embed.proj.weight.detach()
+    assert torch.equal(restored_patch_embed, trained_patch_embed)
+    assert math.isfinite(metric_dict["val/param_mse"].item())
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.integration_r2

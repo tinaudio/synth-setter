@@ -562,6 +562,34 @@ def cfg_torchsynth_pupujepa_large_online_train(tmp_path: Path) -> DictConfig:
 
 
 @pytest.fixture
+def cfg_torchsynth_pupujepa_tiny_scratch_train(tmp_path: Path) -> DictConfig:
+    """Compose one CPU step through from-scratch PupuJEPA Tiny conditioning.
+
+    :param tmp_path: Pinned output directory.
+    :returns: Ready-to-run checkpoint-free PupuJEPA Tiny TorchSynth configuration.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/flow",
+                "conditioning=pupujepa_tiny_scratch",
+                "trainer=cpu",
+                "callbacks=none",
+                "logger=[]",
+            ],
+        )
+    _configure_online_conditioning_smoke(cfg, tmp_path)
+    with open_dict(cfg):
+        cfg.datamodule.sample_rate = 24_000
+        cfg.datamodule.signal_length = 24_000
+        cfg.datamodule.train_val_test_sizes = [2, 2, 2]
+        cfg.datamodule.batch_size = 2
+    return cfg
+
+
+@pytest.fixture
 def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
     """Compose a one-step offline CLAP conditioning run through the train entrypoint.
 
