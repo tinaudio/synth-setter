@@ -570,6 +570,15 @@ def test_finetune_module_learned_arm_without_encoder_raises(tmp_path: Path) -> N
         _finetune(_base_checkpoint(tmp_path), control_mode="learned_audio")
 
 
+def test_finetune_module_with_endpoint_parameterization_raises(tmp_path: Path) -> None:
+    """The one-step estimate assumes a velocity field, so an endpoint base is refused.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    with pytest.raises(ValueError, match="parameterization"):
+        _finetune(_base_checkpoint(tmp_path), overrides={"parameterization": "endpoint"})
+
+
 def test_finetune_module_gradient_arm_without_cost_raises(tmp_path: Path) -> None:
     """The equation-9 arm refuses to start without the differentiable cost it differentiates.
 

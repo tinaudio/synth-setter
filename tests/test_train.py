@@ -532,6 +532,35 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         assert np.isfinite(logged_values).all()
 
 
+@pytest.mark.slow
+def test_train_torchsynth_flow_endpoint_one_step_writes_stamped_checkpoint(
+    cfg_torchsynth_flow_endpoint_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Train and validate one endpoint-parameterized step and stamp the checkpoint.
+
+    :param cfg_torchsynth_flow_endpoint_train: Composed tiny endpoint flow config.
+    :param tmp_path: Output root containing the checkpoint artifact.
+    """
+    HydraConfig().set_config(cfg_torchsynth_flow_endpoint_train)
+
+    metric_dict, object_dict = train(cfg_torchsynth_flow_endpoint_train)
+
+    assert object_dict["trainer"].global_step == 1
+    for key in ("train/loss", "val/param_mse"):
+        values = [value for name, value in metric_dict.items() if name.startswith(key)]
+        assert values, f"no {key} metric in {sorted(metric_dict)}"
+        assert all(torch.isfinite(value).all() for value in values)
+    assert any(name.startswith("train/per_param_endpoint_mse/") for name in metric_dict), sorted(
+        metric_dict
+    )
+
+    checkpoint = torch.load(
+        tmp_path / "checkpoints" / "last.ckpt", map_location="cpu", weights_only=False
+    )
+    assert checkpoint["parameterization"] == "endpoint"
+
+
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 @pytest.mark.slow
