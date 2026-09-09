@@ -223,6 +223,42 @@ def test_evaluate_pyfdn_householder_checkpoint_logs_param_mse(
     assert torch.isfinite(metrics["test/param_mse"])
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("cfg_pyfdn_train", "control"),
+    [
+        (("pyfdn/flow", "pyfdn_n8_mono_kronecker"), "kronecker_angles"),
+        (("pyfdn/flow", "pyfdn_n8_mono_householder_vector"), "householder_vector"),
+    ],
+    indirect=["cfg_pyfdn_train"],
+)
+def test_evaluate_pyfdn_derived_feedback_checkpoint_preserves_parameter_metrics(
+    cfg_pyfdn_train: DictConfig, control: str
+) -> None:
+    """A train-produced checkpoint emits cosine distances alongside existing geometry errors.
+
+    :param cfg_pyfdn_train: One-step pyFDN run over real Lance splits.
+    :param control: Angle or direction parameter expected in the evaluation output.
+    """
+    HydraConfig().set_config(cfg_pyfdn_train)
+    train(cfg_pyfdn_train)
+    checkpoint = Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt"
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.ckpt_path = str(checkpoint)
+        cfg_pyfdn_train.mode = "test"
+        cfg_pyfdn_train.trainer.limit_test_batches = 1
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    metrics, _ = evaluate(cfg_pyfdn_train)
+
+    assert 0.0 <= metrics[f"test/per_param_abs_cosine_distance/{control}"].item() <= 1.0
+    assert 0.0 <= metrics["test/per_param_abs_cosine_distance/delays"].item() <= 1.0
+    assert torch.isfinite(metrics[f"test/per_param_mse/{control}"])
+    assert torch.isfinite(metrics[f"test/per_param_mse_best_swap/{control}"])
+    assert torch.isfinite(metrics[f"test/per_param_mse_number_group_swap/{control}"])
+    assert torch.isfinite(metrics[f"test/per_param_mse_spec_quantized/{control}"])
+
+
 def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -> None:
     """The evaluation entrypoint rejects a config without checkpoint provenance."""
     GlobalHydra.instance().clear()
