@@ -661,6 +661,7 @@ def test_compute_mldr_mid_side_near_silent_side_is_finite() -> None:
         (np.zeros((1, 10)), np.zeros((1, 10))),
         (np.zeros((3, 10)), np.zeros((3, 10))),
         (np.zeros((2, 10)), np.zeros((2, 9))),
+        (np.zeros((2, 0)), np.zeros((2, 0))),
         (np.zeros(10), np.zeros(10)),
     ],
 )
@@ -672,8 +673,17 @@ def test_compute_mldr_mid_side_nonmatching_stereo_shape_raises(
     :param target: Invalid target shape.
     :param pred: Invalid prediction shape.
     """
-    with pytest.raises(ValueError, match=r"matching stereo.*\(2, T\)"):
+    with pytest.raises(ValueError, match=r"matching nonempty stereo.*\(2, T\)"):
         compute_mldr_mid_side(target, pred)
+
+
+def test_compute_mldr_mid_side_nonfinite_audio_raises() -> None:
+    """Non-finite stereo samples cannot enter metric aggregation."""
+    stereo = np.zeros((2, 10), dtype=np.float64)
+    stereo[0, 0] = np.nan
+
+    with pytest.raises(ValueError, match="finite"):
+        compute_mldr_mid_side(stereo, stereo)
 
 
 # ---------------------------------------------------------------------------

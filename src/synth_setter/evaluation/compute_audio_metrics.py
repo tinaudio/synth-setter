@@ -637,16 +637,23 @@ def compute_mldr_mid_side(
     :param pred: Predicted stereo audio with the same shape as ``target``.
     :param sample_rate: Sample rate in Hz; governs the MLDR envelope time constants.
     :returns: Non-negative mid/side distance in natural-log units.
-    :raises ValueError: ``target`` and ``pred`` are not matching stereo arrays.
+    :raises ValueError: Inputs are not finite, matching, nonempty stereo arrays.
     """
-    if target.ndim != 2 or target.shape[0] != 2 or target.shape != pred.shape:
+    if (
+        target.ndim != 2
+        or target.shape[0] != 2
+        or target.shape[-1] == 0
+        or target.shape != pred.shape
+    ):
         raise ValueError(
-            "target and pred must have matching stereo (2, T) shapes; "
+            "target and pred must have matching nonempty stereo (2, T) shapes; "
             f"got {target.shape} and {pred.shape}"
         )
     scale = math.sqrt(2.0)
     target_float = np.asarray(target, dtype=np.float64)
     pred_float = np.asarray(pred, dtype=np.float64)
+    if not np.isfinite(target_float).all() or not np.isfinite(pred_float).all():
+        raise ValueError("target and pred must contain only finite values")
     target_mid_side = np.stack(
         ((target_float[0] + target_float[1]) / scale, (target_float[0] - target_float[1]) / scale)
     )

@@ -1463,6 +1463,23 @@ class TestValidateMetricsDf:
 
         vst_interactive._validate_metrics_df(Path("aggregated_metrics.csv"), df, spec)
 
+    def test_optional_aggregate_row_nan_mean_raises(self, vst_interactive: ModuleType) -> None:
+        """An optional aggregate row still requires a finite mean.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
+        df = pd.DataFrame(
+            {"metric": ["mss", "mldr_mid_side"], "mean": [0.1, float("nan")], "std": [0.01, 0.0]}
+        )
+        spec = vst_interactive._MetricsFileSpec(
+            rows=1,
+            columns=frozenset({"mean", "std"}),
+            optional_rows=frozenset({"mldr_mid_side"}),
+        )
+
+        with pytest.raises(ValueError, match="invalid optional metric rows"):
+            vst_interactive._validate_metrics_df(Path("aggregated_metrics.csv"), df, spec)
+
     def test_wrong_rows_raises_valueerror(self, vst_interactive: ModuleType) -> None:
         """Row count mismatch raises ``ValueError`` mentioning expected and actual.
 

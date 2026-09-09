@@ -266,7 +266,7 @@ class _MetricsFileSpec:
 
     .. attribute :: optional_rows
 
-        Maximum number of optional rows beyond ``rows``.
+        Metric names allowed as additional optional rows beyond ``rows``.
     """
 
     rows: int
@@ -296,7 +296,7 @@ def _validate_metrics_df(
 
     :param metrics_path: Source path included in validation errors.
     :param metrics_df: Parsed metrics table.
-    :param expected: Required row count and column names.
+    :param expected: Required rows and columns plus optional columns and row labels.
     :raises ValueError: The table does not satisfy the expected metrics contract.
     """
     optional_row_mask = metrics_df.iloc[:, 0].isin(expected.optional_rows)
@@ -322,9 +322,15 @@ def _validate_metrics_df(
             f"{metrics_path} contains NaN/Inf in {len(bad_rows)} of {len(required_metrics)} rows:\n"
             f"{bad_rows}"
         )
-    optional_rows = metrics_df.loc[optional_row_mask, expected_cols].to_numpy()
-    if optional_rows.size and (
-        np.isinf(optional_rows).any() or not np.isfinite(optional_rows).any(axis=1).all()
+    optional_metrics = metrics_df.loc[optional_row_mask, expected_cols]
+    optional_values = optional_metrics.to_numpy()
+    optional_means_invalid = (
+        "mean" in optional_metrics and not np.isfinite(optional_metrics["mean"].to_numpy()).all()
+    )
+    if optional_values.size and (
+        optional_means_invalid
+        or np.isinf(optional_values).any()
+        or not np.isfinite(optional_values).any(axis=1).all()
     ):
         raise ValueError(f"{metrics_path} contains invalid optional metric rows")
     present_optional = sorted(expected.optional_columns & set(metrics_df.columns))
