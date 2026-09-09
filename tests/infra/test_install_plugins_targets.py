@@ -562,7 +562,14 @@ def test_docker_dev_base_exposes_pinned_studiorack_graph_to_pytest() -> None:
     graph_link = "ln -s /artifacts/studiorack/node_modules node_modules"
 
     assert graph_link in stage
-    assert stage.index(graph_link) < stage.index('pytest -k "not slow"')
+    assert stage.index(graph_link) < stage.index("pytest ")
+
+
+def test_docker_dev_base_excludes_accelerator_specific_tests() -> None:
+    """The CPU image build excludes tests that require accelerator hardware."""
+    stage = _dockerfile_stage_text("dev-base")
+
+    assert 'pytest -m "not slow and not gpu and not mps" -v' in stage
 
 
 def test_docker_plugin_stage_provisions_cardinal_at_configured_path() -> None:
