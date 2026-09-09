@@ -1,0 +1,13 @@
+# The online AST over a cepstrogram the model computes from the waveform instead of a mel.
+# The backbone IS model/encoder/ast.yaml; only the front end and its grid geometry differ.
+defaults:
+  - /model/frontend@frontend: cepstrum
+  - /model/encoder@backbone: ast
+  - _self_
+
+_target_: synth_setter.models.components.spec_encoder.SpecEncoder
+backbone:
+  input_channels: 1
+  spec_shape:
+    - ${model.encoder.frontend.q_max}
+    - ${stft_n_frames:${model.encoder.frontend.in_dim},${model.encoder.frontend.hop_length}}

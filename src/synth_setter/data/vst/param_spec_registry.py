@@ -23,6 +23,8 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_PARAM_SPEC,
     PYFDN_GOTZ_N8_MONO_LEARNED_DELAYS_PARAM_SPEC,
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
+    PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
     PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
 )
 from synth_setter.data.vst.cardinal_param_spec import CARDINAL_PARAM_SPEC
@@ -62,6 +64,8 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
         "pyfdn_gotz_n8_mono_learned_delays"
     ): PYFDN_GOTZ_N8_MONO_LEARNED_DELAYS_PARAM_SPEC,
     ParamSpecName("pyfdn_n8_mono_householder"): PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    ParamSpecName("pyfdn_n8_mono_householder_vector"): PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
+    ParamSpecName("pyfdn_n8_mono_kronecker"): PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
     ParamSpecName(
         "pyfdn_pitchshift_n8_mono_householder"
     ): PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,

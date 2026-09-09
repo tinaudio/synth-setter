@@ -18,6 +18,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_PARAM_SPEC,
     PYFDN_GOTZ_N8_MONO_LEARNED_DELAYS_PARAM_SPEC,
     PYFDN_TONE_GEQ_GAIN_DB_NAME,
+    PyFDNGotzParamSpec,
 )
 from synth_setter.data.vst.param_spec import (
     ContinuousArrayParameter,
@@ -93,6 +94,23 @@ def test_gotz_fixed_delays_spec_samples_paper_delay_lengths() -> None:
     np.testing.assert_array_equal(delays, _PAPER_DELAYS)
     assert delays.dtype == np.dtype(np.int64)
     np.testing.assert_array_equal(PYFDN_GOTZ_DELAYS, _PAPER_DELAYS)
+
+
+def test_gotz_param_spec_composes_callable_feedback_with_fixed_delays() -> None:
+    """The shared derived-feedback codec and Götz fixed-value restoration compose."""
+    spec = PyFDNGotzParamSpec(
+        synth_params=[],
+        feedback_matrix=lambda _: np.eye(8, dtype=np.float64),
+        fixed_delays=_PAPER_DELAYS,
+    )
+
+    sampled, _ = spec.sample(np.random.default_rng(3))
+    decoded, _ = spec.decode(np.empty((0,), dtype=np.float32))
+
+    np.testing.assert_array_equal(sampled["feedback_matrix"], np.eye(8))
+    np.testing.assert_array_equal(decoded["feedback_matrix"], np.eye(8))
+    np.testing.assert_array_equal(sampled["delays"], _PAPER_DELAYS)
+    np.testing.assert_array_equal(decoded["delays"], _PAPER_DELAYS)
 
 
 def test_gotz_spec_samples_orthogonal_feedback_that_varies_by_seed() -> None:
