@@ -17,6 +17,8 @@ experiment_name: surge-full
 
 tags:
   - surge
+  - ${experiment_name}
+  - ${run_name}
 
 seed: 3123123
 

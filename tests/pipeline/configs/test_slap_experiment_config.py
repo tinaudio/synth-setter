@@ -9,10 +9,7 @@ from omegaconf import DictConfig
 from synth_setter.models.slap_module import SLAPModule
 from tests.helpers.run_if import RunIf
 
-_SLAP_EXPERIMENTS = (
-    "surge/slap_ast_audio_mlp_param",
-    "surge/slap_ast_audio_transformer_param",
-)
+_SLAP_EXPERIMENTS = ("surge/slap_ast_audio_vst_ff_param",)
 _AST_TARGET = "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
 
 
@@ -25,7 +22,8 @@ def _compose_slap_experiment(experiment: str) -> DictConfig:
 
 
 def _shrink_ast_layers(cfg: DictConfig) -> None:
-    for arm in (cfg.model.audio_encoder, cfg.model.text_encoder):
+    cfg.model.param_encoder.encoder.n_layers = 1
+    for arm in (cfg.model.audio_encoder,):
         if "_args_" not in arm.encoder:
             continue
         for layer in arm.encoder._args_:
@@ -74,23 +72,25 @@ def test_slap_model_accepts_paired_surge_batch(experiment: str) -> None:
     )
     assert all(
         parameter.grad is not None and torch.count_nonzero(parameter.grad)
-        for parameter in model.text_encoder.parameters()
+        for parameter in model.param_encoder.parameters()
         if parameter.requires_grad
     )
 
 
-def test_slap_ast_audio_transformer_param_arm_has_no_dead_trainable_weights() -> None:
+def test_slap_param_arm_frozen_weights_are_only_unused_inverse_projection() -> None:
     """Only the projection's unused token-to-parameter half may skip training."""
-    cfg = _compose_slap_experiment("surge/slap_ast_audio_transformer_param")
+    cfg = _compose_slap_experiment("surge/slap_ast_audio_vst_ff_param")
+    _shrink_ast_layers(cfg)
     model = hydra.utils.instantiate(cfg.model)
 
     frozen = [
         name
-        for name, parameter in model.text_encoder.named_parameters()
+        for name, parameter in model.param_encoder.named_parameters()
         if not parameter.requires_grad
     ]
 
-    assert frozen == ["encoder.0.patch_embed.projection._out_projection"]
+    assert len(frozen) == 1
+    assert frozen[0].endswith("projection._out_projection")
 
 
 @pytest.mark.gpu
@@ -98,11 +98,10 @@ def test_slap_ast_audio_transformer_param_arm_has_no_dead_trainable_weights() ->
 @pytest.mark.slow
 @pytest.mark.parametrize("experiment", _SLAP_EXPERIMENTS)
 def test_slap_model_overfits_one_batch(experiment: str) -> None:
-    """The shipped backbones must drive their fixed-pair objective toward its floor.
+    """Check fixed-batch loss reduction with frozen target arms.
 
-    The BYOL-style objective bottoms out near 0.29x its initial value on a memorized batch (cosine
-    losses against normalized targets never reach zero), so the bound asserts convergence toward
-    that measured floor rather than a near-zero loss.
+    Manual optimizer steps bypass EMA updates; the reduction threshold is a smoke check, not
+    evidence of full memorization, non-collapse, or a nonzero cosine-loss floor.
 
     :param experiment: Shipped SLAP experiment name.
     """

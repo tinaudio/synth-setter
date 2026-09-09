@@ -230,6 +230,8 @@ New to the project? These are the docs worth skimming first, in order:
 
 Further reading (mostly for contributors and maintainers):
 
+- **[CLI command cookbook](docs/reference/cli.md)** — copy-ready commands for
+  dataset generation, finalization, embeddings, training, and SkyPilot jobs
 - [`docs/design/`](docs/design/) — training pipeline, evaluation pipeline,
   storage provenance spec, SkyPilot integration, implementation plans
 - [`docs/reference/`](docs/reference/) — configuration reference, Docker,

@@ -46,6 +46,10 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   `.pi/APPEND_SYSTEM.md`, and Pi agent briefs aligned.
 - **Never run `make docker-*` or RunPod commands without asking.** These
   spend money and burn cluster state.
+- **Command lookups:** For “give me the command” requests, start at
+  [`docs/reference/cli.md`](docs/reference/cli.md). Consult the linked config
+  only if needed. Don’t broaden into repository searches or live-state checks
+  unless requested or necessary to resolve a specific ambiguity.
 - **Check the RunPod balance before launching jobs** — exhaustion shows up as
   jobs stuck in STARTING with no visible cause. Run
   `uv run python -c "from synth_setter.pipeline.skypilot_launch import _check_runpod_balance; _check_runpod_balance(); print('balance preflight passed')"`.

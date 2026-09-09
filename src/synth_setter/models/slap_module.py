@@ -10,6 +10,7 @@ Typical usage:
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from typing import Literal, cast
@@ -61,10 +62,11 @@ class SLAPModule(LightningModule):
     def __init__(
         self,
         audio_encoder: SiameseArm,
-        text_encoder: SiameseArm,
-        loss_fn: BYOLLoss,
-        optimizer: OptimizerFactory,
+        param_encoder: SiameseArm | None = None,
+        loss_fn: BYOLLoss | None = None,
+        optimizer: OptimizerFactory | None = None,
         *,
+        text_encoder: SiameseArm | None = None,
         audio_input_key: Literal["audio", "mel"] = "audio",
         scheduler: SchedulerFactory | None = None,
         ma_callback: MovingAverageWeightUpdate | None = None,
@@ -73,19 +75,32 @@ class SLAPModule(LightningModule):
         """Build online and moving-average modality arms.
 
         :param audio_encoder: Online Siamese arm consuming audio or mel batches.
-        :param text_encoder: Online Siamese arm consuming the paired second modality.
+        :param param_encoder: Online Siamese arm consuming parameter batches.
         :param loss_fn: Reference BYOL loss over online predictions and target projections.
         :param optimizer: Partially configured optimizer factory.
+        :param text_encoder: Deprecated alias preserving the caller's encoder architecture.
         :param audio_input_key: Batch key supplying the audio arm input.
         :param scheduler: Optional partially configured scheduler factory.
         :param ma_callback: Target-weight update policy.
         :param compile: Whether and how to compile both online and target arms.
+        :raises ValueError: If arm names are ambiguous or required dependencies are absent.
         """
         super().__init__()
+        if (param_encoder is None) == (text_encoder is None):
+            raise ValueError("Provide exactly one of param_encoder and text_encoder")
+        if loss_fn is None or optimizer is None:
+            raise ValueError("loss_fn and optimizer are required")
+        if text_encoder is not None:
+            warnings.warn(
+                "text_encoder is deprecated; use param_encoder", DeprecationWarning, stacklevel=2
+            )
+            param_encoder = text_encoder
+        assert param_encoder is not None
         self.register_buffer("_ema_optimizer_steps", torch.zeros((), dtype=torch.long))
         self.save_hyperparameters(
             ignore=[
                 "audio_encoder",
+                "param_encoder",
                 "text_encoder",
                 "loss_fn",
                 "optimizer",
@@ -95,7 +110,7 @@ class SLAPModule(LightningModule):
             logger=False,
         )
         self.audio_encoder = audio_encoder
-        self.text_encoder = text_encoder
+        self.param_encoder = param_encoder
         self.audio_input_key: Literal["audio", "mel"] = audio_input_key
         self.loss_fn = loss_fn
         self.optimizer_factory = optimizer
@@ -104,17 +119,29 @@ class SLAPModule(LightningModule):
 
         self.audio_ema = deepcopy(audio_encoder)
         self.audio_ema.transform = nn.Identity()
-        self.text_ema = deepcopy(text_encoder)
-        self.text_ema.transform = nn.Identity()
+        self.param_ema = deepcopy(param_encoder)
+        self.param_ema.transform = nn.Identity()
         self._freeze_targets()
+
+    @property
+    @jaxtyped(typechecker=beartype)
+    def text_encoder(self) -> nn.Module:
+        """Expose the parameter arm to legacy export consumers without duplicate state."""
+        return cast(nn.Module, self.param_encoder)
+
+    @property
+    @jaxtyped(typechecker=beartype)
+    def text_ema(self) -> nn.Module:
+        """Expose the parameter EMA projection arm to legacy export consumers."""
+        return cast(nn.Module, self.param_ema)
 
     @jaxtyped(typechecker=beartype)
     def _freeze_targets(self) -> None:
         """Keep target arms outside gradient and train-mode state changes."""
         self.audio_ema.requires_grad_(False)
         self.audio_ema.eval()
-        self.text_ema.requires_grad_(False)
-        self.text_ema.eval()
+        self.param_ema.requires_grad_(False)
+        self.param_ema.eval()
 
     @jaxtyped(typechecker=beartype)
     def train(self, mode: bool = True) -> SLAPModule:
@@ -125,25 +152,52 @@ class SLAPModule(LightningModule):
         """
         super().train(mode)
         self.audio_ema.eval()
-        self.text_ema.eval()
+        self.param_ema.eval()
         return self
 
     @jaxtyped(typechecker=beartype)
     def on_load_checkpoint(self, checkpoint: dict[str, object]) -> None:
-        """Remove target-predictor tensors that target arms do not own.
+        """Migrate parameter-arm names without replacing the checkpoint architecture.
 
         :param checkpoint: Lightning checkpoint whose state is migrated in place.
+        :raises ValueError: If canonical and legacy names coexist.
         """
+        hparams = cast(dict[str, object], checkpoint.get("hyper_parameters", {}))
+        if "text_encoder" in hparams:
+            if "param_encoder" in hparams:
+                raise ValueError("ambiguous parameter encoder hyperparameters")
+            hparams["param_encoder"] = hparams.pop("text_encoder")
         state_dict = cast(dict[str, Tensor], checkpoint["state_dict"])
+        for legacy, canonical in (
+            ("text_encoder.", "param_encoder."),
+            ("text_ema.", "param_ema."),
+        ):
+            legacy_keys = [name for name in state_dict if name.startswith(legacy)]
+            if legacy_keys and any(name.startswith(canonical) for name in state_dict):
+                raise ValueError(f"ambiguous checkpoint state: {legacy} and {canonical}")
+            for name in legacy_keys:
+                state_dict[canonical + name.removeprefix(legacy)] = state_dict.pop(name)
         predictor_prefixes = (
             "audio_ema.transform.",
             "audio_ema._orig_mod.transform.",
-            "text_ema.transform.",
-            "text_ema._orig_mod.transform.",
+            "param_ema.transform.",
+            "param_ema._orig_mod.transform.",
         )
         for name in tuple(state_dict):
             if name.startswith(predictor_prefixes):
                 state_dict.pop(name)
+        for arm_name in ("audio_encoder", "param_encoder", "audio_ema", "param_ema"):
+            arm = getattr(self, arm_name)
+            if hasattr(arm, "_orig_mod"):
+                continue
+            compiled_prefix = f"{arm_name}._orig_mod."
+            for name in tuple(state_dict):
+                if not name.startswith(compiled_prefix):
+                    continue
+                eager_name = f"{arm_name}." + name.removeprefix(compiled_prefix)
+                if eager_name in state_dict:
+                    raise ValueError(f"ambiguous compiled checkpoint state: {eager_name}")
+                state_dict[eager_name] = state_dict.pop(name)
         if "_ema_optimizer_steps" not in state_dict:
             global_step = checkpoint.get("global_step", 0)
             completed_steps = global_step if isinstance(global_step, int) else 0
@@ -159,12 +213,12 @@ class SLAPModule(LightningModule):
         """
         audio, params = _paired_inputs(batch, self.audio_input_key)
         _, _, audio_prediction = self.audio_encoder(audio)
-        _, _, text_prediction = self.text_encoder(params)
+        _, _, param_prediction = self.param_encoder(params)
         with torch.no_grad():
             _, audio_projection_ema, _ = self.audio_ema(audio)
-            _, text_projection_ema, _ = self.text_ema(params)
+            _, param_projection_ema, _ = self.param_ema(params)
 
-        values = (audio_prediction, text_prediction, audio_projection_ema, text_projection_ema)
+        values = (audio_prediction, param_prediction, audio_projection_ema, param_projection_ema)
         if any(value is None for value in values):
             raise ValueError("SLAP arms require projectors and prediction transforms")
         qa, qt, za_ema, zt_ema = cast(
@@ -258,9 +312,9 @@ class SLAPModule(LightningModule):
             return
         mode = compile_mode if isinstance(compile_mode, str) else "default"
         self.audio_encoder = torch.compile(self.audio_encoder, mode=mode)
-        self.text_encoder = torch.compile(self.text_encoder, mode=mode)
+        self.param_encoder = torch.compile(self.param_encoder, mode=mode)
         self.audio_ema = torch.compile(self.audio_ema, mode=mode)
-        self.text_ema = torch.compile(self.text_ema, mode=mode)
+        self.param_ema = torch.compile(self.param_ema, mode=mode)
         self._freeze_targets()
 
     @jaxtyped(typechecker=beartype)
@@ -271,7 +325,7 @@ class SLAPModule(LightningModule):
         """
         parameters = [
             *self.audio_encoder.parameters(),
-            *self.text_encoder.parameters(),
+            *self.param_encoder.parameters(),
             *self.loss_fn.parameters(),
         ]
         optimizer = self.optimizer_factory(params=parameters)

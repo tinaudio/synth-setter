@@ -148,7 +148,7 @@ def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) 
 @pytest.mark.slow
 @pytest.mark.parametrize(
     "cfg_slap_train_lance",
-    ["surge/slap_ast_audio_mlp_param", "surge/slap_ast_audio_transformer_param"],
+    ["surge/slap_ast_audio_vst_ff_param"],
     indirect=True,
 )
 def test_evaluate_slap_experiment_checkpoint_end_to_end(

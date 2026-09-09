@@ -55,9 +55,12 @@ Reference: `data-pipeline.md` §14.5
 
 ### 2.2 Data Finalization
 
+For the operational command, see [Finalize a dataset](cli.md#finalize-a-dataset).
+The composed configuration flow is:
+
 ```
-synth-setter-finalize-dataset dataset_root_uri=r2://…/<task_name>/<run_id>/
-  → @hydra.main composes DictConfig from src/synth_setter/configs/finalize_dataset.yaml
+src/synth_setter/configs/finalize_dataset.yaml
+  → @hydra.main composes DictConfig
     → load_spec_from_root(cfg.dataset_root_uri) → DatasetSpec (joins input_spec.json under the root; the frozen spec generate uploaded)
       → r2_io.object_size(spec.r2.dataset_complete_marker_uri()) probe (idempotency short-circuit)
       → assert_r2_prefix_matches(…) (advisory: warns on a non-canonical prefix, never aborts — custom prefixes like the oracle-eval e2e's test-runs/ are legitimate)
@@ -132,13 +135,8 @@ commands use the Hydra-native `synth-setter-skypilot-launch` endpoint with
 
 #### Generic dispatch
 
-```bash
-synth-setter-skypilot-launch \
-  skypilot_launch/compute=runpod/training \
-  'skypilot_launch.cmd="exec synth-setter-train experiment=torchsynth/flow_audio_same"'
-```
-
-The launcher prepends repository checkout synchronization under
+See [Launch with SkyPilot](cli.md#launch-with-skypilot) for the operational
+commands. The launcher prepends repository checkout synchronization under
 `skypilot_launch.worker_checkout_dir` (default `/home/build/synth-setter`) before
 executing `cmd`. Override that field for worker images with a different checkout
 location. Every literal `${...}` intended for the worker command—including
@@ -152,9 +150,12 @@ with manual Python callers during migration; their removal is tracked by
 
 #### Dataset dispatch flow
 
+See [Generate a dataset](cli.md#generate-a-dataset) and
+[Launch with SkyPilot](cli.md#launch-with-skypilot) for the operational commands.
+The configuration flow is:
+
 ```
-synth-setter-generate-dataset experiment=… skypilot_launch/compute=runpod/smoke
-  → @hydra.main composes DictConfig → spec_from_cfg → DatasetSpec
+@hydra.main composes DictConfig → spec_from_cfg → DatasetSpec
     → write_spec_locally(spec, Path(cfg.paths.output_dir))
     → upload_spec(spec) → R2 at {r2.prefix}input_spec.json
     → sky_cfg.extra_envs["WORKER_SPEC_URI"] = spec.r2.input_spec_uri()

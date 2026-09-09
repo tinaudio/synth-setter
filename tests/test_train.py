@@ -311,7 +311,7 @@ def _assert_slap_train_artifacts(
 @pytest.mark.slow
 @pytest.mark.parametrize(
     "cfg_slap_train_lance",
-    ["surge/slap_ast_audio_mlp_param", "surge/slap_ast_audio_transformer_param"],
+    ["surge/slap_ast_audio_vst_ff_param"],
     indirect=True,
 )
 def test_train_slap_experiment_end_to_end(
@@ -1514,6 +1514,30 @@ def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
 
     with pytest.raises(RuntimeError, match="test split was not built"):
         object_dict["datamodule"].test_dataloader()
+
+
+def test_train_experiment_labels_offline_run_preserves_display_metadata(
+    cfg_train_wandb_labels: DictConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real training step logs the selected experiment's name and tags.
+
+    :param cfg_train_wandb_labels: Tiny Lance workload with production W&B metadata.
+    :param monkeypatch: Forces offline W&B for the training run.
+    """
+    import wandb
+
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    wandb.teardown()
+    HydraConfig().set_config(cfg_train_wandb_labels)
+    try:
+        _, objects = train(cfg_train_wandb_labels)
+        run = objects["logger"][0].experiment
+        assert objects["trainer"].global_step == 1
+        assert run.name == "surge-simple-onehot_ffn"
+        assert {"surge", "surge-simple-onehot", "ffn"} <= set(run.tags)
+    finally:
+        wandb.finish()
+        wandb.teardown()
 
 
 def test_train_wandb_config_resolves_scheduler_max_steps(
