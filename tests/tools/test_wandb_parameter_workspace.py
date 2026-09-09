@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+import pytest
+from click.testing import CliRunner
+
+from synth_setter.tools import wandb_parameter_workspace
 from synth_setter.tools.wandb_parameter_workspace import build_parameter_workspace
 
 
@@ -35,3 +41,43 @@ def test_parameter_workspace_serializes_dynamic_metric_regexes() -> None:
     ]
     assert all(config["useMetricRegex"] is True for config in panel_configs)
     assert spec["runSets"][0]["search"]["query"] == ""
+
+
+def test_main_with_explicit_entity_saves_workspace_and_prints_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CLI reports the URL returned by the W&B save boundary.
+
+    :param monkeypatch: Pytest fixture that isolates the W&B save boundary.
+    """
+    workspace = MagicMock()
+    workspace.save.return_value.url = "https://wandb.ai/team/project?nw=view"
+    monkeypatch.setattr(
+        wandb_parameter_workspace,
+        "build_parameter_workspace",
+        MagicMock(return_value=workspace),
+    )
+
+    result = CliRunner().invoke(
+        wandb_parameter_workspace.main,
+        ["--entity", "team", "--project", "project"],
+    )
+
+    assert result.exit_code == 0
+    assert result.output == "https://wandb.ai/team/project?nw=view\n"
+
+
+def test_main_without_configured_entity_reports_actionable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing account identity fails before any workspace is created.
+
+    :param monkeypatch: Pytest fixture that removes the default W&B entity.
+    """
+    api = MagicMock(default_entity=None)
+    monkeypatch.setattr(wandb_parameter_workspace.wandb, "Api", MagicMock(return_value=api))
+
+    result = CliRunner().invoke(wandb_parameter_workspace.main, ["--project", "project"])
+
+    assert result.exit_code == 1
+    assert "No W&B entity configured; pass --entity." in result.output
