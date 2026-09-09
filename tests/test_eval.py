@@ -80,6 +80,10 @@ from tests.helpers.eval_fakes import (
     fake_postprocessing_subprocess,
 )
 from tests.helpers.generic_launcher import run_generic_launcher_command
+from tests.helpers.grouped_projection_training import (
+    GROUPED_PROJECTION_DATASET_ROWS,
+    build_grouped_projection_config,
+)
 from tests.helpers.lance_fixtures import write_blob_audio_corpus
 from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _RecordingWandbLogger
 from tests.helpers.run_if import RunIf
@@ -277,6 +281,44 @@ def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -
 
     with pytest.raises(MissingMandatoryValue, match="ckpt_path"):
         evaluate(cfg)
+
+
+def test_evaluate_grouped_projection_checkpoint_writes_finite_predictions(
+    tmp_path: Path,
+) -> None:
+    """Load a grouped checkpoint through evaluate and persist real Lance predictions.
+
+    :param tmp_path: Isolated dataset, checkpoint, and prediction root.
+    """
+    cfg = build_grouped_projection_config(tmp_path, config_name="eval.yaml")
+    model = instantiate(cfg.model)
+    checkpoint = tmp_path / "grouped.ckpt"
+    checkpoint_trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+    )
+    checkpoint_trainer.strategy.connect(model)
+    checkpoint_trainer.save_checkpoint(checkpoint)
+    cfg.ckpt_path = str(checkpoint)
+    HydraConfig().set_config(cfg)
+
+    try:
+        evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    prediction_files = sorted((tmp_path / "predictions").glob("pred-*.pt"))
+    assert len(prediction_files) == 1
+    predictions = torch.load(prediction_files[0], map_location="cpu", weights_only=True)
+    assert predictions.shape == (
+        GROUPED_PROJECTION_DATASET_ROWS,
+        param_specs["surge_4"].encoded_width,
+    )
+    assert torch.isfinite(predictions).all()
 
 
 def _compose_sketch_cfg_eval(

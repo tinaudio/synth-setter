@@ -11,11 +11,13 @@ real.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock
 
+import matplotlib.pyplot as plt
 import pytest
 import torch
 from lightning.pytorch import LightningModule, Trainer
@@ -24,7 +26,7 @@ from matplotlib.figure import Figure
 from torchsynth.signal import Signal
 
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.models.components.transformer import LearntProjection
+from synth_setter.models.components.transformer import GroupedParameterProjection, LearntProjection
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.utils.callbacks import (
     LogPerParamMSE,
@@ -68,6 +70,20 @@ class _RecordingTensorBoardExperiment:
         :param global_step: Global step the callback tagged the figure with.
         """
         self.figure_calls.append({"tag": tag, "figure": figure, "global_step": global_step})
+
+
+class _FailingTensorBoardExperiment:
+    def add_figure(self, tag: str, figure: object, global_step: int) -> None:
+        raise RuntimeError("logger unavailable")
+
+
+class _FailingTensorBoardLogger(TensorBoardLogger):
+    def __init__(self) -> None:
+        self._failing_experiment = _FailingTensorBoardExperiment()
+
+    @property
+    def experiment(self) -> _FailingTensorBoardExperiment:  # type: ignore[override]
+        return self._failing_experiment
 
 
 class _RecordingTensorBoardLogger(TensorBoardLogger):
@@ -126,6 +142,98 @@ def _trainer(
     :returns: The fake narrowed to ``Trainer`` for the call site's type checker.
     """
     return cast("Trainer", _FakeTrainer(loggers, global_step, is_global_zero))
+
+
+class _ProjectionField(torch.nn.Module):
+    """Minimal vector field exposing a projection to plotting callbacks."""
+
+    def __init__(self, projection: torch.nn.Module) -> None:
+        """Expose the supplied projection without adding a transformer.
+
+        :param projection: Projection exercised by the callback.
+        """
+        super().__init__()
+        self.projection = projection
+
+
+def _flow_module(projection: torch.nn.Module) -> VSTFlowMatchingModule:
+    return VSTFlowMatchingModule(
+        encoder=torch.nn.Identity(),
+        vector_field=_ProjectionField(projection),
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        num_params=3,
+    )
+
+
+def test_plot_learnt_projection_logs_assignment_and_similarity_figures() -> None:
+    """A learnt projection emits both real matplotlib plot artifacts."""
+    logger = _RecordingTensorBoardLogger()
+    trainer = _trainer([logger])
+    module = _flow_module(
+        LearntProjection(
+            d_model=2,
+            d_token=2,
+            num_params=3,
+            num_tokens=2,
+            initial_ffn=False,
+            final_ffn=False,
+        )
+    )
+
+    PlotLearntProjection().on_validation_epoch_end(trainer, module)
+
+    assert [call["tag"] for call in logger.experiment.figure_calls] == ["assignment", "value"]
+    assert all(isinstance(call["figure"], Figure) for call in logger.experiment.figure_calls)
+
+
+@pytest.mark.gpu
+def test_plot_learnt_projection_on_cuda_logs_cpu_backed_figures() -> None:
+    """CUDA projection tensors convert to matplotlib-compatible plot inputs."""
+    logger = _RecordingTensorBoardLogger()
+    trainer = _trainer([logger])
+    projection = LearntProjection(
+        d_model=2,
+        d_token=2,
+        num_params=3,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    ).cuda()
+
+    PlotLearntProjection().on_validation_epoch_end(trainer, _flow_module(projection))
+
+    assert [call["tag"] for call in logger.experiment.figure_calls] == ["assignment", "value"]
+
+
+def test_plot_learnt_projection_logging_error_closes_figures() -> None:
+    """A logger failure does not leak either generated matplotlib figure."""
+    trainer = _trainer([_FailingTensorBoardLogger()])
+    projection = LearntProjection(
+        d_model=2,
+        d_token=2,
+        num_params=3,
+        num_tokens=2,
+        initial_ffn=False,
+        final_ffn=False,
+    )
+    open_figures = set(plt.get_fignums())
+
+    with pytest.raises(RuntimeError, match="logger unavailable"):
+        PlotLearntProjection().on_validation_epoch_end(trainer, _flow_module(projection))
+
+    assert set(plt.get_fignums()) == open_figures
+
+
+def test_plot_learnt_projection_with_grouped_projection_skips_plots() -> None:
+    """A grouped projection without learnt matrices is an explicit no-op."""
+    logger = _RecordingTensorBoardLogger()
+    trainer = _trainer([logger])
+    module = _flow_module(GroupedParameterProjection(d_model=2, param_spec_name="surge_simple"))
+
+    PlotLearntProjection().on_validation_epoch_end(trainer, module)
+
+    assert logger.experiment.figure_calls == []
 
 
 def test_log_per_param_mse_without_param_spec_raises_type_error() -> None:
