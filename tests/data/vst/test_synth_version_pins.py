@@ -62,6 +62,9 @@ def test_vst_synth_group_pins_the_installed_plugin_version(group: str) -> None:
 
     :param group: Synth group name under test.
     """
+    if group == "cardinal":
+        pytest.xfail("#3308: Cardinal version probing can segfault the shared pytest process")
+
     plugin_path, synth_version = _composed_synth(group)
 
     assert extract_renderer_version(Path(plugin_path)) == synth_version
