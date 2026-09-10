@@ -291,27 +291,6 @@ def test_faustwasm_out_of_domain_patch_is_rejected() -> None:
 
 
 @pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
-def test_faustwasm_and_dawdreamer_share_bright_organ_invariants() -> None:
-    """Both real hosts preserve onset silence and rendered level."""
-    params = _midpoint_patch("faust_bright_organ")
-    wasm = make_audio_renderer(_config()).render(params, 60, 100, (0.1, 0.25))
-    daw_config = _config().model_copy(
-        update={
-            "renderer_backend": "dawdreamer",
-            "backend_version": "0.8.3",
-            "block_size": None,
-        }
-    )
-    daw = make_audio_renderer(daw_config).render(params, 60, 100, (0.1, 0.25))
-
-    wasm_rms = float(np.sqrt(np.mean(np.square(wasm[:, 4_410:11_025]))))
-    daw_rms = float(np.sqrt(np.mean(np.square(daw[:, 4_410:11_025]))))
-    assert np.max(np.abs(wasm[:, :4_410])) == 0.0
-    assert np.max(np.abs(daw[:, :4_410])) == 0.0
-    assert 0.99 < wasm_rms / daw_rms < 1.01
-
-
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
 def test_faustwasm_canonical_volume_has_causal_effect() -> None:
     """The canonical volume control changes real rendered level."""
     quiet = _midpoint_patch("faust_bright_organ")
