@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import json
+import logging
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Literal
@@ -22,6 +26,41 @@ from synth_setter.synth_spec import SYNTHS, SynthName, SynthSpec
 
 FAUSTWASM_VERSION = "0.18.3"
 _NODE_TIMEOUT_SECONDS = 60
+_RENAME_NOREPLACE = 1
+_RENAME_EXCL = 4
+_AT_FDCWD = -100
+
+logger = logging.getLogger(__name__)
+
+
+def _rename_without_replace(source: Path, destination: Path) -> None:
+    """Atomically rename a directory without replacing an existing destination.
+
+    :param source: Staged directory to publish.
+    :param destination: Absent publication destination.
+    :raises FileExistsError: The destination already exists.
+    :raises OSError: The platform cannot complete the atomic rename.
+    """
+    if os.name == "nt":
+        os.rename(source, destination)
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        result = libc.renamex_np(os.fsencode(source), os.fsencode(destination), _RENAME_EXCL)
+    else:
+        result = libc.renameat2(
+            _AT_FDCWD,
+            os.fsencode(source),
+            _AT_FDCWD,
+            os.fsencode(destination),
+            _RENAME_NOREPLACE,
+        )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise FileExistsError(error_number, os.strerror(error_number), destination)
+    raise OSError(error_number, os.strerror(error_number), destination)
 
 
 class _ArtifactFile(BaseModel):
@@ -325,9 +364,11 @@ def export_faustwasm_artifact(
     )
     try:
         manifest = compile_faustwasm_artifact(synth, staging)
-        if output_directory.exists():
-            raise FileExistsError(f"output destination already exists: {output_directory}")
-        os.rename(staging, output_directory)
+        _rename_without_replace(staging, output_directory)
         return manifest
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        if staging.exists():
+            try:
+                shutil.rmtree(staging)
+            except OSError:
+                logger.warning("failed to remove FaustWasm staging directory %s", staging)
