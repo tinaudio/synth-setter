@@ -22,6 +22,7 @@ on:
       - ".github/workflows/cpu-slow.yml"
       - "Makefile"
       - "docker/**"
+      - "package*.json"
       - "pyproject.toml"
       - "scripts/ci/**"
       - "src/synth_setter/**"
@@ -59,6 +60,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Install Node dependencies
+        run: npm ci
 
       # Registers the binfmt_misc aarch64 handler; without it BuildKit cannot exec
       # arm64 binaries and the cpu-slow arm64 buildx test fails. Refs #1817.
