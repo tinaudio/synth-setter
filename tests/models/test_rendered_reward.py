@@ -4,7 +4,7 @@ import torch
 
 from synth_setter.data.torchsynth_datamodule import render_torchsynth
 from synth_setter.data.torchsynth_grad_render import differentiable_decode
-from synth_setter.models.components.audio_distance import MultiScaleSpectralDistance
+from synth_setter.models.components.audio_distance import MultichannelAudioDistance
 from synth_setter.models.components.rendered_reward import RenderedAudioReward
 from tests.models.test_vst_flow_finetune_module import _audible_model_rows
 
@@ -14,7 +14,12 @@ _SIGNAL_LENGTH = 8_192
 
 def _reward(render_batch_size: int) -> RenderedAudioReward:
     return RenderedAudioReward(
-        distance=MultiScaleSpectralDistance(sample_rate=_SAMPLE_RATE),
+        distance=MultichannelAudioDistance(
+            sample_rate=_SAMPLE_RATE,
+            spectral_weight=1.0,
+            channel_mldr_weight=0.1,
+            pair_mldr_weight=0.1,
+        ),
         sample_rate=_SAMPLE_RATE,
         signal_length=_SIGNAL_LENGTH,
         render_batch_size=render_batch_size,
@@ -37,6 +42,17 @@ def test_rendered_audio_reward_preserves_stored_target_waveforms() -> None:
     prepared = _reward(render_batch_size=2).prepare_target(target)
 
     assert prepared is target
+
+
+def test_rendered_audio_reward_accepts_singleton_channelized_target() -> None:
+    """Stored mono audio may retain its explicit channel axis at the reward boundary."""
+    rows = _audible_model_rows(2, seed=8)
+    target = _target_audio(rows).unsqueeze(1)
+
+    rewards = _reward(render_batch_size=2)(rows, target)
+
+    assert rewards.shape == (2,)
+    assert torch.isfinite(rewards).all()
 
 
 def test_rendered_audio_reward_prefers_the_row_that_produced_the_target() -> None:

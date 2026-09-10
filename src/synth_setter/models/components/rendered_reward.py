@@ -30,6 +30,7 @@ from synth_setter.renderer_factory import anchor_render_preset, make_audio_rende
 
 _BATCH_SHAPE = "batch"
 _BATCH_AUDIO_SHAPE = "batch samples"
+_BATCH_CHANNEL_AUDIO_SHAPE = "batch channels samples"
 _BATCH_PARAMS_SHAPE = "batch params"
 
 
@@ -71,8 +72,10 @@ class RenderedAudioReward(nn.Module):
 
     @jaxtyped(typechecker=beartype)
     def prepare_target(
-        self, target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE]
-    ) -> Float[Tensor, _BATCH_AUDIO_SHAPE]:
+        self,
+        target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE]
+        | Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE],
+    ) -> Float[Tensor, _BATCH_AUDIO_SHAPE] | Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE]:
         """Return stored target waveforms unchanged before candidate grouping.
 
         :param target_audio: Observed audio with one waveform per original row.
@@ -85,12 +88,14 @@ class RenderedAudioReward(nn.Module):
     def forward(
         self,
         theta: Float[Tensor, _BATCH_PARAMS_SHAPE],
-        target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
+        target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE]
+        | Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE],
     ) -> Float[Tensor, _BATCH_SHAPE]:
         """Render every row and score it against its own target.
 
         :param theta: Sampled parameters in model space ``[-1, 1]``.
-        :param target_audio: Observed audio shaped ``(batch, signal_length)``.
+        :param target_audio: Observed audio shaped ``(batch, signal_length)`` or
+            ``(batch, channels, signal_length)``.
         :returns: Per-row reward, higher for renders closer to the target.
         """
         # Reversed endpoint predictions remain degenerate until onset/bounded-duration timing (#2995).
@@ -155,11 +160,11 @@ class SynthRenderedReward(nn.Module):
     @jaxtyped(typechecker=beartype)
     def _render_rows(
         self, theta: Float[Tensor, _BATCH_PARAMS_SHAPE]
-    ) -> Float[Tensor, _BATCH_AUDIO_SHAPE]:
-        """Decode and render every model-space row to mono audio.
+    ) -> Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE]:
+        """Decode and render every model-space row without discarding channels.
 
         :param theta: Rows in model space; values outside ``[-1, 1]`` clamp into range.
-        :returns: Float32 audio shaped ``(batch, samples)`` on ``theta``'s device.
+        :returns: Float32 audio shaped ``(batch, channels, samples)`` on ``theta``'s device.
         """
         if self._renderer is None:
             self._renderer = make_audio_renderer(self.render_config)
@@ -180,18 +185,18 @@ class SynthRenderedReward(nn.Module):
                 render.velocity,
                 (start, end),
             )
-            rendered.append(torch.from_numpy(np.asarray(audio, dtype=np.float32)).mean(dim=0))
+            rendered.append(torch.from_numpy(np.asarray(audio, dtype=np.float32)))
         return torch.stack(rendered).to(theta.device)
 
     @jaxtyped(typechecker=beartype)
     @torch.no_grad()
     def prepare_target(
         self, target_params: Float[Tensor, _BATCH_PARAMS_SHAPE]
-    ) -> Float[Tensor, _BATCH_AUDIO_SHAPE]:
+    ) -> Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE]:
         """Render each original target parameter row once.
 
         :param target_params: Target parameters in model space before candidate grouping.
-        :returns: One target waveform per original row.
+        :returns: One channel-preserving target waveform per original row.
         """
         return self._render_rows(target_params)
 
@@ -200,7 +205,8 @@ class SynthRenderedReward(nn.Module):
     def forward(
         self,
         theta: Float[Tensor, _BATCH_PARAMS_SHAPE],
-        target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE],
+        target_audio: Float[Tensor, _BATCH_AUDIO_SHAPE]
+        | Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE],
     ) -> Float[Tensor, _BATCH_SHAPE]:
         """Render sampled rows and score each against its prepared target waveform.
 

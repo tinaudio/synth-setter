@@ -41,9 +41,11 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
+from synth_setter.models.components.audio_distance import MultichannelAudioDistance
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 from synth_setter.models.components.differentiable_renderer import (
     FlamoFDNDifferentiableRenderer,
+    TorchSynthDifferentiableRenderer,
 )
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
@@ -884,6 +886,10 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
     model = object_dict["model"]
     trainer = object_dict["trainer"]
     assert isinstance(model.audio_loss, AudioFeedbackLoss)
+    assert isinstance(model.audio_loss.renderer, TorchSynthDifferentiableRenderer)
+    assert isinstance(model.audio_loss.distance, MultichannelAudioDistance)
+    assert model.audio_loss.distance.channel_mldr_weight > 0.0
+    assert model.audio_loss.distance.pair_mldr_weight > 0.0
     assert trainer.global_step == 1
     for prefix in ("train/loss", "train/audio_loss"):
         values = [value for key, value in metric_dict.items() if key.startswith(prefix)]

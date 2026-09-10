@@ -1781,6 +1781,13 @@ def test_torchsynth_flow_ram_composes_the_post_training_module() -> None:
 
     assert cfg.model._target_ == "synth_setter.models.vst_flow_ram_module.VSTFlowRAMModule"
     assert cfg.model.reward.signal_length == cfg.datamodule.signal_length
+    assert (
+        cfg.model.reward.distance._target_
+        == "synth_setter.models.components.audio_distance.MultichannelAudioDistance"
+    )
+    assert cfg.model.reward.distance.spectral_weight == 1.0
+    assert cfg.model.reward.distance.channel_mldr_weight == 0.1
+    assert cfg.model.reward.distance.pair_mldr_weight == 0.1
     # The reward renders through torchsynth, which graph-breaks under compile (#2585).
     assert cfg.model.compile is False
     # Paper appendix D: no learning-rate schedule during post-training.
@@ -1850,6 +1857,13 @@ def test_surge_flow_ram_composes_the_surgepy_render_reward() -> None:
     assert cfg.synth.name == "surge_simple_surgepy"
     assert cfg.model.reward.render.renderer_backend == "surgepy"
     assert cfg.model.reward.distance.sample_rate == cfg.render.sample_rate
+    assert (
+        cfg.model.reward.distance._target_
+        == "synth_setter.models.components.audio_distance.MultichannelAudioDistance"
+    )
+    assert cfg.model.reward.distance.spectral_weight == 1.0
+    assert cfg.model.reward.distance.channel_mldr_weight == 0.1
+    assert cfg.model.reward.distance.pair_mldr_weight == 0.1
     assert cfg.model.compile is False
 
 

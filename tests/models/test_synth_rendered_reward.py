@@ -10,7 +10,7 @@ import torch
 
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst.renderers import AudioRenderer
-from synth_setter.models.components.audio_distance import MultiScaleSpectralDistance
+from synth_setter.models.components.audio_distance import MultichannelAudioDistance
 from synth_setter.models.components.rendered_reward import SynthRenderedReward
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.synth_spec import SYNTHS
@@ -30,7 +30,7 @@ class _FirstSampleDistance(torch.nn.Module):
         :param target: Target waveforms.
         :returns: Per-row absolute differences.
         """
-        return (rendered[:, 0] - target[:, 0]).abs()
+        return (rendered[:, 0, 0] - target[:, 0, 0]).abs()
 
 
 class _SequentialRenderer:
@@ -55,7 +55,7 @@ class _SequentialRenderer:
         :returns: Mono waveform with a call-specific constant value.
         """
         self.render_count += 1
-        return np.full((1, _SAMPLE_RATE), self.render_count, dtype=np.float32)
+        return np.full((2, _SAMPLE_RATE), self.render_count, dtype=np.float32)
 
 
 def _surgepy_synth() -> dict[str, object]:
@@ -96,7 +96,13 @@ def _reward() -> SynthRenderedReward:
         }
     )
     return SynthRenderedReward(
-        render_config=render, distance=MultiScaleSpectralDistance(sample_rate=_SAMPLE_RATE)
+        render_config=render,
+        distance=MultichannelAudioDistance(
+            sample_rate=_SAMPLE_RATE,
+            spectral_weight=1.0,
+            channel_mldr_weight=0.1,
+            pair_mldr_weight=0.1,
+        ),
     )
 
 
@@ -116,6 +122,18 @@ def _rows(count: int, seed: int) -> torch.Tensor:
     )
     rows[:, spec.synth_columns.stop :] = torch.from_numpy(note[spec.synth_columns.stop :]) * 2 - 1
     return rows
+
+
+def test_synth_rendered_reward_preserves_renderer_channels() -> None:
+    """Prepared targets retain every renderer channel instead of mean-downmixing."""
+    reward = _reward()
+    reward._renderer = cast(  # pyright: ignore[reportPrivateUsage]
+        AudioRenderer, _SequentialRenderer()
+    )
+
+    target = reward.prepare_target(_rows(1, seed=1))
+
+    assert target.shape == (1, 2, _SAMPLE_RATE)
 
 
 def test_synth_rendered_reward_reuses_one_target_render_per_original_row() -> None:
