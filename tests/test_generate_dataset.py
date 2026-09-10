@@ -1124,6 +1124,7 @@ def test_from_hydra_surgepy_experiment_writes_consumable_shard(
     with open_dict(cfg_dataset_dawdreamer):
         cfg_dataset_dawdreamer.output_format = "lance"
         cfg_dataset_dawdreamer.train_val_test_sizes = [1, 0, 0]
+        cfg_dataset_dawdreamer.synth.name = "surge_xt_surgepy"
         cfg_dataset_dawdreamer.synth.format = "surgepy"
         cfg_dataset_dawdreamer.synth.plugin_path = "surgepy"
         cfg_dataset_dawdreamer.synth.plugin_state_path = "presets/surge-base.fxp"

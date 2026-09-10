@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, NewType
+from typing import TYPE_CHECKING, Literal, NewType
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -91,7 +91,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 
     @model_validator(mode="before")
     @classmethod
-    def _normalize_legacy_identity(cls, data: Any) -> Any:
+    def _normalize_legacy_identity(cls, data: object) -> object:
         """Promote non-Faust identities authored before ``format`` was persisted.
 
         :param data: Raw identity input.
@@ -302,9 +302,9 @@ def validate_synth_identity(cfg: DictConfig) -> SynthSpec | None:
     """Fail fast when a composed root config contradicts the selected synth.
 
     Duck-typed so the module stays free of a runtime omegaconf import — the
-    minimal-env CI install that runs ``validate_spec`` does not ship it. Only
-    ``name`` and ``param_spec_name`` are pinned to the ``SYNTHS`` row: the
-    binding fields (``plugin_path``, ``plugin_state_path``, ``synth_version``)
+    minimal-env CI install that runs ``validate_spec`` does not ship it. The
+    ``name``, ``param_spec_name``, and ``format`` fields are pinned to the
+    ``SYNTHS`` row; ``plugin_path``, ``plugin_state_path``, and ``synth_version``
     stay per-run overridable (relocated bundles, stub plugins in tests). A
     CLI-forced ``datamodule.param_spec_name`` literal that skews from the
     synth selection surfaces here instead of as a silent width mismatch; a
@@ -328,6 +328,18 @@ def validate_synth_identity(cfg: DictConfig) -> SynthSpec | None:
         raise ValueError(
             f"synth {spec.name!r} declares param_spec_name={spec.param_spec_name!r} "
             f"but the registry row says {row.param_spec_name!r}"
+        )
+    if spec.format != row.format:
+        alternatives = [
+            candidate.name
+            for candidate in SYNTHS.values()
+            if candidate.param_spec_name == spec.param_spec_name
+            and candidate.format == spec.format
+        ]
+        suggestion = f"; select synth={alternatives[0]}" if alternatives else ""
+        raise ValueError(
+            f"synth {spec.name!r} declares format={spec.format!r} "
+            f"but the registry row says {row.format!r}{suggestion}"
         )
     datamodule = cfg.get("datamodule")
     datamodule_spec = None if datamodule is None else datamodule.get("param_spec_name")

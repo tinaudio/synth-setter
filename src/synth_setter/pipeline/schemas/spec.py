@@ -76,6 +76,48 @@ _PYFDN_PARAM_SPEC_NAMES = frozenset(
     synth.param_spec_name for synth in SYNTHS.values() if synth.plugin_path == PYFDN_PLUGIN_NAME
 )
 
+# The v1 snapshot must not follow upgrades to the current Faust source registry.
+_FAUST_V1_BACKEND_VERSION = "0.8.3"
+_FAUST_V1_PROVENANCE_ERROR = (
+    "render_contract_version=1 can represent only the historical Faust source and "
+    "DawDreamer 0.8.3 provenance; use render_contract_version=2"
+)
+_FAUST_V1_SOURCE_IDENTITIES = {
+    "faust_bright_organ": (
+        "1",
+        "a1bf9f6e45ebbf78dd11fc18603cda048a91a778af1ad79683339b1951813465",
+    ),
+    "faust_bubble": (
+        "1",
+        "731727e725ac0336a897c18df4e8b73f1e75c3d8add40a978efb1d95f88db23c",
+    ),
+    "faust_church_organ": (
+        "1",
+        "c753731f4053210d42757acb179010185e91d37fb56a8b45e093222be688b512",
+    ),
+    "faust_filter_osc": (
+        "1",
+        "6ad65d28d787f08a3fa66eb4de7d4091be8d2267ad1e9edc200618effbbe588c",
+    ),
+}
+
+
+def _historical_faust_v1_provenance(
+    param_spec_name: object,
+) -> tuple[str, str, str, str] | None:
+    """Return the complete provenance representable by the legacy Faust projection.
+
+    :param param_spec_name: Candidate checked-in source identity.
+    :returns: Historical backend and source provenance, or ``None`` for another identity.
+    """
+    if not isinstance(param_spec_name, str):
+        return None
+    source = _FAUST_V1_SOURCE_IDENTITIES.get(param_spec_name)
+    if source is None:
+        return None
+    return ("dawdreamer", _FAUST_V1_BACKEND_VERSION, *source)
+
+
 # Flat-form keys promoted into the nested ``r2`` dict by the back-compat shim.
 # Maps the legacy top-level key → the nested ``R2Location`` field. Anchored
 # here (not on ``DatasetSpec``) so the dict literal is the source of truth and
@@ -271,8 +313,9 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         default=None,
         description="Pinned host runtime version; required when DawDreamer compiles Faust.",
     )
+    # CliApp.serialize omits literal defaults; a factory preserves v2 during worker transport.
     render_contract_version: Literal[1, 2] = Field(
-        default=2,
+        default_factory=lambda: 2,
         description="Canonical digest projection version; 1 preserves persisted legacy specs.",
     )
     pyfdn_excitation: PyFDNExcitation | None = Field(
@@ -421,8 +464,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
         :param data: Raw render configuration.
         :returns: Canonical configuration with a historical digest marker when needed.
-        :raises ValueError: The legacy backend token is not paired with its exact sentinel
-            identity.
+        :raises ValueError: A legacy token is malformed or version 1 would omit Faust provenance.
         """
         if not isinstance(data, dict):
             return data
@@ -436,6 +478,20 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         )
         if not is_explicit_contract:
             normalized["render_contract_version"] = 1
+        if (
+            normalized.get("render_contract_version") == 1
+            and isinstance(synth, dict)
+            and synth.get("format") == "faust"
+        ):
+            actual_provenance = (
+                normalized.get("renderer_backend"),
+                normalized.get("backend_version"),
+                synth.get("synth_version"),
+                synth.get("source_sha256"),
+            )
+            historical_provenance = _historical_faust_v1_provenance(synth.get("param_spec_name"))
+            if actual_provenance != historical_provenance:
+                raise ValueError(_FAUST_V1_PROVENANCE_ERROR)
         if normalized.get("renderer_backend") != "dawdreamer_faust":
             return normalized
         if (
@@ -449,8 +505,14 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             )
         synth_name = synth.get("name")
         registered = SYNTHS.get(SynthName(synth_name)) if isinstance(synth_name, str) else None
-        if registered is None or registered.format != "faust":
+        historical_source = (
+            None
+            if registered is None
+            else _FAUST_V1_SOURCE_IDENTITIES.get(registered.param_spec_name)
+        )
+        if registered is None or registered.format != "faust" or historical_source is None:
             raise ValueError("legacy Faust identity must name a registered Faust source")
+        source_version, source_sha256 = historical_source
         normalized["renderer_backend"] = "dawdreamer"
         normalized["backend_version"] = synth.get("synth_version")
         normalized["render_contract_version"] = 1
@@ -458,8 +520,8 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         promoted_synth.update(
             format="faust",
             plugin_path="",
-            synth_version=registered.synth_version,
-            source_sha256=registered.source_sha256,
+            synth_version=source_version,
+            source_sha256=source_sha256,
         )
         normalized["synth"] = promoted_synth
         return normalized
@@ -651,6 +713,16 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             raise ValueError("format='faust' requires a non-blank backend_version")
         if self.gui_toggle_cadence != "never":
             raise ValueError('format="faust" requires gui_toggle_cadence="never"')
+        if self.render_contract_version == 1:
+            actual_provenance = (
+                self.renderer_backend,
+                self.backend_version,
+                self.synth.synth_version,
+                self.synth.source_sha256,
+            )
+            historical_provenance = _historical_faust_v1_provenance(self.param_spec_name)
+            if actual_provenance != historical_provenance:
+                raise ValueError(_FAUST_V1_PROVENANCE_ERROR)
         from synth_setter.data.vst.faust_sources import resolve_faust_dsp
 
         source = resolve_faust_dsp(self.param_spec_name).source

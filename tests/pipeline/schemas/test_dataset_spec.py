@@ -351,17 +351,6 @@ class TestRenderConfig:
         with pytest.raises(ValidationError, match=message):
             RenderConfig(**values)
 
-    def test_reserved_faustwasm_backend_has_no_supported_format_yet(self) -> None:
-        """The public token is recognized without enabling the future renderer."""
-        values = _valid_render_kwargs(plugin_path="faust")
-        values["synth"] = SYNTHS[SynthName("faust_bright_organ")]
-        values["renderer_backend"] = "faustwasm"
-        values["backend_version"] = "0.8.3"
-        values["gui_toggle_cadence"] = "never"
-
-        with pytest.raises(ValidationError, match="format='faust'.*renderer_backend"):
-            RenderConfig(**values)
-
     def test_faust_format_rejects_pedalboard_backend(self) -> None:
         """A source program cannot be passed to a VST3-only host."""
         values = _valid_render_kwargs(plugin_path="faust")
@@ -370,6 +359,35 @@ class TestRenderConfig:
         values["gui_toggle_cadence"] = "never"
 
         with pytest.raises(ValidationError, match="format='faust'.*renderer_backend"):
+            RenderConfig(**values)
+
+    @pytest.mark.parametrize(
+        ("synth_updates", "backend_version"),
+        [
+            ({"synth_version": "2"}, "0.8.3"),
+            ({"source_sha256": "0" * 64}, "0.8.3"),
+            ({}, "0.9.0"),
+        ],
+    )
+    def test_faust_v1_unrepresentable_provenance_requires_v2(
+        self, synth_updates: dict[str, str], backend_version: str
+    ) -> None:
+        """Version 1 rejects Faust provenance absent from its historical projection.
+
+        :param synth_updates: Faust source provenance variation.
+        :param backend_version: DawDreamer host version under test.
+        """
+        synth = SYNTHS[SynthName("faust_bright_organ")].model_dump()
+        values = {
+            **_valid_render_kwargs(plugin_path="faust"),
+            "synth": {**synth, **synth_updates},
+            "renderer_backend": "dawdreamer",
+            "backend_version": backend_version,
+            "render_contract_version": 1,
+            "gui_toggle_cadence": "never",
+        }
+
+        with pytest.raises(ValidationError, match="render_contract_version=2"):
             RenderConfig(**values)
 
     def test_legacy_faust_json_round_trip_preserves_historical_digest(self) -> None:

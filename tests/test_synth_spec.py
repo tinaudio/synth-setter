@@ -309,6 +309,21 @@ class TestValidateSynthIdentity:
         with pytest.raises(ValueError, match="surge_4"):
             validate_synth_identity(cfg)
 
+    def test_surge_xt_overridden_to_surgepy_format_requires_variant_identity(self) -> None:
+        """A backend-format override cannot retain the VST3 registry identity."""
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="synth/surge_xt",
+                overrides=[
+                    "synth.format=surgepy",
+                    "synth.plugin_path=surgepy",
+                    "synth.plugin_state_path=presets/surge-base.fxp",
+                ],
+            )
+
+        with pytest.raises(ValueError, match="surge_xt_surgepy"):
+            validate_synth_identity(cfg)
+
     def test_overridden_binding_fields_pass_and_survive(self) -> None:
         """Plugin binding stays per-run overridable; only identity is registry-pinned."""
         cfg = OmegaConf.create(

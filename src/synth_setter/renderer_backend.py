@@ -15,7 +15,6 @@ type RendererBackend = Literal[
     "pedalboard",
     "pyfdn",
     "dawdreamer",
-    "faustwasm",
     "surgepy",
     "torchsynth",
 ]
