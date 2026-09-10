@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from fractions import Fraction
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -71,6 +73,171 @@ def _reset_module_caches(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(cam, "scatter", None, raising=True)
     monkeypatch.setattr(cam, "pesto_model", None, raising=True)
+
+
+# Public metric channel contracts.
+
+
+_PAIR_METRICS_WITH_SAMPLE_RATE: tuple[Callable[..., object], ...] = (
+    cam.compute_mss_corresponding_channels,
+    cam.compute_wmfcc_global_joint,
+    cam.compute_f0_downmix,
+    cam.compute_sot_downmix,
+    cam.compute_octave_rt60_log_rmse_mono_only,
+    cam.compute_octave_edc_rmse_db_mono_only,
+    cam.compute_acoustic_parameter_metrics_mono_only,
+    cam.compute_rms_downmix,
+    cam.compute_mldr_corresponding_channels,
+)
+
+
+@pytest.mark.parametrize(
+    ("target", "pred", "message"),
+    [
+        (np.zeros(32), np.zeros(32), "channel-first"),
+        (np.zeros((1, 32)), np.zeros((1, 31)), "same shape"),
+        (np.zeros((0, 32)), np.zeros((0, 32)), "at least one channel"),
+        (np.zeros((1, 0)), np.zeros((1, 0)), "one sample"),
+        (np.array([[np.nan]]), np.array([[0.0]]), "finite"),
+        (np.array([[1.0j]]), np.array([[0.0j]]), "real numeric"),
+        (np.array([[True]]), np.array([[False]]), "real numeric"),
+        (
+            np.array([[np.datetime64("2026-01-01")]]),
+            np.array([[np.datetime64("2026-01-02")]]),
+            "real numeric",
+        ),
+        (
+            np.array([[np.timedelta64(1, "ns")]]),
+            np.array([[np.timedelta64(2, "ns")]]),
+            "real numeric",
+        ),
+        (np.array([["audio"]]), np.array([["audio"]]), "real numeric"),
+    ],
+    ids=(
+        "wrong-rank",
+        "shape-mismatch",
+        "zero-channels",
+        "zero-samples",
+        "nonfinite",
+        "complex",
+        "boolean",
+        "datetime",
+        "timedelta",
+        "nonnumeric",
+    ),
+)
+@pytest.mark.parametrize(
+    "metric", _PAIR_METRICS_WITH_SAMPLE_RATE, ids=lambda metric: metric.__name__
+)
+def test_public_audio_metric_malformed_pair_raises(
+    metric: Callable[..., object], target: np.ndarray, pred: np.ndarray, message: str
+) -> None:
+    """Every metric rejects malformed audio through the shared contract.
+
+    :param metric: Public metric under test.
+    :param target: Invalid target audio.
+    :param pred: Invalid predicted audio.
+    :param message: Expected validation-error fragment.
+    """
+    with pytest.raises(ValueError, match=message):
+        metric(target, pred, _SR)
+
+
+@pytest.mark.parametrize("sample_rate", [True, 0, -1, np.nan, np.inf, "44100"])
+@pytest.mark.parametrize(
+    "metric", _PAIR_METRICS_WITH_SAMPLE_RATE, ids=lambda metric: metric.__name__
+)
+def test_public_audio_metric_invalid_sample_rate_raises(
+    metric: Callable[..., object], sample_rate: object
+) -> None:
+    """Every rate-aware metric rejects an invalid time base before analysis.
+
+    :param metric: Public metric under test.
+    :param sample_rate: Invalid sample rate.
+    """
+    audio = np.zeros((1, 32), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="sample_rate"):
+        metric(audio, audio, sample_rate)
+
+
+def test_public_audio_metric_fraction_sample_rate_is_normalized_to_float() -> None:
+    """Finite positive real sample rates reach downstream transforms as floats."""
+    audio = _sine(seconds=0.2)
+
+    score = cam.compute_mss_corresponding_channels(audio, audio, Fraction(_SR, 1))
+
+    assert score == pytest.approx(0.0, abs=1e-9)
+
+
+def test_public_audio_metric_integer_pair_matches_float64_pair() -> None:
+    """Integer audio is widened without scaling before metric analysis."""
+    target = (1000.0 * _sine(seconds=0.2, freq=440.0)).astype(np.int16)
+    pred = (1000.0 * _sine(seconds=0.2, freq=880.0)).astype(np.int16)
+
+    integer_score = cam.compute_mss_corresponding_channels(target, pred)
+    float_score = cam.compute_mss_corresponding_channels(
+        target.astype(np.float64), pred.astype(np.float64)
+    )
+
+    assert integer_score == pytest.approx(float_score, rel=1e-12)
+
+
+@pytest.mark.parametrize("sample_rate", [True, 0, -1, np.nan, np.inf, "44100"])
+def test_stereo_only_metric_invalid_sample_rate_raises(sample_rate: object) -> None:
+    """The stereo-only metric validates its time base before the transform.
+
+    :param sample_rate: Invalid sample rate.
+    """
+    audio = np.zeros((2, 32), dtype=np.float32)
+
+    metric = cast(Callable[..., object], cam.compute_mldr_mid_side_stereo_only)
+    with pytest.raises(ValueError, match="sample_rate"):
+        metric(audio, audio, sample_rate)
+
+
+def test_compatibility_metric_names_alias_explicit_channel_policies() -> None:
+    """Compatibility import names resolve to the explicit-policy callables."""
+    assert cam.compute_mss is cam.compute_mss_corresponding_channels
+    assert cam.compute_jtfs_distance is cam.compute_jtfs_distance_corresponding_channels
+    assert cam.compute_wmfcc is cam.compute_wmfcc_global_joint
+    assert cam.compute_f0 is cam.compute_f0_downmix
+    assert cam.compute_sot is cam.compute_sot_downmix
+    assert cam.compute_octave_rt60_log_rmse is cam.compute_octave_rt60_log_rmse_mono_only
+    assert cam.compute_octave_edc_rmse_db is cam.compute_octave_edc_rmse_db_mono_only
+    assert (
+        cam.compute_acoustic_parameter_metrics is cam.compute_acoustic_parameter_metrics_mono_only
+    )
+    assert cam.compute_rms is cam.compute_rms_downmix
+    assert cam.compute_mldr is cam.compute_mldr_corresponding_channels
+    assert cam.compute_mldr_mid_side is cam.compute_mldr_mid_side_stereo_only
+
+
+def test_compute_jtfs_distance_corresponding_channels_wrong_rank_raises() -> None:
+    """JTFS rejects implicit mono rank before constructing Scattering1D."""
+    audio = np.zeros(32, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="channel-first"):
+        cam.compute_jtfs_distance_corresponding_channels(audio, audio)
+
+
+@pytest.mark.parametrize(
+    "metric_name",
+    [
+        "compute_octave_rt60_log_rmse_mono_only",
+        "compute_octave_edc_rmse_db_mono_only",
+        "compute_acoustic_parameter_metrics_mono_only",
+    ],
+)
+def test_mono_only_metric_stereo_input_raises(metric_name: str) -> None:
+    """Mono-only response metrics reject stereo before pyFDN transforms.
+
+    :param metric_name: Public mono-only metric under test.
+    """
+    stereo = np.zeros((2, 32), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="mono-only"):
+        getattr(cam, metric_name)(stereo, stereo, _SR)
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +457,7 @@ def test_pyfdn_reverb_metric_mismatched_lengths_raise(
     target = np.zeros((1, _SR), dtype=np.float32)
     pred = np.zeros((1, _SR - 1), dtype=np.float32)
 
-    with pytest.raises(ValueError, match="same sample count"):
+    with pytest.raises(ValueError, match="same shape"):
         metric(target, pred, _SR)
 
 
@@ -309,6 +476,23 @@ def test_pyfdn_reverb_metric_stereo_input_raises(
 
     with pytest.raises(ValueError, match="mono"):
         metric(stereo, stereo, _SR)
+
+
+def test_compute_rms_downmix_accepts_three_channels() -> None:
+    """RMS explicitly downmixes any nonempty matching channel count."""
+    mono = _sine(seconds=0.2)
+    audio = np.concatenate((mono, 0.5 * mono, -mono), axis=0)
+
+    assert cam.compute_rms_downmix(audio, audio) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_compute_rms_downmix_uses_arithmetic_channel_mean() -> None:
+    """Anti-phase target channels cancel before RMS-envelope comparison."""
+    channel = np.ones(4096, dtype=np.float32)
+    target = np.stack((channel, -channel))
+    pred = np.stack((channel, channel))
+
+    assert cam.compute_rms_downmix(target, pred) == 0.0
 
 
 def test_compute_rms_quiet_nonzero_inputs_return_zero() -> None:
@@ -453,25 +637,59 @@ def test_compute_mel_specs_is_deterministic() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_compute_mss_corresponding_channels_accepts_three_channels() -> None:
+    """MSS compares matching channels without restricting their count."""
+    mono = _sine(seconds=0.5)
+    audio = np.concatenate((mono, 0.5 * mono, -mono), axis=0)
+
+    assert cam.compute_mss_corresponding_channels(audio, audio) == pytest.approx(0.0, abs=1e-9)
+
+
 def test_compute_mss_identical_inputs_returns_zero() -> None:
     """``compute_mss(x, x)`` is exactly 0."""
-    audio = _sine(seconds=0.5)[0]
+    audio = _sine(seconds=0.5)
     assert compute_mss(audio, audio) == pytest.approx(0.0, abs=1e-9)
 
 
 def test_compute_mss_different_inputs_is_positive() -> None:
     """Distinct signals produce a strictly positive distance."""
-    target = _sine(seconds=0.5, freq=440.0)[0]
-    pred = _sine(seconds=0.5, freq=880.0)[0]
+    target = _sine(seconds=0.5, freq=440.0)
+    pred = _sine(seconds=0.5, freq=880.0)
     dist = compute_mss(target, pred)
     assert dist > 0
     assert np.isfinite(dist)
 
 
+def test_compute_mss_valid_pair_preserves_reference_value() -> None:
+    """Channel validation does not change the established MSS reduction."""
+    target = _sine(seconds=0.5, freq=440.0)
+    pred = _sine(seconds=0.5, freq=880.0)
+
+    assert compute_mss(target, pred, _SR) == pytest.approx(8.276928, rel=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("sample_rate", "invalid_length"),
+    [(99.0, "n_fft"), (199.0, "hop_length")],
+)
+def test_compute_mss_sample_rate_with_zero_analysis_length_raises(
+    sample_rate: float, invalid_length: str
+) -> None:
+    """MSS rejects rates that truncate any configured analysis length to zero.
+
+    :param sample_rate: Rate that makes at least one MSS analysis length invalid.
+    :param invalid_length: Derived length expected in the public validation error.
+    """
+    audio = np.zeros((1, 32), dtype=np.float32)
+
+    with pytest.raises(ValueError, match=rf"MSS sample_rate.*positive.*{invalid_length}"):
+        cam.compute_mss_corresponding_channels(audio, audio, sample_rate)
+
+
 def test_compute_mss_is_symmetric() -> None:
     """``compute_mss(a, b) == compute_mss(b, a)``."""
-    a = _sine(seconds=0.5, freq=440.0)[0]
-    b = _sine(seconds=0.5, freq=880.0)[0]
+    a = _sine(seconds=0.5, freq=440.0)
+    b = _sine(seconds=0.5, freq=880.0)
     assert compute_mss(a, b) == pytest.approx(compute_mss(b, a), abs=1e-9)
 
 
@@ -481,9 +699,9 @@ def test_compute_mss_grows_with_frequency_separation() -> None:
     Monotonicity holds over this range but not globally — the mel-scale distance saturates above
     ~3.5 kHz, so widening the sweep would invert the comparison.
     """
-    reference = _sine(seconds=0.5, freq=440.0)[0]
-    one_octave = _sine(seconds=0.5, freq=880.0)[0]
-    two_octaves = _sine(seconds=0.5, freq=1760.0)[0]
+    reference = _sine(seconds=0.5, freq=440.0)
+    one_octave = _sine(seconds=0.5, freq=880.0)
+    two_octaves = _sine(seconds=0.5, freq=1760.0)
 
     assert compute_mss(reference, one_octave) < compute_mss(reference, two_octaves)
 
@@ -505,6 +723,14 @@ def _tremolo(depth: float, rate_hz: float = 4.0, seconds: float = 2.0) -> np.nda
     t = np.arange(carrier.shape[-1], dtype=np.float32) / _SR
     envelope = 1.0 - depth * 0.5 * (1.0 + np.sin(2 * np.pi * rate_hz * t))
     return (carrier * envelope).astype(np.float32)
+
+
+def test_compute_mldr_corresponding_channels_accepts_three_channels() -> None:
+    """MLDR scores corresponding channels for any nonempty channel count."""
+    mono = _tremolo(depth=0.5, seconds=0.2)
+    audio = np.concatenate((mono, 0.5 * mono, -mono), axis=0)
+
+    assert cam.compute_mldr_corresponding_channels(audio, audio) == pytest.approx(0.0, abs=1e-9)
 
 
 def test_compute_mldr_identical_inputs_returns_zero() -> None:
@@ -593,6 +819,14 @@ def test_compute_mldr_silent_inputs_are_finite() -> None:
     assert np.isfinite(dist)
 
 
+def test_compute_mldr_mid_side_stereo_only_rejects_three_channels() -> None:
+    """The mid/side metric exposes its exact stereo-only contract."""
+    audio = np.zeros((3, 100), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="stereo-only"):
+        cam.compute_mldr_mid_side_stereo_only(audio, audio)
+
+
 def test_compute_mldr_mid_side_identical_stereo_returns_zero() -> None:
     """Identical stereo pairs have zero mid/side MLDR distance."""
     stereo = np.concatenate([_sine(seconds=2.0), _tremolo(depth=0.5)], axis=0)
@@ -674,7 +908,7 @@ def test_compute_mldr_mid_side_nonmatching_stereo_shape_raises(
     :param target: Invalid target shape.
     :param pred: Invalid prediction shape.
     """
-    with pytest.raises(ValueError, match=r"matching nonempty stereo.*\(2, T\)"):
+    with pytest.raises(ValueError, match="channel-first|same shape|at least one|stereo-only"):
         compute_mldr_mid_side(target, pred)
 
 
@@ -744,19 +978,37 @@ def test_compute_mfcc_multichannel_input_returns_channel_leading_shape() -> None
 # ---------------------------------------------------------------------------
 
 
+def test_compute_wmfcc_global_joint_accepts_three_channels() -> None:
+    """WMFCC keeps all channels in one joint DTW feature vector."""
+    mono = _sine(seconds=0.2)
+    audio = np.concatenate((mono, 0.5 * mono, -mono), axis=0)
+
+    assert cam.compute_wmfcc_global_joint(audio, audio) == pytest.approx(0.0, abs=1e-9)
+
+
 def test_compute_wmfcc_identical_inputs_returns_zero() -> None:
     """DTW-normalized distance of identical signals is 0."""
-    audio = _sine(seconds=0.5)[0]
+    audio = _sine(seconds=0.5)
     assert compute_wmfcc(audio, audio) == pytest.approx(0.0, abs=1e-9)
 
 
 def test_compute_wmfcc_different_inputs_is_positive() -> None:
     """Distinct signals produce a strictly positive distance."""
-    target = _sine(seconds=0.5, freq=440.0)[0]
-    pred = _sine(seconds=0.5, freq=880.0)[0]
+    target = _sine(seconds=0.5, freq=440.0)
+    pred = _sine(seconds=0.5, freq=880.0)
     dist = compute_wmfcc(target, pred)
     assert dist > 0
     assert np.isfinite(dist)
+
+
+def test_compute_wmfcc_global_joint_preserves_reference_value() -> None:
+    """Multichannel wMFCC uses one joint channel/coefficient feature vector."""
+    first = _sine(seconds=0.2, freq=440.0)
+    second = _sine(seconds=0.2, freq=880.0)
+    target = np.concatenate((first, second), axis=0)
+    pred = np.concatenate((second, first), axis=0)
+
+    assert compute_wmfcc(target, pred, _SR) == pytest.approx(22.158663702011108, rel=1e-6)
 
 
 def test_compute_wmfcc_is_symmetric() -> None:
@@ -769,8 +1021,8 @@ def test_compute_wmfcc_is_symmetric() -> None:
     Unlike the other distances, wMFCC is *not* monotonic in frequency separation — it dips around
     3.5 kHz — so no ordering is asserted.
     """
-    a = _sine(seconds=0.5, freq=440.0)[0]
-    b = _sine(seconds=0.5, freq=880.0)[0]
+    a = _sine(seconds=0.5, freq=440.0)
+    b = _sine(seconds=0.5, freq=880.0)
 
     assert compute_wmfcc(a, b) == pytest.approx(compute_wmfcc(b, a), rel=1e-9)
 
@@ -834,6 +1086,16 @@ def test_batched_wasserstein_distance_preserves_batch_dim() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_compute_sot_downmix_anti_phase_matches_silence() -> None:
+    """SOT explicitly averages channels before spectral analysis."""
+    mono = _sine(seconds=0.5)
+    anti_phase = np.concatenate((mono, -mono), axis=0)
+    silence = np.zeros_like(anti_phase)
+
+    assert cam.compute_sot_downmix(anti_phase, silence) == pytest.approx(0.0, abs=1e-9)
+    assert cam.compute_mss_corresponding_channels(anti_phase, silence) > 0.0
+
+
 def test_compute_sot_identical_inputs_returns_zero() -> None:
     """Identical signals have zero spectral optimal-transport distance."""
     audio = _sine(seconds=0.5)
@@ -881,6 +1143,21 @@ def test_compute_metrics_on_dir_returns_expected_keys(tmp_path: Path) -> None:
     assert set(metrics.keys()) == {"mss", "wmfcc", "sot", "rms", "mldr"}
     for value in metrics.values():
         assert np.isfinite(value)
+
+
+def test_compute_metrics_on_dir_three_channel_wavs_use_declared_policies(tmp_path: Path) -> None:
+    """Real three-channel WAVs run all unrestricted metrics without adding stereo-only output.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    mono = _sine(seconds=0.2)
+    audio = np.concatenate((mono, 0.5 * mono, -mono), axis=0)
+    sample_dir = _make_sample_dir(tmp_path, "0", audio, audio)
+
+    metrics = compute_metrics_on_dir(sample_dir)
+
+    assert set(metrics) == {"mss", "wmfcc", "sot", "rms", "mldr"}
+    assert np.isfinite(list(metrics.values())).all()
 
 
 def test_compute_metrics_on_dir_stereo_adds_mid_side_metric(tmp_path: Path) -> None:
@@ -983,6 +1260,22 @@ def test_compute_metrics_on_dir_uses_wav_sample_rate(tmp_path: Path) -> None:
     assert metrics["mss"] != pytest.approx(
         compute_mss(loaded_target, loaded_pred, 44_100), rel=1e-3
     )
+
+
+def test_compute_metrics_on_dir_mismatched_sample_counts_raise(tmp_path: Path) -> None:
+    """Real WAV dispatch validates pair geometry before metric transforms.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    sample_dir = _make_sample_dir(
+        tmp_path,
+        "0",
+        _sine(seconds=0.2),
+        _sine(seconds=0.1),
+    )
+
+    with pytest.raises(ValueError, match="same shape"):
+        compute_metrics_on_dir(sample_dir)
 
 
 def test_compute_metrics_on_dir_mismatched_sample_rates_raise(tmp_path: Path) -> None:
@@ -1099,7 +1392,12 @@ def test_main_mixed_channel_files_export_optional_mid_side_metric(
     _make_sample_dir(audio_root, "identity", stereo_target, stereo_target)
     metrics_dir = tmp_path / "metrics"
     monkeypatch.setattr(cam, "ProcessPoolExecutor", ThreadPoolExecutor)
-    for metric_name in ("compute_mss", "compute_wmfcc", "compute_sot", "compute_rms"):
+    for metric_name in (
+        "compute_mss_corresponding_channels",
+        "compute_wmfcc_global_joint",
+        "compute_sot_downmix",
+        "compute_rms_downmix",
+    ):
         monkeypatch.setattr(cam, metric_name, lambda *_args: 0.0)
 
     result = CliRunner().invoke(
@@ -1396,7 +1694,7 @@ def test_compute_jtfs_first_call_constructs_scatter_and_returns_array() -> None:
 @pytest.mark.slow
 def test_compute_jtfs_distance_identical_inputs_returns_zero() -> None:
     """Identical signals → JTFS L1 distance is 0."""
-    audio = _sine(seconds=0.5)[0]
+    audio = _sine(seconds=0.5)
     dist = compute_jtfs_distance(audio, audio, J=6, Q=8)
     assert dist == pytest.approx(0.0, abs=1e-9)
 
@@ -1404,11 +1702,32 @@ def test_compute_jtfs_distance_identical_inputs_returns_zero() -> None:
 @pytest.mark.slow
 def test_compute_jtfs_distance_different_inputs_is_positive() -> None:
     """Distinct signals → JTFS L1 distance is strictly positive and finite."""
-    target = _sine(seconds=0.5, freq=440.0)[0]
-    pred = _sine(seconds=0.5, freq=880.0)[0]
+    target = _sine(seconds=0.5, freq=440.0)
+    pred = _sine(seconds=0.5, freq=880.0)
     dist = compute_jtfs_distance(target, pred, J=6, Q=8)
     assert np.isfinite(dist)
     assert dist > 0
+
+
+def test_compute_jtfs_distance_compares_corresponding_channels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JTFS preserves each channel through scattering before reducing the distance.
+
+    :param monkeypatch: Replaces only the expensive Scattering1D boundary.
+    """
+
+    class FakeScattering:
+        def __call__(self, audio: np.ndarray) -> np.ndarray:
+            return audio.mean(axis=-1, keepdims=True) ** 2
+
+    monkeypatch.setattr(cam, "Scattering1D", lambda **_kwargs: FakeScattering())
+    target = np.repeat(np.array([[0.0], [1.0], [4.0]]), 8, axis=1)
+    pred = np.repeat(np.array([[1.0], [3.0], [4.0]]), 8, axis=1)
+
+    distance = cam.compute_jtfs_distance_corresponding_channels(target, pred)
+
+    assert distance == pytest.approx(3.0)
 
 
 @pytest.mark.slow
@@ -1430,6 +1749,56 @@ def test_compute_jtfs_cache_is_shape_keyed_not_param_keyed() -> None:
 # ---------------------------------------------------------------------------
 # get_pesto_activations / compute_f0 — exercise the real pesto model
 # ---------------------------------------------------------------------------
+
+
+def test_compute_f0_downmix_nondefault_sample_rate_reaches_pesto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caller's exact rate governs pitch values at the public PESTO boundary.
+
+    :param monkeypatch: Replaces only the pretrained PESTO model boundary.
+    """
+    received_rates: list[float] = []
+
+    def fake_pesto(
+        audio: torch.Tensor, sample_rate: float
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        received_rates.append(sample_rate)
+        pitches = audio.mean(dim=1, keepdim=True) * sample_rate / 1000.0
+        confidence = torch.ones_like(pitches)
+        return pitches, confidence, pitches, confidence
+
+    monkeypatch.setattr(cam, "pesto_model", fake_pesto)
+    target = np.ones((2, 16), dtype=np.float32)
+    pred = np.full((2, 16), 3.0, dtype=np.float32)
+
+    distance = cam.compute_f0_downmix(target, pred, 16000.0)
+
+    assert distance == pytest.approx(32.0)
+    assert received_rates == [16000.0]
+
+
+def test_compute_f0_downmix_uses_arithmetic_channel_mean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The PESTO boundary receives channel means, not selected or paired channels.
+
+    :param monkeypatch: Replaces only the pretrained PESTO model boundary.
+    """
+
+    def fake_pesto(
+        audio: torch.Tensor, _sample_rate: float
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        pitches = audio.abs().mean(dim=1, keepdim=True) * 100.0
+        confidence = torch.ones_like(pitches)
+        return pitches, confidence, pitches, confidence
+
+    monkeypatch.setattr(cam, "pesto_model", fake_pesto)
+    channel = np.ones(16, dtype=np.float32)
+    target = np.stack((channel, -channel))
+    pred = np.stack((channel, channel))
+
+    assert cam.compute_f0_downmix(target, pred) == pytest.approx(100.0)
 
 
 @pytest.mark.slow
@@ -1650,6 +2019,53 @@ def test_main_num_workers_zero_raises_usage_error(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 _RATE_AWARE_METRICS = (compute_mss, compute_sot, compute_wmfcc)
+
+
+@pytest.mark.parametrize(
+    ("metric", "sample_rate", "metric_name"),
+    [
+        (cam.compute_rms_downmix, 39.0, "RMS"),
+        (cam.compute_sot_downmix, 49.0, "SOT"),
+        (cam.compute_wmfcc_global_joint, 99.0, "wMFCC"),
+    ],
+    ids=("rms", "sot", "wmfcc"),
+)
+def test_metric_sample_rate_with_zero_hop_length_raises(
+    metric: Callable[..., float], sample_rate: float, metric_name: str
+) -> None:
+    """Windowed metrics reject rates that truncate their own hop to zero.
+
+    :param metric: Public windowed metric under test.
+    :param sample_rate: Rate below the metric's derived-hop boundary.
+    :param metric_name: Metric name expected in the public validation error.
+    """
+    audio = np.zeros((1, 32), dtype=np.float32)
+
+    with pytest.raises(ValueError, match=rf"{metric_name} sample_rate.*positive.*hop_length"):
+        metric(audio, audio, sample_rate)
+
+
+@pytest.mark.parametrize(
+    ("metric", "sample_rate"),
+    [
+        (cam.compute_mss_corresponding_channels, 200.0),
+        (cam.compute_rms_downmix, 40.0),
+        (cam.compute_sot_downmix, 50.0),
+        (cam.compute_wmfcc_global_joint, 100.0),
+    ],
+    ids=("mss", "rms", "sot", "wmfcc"),
+)
+def test_windowed_metric_smallest_valid_sample_rate_is_accepted(
+    metric: Callable[..., float], sample_rate: float
+) -> None:
+    """Derived-length guards accept the exact positive-sample boundary.
+
+    :param metric: Public windowed metric under test.
+    :param sample_rate: Lowest rate that keeps every metric-specific length positive.
+    """
+    audio = np.ones((1, 32), dtype=np.float32)
+
+    assert np.isfinite(metric(audio, audio, sample_rate))
 
 
 @pytest.mark.parametrize("metric", _RATE_AWARE_METRICS, ids=lambda fn: fn.__name__)

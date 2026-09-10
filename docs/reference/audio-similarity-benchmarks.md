@@ -194,21 +194,29 @@ seed, diagnostic-only green definition, and loudness override rationale. Consump
 recomputes every mel from its same-named WAV so a label swap cannot pass. Pull
 requests never receive R2 credentials.
 
+## Metric input contract
+
+Pairwise metrics accept matching, nonempty, channel-first NumPy arrays with integer or
+floating-point dtypes. Integer samples are widened without scaling; boolean, complex,
+object, string, datetime, and timedelta arrays raise `ValueError`, as do non-finite
+samples. Rate-aware metrics accept any finite positive `numbers.Real` sample rate that
+converts to `float` (including `fractions.Fraction`); all other rates raise `ValueError`.
+
 ## Metric series
 
 The two noise-floor buckets emit the per-row "round-trip" series (five distance metrics
 plus the two non-distance sentinels `num-samples` and
 `wall-clock-seconds-per-render`):
 
-| Metric                                | Computed by                                                                                     | Unit        | Smaller-is-better? |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------- | ------------------ |
-| `multi-scale-spectral-loss-max`       | `compute_mss` (`src/synth_setter/evaluation/compute_audio_metrics.py`) — multi-scale log-mel L1 | dB          | yes                |
-| `dtw-aligned-mfcc-distance-max`       | `compute_wmfcc` — DTW-aligned MFCC L1 distance                                                  | L1          | yes                |
-| `spectral-optimal-transport-max`      | `compute_sot` — Wasserstein on STFT magnitudes                                                  | Wasserstein | yes                |
-| `rms-envelope-cosine-distance-max`    | `1 - compute_rms` — RMS envelope cosine distance                                                | 1-cos       | yes                |
-| `mel-spectrogram-mean-absolute-error` | mean abs diff on stored mel arrays                                                              | dB          | yes                |
-| `num-samples`                         | static fixture size (input parameter)                                                           | count       | n/a (sentinel)     |
-| `wall-clock-seconds-per-render`       | `(stage1_t + stage2_t) / (2 × num_samples)`                                                     | seconds     | yes                |
+| Metric                                | Computed by                                                                                                                      | Unit        | Smaller-is-better? |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------------------ |
+| `multi-scale-spectral-loss-max`       | `compute_mss_corresponding_channels` (`src/synth_setter/evaluation/compute_audio_metrics.py`) — corresponding-channel log-mel L1 | dB          | yes                |
+| `dtw-aligned-mfcc-distance-max`       | `compute_wmfcc_global_joint` — DTW over a joint channel/coefficient feature vector                                               | L1          | yes                |
+| `spectral-optimal-transport-max`      | `compute_sot_downmix` — Wasserstein on channel-mean STFT magnitudes                                                              | Wasserstein | yes                |
+| `rms-envelope-cosine-distance-max`    | `1 - compute_rms_downmix` — channel-mean RMS envelope cosine distance                                                            | 1-cos       | yes                |
+| `mel-spectrogram-mean-absolute-error` | mean abs diff on stored mel arrays                                                                                               | dB          | yes                |
+| `num-samples`                         | static fixture size (input parameter)                                                                                            | count       | n/a (sentinel)     |
+| `wall-clock-seconds-per-render`       | `(stage1_t + stage2_t) / (2 × num_samples)`                                                                                      | seconds     | yes                |
 
 The **`1 preset N renders`** bucket additionally emits five `all-pairs-*`
 series — these are the **fix-regression signal for the #489
@@ -216,13 +224,13 @@ every-other-render bug**, since the per-row metrics can stay flat
 while the all-pairs worst-case spikes (the bug manifested as junk on
 every-other render, not on every render):
 
-| Metric                                       | Computed by                                   | Unit        |
-| -------------------------------------------- | --------------------------------------------- | ----------- |
-| `all-pairs-multi-scale-spectral-loss-max`    | worst-case `compute_mss` across all pairs     | dB          |
-| `all-pairs-dtw-aligned-mfcc-distance-max`    | worst-case `compute_wmfcc` across all pairs   | L1          |
-| `all-pairs-spectral-optimal-transport-max`   | worst-case `compute_sot` across all pairs     | Wasserstein |
-| `all-pairs-rms-envelope-cosine-distance-max` | worst-case `1 - compute_rms` across all pairs | 1-cos       |
-| `all-pairs-pair-count`                       | `n × (n − 1) / 2` for `n = 2 × num_samples`   | count       |
+| Metric                                       | Computed by                                                      | Unit        |
+| -------------------------------------------- | ---------------------------------------------------------------- | ----------- |
+| `all-pairs-multi-scale-spectral-loss-max`    | worst-case `compute_mss_corresponding_channels` across all pairs | dB          |
+| `all-pairs-dtw-aligned-mfcc-distance-max`    | worst-case `compute_wmfcc_global_joint` across all pairs         | L1          |
+| `all-pairs-spectral-optimal-transport-max`   | worst-case `compute_sot_downmix` across all pairs                | Wasserstein |
+| `all-pairs-rms-envelope-cosine-distance-max` | worst-case `1 - compute_rms_downmix` across all pairs            | 1-cos       |
+| `all-pairs-pair-count`                       | `n × (n − 1) / 2` for `n = 2 × num_samples`                      | count       |
 
 Distance metrics are emitted as **max-over-samples** (worst-case
 per-pair) for the round-trip series and **max-over-pairs** for the

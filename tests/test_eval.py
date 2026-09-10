@@ -289,6 +289,11 @@ def test_train_eval_pyfdn_predict_writes_response_metrics(
 
     per_sample = pd.read_csv(output_dir / "metrics" / "metrics.csv", index_col=0)
     expected_metrics = [
+        "mss",
+        "wmfcc",
+        "sot",
+        "rms",
+        "mldr",
         "joint_time_frequency_ot",
         "pyfdn_match_impulse_response",
         "pyfdn_match_magnitude",
@@ -2152,6 +2157,80 @@ def test_evaluate_predict_mode_pyfdn_renders_finite_audio_end_to_end(
         rendered = audio_file.read(audio_file.frames)
     assert rendered.shape == (1, 176_400)
     assert np.isfinite(rendered).all()
+
+
+@pytest.mark.fake_vst
+def test_evaluate_predict_mode_mismatched_audio_lengths_raise(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """The eval entrypoint rejects rendered pairs with mismatched sample counts.
+
+    :param tmp_path: Hydra output root containing the malformed rendered pair.
+    :param fake_surge_smoke_datasets: Tiny real Lance predict split.
+    :param capfd: Captures the real metrics subprocess diagnostic.
+    """
+    sample_dir = tmp_path / "audio" / "sample_0"
+    sample_dir.mkdir(parents=True)
+    sf.write(sample_dir / "target.wav", np.zeros(4096, dtype=np.float32), 44100)
+    sf.write(sample_dir / "pred.wav", np.zeros(2048, dtype=np.float32), 44100)
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        mode="predict",
+        datamodule="surge_lance",
+    )
+    with open_dict(cfg):
+        cfg.evaluation.render_vst = False
+        cfg.evaluation.compute_metrics = True
+        cfg.evaluation.num_workers = 1
+
+    HydraConfig().set_config(cfg)
+    try:
+        with pytest.raises(subprocess.CalledProcessError):
+            evaluate(cfg)
+        assert "target and pred must have the same shape" in capfd.readouterr().err
+    finally:
+        GlobalHydra.instance().clear()
+
+
+@pytest.mark.fake_vst
+def test_evaluate_predict_mode_nonfinite_audio_raises(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """The eval entrypoint rejects rendered audio containing non-finite samples.
+
+    :param tmp_path: Hydra output root containing the malformed rendered pair.
+    :param fake_surge_smoke_datasets: Tiny real Lance predict split.
+    :param capfd: Captures the real metrics subprocess diagnostic.
+    """
+    sample_dir = tmp_path / "audio" / "sample_0"
+    sample_dir.mkdir(parents=True)
+    target = np.zeros(4096, dtype=np.float32)
+    target[0] = np.nan
+    sf.write(sample_dir / "target.wav", target, 44100, subtype="FLOAT")
+    sf.write(sample_dir / "pred.wav", np.zeros_like(target), 44100, subtype="FLOAT")
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        mode="predict",
+        datamodule="surge_lance",
+    )
+    with open_dict(cfg):
+        cfg.evaluation.render_vst = False
+        cfg.evaluation.compute_metrics = True
+        cfg.evaluation.num_workers = 1
+
+    HydraConfig().set_config(cfg)
+    try:
+        with pytest.raises(subprocess.CalledProcessError):
+            evaluate(cfg)
+        assert "target and pred must contain only finite values" in capfd.readouterr().err
+    finally:
+        GlobalHydra.instance().clear()
 
 
 @pytest.mark.fake_vst
