@@ -251,7 +251,6 @@ models, and callbacks resolve it through `${synth.param_spec_name}`:
 # src/synth_setter/configs/synth/mysynth.yaml
 name: "mysynth"
 param_spec_name: "mysynth"
-format: "vst3"
 plugin_path: "plugins/MySynth.vst3"
 plugin_state_path: "presets/mysynth-base.vstpreset"
 synth_version: "1.2.3"

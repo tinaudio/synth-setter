@@ -304,9 +304,7 @@ class TestSynthConfigGroup:
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             group = compose(config_name=f"synth/{name}").synth
 
-        expected = SYNTHS[SynthName(name)].model_dump(exclude_none=True)
-        if expected["format"] == "faust":
-            expected.pop("format")
+        expected = SYNTHS[SynthName(name)].model_dump(exclude={"format"}, exclude_none=True)
         assert OmegaConf.to_container(group) == expected
 
     def test_ultramaster_onehot_selector_resolves_configured_width(self) -> None:
@@ -382,7 +380,7 @@ class TestValidateSynthIdentity:
             cfg = compose(
                 config_name="synth/surge_xt",
                 overrides=[
-                    "synth.format=surgepy",
+                    "++synth.format=surgepy",
                     "synth.plugin_path=surgepy",
                     "synth.plugin_state_path=presets/surge-base.fxp",
                 ],

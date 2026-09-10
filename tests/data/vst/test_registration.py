@@ -566,6 +566,18 @@ def test_identity_group_yaml_reproduces_every_checked_in_group_file() -> None:
         assert (group_dir / f"{name}.yaml").read_text() == identity_group_yaml(spec), name
 
 
+@pytest.mark.parametrize("spec", SYNTHS.values(), ids=SYNTHS.keys())
+def test_identity_group_yaml_without_format_preserves_identity(spec: SynthSpec) -> None:
+    """Generated references reconstruct the identity without an authored format.
+
+    :param spec: Registered synth identity to round-trip through generated YAML.
+    """
+    content = yaml.safe_load(identity_group_yaml(spec))
+
+    assert "format" not in content
+    assert SynthSpec.model_validate(content) == spec
+
+
 def test_identity_group_yaml_states_the_full_identity() -> None:
     """The generated group carries every field ``SynthSpec`` requires."""
     yaml_text = identity_group_yaml(_fake_spec())
@@ -573,7 +585,6 @@ def test_identity_group_yaml_states_the_full_identity() -> None:
     assert yaml.safe_load(yaml_text) == {
         "name": "fake_synth",
         "param_spec_name": "fake_synth",
-        "format": "vst3",
         "plugin_path": "plugins/fake.vst3",
         "plugin_state_path": preset_repo_path("fake_synth"),
         "synth_version": "9.9.9",
