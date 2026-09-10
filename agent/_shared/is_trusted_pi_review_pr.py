@@ -9,6 +9,7 @@ import sys
 from typing import Any
 
 ALLOWED_PR_AUTHOR = "ktinubu"
+UNTRUSTED_EXIT_CODE = 3
 
 
 def is_trusted_pull_request(pull_request: dict[str, Any], repository: str) -> bool:
@@ -30,7 +31,7 @@ def is_trusted_pull_request(pull_request: dict[str, Any], repository: str) -> bo
 def main() -> int:
     """Read pull-request metadata and return a silent trust decision.
 
-    :returns: Zero for a trusted pull request, otherwise one.
+    :returns: Zero for a trusted pull request, otherwise three.
     :raises ValueError: If the API payload is not a pull-request object.
     """
     parser = argparse.ArgumentParser(description=__doc__)
@@ -41,7 +42,7 @@ def main() -> int:
     if not isinstance(pull_request, dict):
         raise ValueError("pull-request payload must be a JSON object")
     trusted = is_trusted_pull_request(pull_request, args.repository)
-    return 0 if trusted else 1
+    return 0 if trusted else UNTRUSTED_EXIT_CODE
 
 
 if __name__ == "__main__":

@@ -60,8 +60,10 @@ jobs:
             if python agent/_shared/is_trusted_pi_review_pr.py \
               --repository "${GITHUB_REPOSITORY}" <<< "${pull_request}"; then
               should_review=true
-            else
+            elif [[ "$?" == "3" ]]; then
               should_review=false
+            else
+              exit 1
             fi
           else
             reviews=$(gh api --paginate --slurp \

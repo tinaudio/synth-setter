@@ -40,6 +40,29 @@ def _run_limit(
     )
 
 
+def _run_trust(
+    project_root: Path, pull_request: dict[str, object]
+) -> subprocess.CompletedProcess[str]:
+    """Run the manual-review trust policy with pull-request metadata.
+
+    :param project_root: Repository root containing the policy entrypoint.
+    :param pull_request: Pull-request payload serialized to the entrypoint's stdin.
+    :returns: Completed policy process with captured output.
+    """
+    return subprocess.run(  # noqa: S603 - fixed repository script
+        [
+            sys.executable,
+            str(project_root / TRUST_SCRIPT_PATH),
+            "--repository",
+            "tinaudio/synth-setter",
+        ],
+        check=False,
+        input=json.dumps(pull_request),
+        capture_output=True,
+        text=True,
+    )
+
+
 @pytest.mark.infra
 @pytest.mark.parametrize(
     ("automatic_review_count", "expected"),
@@ -105,8 +128,8 @@ def test_review_limit_fails_closed_for_malformed_api_payload(project_root: Path)
     ("author", "head_repository", "expected_returncode"),
     [
         ("ktinubu", "tinaudio/synth-setter", 0),
-        ("ktinubu", "external/fork", 1),
-        ("external", "tinaudio/synth-setter", 1),
+        ("ktinubu", "external/fork", 3),
+        ("external", "tinaudio/synth-setter", 3),
     ],
 )
 def test_manual_review_requires_trusted_same_repository_pr(
@@ -120,25 +143,28 @@ def test_manual_review_requires_trusted_same_repository_pr(
     :param project_root: Repository root containing the authorization script.
     :param author: Pull-request author login.
     :param head_repository: Pull-request head repository name.
-    :param expected_returncode: Zero for trusted pull requests, otherwise one.
+    :param expected_returncode: Zero for trusted pull requests, otherwise three.
     """
     pull_request = {
         "head": {"repo": {"full_name": head_repository}},
         "user": {"login": author},
     }
 
-    result = subprocess.run(  # noqa: S603 - fixed repository script
-        [
-            sys.executable,
-            str(project_root / TRUST_SCRIPT_PATH),
-            "--repository",
-            "tinaudio/synth-setter",
-        ],
-        check=False,
-        input=json.dumps(pull_request),
-        capture_output=True,
-        text=True,
-    )
+    result = _run_trust(project_root, pull_request)
 
     assert result.returncode == expected_returncode, result.stderr
+    assert result.stdout == ""
+
+
+@pytest.mark.infra
+def test_manual_review_trust_helper_malformed_payload_fails_distinctly(
+    project_root: Path,
+) -> None:
+    """Malformed API data cannot be mistaken for an expected trust rejection.
+
+    :param project_root: Repository root containing the authorization script.
+    """
+    result = _run_trust(project_root, {"message": "API failure"})
+
+    assert result.returncode == 1
     assert result.stdout == ""
