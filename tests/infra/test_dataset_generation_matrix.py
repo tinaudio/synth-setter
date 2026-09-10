@@ -44,6 +44,34 @@ def finalization_workflow(project_root: Path) -> dict:
     return load_workflow(project_root, "test-dataset-finalization.yml")
 
 
+def test_generation_revisions_match_default_pr_merge_checkout(project_root: Path) -> None:
+    """PR generation, workers, and finalization consume the merge revision.
+
+    :param project_root: Repo root provided by the infra fixture.
+    """
+    workflow = load_workflow(project_root, "generate-dataset-shards.yaml")
+    generate = workflow["jobs"]["generate"]
+    checkout = next(step for step in generate["steps"] if step.get("name") == "Checkout")
+    local_generate = next(step for step in generate["steps"] if step.get("id") == "gen_local")
+    docker_generate = next(step for step in generate["steps"] if step.get("id") == "gen_docker")
+    finalize = workflow["jobs"]["finalize"]
+
+    merge_sha = "merge-sha"
+    pr_expression_values = {
+        "${{ github.sha }}": merge_sha,
+        "${{ github.event.pull_request.head.sha || github.sha }}": "head-sha",
+    }
+
+    assert "ref" not in checkout.get("with", {})
+    resolved_revisions = [
+        merge_sha,
+        pr_expression_values[local_generate["env"]["WORKER_GIT_REF"]],
+        pr_expression_values[docker_generate["env"]["WORKER_GIT_REF"]],
+        pr_expression_values[finalize["with"]["env_ref"]],
+    ]
+    assert resolved_revisions == [merge_sha, merge_sha, merge_sha, merge_sha]
+
+
 def test_finalization_workflow_runs_static_and_queue_lance_scenarios(
     finalization_workflow: dict,
 ) -> None:
