@@ -158,7 +158,7 @@ logs/browser-demo/evaluation/arms/cfg-c2-s3/
 ├── browser/
 │   ├── conditioning.onnx
 │   ├── velocity.onnx
-│   ├── input.json          # normalized inputs, noise, guidance, steps
+│   ├── input.json          # normalized inputs, noise, branch weights, steps
 │   ├── prediction.json     # accepted browser parameter vector
 │   └── provenance.json     # artifact digests, source revision, renderer, seed
 ├── sketch.wav

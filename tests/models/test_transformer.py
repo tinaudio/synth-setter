@@ -1,10 +1,14 @@
 """Behavioral tests for transformer model components."""
 
+import pytest
 import torch
 
 from synth_setter.models.components.transformer import PatchEmbed
 
 
+@pytest.mark.xfail(
+    strict=True, reason="#3388 padding temporarily reverted for #3483 checkpoint validation"
+)
 def test_patch_embed_production_grid_includes_highest_mel_bins() -> None:
     """Include signal from the final mel bins in at least one patch token."""
     patch_embed = PatchEmbed(
@@ -26,6 +30,9 @@ def test_patch_embed_production_grid_includes_highest_mel_bins() -> None:
     assert torch.count_nonzero(tokens) > 0
 
 
+@pytest.mark.xfail(
+    strict=True, reason="#3388 padding temporarily reverted for #3483 checkpoint validation"
+)
 def test_patch_embed_short_time_grid_returns_tokens() -> None:
     """Pad a time axis shorter than one patch before convolution."""
     patch_embed = PatchEmbed(

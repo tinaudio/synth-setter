@@ -1,6 +1,8 @@
 import * as ort from "./ort/ort.wasm.min.mjs";
 import { integrateRK4 } from "./rk4.mjs";
 
+export { branchWeights } from "./guidance.mjs";
+
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.wasmPaths = new URL("./ort/", import.meta.url).href;
 
@@ -14,7 +16,7 @@ export async function sampleFlow(payload, onStep) {
   try {
     velocity = await ort.InferenceSession.create("velocity.onnx", { executionProviders: ["wasm"] });
     const encoded = await encoder.run({ mel: tensor(payload.mel), sketch_ctrl: tensor(payload.sketch_ctrl) });
-    const guidance = new ort.Tensor("float32", Float32Array.from(payload.guidance), [2]);
+    const weights = new ort.Tensor("float32", Float32Array.from(payload.branch_weights), [4]);
     return await integrateRK4({
       noise: Float32Array.from(payload.noise),
       steps: payload.steps,
@@ -24,7 +26,7 @@ export async function sampleFlow(payload, onStep) {
           ...encoded,
           x: new ort.Tensor("float32", state, [1, state.length]),
           t: new ort.Tensor("float32", Float32Array.of(time), [1, 1]),
-          guidance,
+          branch_weights: weights,
         });
         return output.velocity.data;
       },

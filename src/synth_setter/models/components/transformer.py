@@ -709,7 +709,9 @@ class PatchEmbed(nn.Module):
         mel_padding = (stride - (spec_shape[0] - patch_size)) % stride
         time_padding = (stride - (spec_shape[1] - patch_size)) % stride
 
-        self.pad = nn.ZeroPad2d((0, time_padding, 0, mel_padding))
+        # Validation-only revert of #3388: the flow_sketch pyFDN checkpoint under test was
+        # trained with the swapped axes (480 patches); restore before merge (#3483).
+        self.pad = nn.ZeroPad2d((0, mel_padding, 0, time_padding))
         self.projection = nn.Conv2d(
             in_channels=in_channels,
             out_channels=d_model,
