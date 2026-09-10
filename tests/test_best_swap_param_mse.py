@@ -96,8 +96,8 @@ def test_number_group_optimal_assignment_mse_groups_preserves_labels_and_widths(
     assert result["voice_2"].item() == 8.0
 
 
-def test_number_group_optimal_assignment_mse_groups_duplicate_label_raises() -> None:
-    """A literal ``N`` field cannot silently overwrite a collapsed numbered family."""
+def test_number_group_optimal_assignment_mse_groups_disambiguates_literal_label() -> None:
+    """A literal ``N`` field and collapsed numbered family both remain visible."""
     spec = ParamSpec(
         synth_params=[
             ContinuousParameter("osc_1_gain"),
@@ -107,8 +107,34 @@ def test_number_group_optimal_assignment_mse_groups_duplicate_label_raises() -> 
         note_params=[],
     )
 
-    with pytest.raises(ValueError, match="duplicate number-group metric label osc_N_gain"):
-        number_group_optimal_assignment_mse_groups(torch.ones(3), spec)
+    result = number_group_optimal_assignment_mse_groups(torch.tensor([1.0, 3.0, 5.0]), spec)
+
+    assert result.keys() == {
+        "osc_N_gain__members_osc_1_gain-osc_2_gain",
+        "osc_N_gain__members_osc_N_gain",
+    }
+    assert result["osc_N_gain__members_osc_1_gain-osc_2_gain"].item() == 2.0
+    assert result["osc_N_gain__members_osc_N_gain"].item() == 5.0
+
+
+def test_number_group_optimal_assignment_mse_groups_disambiguates_width_families() -> None:
+    """Different-width families with one collapsed name publish distinct metrics."""
+    spec = ParamSpec(
+        synth_params=[
+            CategoricalParameter("voice_1", ["a", "b"], encoding="onehot"),
+            CategoricalParameter("voice_2", ["a", "b"], encoding="onehot"),
+            CategoricalParameter("voice_3", ["a", "b", "c"], encoding="onehot"),
+            CategoricalParameter("voice_4", ["a", "b", "c"], encoding="onehot"),
+        ],
+        note_params=[],
+    )
+
+    result = number_group_optimal_assignment_mse_groups(torch.arange(10.0), spec)
+
+    assert result.keys() == {
+        "voice_N__members_voice_1-voice_2",
+        "voice_N__members_voice_3-voice_4",
+    }
 
 
 def test_number_group_optimal_assignment_per_param_mse_non_2d_input_raises_value_error() -> None:

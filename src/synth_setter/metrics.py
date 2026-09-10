@@ -246,14 +246,25 @@ def _number_groups(
         group_key = (_NUMBER_GROUP_PATTERN.sub("#", param.name), len(param))
         groups[group_key].append((param.name, tuple(range(span.start, span.stop))))
 
-    return tuple(
+    labelled_groups = [
         (
             names_and_spans[0][0]
             if len(names_and_spans) == 1
             else _DIGIT_RUN_PATTERN.sub("N", names_and_spans[0][0]),
+            tuple(name for name, _ in names_and_spans),
             tuple(span for _, span in names_and_spans),
         )
         for names_and_spans in groups.values()
+    ]
+    label_counts = defaultdict(int)
+    for label, _, _ in labelled_groups:
+        label_counts[label] += 1
+    return tuple(
+        (
+            label if label_counts[label] == 1 else f"{label}__members_{'-'.join(names)}",
+            spans,
+        )
+        for label, names, spans in labelled_groups
     )
 
 
@@ -276,8 +287,6 @@ def number_group_optimal_assignment_mse_groups(
 
     grouped_mse = {}
     for label, spans in _number_groups(param_spec):
-        if label in grouped_mse:
-            raise ValueError(f"duplicate number-group metric label {label}")
         indices = []
         for span in spans:
             indices.extend(span)
