@@ -289,18 +289,32 @@ def test_pr_review_skills_fetch_base_sha_with_supported_gh_metadata() -> None:
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+@pytest.mark.parametrize(
+    ("skill_path", "metadata_marker"),
+    (
+        ("agent/skills/_shared/repo-review-full-analysis.md", "Fetch metadata once:"),
+        (
+            "agent/skills/repo-review-full-no-comments/SKILL.md",
+            "never run the command with the literal `<N>` placeholder:",
+        ),
+        ("agent/skills/repo-review/SKILL.md", "remember it:"),
+    ),
+)
 def test_pr_review_metadata_command_returns_base_sha_with_supported_gh_fields(
     tmp_path: Path,
+    skill_path: str,
+    metadata_marker: str,
 ) -> None:
-    """Execute the canonical metadata command through a controlled gh boundary.
+    """Execute each metadata command through a controlled gh boundary.
 
     :param tmp_path: Temporary directory containing the controlled ``gh`` executable.
+    :param skill_path: Runbook containing a PR metadata command.
+    :param metadata_marker: Text immediately preceding the command's Bash fence.
     """
-    analysis = (
-        REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
-    ).read_text()
-    metadata_section = analysis.split("Fetch metadata once:", maxsplit=1)[1]
-    command = metadata_section.split("```bash\n", maxsplit=1)[1].split("\n```", maxsplit=1)[0]
+    skill = (REPO_ROOT / skill_path).read_text()
+    metadata_section = skill.split(metadata_marker, maxsplit=1)[1]
+    unquoted_section = "\n".join(line.removeprefix("> ") for line in metadata_section.splitlines())
+    command = unquoted_section.split("```bash\n", maxsplit=1)[1].split("\n```", maxsplit=1)[0]
 
     fake_gh = tmp_path / "gh"
     fake_gh.write_text(
@@ -309,7 +323,10 @@ set -euo pipefail
 if [[ $1 == repo && $2 == view ]]; then
   printf '%s\\n' 'tinaudio/synth-setter'
 elif [[ $1 == pr && $2 == view ]]; then
-  [[ $* == *baseRefName* && $* != *baseRefOid* ]]
+  if [[ $* != *baseRefName* || $* == *baseRefOid* ]]; then
+    printf '%s\\n' "unsupported PR metadata arguments: $*" >&2
+    exit 65
+  fi
   printf '%s\\n' '{"headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}'
 elif [[ $1 == api && $2 == repos/tinaudio/synth-setter/pulls/123 ]]; then
   printf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
