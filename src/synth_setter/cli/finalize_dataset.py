@@ -171,7 +171,7 @@ def finalize_from_spec(
     :param work_dir: Writable scratch dir; created if missing; retained
         after the call.
     :param progress_callback: Optional sink for completed shard and upload events.
-    :raises ValueError: ``spec.output_format`` is not a supported finalized format.
+    :raises ValueError: Output format is unsupported or published language metadata mismatches.
     """
     marker_uri = spec.r2.dataset_complete_marker_uri()
     if r2_io.object_size(marker_uri) is not None:
@@ -187,23 +187,37 @@ def finalize_from_spec(
     except ValueError as exc:
         logger.warning("non-canonical r2 prefix (finalizing anyway): {}", exc)
     work_dir.mkdir(parents=True, exist_ok=True)
-    if spec.output_format is OutputFormat.LANCE:
-        finalize_lance(spec, work_dir, progress_callback)
-    else:
+    if spec.output_format is not OutputFormat.LANCE:
         raise ValueError(f"unsupported output_format: {spec.output_format!r}")
 
     if spec.param_language_dimension is not None:
-        from synth_setter.pipeline.data.param_language import prepare_param_language
-
-        language_path = prepare_param_language(
-            work_dir,
-            str(spec.render.param_spec_name),
-            spec.render.synth.name,
-            dimension=spec.param_language_dimension,
+        from synth_setter.pipeline.data.param_language import (
+            PARAM_LANGUAGE_FILENAME,
+            load_param_language,
+            prepare_param_language,
         )
-        r2_io.upload(language_path, f"r2://{spec.r2.bucket}/{spec.r2.prefix}{language_path.name}")
-        report_finalize_progress(progress_callback, "artifact_uploaded")
 
+        language_uri = f"r2://{spec.r2.bucket}/{spec.r2.prefix}{PARAM_LANGUAGE_FILENAME}"
+        if r2_io.object_size(language_uri) is None:
+            language_path = prepare_param_language(
+                work_dir,
+                str(spec.render.param_spec_name),
+                spec.render.synth.name,
+                dimension=spec.param_language_dimension,
+            )
+            r2_io.upload(language_path, language_uri)
+            report_finalize_progress(progress_callback, "artifact_uploaded")
+        else:
+            with r2_io.downloaded_to_tempfile(language_uri) as language_path:
+                _, metadata = load_param_language(
+                    language_path, str(spec.render.param_spec_name), spec.render.synth.name
+                )
+            if metadata.dimension != spec.param_language_dimension:
+                raise ValueError("published parameter language dimension does not match spec")
+            logger.info("reused validated parameter language artifact at {}", language_uri)
+
+    # Persist static language first so gated-model failures cannot replay Lance commits.
+    finalize_lance(spec, work_dir, progress_callback)
     marker_local = work_dir / DATASET_COMPLETE_FILENAME
     marker_local.touch()
     r2_io.upload(marker_local, marker_uri)
