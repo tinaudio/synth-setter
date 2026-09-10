@@ -184,6 +184,30 @@ class TestSynthSpecValidation:
 
         assert spec.format == "faust"
 
+    def test_registry_reference_without_string_identity_is_rejected(self) -> None:
+        """A registry URI cannot infer Faust for an untyped source identity."""
+        values = SYNTHS[SynthName("faust_bright_organ")].model_dump(exclude={"format"})
+        values["param_spec_name"] = None
+
+        with pytest.raises(ValidationError, match="param_spec_name"):
+            SynthSpec.model_validate(values)
+
+    def test_non_faust_format_rejects_source_digest(self) -> None:
+        """A VST identity cannot carry checked-in Faust source provenance."""
+        values = SYNTHS[SynthName("surge_xt")].model_dump()
+        values["source_sha256"] = "0" * 64
+
+        with pytest.raises(ValidationError, match="source_sha256 is supported only"):
+            SynthSpec.model_validate(values)
+
+    def test_faust_format_rejects_unregistered_source_digest(self) -> None:
+        """A Faust identity pins the digest registered for its checked-in source."""
+        values = SYNTHS[SynthName("faust_bright_organ")].model_dump()
+        values["source_sha256"] = "0" * 64
+
+        with pytest.raises(ValidationError, match="registered source_sha256"):
+            SynthSpec.model_validate(values)
+
     def test_registry_reference_with_mismatched_explicit_format_raises(self) -> None:
         """An explicitly authored format cannot contradict a Faust registry URI."""
         values = SYNTHS[SynthName("faust_bright_organ")].model_dump()

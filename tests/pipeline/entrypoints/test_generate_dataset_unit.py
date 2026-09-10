@@ -1487,6 +1487,38 @@ class TestRun(RenderSeamFixtures):
         patched_subprocess.assert_not_called()
         assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
+    def test_faust_backend_version_mismatch_raises_before_rendering(
+        self,
+        patched_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Fail before rendering when the Faust host version disagrees with the spec.
+
+        :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
+        :param tmp_path: Pytest temporary directory used for worker output.
+        """
+        kwargs = _base_spec_kwargs(tmp_path)
+        kwargs["render"] = {
+            **kwargs["render"],  # type: ignore[dict-item]
+            "synth": SYNTHS[SynthName("faust_bright_organ")],
+            "renderer_backend": "dawdreamer",
+            "backend_version": "0.8.3",
+            "gui_toggle_cadence": "never",
+        }
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+        with (
+            patch("synth_setter.cli.generate_dataset.ensure_dawdreamer_runtime"),
+            patch(
+                "synth_setter.cli.generate_dataset.extract_backend_version",
+                return_value="0.9.0",
+            ),
+            pytest.raises(RuntimeError, match="Backend version mismatch"),
+        ):
+            generate(spec, tmp_path, [])
+
+        patched_subprocess.assert_not_called()
+
     def test_run_defaults_to_single_worker_when_skypilot_env_absent(
         self,
         patched_subprocess: MagicMock,
