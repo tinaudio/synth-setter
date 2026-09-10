@@ -39,18 +39,26 @@ def _patch(identity: str) -> dict[str, float]:
     return patch
 
 
-def _renderer(identity: str, *, sample_rate: float, duration: float, channels: int) -> FaustWasmRenderer:
+def _renderer(
+    identity: str,
+    *,
+    sample_rate: float,
+    duration: float,
+    channels: int,
+    plugin_path: str | None = None,
+) -> FaustWasmRenderer:
     """Build a production renderer with explicit boundary dimensions.
 
     :param identity: Registered Faust synth identity.
     :param sample_rate: Render sample rate in Hz.
     :param duration: Fixed output duration in seconds.
     :param channels: Expected native output count.
+    :param plugin_path: Source reference override; the registered value is used when omitted.
     :returns: Compiled production renderer.
     """
     synth = SYNTHS[SynthName(identity)]
     return FaustWasmRenderer(
-        plugin_path=synth.plugin_path,
+        plugin_path=synth.plugin_path if plugin_path is None else plugin_path,
         plugin_state_path=synth.plugin_state_path,
         sample_rate=sample_rate,
         channels=channels,
@@ -132,6 +140,76 @@ def test_faustwasm_renderer_invalid_block_size_fails_before_compile(block_size: 
             backend_version=FAUSTWASM_VERSION,
             block_size=block_size,  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+def test_faustwasm_registry_reference_renders_real_source() -> None:
+    """A canonical registry URI selects source consumed by the real runtime."""
+    renderer = _renderer(
+        "faust_filter_osc",
+        sample_rate=44_100,
+        duration=0.01,
+        channels=1,
+        plugin_path="registry://faust/faust_filter_osc",
+    )
+
+    audio = renderer.render(_patch("faust_filter_osc"), 60, 100, (0.0, 0.005))
+
+    assert audio.shape == (1, 441)
+    assert np.isfinite(audio).all()
+
+
+def test_faustwasm_malformed_registry_reference_fails_before_compile() -> None:
+    """A malformed source URI fails at the renderer boundary."""
+    with pytest.raises(ValueError, match="registry://faust/<registered-source-name>"):
+        _renderer(
+            "faust_filter_osc",
+            sample_rate=44_100,
+            duration=0.01,
+            channels=1,
+            plugin_path="registry://faust/faust_filter_osc/extra",
+        )
+
+
+def test_faustwasm_unknown_registry_reference_fails_before_compile() -> None:
+    """An unknown source identity fails at the renderer boundary."""
+    with pytest.raises(ValueError, match="Faust source 'not_registered' is not registered"):
+        _renderer(
+            "faust_filter_osc",
+            sample_rate=44_100,
+            duration=0.01,
+            channels=1,
+            plugin_path="registry://faust/not_registered",
+        )
+
+
+def test_faustwasm_mismatched_registry_reference_fails_before_compile() -> None:
+    """A source URI cannot select a different parameter identity."""
+    with pytest.raises(ValueError, match="selects 'faust_bubble'.*'faust_filter_osc'"):
+        _renderer(
+            "faust_filter_osc",
+            sample_rate=44_100,
+            duration=0.01,
+            channels=1,
+            plugin_path="registry://faust/faust_bubble",
+        )
+
+
+@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+def test_faustwasm_blank_plugin_path_retains_legacy_compatibility() -> None:
+    """A blank source path retains the pathless legacy render contract."""
+    renderer = _renderer(
+        "faust_filter_osc",
+        sample_rate=44_100,
+        duration=0.01,
+        channels=1,
+        plugin_path="",
+    )
+
+    audio = renderer.render(_patch("faust_filter_osc"), 60, 100, (0.0, 0.005))
+
+    assert audio.shape == (1, 441)
+    assert np.isfinite(audio).all()
 
 
 @pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")

@@ -24,7 +24,11 @@ from synth_setter.data.vst.renderers import (
     require_scalar_synth_params,
 )
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.synth_spec import SYNTHS, SynthName
+from synth_setter.synth_spec import (
+    SYNTHS,
+    SynthName,
+    validate_faust_registry_reference,
+)
 
 
 def _quantize_note_window(
@@ -103,8 +107,14 @@ class FaustWasmRenderer(AudioRenderer):
                 f"FaustWasm backend version {self.backend_version!r} does not match "
                 f"installed {FAUSTWASM_VERSION!r}"
             )
-        if self.plugin_path or self.plugin_state_path:
-            raise ValueError("FaustWasm renderer accepts no plugin or preset path")
+        if self.plugin_state_path:
+            raise ValueError("FaustWasm renderer accepts no preset path")
+        source_identity = self.param_spec_name
+        if self.plugin_path:
+            source_identity = validate_faust_registry_reference(
+                self.plugin_path,
+                self.param_spec_name,
+            )
         if isinstance(self.block_size, bool) or not isinstance(self.block_size, int) or self.block_size < 1:
             raise ValueError("block_size must be a positive integer")
         if not math.isfinite(self.sample_rate) or self.sample_rate <= 0:
@@ -115,7 +125,7 @@ class FaustWasmRenderer(AudioRenderer):
         if frames < 1:
             raise ValueError("render duration must contain at least one output frame")
 
-        synth = SYNTHS[SynthName(self.param_spec_name)]
+        synth = SYNTHS[SynthName(source_identity)]
         if synth.source_sha256 != self.source_sha256:
             raise ValueError("source_sha256 does not match the registered Faust source")
         self._temporary_directory = tempfile.TemporaryDirectory(prefix="synth-setter-faustwasm-")
