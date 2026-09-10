@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FaustWasm artifact player</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1 id="title">FaustWasm artifact player</h1>
+      <p id="status" role="status">Ready. Start audio to load the artifact.</p>
+      <button id="start" type="button">Start audio</button>
+      <section id="notes" aria-label="Notes" hidden>
+        <button data-note="60" type="button">C4</button>
+        <button data-note="64" type="button">E4</button>
+        <button data-note="67" type="button">G4</button>
+      </section>
+      <section aria-labelledby="controls-title">
+        <h2 id="controls-title">Parameters</h2>
+        <div id="controls"></div>
+      </section>
+    </main>
+    <script type="module" src="./controller.mjs"></script>
+  </body>
+</html>
