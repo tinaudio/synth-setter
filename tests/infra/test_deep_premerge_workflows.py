@@ -292,6 +292,33 @@ def test_cpu_slow_lane_runs_real_faustwasm_browser_e2e(workflows: WorkflowSet) -
     assert _string(browser, "run") == "npm --prefix scripts/faustwasm/browser run test:e2e"
 
 
+def test_cpu_slow_lane_collects_faust_host_parity(
+    workflows: WorkflowSet,
+    project_root: Path,
+) -> None:
+    """The slow PR selector runs Faust parity after installing both runtimes.
+
+    :param workflows: Four parsed workflow documents keyed by filename.
+    :param project_root: Repository root containing test and Makefile contracts.
+    """
+    workflow = workflows["cpu-slow.yml"]
+    steps = _steps(workflow, "run_slow_tests")
+    step_names = [step.get("name") for step in steps]
+    slow_step_index = step_names.index("Run slow PR tests")
+    assert step_names.index("Install Node dependencies") < slow_step_index
+    assert step_names.index("Install dependencies (uv sync --frozen, CPU torch)") < slow_step_index
+
+    parity_test = project_root / "tests/data/vst/test_faustwasm_dawdreamer_parity_e2e.py"
+    source = parity_test.read_text(encoding="utf-8")
+    assert "pytestmark = pytest.mark.slow" in source
+    assert "requires_vst" not in source
+
+    makefile = (project_root / "Makefile").read_text(encoding="utf-8")
+    assert (
+        '-m "slow and not gpu and not mps and not requires_vst and not integration_r2"' in makefile
+    )
+
+
 def test_cpu_slow_non_pr_lane_preserves_live_r2_target(workflows: WorkflowSet) -> None:
     """Push and dispatch runs retain the live-R2 slow target.
 
