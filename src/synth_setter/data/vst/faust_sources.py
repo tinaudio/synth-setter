@@ -204,6 +204,55 @@ bubble(f0,trig) = os.osc(f) * (exp(-damp*time) : si.smooth(0.99))
 process = button("drop") : bubble(hslider("v:bubble/freq", 600, 150, 2000, 1)) <: dm.freeverb_demo;
 '''
 
+_FDN_HOUSEHOLDER_SOURCE = r'''import("stdfaust.lib");
+
+declare name "fdnHouseholder";
+declare author "synth-setter";
+
+// Order-8 mono feedback delay network matching pyFDN.process_fdn for the plain Householder build:
+// delay lines -> per-line first-order shelf -> output gains, feedback through I - 0.25 * ones.
+
+N = 8;
+MAX_DELAY = 2048;
+RT_CROSSOVER_HZ = 6000;
+
+delay_length(i) = int(hslider("delay_%i", 800, 400, 1200, 1));
+input_gain(i) = hslider("input_%i", 0, -1, 1, 0.000001);
+output_gain(i) = hslider("output_%i", 0, -1, 1, 0.000001);
+direct_gain = hslider("direct", 0, -1, 1, 0.000001);
+rt_dc = hslider("rt_dc_seconds", 1, 0.1, 4, 0.000001);
+rt_nyquist = hslider("rt_nyquist_seconds", 1, 0.1, 4, 0.000001);
+
+// pyFDN.eq.design: per-pass gain in dB for a homogeneous RT60, then a first-order shelf.
+decay_gain(rt, i) = ba.db2linear(-60 * delay_length(i) / (rt * ma.SR));
+shelf_omega = min(RT_CROSSOVER_HZ, ma.SR / 5) / ma.SR * 2 * ma.PI;
+shelf(i) = fi.tf1(b0, b1, a1)
+with {
+    g_dc = decay_gain(rt_dc, i);
+    g_ny = decay_gain(rt_nyquist, i);
+    t = tan(shelf_omega);
+    r = sqrt(g_dc / g_ny);
+    a0 = t / r + 1;
+    b0 = (t * r + 1) * g_ny / a0;
+    b1 = (t * r - 1) * g_ny / a0;
+    a1 = (t / r - 1) / a0;
+};
+
+// Householder(ones) feedback: y_i = f_i - 0.25 * sum(f).
+householder(i) = si.bus(N) <: (ba.selector(i, N), (si.bus(N) :> *(-0.25))) :> _;
+
+// Inputs: N filtered delay outputs then the excitation; output: this line's filtered delay output.
+// The recursion operator adds one sample to the feedback path, so the line delay is shortened by
+// one and the excitation path is delayed by one to keep both at exactly delay_length(i).
+line(i) = (householder(i), (*(input_gain(i)) : mem)) :> _ : de.delay(MAX_DELAY, delay_length(i) - 1) : shelf(i);
+lines = (si.bus(N), _) <: par(i, N, line(i));
+
+impulse = 1 - 1';
+output_stage = (par(i, N, *(output_gain(i))), *(direct_gain)) :> _;
+
+process = impulse <: ((lines ~ si.bus(N)), _) : output_stage;
+'''
+
 _faust_dsps: dict[ParamSpecName, FaustDsp] = {
     ParamSpecName("faust_bright_organ"): FaustDsp(
         _BRIGHT_ORGAN_SOURCE, num_voices=1, outputs=2
@@ -211,6 +260,9 @@ _faust_dsps: dict[ParamSpecName, FaustDsp] = {
     ParamSpecName("faust_bubble"): FaustDsp(_BUBBLE_SOURCE, num_voices=0, outputs=2),
     ParamSpecName("faust_church_organ"): FaustDsp(
         _CHURCH_ORGAN_SOURCE, num_voices=0, outputs=2
+    ),
+    ParamSpecName("faust_fdn_n8_mono_householder"): FaustDsp(
+        _FDN_HOUSEHOLDER_SOURCE, num_voices=0, outputs=1
     ),
     ParamSpecName("faust_filter_osc"): FaustDsp(
         _FILTER_OSC_SOURCE, num_voices=0, outputs=1

@@ -30,9 +30,22 @@ uv run python -m http.server --directory build/faust-bright-organ-site 8000
 Open `http://localhost:8000`. The browser exporter and player are supplied by the stacked browser
 entrypoint; they consume the persisted manifest and Wasm files without compiling Faust source.
 
-Select `render=faustwasm` for bright organ, bubble, or church organ, and
-`render=faustwasm_filter_osc` for the mono filter oscillator. Pair either render group with the
-existing `synth=faust_*` identity. FaustWasm requires render contract version 2; legacy version 1
+Select `render=faustwasm` for bright organ, bubble, or church organ,
+`render=faustwasm_filter_osc` for the mono filter oscillator, and `render=faustwasm_fdn` for the
+mono feedback delay network. Pair each render group with the existing `synth=faust_*` identity.
+
+`faust_fdn_n8_mono_householder` renders the `pyfdn_n8_mono_householder` parameter spec verbatim: the
+Faust identity resolves the same spec object, so a pyFDN row decodes to identical native values on
+both backends. Array-valued fields expand to one compiled slider per element, named by the spec's
+native coordinate labels (`delays.0` … `delays.7`, `input_matrix.3.0`, `output_matrix.0.7`,
+`direct_matrix.0.0`); the spec-derived `feedback_matrix` is compiled into the source as the fixed
+Householder reflection of the all-ones vector and must match when supplied. The decay shelves are
+designed inside the DSP from `post_delay.rt_dc_seconds` and `post_delay.rt_nyquist_seconds` with
+pyFDN's 6 kHz crossover. Only FaustWasm flattens these fields; selecting `render=faust` or the
+Faust C++ backend with this identity fails validation. The impulse is generated in-DSP at the first
+sample of each fresh instance, so a mono `renderNote` capture of 176 400 frames at 44.1 kHz is the
+complete four-second response; parity against `pyFDN.build_to_impz` holds to `atol=1e-5`
+(`tests/data/vst/test_faustwasm_pyfdn_parity.py`). FaustWasm requires render contract version 2; legacy version 1
 omits backend provenance and is rejected.
 
 ## Manifest schema

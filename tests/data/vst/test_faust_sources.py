@@ -65,12 +65,25 @@ _EXPECTED_PARAMETER_ADDRESSES: Mapping[str, list[str]] = {
         "/churchOrgan/noise_gain",
         "/churchOrgan/gate",
     ],
+    "faust_fdn_n8_mono_householder": [
+        "delays",
+        "input_matrix",
+        "output_matrix",
+        "direct_matrix",
+        "post_delay.rt_dc_seconds",
+        "post_delay.rt_nyquist_seconds",
+    ],
     "faust_filter_osc": [
         "/SINE_WAVE_OSCILLATOR_oscrs/Amplitude",
         "/SINE_WAVE_OSCILLATOR_oscrs/Frequency",
         "/SINE_WAVE_OSCILLATOR_oscrs/Portamento",
     ],
 }
+# The FDN exposes 27 sliders for 6 array-valued spec fields, so the scalar-address DawDreamer
+# host cannot drive it; it renders through FaustWasm only (tests/data/vst/test_faustwasm_pyfdn_parity.py).
+_SCALAR_ADDRESS_IDENTITIES = [
+    name for name in _EXPECTED_PARAMETER_ADDRESSES if name != "faust_fdn_n8_mono_householder"
+]
 _EXPECTED_OUTPUT_CHANNELS = {
     "faust_bright_organ": 2,
     "faust_bubble": 2,
@@ -279,6 +292,7 @@ def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
         ("faust_bright_organ", 13),
         ("faust_bubble", 10),
         ("faust_church_organ", 16),
+        ("faust_fdn_n8_mono_householder", 27),
         ("faust_filter_osc", 6),
     ],
 )
@@ -402,7 +416,7 @@ def test_faust_model_output_decodes_exact_native_addresses() -> None:
     )
 
 
-@pytest.mark.parametrize("param_spec_name", _EXPECTED_PARAMETER_ADDRESSES)
+@pytest.mark.parametrize("param_spec_name", _SCALAR_ADDRESS_IDENTITIES)
 def test_faust_note_conditioning_contract_is_identity_stable(param_spec_name: str) -> None:
     """Every Faust identity pins pitch and note-window label domains.
 
@@ -455,7 +469,7 @@ def test_bright_organ_source_uses_one_polyphonic_voice_and_stereo_effect() -> No
     )
 
 
-@pytest.mark.parametrize("param_spec_name", _EXPECTED_PARAMETER_ADDRESSES)
+@pytest.mark.parametrize("param_spec_name", _SCALAR_ADDRESS_IDENTITIES)
 def test_faust_source_compiles_with_exact_parameter_addresses(
     param_spec_name: str,
 ) -> None:
@@ -472,7 +486,7 @@ def test_faust_source_compiles_with_exact_parameter_addresses(
     ]
 
 
-@pytest.mark.parametrize("param_spec_name", _EXPECTED_PARAMETER_ADDRESSES)
+@pytest.mark.parametrize("param_spec_name", _SCALAR_ADDRESS_IDENTITIES)
 def test_faust_compiled_parameter_domains_match_specs(param_spec_name: str) -> None:
     """Real Faust metadata matches every modeled native domain.
 
@@ -492,7 +506,7 @@ def test_faust_compiled_parameter_domains_match_specs(param_spec_name: str) -> N
         assert description["isDiscrete"] is is_discrete
 
 
-@pytest.mark.parametrize("param_spec_name", _EXPECTED_PARAMETER_ADDRESSES)
+@pytest.mark.parametrize("param_spec_name", _SCALAR_ADDRESS_IDENTITIES)
 def test_faust_source_renders_real_audio(param_spec_name: str) -> None:
     """One compiled source emits finite, audible, bounded audio of its native shape.
 

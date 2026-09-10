@@ -1,0 +1,7 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "faust_fdn_n8_mono_householder"
+param_spec_name: "faust_fdn_n8_mono_householder"
+plugin_path: "registry://faust/faust_fdn_n8_mono_householder"
+plugin_state_path: ""
+synth_version: "1"
+source_sha256: "ac59c8739ecddbb38779c2bd5c1d5739916ef570ce18c570e4619a91cbd084e0"
