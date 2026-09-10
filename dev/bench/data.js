@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789018418383,
+  "lastUpdate": 1789018421894,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -27348,6 +27348,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 13.521199101200006,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e403fe0e0314b9a46d0bc0667f3026ed786318a6",
+          "message": "internal-feat(training): separate flow objective and endpoint metrics (#3400)\n\n* internal-feat(training): make flow evaluation reproducible\n\nSeparate weighted objective metrics from unweighted endpoint diagnostics.\nStabilize held-out sampling with local deterministic noise.\n\n* internal-fix(training): keep reproducibility PR seed-focused\n\n* internal-fix(training): evaluate conditional fixed-time fields\n\n* test(training): cover evaluation endpoint diagnostics\n\n* test(training): cover rank-local evaluation noise\n\n* internal-fix(training): gate seeded evaluation behind opt-in\n\n* test(training): opt training validation into seeded evaluation\n\n* internal-fix(training): stabilize endpoint reconstruction\n\n* test(training): verify repeatable endpoint diagnostics",
+          "timestamp": "2026-09-10T00:21:27-04:00",
+          "tree_id": "14b2e3e3408a109501eef54f38a2e6501ea3eb6c",
+          "url": "https://github.com/tinaudio/synth-setter/commit/e403fe0e0314b9a46d0bc0667f3026ed786318a6"
+        },
+        "date": 1789018421437,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.783551216125488,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 15.276402465701103,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.07829216122627258,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.005701422691345215,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.26564621925354,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.067648636099966,
             "unit": "seconds"
           }
         ]
