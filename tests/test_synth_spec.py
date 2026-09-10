@@ -58,6 +58,18 @@ class TestSynthSpecValidation:
                 synth_version="0.8.3",
             )
 
+    def test_explicit_vst_format_rejects_legacy_faust_sentinel(self) -> None:
+        """The reserved legacy sentinel cannot be treated as a VST bundle path."""
+        with pytest.raises(ValidationError, match="legacy Faust"):
+            SynthSpec(
+                name=SynthName("faust_bubble"),
+                param_spec_name=ParamSpecName("faust_bubble"),
+                format="vst3",
+                plugin_path="faust",
+                plugin_state_path="",
+                synth_version="0.8.3",
+            )
+
     def test_a_vst_plugin_accepts_a_preset_path(self) -> None:
         """A plugin-hosted synth carries the baseline preset it was mapped against."""
         spec = SynthSpec(
