@@ -246,6 +246,7 @@ def _config(
     if backend == "surgepy":
         values["synth"] = {
             **values["synth"],
+            "format": "surgepy",
             "plugin_path": "surgepy",
             "plugin_state_path": str(_SURGEPY_PRESET_PATH),
             "synth_version": "1.3.master.f7b97c68",
