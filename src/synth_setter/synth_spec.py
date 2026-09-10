@@ -121,7 +121,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
     name: SynthName
     param_spec_name: ValidatedParamSpecName
     format: SynthFormat = "vst3"
-    plugin_path: str = ""
+    plugin_path: str
     plugin_state_path: str
     synth_version: str
     source_sha256: str | None = None

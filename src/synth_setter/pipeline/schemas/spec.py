@@ -715,13 +715,15 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
     @model_validator(mode="after")
     def _validate_faust_backend(self) -> RenderConfig:
-        """Require checked-in Faust source and pinned DawDreamer provenance.
+        """Restrict host provenance to checked-in Faust source rendering.
 
         :returns: This config when Faust provenance and lifecycle settings are valid.
-        :raises ValueError: The backend version is blank, editor use is enabled, or checked-in
-            source differs from the identity digest.
+        :raises ValueError: Host provenance is set for another format, the backend version is
+            blank, editor use is enabled, or checked-in source differs from the identity digest.
         """
         if self.synth.format != "faust":
+            if self.backend_version is not None:
+                raise ValueError("backend_version is supported only for format='faust'")
             return self
         if self.backend_version is None or not self.backend_version.strip():
             raise ValueError("format='faust' requires a non-blank backend_version")

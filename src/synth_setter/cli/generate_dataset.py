@@ -354,11 +354,10 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
                     f"Backend version mismatch: spec pins {render.backend_version!r} but "
                     f"{render.renderer_backend} reports {actual_backend_version!r}."
                 )
-            logger.info(
-                "backend_version OK: {} == {}",
-                render.renderer_backend,
-                render.backend_version,
-            )
+            logger.bind(
+                backend_version=render.backend_version,
+                renderer_backend=render.renderer_backend,
+            ).info("backend_version_ok")
         else:
             actual_synth_version = extract_renderer_version(Path(render.plugin_path))
             if actual_synth_version != render.synth.synth_version:
