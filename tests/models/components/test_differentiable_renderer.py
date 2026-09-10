@@ -108,7 +108,7 @@ def test_flamo_renderer_same_dtype_conversion_preserves_output() -> None:
 
 def test_flamo_audio_feedback_unclipped_target_has_zero_loss() -> None:
     """FLAMO feedback must not inherit TorchSynth's stored-audio clipping."""
-    from synth_setter.models.components.audio_distance import MultiScaleSpectralDistance
+    from synth_setter.models.components.audio_distance import MultichannelAudioDistance
     from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 
     row = torch.zeros(1, 27)
@@ -124,7 +124,12 @@ def test_flamo_audio_feedback_unclipped_target_has_zero_loss() -> None:
         sample_rate=44_100,
         signal_length=4096,
         render_batch_size=1,
-        distance=MultiScaleSpectralDistance(sample_rate=44_100),
+        distance=MultichannelAudioDistance(
+            sample_rate=44_100,
+            spectral_weight=1.0,
+            channel_mldr_weight=0.1,
+            pair_mldr_weight=0.1,
+        ),
         renderer=renderer,
     )
 
