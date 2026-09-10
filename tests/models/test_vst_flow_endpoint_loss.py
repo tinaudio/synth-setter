@@ -690,12 +690,17 @@ def test_audio_feedback_mixed_endpoint_receives_typed_endpoint() -> None:
     torch.testing.assert_close(recorder.endpoint, expected)
 
 
-def _save_checkpoint(module: VSTFlowMatchingModule, path: Path, *, legacy: bool = False) -> Path:
-    """Write a loadable checkpoint, optionally without endpoint-loss metadata.
+def _save_checkpoint(
+    module: VSTFlowMatchingModule,
+    path: Path,
+    *,
+    omit_metadata: str | None = None,
+) -> Path:
+    """Write a loadable checkpoint with one optional legacy metadata omission.
 
     :param module: Module supplying state and hyperparameters.
     :param path: Checkpoint destination.
-    :param legacy: Whether to remove endpoint-loss metadata.
+    :param omit_metadata: Top-level and hyperparameter key to omit.
     :returns: Checkpoint path.
     """
     checkpoint = {
@@ -704,9 +709,9 @@ def _save_checkpoint(module: VSTFlowMatchingModule, path: Path, *, legacy: bool 
         "pytorch-lightning_version": lightning.__version__,
     }
     module.on_save_checkpoint(checkpoint)
-    if legacy:
-        checkpoint.pop("endpoint_loss")
-        checkpoint["hyper_parameters"].pop("endpoint_loss", None)
+    if omit_metadata is not None:
+        checkpoint.pop(omit_metadata)
+        checkpoint["hyper_parameters"].pop(omit_metadata, None)
     torch.save(checkpoint, path)
     return path
 
@@ -732,13 +737,157 @@ def test_load_legacy_checkpoint_without_endpoint_loss_counts_as_mse(tmp_path: Pa
 
     :param tmp_path: Checkpoint directory.
     """
-    path = _save_checkpoint(_module(endpoint_loss="mse"), tmp_path / "legacy.ckpt", legacy=True)
+    path = _save_checkpoint(
+        _module(endpoint_loss="mse"),
+        tmp_path / "legacy.ckpt",
+        omit_metadata="endpoint_loss",
+    )
 
     loaded = VSTFlowMatchingModule.load_from_checkpoint(
         path, encoder=_WaveformEncoder(), weights_only=False
     )
 
     assert loaded.hparams["endpoint_loss"] == "mse"
+
+
+def test_load_checkpoint_with_other_endpoint_time_weighting_raises(tmp_path: Path) -> None:
+    """Resume rejects silently switching a same-shaped endpoint objective.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="flowmol3"),
+        tmp_path / "flowmol3.ckpt",
+    )
+
+    with pytest.raises(ValueError, match="endpoint_time_weighting"):
+        VSTFlowMatchingModule.load_from_checkpoint(
+            path,
+            encoder=_WaveformEncoder(),
+            endpoint_time_weighting="uniform",
+            weights_only=False,
+        )
+
+
+def test_load_pre_stamp_flowmol3_checkpoint_uses_saved_hyperparameter(tmp_path: Path) -> None:
+    """A pre-stamp FlowMol3 checkpoint retains its recorded objective.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="flowmol3"),
+        tmp_path / "pre-stamp.ckpt",
+    )
+    checkpoint = torch.load(path, weights_only=False)
+    checkpoint.pop("endpoint_time_weighting")
+    torch.save(checkpoint, path)
+
+    loaded = VSTFlowMatchingModule.load_from_checkpoint(
+        path,
+        encoder=_WaveformEncoder(),
+        weights_only=False,
+    )
+
+    assert loaded.hparams["endpoint_time_weighting"] == "flowmol3"
+
+
+def test_load_pre_stamp_flowmol3_checkpoint_with_uniform_override_raises(tmp_path: Path) -> None:
+    """A load-time override cannot replace pre-stamp FlowMol3 metadata.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="flowmol3"),
+        tmp_path / "pre-stamp.ckpt",
+    )
+    checkpoint = torch.load(path, weights_only=False)
+    checkpoint.pop("endpoint_time_weighting")
+    torch.save(checkpoint, path)
+
+    with pytest.raises(ValueError, match="endpoint_time_weighting"):
+        VSTFlowMatchingModule.load_from_checkpoint(
+            path,
+            encoder=_WaveformEncoder(),
+            endpoint_time_weighting="uniform",
+            weights_only=False,
+        )
+
+
+def test_load_pre_stamp_checkpoint_with_hparams_file_raises(tmp_path: Path) -> None:
+    """External hyperparameters cannot obscure an unstamped checkpoint objective.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="flowmol3"),
+        tmp_path / "pre-stamp.ckpt",
+    )
+    checkpoint = torch.load(path, weights_only=False)
+    checkpoint.pop("endpoint_time_weighting")
+    torch.save(checkpoint, path)
+
+    with pytest.raises(ValueError, match="hparams_file"):
+        VSTFlowMatchingModule.load_from_checkpoint(
+            path,
+            hparams_file=tmp_path / "overrides.yaml",
+            weights_only=False,
+        )
+
+
+def test_load_checkpoint_from_file_object_restores_module(tmp_path: Path) -> None:
+    """Raw metadata inspection preserves file-object checkpoint loading.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(_module(), tmp_path / "checkpoint.ckpt")
+
+    with path.open("rb") as checkpoint_file:
+        loaded = VSTFlowMatchingModule.load_from_checkpoint(
+            checkpoint_file,
+            encoder=_WaveformEncoder(),
+            weights_only=False,
+        )
+
+    assert loaded.hparams["endpoint_time_weighting"] == "uniform"
+
+
+def test_load_legacy_checkpoint_without_endpoint_time_weighting_counts_as_uniform(
+    tmp_path: Path,
+) -> None:
+    """Metadata-free checkpoints retain the historical uniform objective.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="uniform"),
+        tmp_path / "legacy.ckpt",
+        omit_metadata="endpoint_time_weighting",
+    )
+
+    loaded = VSTFlowMatchingModule.load_from_checkpoint(
+        path,
+        encoder=_WaveformEncoder(),
+        weights_only=False,
+    )
+
+    assert loaded.hparams["endpoint_time_weighting"] == "uniform"
+
+
+def test_load_legacy_checkpoint_with_flowmol3_module_raises(tmp_path: Path) -> None:
+    """A metadata-free uniform checkpoint cannot resume under FlowMol3 weighting.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="uniform"),
+        tmp_path / "legacy.ckpt",
+        omit_metadata="endpoint_time_weighting",
+    )
+    checkpoint = torch.load(path, weights_only=False)
+    module = _module(endpoint_time_weighting="flowmol3")
+
+    with pytest.raises(ValueError, match="endpoint_time_weighting"):
+        module.on_load_checkpoint(checkpoint)
 
 
 def test_vst_flow_config_defaults_endpoint_loss_to_mse() -> None:
