@@ -1,37 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { branchWeights, CONDITIONING_MODES } from "./weights.mjs";
 import { canonicalPatch } from "./patch.mjs";
 import { gaussianNoise } from "./noise.mjs";
 import { encodeWav } from "./wav.mjs";
-
-test("both-branch weights reproduce the three-branch CFG formula", () => {
-  assert.deepEqual(Array.from(branchWeights("both", 2, 3)), [-2, 1, 0, 2]);
-});
-
-test("mel-only weights ignore the sketch strength", () => {
-  assert.deepEqual(Array.from(branchWeights("mel_only", 2, 3)), [-1, 0, 2, 0]);
-});
-
-test("sketch-only weights ignore the content strength", () => {
-  assert.deepEqual(Array.from(branchWeights("sketch_only", 2, 3)), [-2, 3, 0, 0]);
-});
-
-test("unconditional weights select the null branch only", () => {
-  assert.deepEqual(Array.from(branchWeights("unconditional", 2, 3)), [1, 0, 0, 0]);
-});
-
-test("every weight vector sums to one", () => {
-  for (const mode of CONDITIONING_MODES) {
-    const total = Array.from(branchWeights(mode, 1.5, 0.5)).reduce((sum, value) => sum + value, 0);
-    assert.ok(Math.abs(total - 1) < 1e-12, mode);
-  }
-});
-
-test("unknown mode and negative strengths are rejected", () => {
-  assert.throws(() => branchWeights("mel", 1, 1), /mode/);
-  assert.throws(() => branchWeights("both", -1, 1), /non-negative/);
-});
 
 const native = {
   delays: Int32Array.from([400, 500, 600, 700, 800, 900, 1000, 1100]),

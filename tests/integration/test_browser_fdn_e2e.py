@@ -29,7 +29,8 @@ _REPO = Path(__file__).resolve().parents[2]
 _WEB_ROOT = _REPO / "src/synth_setter/web"
 _MODEL_BUNDLE = os.environ.get("BROWSER_FDN_MODEL_BUNDLE")
 _FAUST_ARTIFACT = os.environ.get("BROWSER_FDN_FAUST_ARTIFACT")
-_CHECKPOINT = os.environ.get("BROWSER_FDN_CHECKPOINT")
+_CHECKPOINT = os.environ.get("SYNTH_SETTER_FDN_SKETCH_CHECKPOINT")
+_STATS = os.environ.get("SYNTH_SETTER_FDN_SKETCH_STATS")
 _SPEC_NAME = ParamSpecName("pyfdn_n8_mono_householder")
 _SAMPLE_RATE = 44_100
 _STEPS = 8
@@ -131,16 +132,17 @@ def test_browser_fdn_site_matches_python_inference_render_and_metrics(tmp_path: 
     scale = np.abs(pyfdn_pred).max()
     assert np.abs(pyfdn_pred - browser_pred).max() <= 1e-3 * scale
 
-    if _CHECKPOINT:
-        _assert_sampling_parity(_CHECKPOINT, record, browser_target, expected_sketch)
+    if _CHECKPOINT and _STATS:
+        _assert_sampling_parity(_CHECKPOINT, _STATS, record, browser_target, expected_sketch)
 
 
 def _assert_sampling_parity(
-    checkpoint: str, record: dict[str, Any], target: np.ndarray, sketch: np.ndarray
+    checkpoint: str, stats: str, record: dict[str, Any], target: np.ndarray, sketch: np.ndarray
 ) -> None:
     """Replay the browser's noise through the PyTorch sampler and compare parameters.
 
     :param checkpoint: Local checkpoint path the bundle was exported from.
+    :param stats: Local training mel-statistics archive the bundle was exported with.
     :param record: The page's run record with noise, guidance, and parameters.
     :param target: Mono target the page decoded.
     :param sketch: Reverb sketch of that target.

@@ -9,7 +9,7 @@ import { canonicalPatch } from "./patch.mjs";
 import { renderImpulseResponse } from "./render.mjs";
 import { extractReverbSketch } from "./sketch.mjs";
 import { encodeWav } from "./wav.mjs";
-import { branchWeights } from "./weights.mjs";
+import { branchWeights } from "../guidance.mjs";
 
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.wasmPaths = new URL("../ort/", import.meta.url).href;
@@ -31,12 +31,11 @@ async function loadBundles() {
   const model = await loadModelBundle("model");
   const faust = await loadFaustBundle("faust");
   const graphs = await loadGraphs(ort, model.graphs);
-  const defaults = model.manifest.defaults ?? {};
-  if (defaults.steps) field("steps").value = defaults.steps;
-  if (defaults.content_cfg !== undefined) field("content").value = defaults.content_cfg;
-  if (defaults.sketch_cfg !== undefined) field("sketch").value = defaults.sketch_cfg;
+  const { sampling, paramSpecName, frames, sampleRate } = model.manifest;
+  field("content").value = sampling.contentCfg;
+  field("sketch").value = sampling.sketchCfg;
   bundles = { model, faust, graphs };
-  setStatus(`Ready: ${model.manifest.param_spec_name}, ${model.manifest.frames} frames at ${model.manifest.sample_rate} Hz`);
+  setStatus(`Ready: ${paramSpecName}, ${frames} frames at ${sampleRate} Hz; checkpoint default is ${sampling.steps} steps`);
   runButton.disabled = false;
 }
 
@@ -114,7 +113,7 @@ async function run(event) {
   window.fdnEval = { state: "running" };
   try {
     const { manifest } = bundles.model;
-    const contract = { sampleRate: manifest.sample_rate, frames: manifest.frames };
+    const contract = { sampleRate: manifest.sampleRate, frames: manifest.frames };
     const file = field("target").files[0];
     if (!file) throw new Error("choose a WAV file first");
     setStatus("Decoding target audio");
@@ -128,7 +127,7 @@ async function run(event) {
     const steps = Number(field("steps").value);
     const seed = Number(field("seed").value);
     const weights = branchWeights(mode, contentCfg, sketchCfg);
-    const noise = gaussianNoise(seed, manifest.encoded_width);
+    const noise = gaussianNoise(seed, manifest.encodedWidth);
     const started = performance.now();
     const { params } = await sampleParameters({
       ort,

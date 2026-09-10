@@ -21,11 +21,12 @@ async function sha256(bytes) {
 export async function loadModelBundle(root) {
   const manifest = await fetchJson(`${root}/manifest.json`);
   if (manifest.schemaVersion !== 1) throw new Error("unsupported model bundle schema");
+  // Graph files are keyed by filename; sessions are keyed by the filename stem.
   const graphs = {};
-  for (const [name, entry] of Object.entries(manifest.files)) {
-    const bytes = await fetchBytes(`${root}/${entry.path}`);
-    if ((await sha256(bytes)) !== entry.sha256) throw new Error(`model bundle digest mismatch: ${entry.path}`);
-    graphs[name] = bytes;
+  for (const [filename, entry] of Object.entries(manifest.files)) {
+    const bytes = await fetchBytes(`${root}/${filename}`);
+    if ((await sha256(bytes)) !== entry.sha256) throw new Error(`model bundle digest mismatch: ${filename}`);
+    graphs[filename.replace(/\.onnx$/, "")] = bytes;
   }
   return { manifest, graphs };
 }
