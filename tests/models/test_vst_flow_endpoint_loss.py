@@ -751,6 +751,23 @@ def test_load_legacy_checkpoint_without_endpoint_loss_counts_as_mse(tmp_path: Pa
     assert loaded.hparams["endpoint_loss"] == "mse"
 
 
+def test_load_pre_stamp_checkpoint_uses_hyperparameter_param_spec(tmp_path: Path) -> None:
+    """An unstamped checkpoint retains its parameter-spec identity fallback.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(_module(param_spec="cardinal"), tmp_path / "legacy.ckpt")
+    checkpoint = torch.load(path, weights_only=False)
+    checkpoint.pop("param_spec_identity")
+    torch.save(checkpoint, path)
+
+    loaded = VSTFlowMatchingModule.load_from_checkpoint(
+        path, encoder=_WaveformEncoder(), weights_only=False
+    )
+
+    assert loaded.hparams["param_spec"] == "cardinal"
+
+
 def test_load_checkpoint_with_same_width_timing_semantics_override_raises(
     tmp_path: Path,
 ) -> None:

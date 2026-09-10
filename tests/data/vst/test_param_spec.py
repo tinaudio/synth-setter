@@ -20,6 +20,7 @@ from synth_setter.data.vst.param_spec import (
     NoteDurationParameter,
     ParamSpec,
     decode_model_output,
+    onset_duration_variant,
     require_note_params,
     require_scalar_synth_params,
 )
@@ -987,6 +988,33 @@ def test_note_duration_sample_preserves_truncated_uniform_endpoint_prior() -> No
     sampled = parameter.sample(np.random.default_rng(7))
 
     assert sampled == pytest.approx((2.499756770952063, 3.5889579900773323))
+
+
+def test_note_duration_samples_always_satisfy_renderer_window() -> None:
+    """Repeated sampler draws remain ordered, bounded, and at least 1 ms long."""
+    parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+        min_note_duration_seconds=0.001,
+    )
+
+    samples = np.array(
+        [parameter.sample(np.random.default_rng(seed)) for seed in range(256)]
+    )
+
+    assert np.all(samples[:, 0] >= 0.0)
+    assert np.all(samples[:, 1] <= 4.0)
+    assert np.all(samples[:, 1] - samples[:, 0] >= 0.001)
+
+
+def test_onset_duration_variant_rejects_missing_or_ambiguous_timing() -> None:
+    """A compatibility variant requires one unambiguous legacy timing field."""
+    timing = LegacyEndpointNoteDurationParameter("window", 4.0)
+
+    with pytest.raises(ValueError, match="exactly one"):
+        onset_duration_variant(ParamSpec([], []))
+    with pytest.raises(ValueError, match="exactly one"):
+        onset_duration_variant(ParamSpec([], [timing, timing]))
 
 
 def test_note_duration_final_onset_encodes_canonical_duration_fraction() -> None:
