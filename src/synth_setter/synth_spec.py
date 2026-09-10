@@ -173,6 +173,8 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
             not match a registered checked-in source.
         """
         if self.format != "faust":
+            if self.plugin_path == "faust":
+                raise ValueError("legacy Faust plugin sentinel requires format='faust'")
             if _is_registry_reference(self.plugin_path):
                 validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
                 raise ValueError("a Faust registry reference requires format='faust'")
