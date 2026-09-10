@@ -1,4 +1,10 @@
-"""Resolve Hydra feature-flag IDs and expose selected flags to the process."""
+"""Resolve Hydra feature-flag IDs and expose selected flags to the process.
+
+.. code-block:: python
+
+    resolved = FeatureFlagConfig.model_validate({"feature_flags": [3160]})
+    assert resolved.feature_flags[0].number == 3160
+"""
 
 from __future__ import annotations
 
@@ -44,13 +50,14 @@ class FeatureFlag(BaseModel):
     description: str
 
 
-_FEATURE_FLAGS = {
-    3160: FeatureFlag(
+_REGISTERED_FEATURE_FLAGS = (
+    FeatureFlag(
         number=3160,
         name="SYNTH_SETTER_FF_3160_CORRECT_AST_PATCH_PADDING",
         description="Use the corrected AST patch-padding axis order.",
     ),
-}
+)
+_FEATURE_FLAGS = {feature_flag.number: feature_flag for feature_flag in _REGISTERED_FEATURE_FLAGS}
 
 
 def _resolve_feature_flags(value: object) -> object:
@@ -101,6 +108,8 @@ def apply_feature_flags(cfg: Mapping[str, object]) -> FeatureFlagConfig:
     :returns: Validated feature-flag metadata for the selected IDs.
     """
     resolved = FeatureFlagConfig.model_validate({"feature_flags": cfg.get("feature_flags", [])})
+    for feature_flag in _REGISTERED_FEATURE_FLAGS:
+        os.environ.pop(feature_flag.name, None)
     for feature_flag in resolved.feature_flags:
         os.environ[feature_flag.name] = "1"
     return resolved

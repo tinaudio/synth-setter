@@ -48,6 +48,21 @@ def test_feature_flag_config_string_number_rejected() -> None:
         FeatureFlagConfig.model_validate({"feature_flags": ["3160"]})
 
 
+def test_apply_feature_flags_empty_selection_clears_registered_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each application replaces flags left by an earlier config in the process.
+
+    :param monkeypatch: Isolates the process environment modified by activation.
+    """
+    monkeypatch.delenv(_FEATURE_FLAG_NAME, raising=False)
+    apply_feature_flags(OmegaConf.create({"feature_flags": [3160]}))
+
+    apply_feature_flags(OmegaConf.create({"feature_flags": []}))
+
+    assert _FEATURE_FLAG_NAME not in os.environ
+
+
 def test_apply_feature_flags_sets_selected_process_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
