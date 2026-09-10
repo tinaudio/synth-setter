@@ -53,6 +53,14 @@ class TestTrainConfigAcceptsLiveCompose:
 
         assert model.feature_flags[0].name == "SYNTH_SETTER_FF_3160_CORRECT_AST_PATCH_PADDING"
 
+    def test_feature_flags_round_trip_through_train_config_dump(self) -> None:
+        """TrainConfig serialization preserves integer IDs for revalidation."""
+        model = TrainConfig.model_validate({"feature_flags": [3160]})
+
+        restored = TrainConfig.model_validate(model.model_dump())
+
+        assert restored.feature_flags == model.feature_flags
+
 
 class TestTrainConfigRejectsBadInputs:
     """Validators must reject obvious mistakes on the scalar fields."""

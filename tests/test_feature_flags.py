@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import asdict
 
 import pytest
 from omegaconf import OmegaConf
@@ -17,11 +18,22 @@ def test_feature_flag_config_known_number_resolves_metadata() -> None:
     """A configured integer ID resolves to its complete registry record."""
     config = FeatureFlagConfig.model_validate({"feature_flags": [3160]})
 
-    assert config.feature_flags[0].model_dump() == {
+    assert asdict(config.feature_flags[0]) == {
         "number": 3160,
         "name": _FEATURE_FLAG_NAME,
         "description": "Use the corrected AST patch-padding axis order.",
     }
+
+
+def test_feature_flag_config_dump_round_trips_as_integer_ids() -> None:
+    """Serialized config keeps Hydra's integer-ID representation."""
+    config = FeatureFlagConfig.model_validate({"feature_flags": [3160]})
+
+    dumped = config.model_dump()
+
+    assert dumped == {"feature_flags": [3160]}
+    assert FeatureFlagConfig.model_validate(dumped) == config
+    assert FeatureFlagConfig.model_validate_json(config.model_dump_json()) == config
 
 
 def test_feature_flag_config_unknown_number_rejected() -> None:

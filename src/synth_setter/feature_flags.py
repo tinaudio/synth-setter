@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Annotated
 
 from omegaconf import ListConfig
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, StrictInt
 
 __all__ = [
     "FeatureFlag",
@@ -23,12 +24,9 @@ __all__ = [
 ]
 
 
-class FeatureFlag(BaseModel):
+@dataclass(frozen=True)
+class FeatureFlag:
     """Describe one registered runtime feature flag.
-
-    .. attribute :: model_config
-
-        Pydantic model config sentinel.
 
     .. attribute :: number
 
@@ -42,8 +40,6 @@ class FeatureFlag(BaseModel):
 
         One-sentence behavior summary.
     """
-
-    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
     number: int
     name: str
@@ -81,7 +77,15 @@ def _resolve_feature_flags(value: object) -> object:
     return resolved
 
 
-ResolvedFeatureFlags = Annotated[list[FeatureFlag], BeforeValidator(_resolve_feature_flags)]
+def _feature_flag_numbers(feature_flags: list[FeatureFlag]) -> list[int]:
+    return [feature_flag.number for feature_flag in feature_flags]
+
+
+ResolvedFeatureFlags = Annotated[
+    list[FeatureFlag],
+    BeforeValidator(_resolve_feature_flags, json_schema_input_type=list[StrictInt]),
+    PlainSerializer(_feature_flag_numbers, return_type=list[int]),
+]
 
 
 class FeatureFlagConfig(BaseModel):
