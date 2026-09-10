@@ -29,6 +29,7 @@ _REQUIRED_TOP_LEVEL_FIELDS: tuple[str, ...] = tuple(
 _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS = frozenset(
     {
         "audio_dtype",
+        "block_size",
         "mel_spec_dtype",
         "post_load_flush_blocks",
         "post_param_flush_blocks",

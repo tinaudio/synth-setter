@@ -289,6 +289,11 @@ def test_train_eval_pyfdn_predict_writes_response_metrics(
 
     per_sample = pd.read_csv(output_dir / "metrics" / "metrics.csv", index_col=0)
     expected_metrics = [
+        "mss",
+        "wmfcc",
+        "sot",
+        "rms",
+        "mldr",
         "joint_time_frequency_ot",
         "pyfdn_match_impulse_response",
         "pyfdn_match_magnitude",
@@ -372,7 +377,7 @@ def test_evaluate_pyfdn_derived_feedback_checkpoint_preserves_parameter_metrics(
     assert 0.0 <= metrics["test/per_param_abs_cosine_distance/delays"].item() <= 1.0
     assert torch.isfinite(metrics[f"test/per_param_mse/{control}"])
     assert torch.isfinite(metrics[f"test_per_param_mse_best_swap/{control}"])
-    assert torch.isfinite(metrics[f"test/per_param_mse_number_group_swap/{control}"])
+    assert torch.isfinite(metrics[f"test/number_group_optimal_assignment_mse/{control}"])
     assert torch.isfinite(metrics[f"test/per_param_mse_spec_quantized/{control}"])
 
 
@@ -392,7 +397,7 @@ def test_evaluate_legacy_config_does_not_seed_before_feature_validation(
         )
     with open_dict(cfg):
         del cfg["seed"]
-        del cfg["seeded_evaluation"]
+        del cfg.model["seeded_evaluation"]
     HydraConfig().set_config(cfg)
     seed_everything_mock = MagicMock()
     monkeypatch.setattr("synth_setter.cli.eval.seed_everything", seed_everything_mock)
@@ -403,10 +408,55 @@ def test_evaluate_legacy_config_does_not_seed_before_feature_validation(
     seed_everything_mock.assert_not_called()
 
 
-def test_evaluate_seeded_config_without_seed_uses_documented_fallback(
+def test_evaluate_seeded_config_without_seed_raises_before_feature_validation() -> None:
+    """Seeded evaluation requires an explicit top-level seed."""
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/eval_flow_sketch_nsynth", "feature_flags=[9999]"],
+        )
+    with open_dict(cfg):
+        del cfg["seed"]
+        cfg.model.seeded_evaluation = True
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(ValueError, match="model.seeded_evaluation=true requires.*cfg.seed"):
+        evaluate(cfg)
+
+
+@pytest.mark.parametrize("seed", [None, True, False, "42", 42.0, -1, 2**32])
+def test_evaluate_seeded_config_with_invalid_seed_raises_before_feature_validation(
+    seed: object,
+) -> None:
+    """Seeded evaluation rejects null, non-integer, and unsupported seeds.
+
+    :param seed: Invalid seed value under test.
+    """
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/eval_flow_sketch_nsynth", "feature_flags=[9999]"],
+        )
+    with open_dict(cfg):
+        cfg.seed = seed
+        cfg.model.seeded_evaluation = True
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(
+        ValueError,
+        match=r"model.seeded_evaluation=true requires cfg.seed to be an integer in \[0, 4294967295\]",
+    ):
+        evaluate(cfg)
+
+
+def test_evaluate_seeded_config_with_zero_seeds_before_feature_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Seeded evaluation uses seed 42 when a legacy config omits ``seed``.
+    """Zero is a valid explicit evaluation seed.
 
     :param monkeypatch: Scoped replacement for the Lightning seeding boundary.
     """
@@ -418,8 +468,8 @@ def test_evaluate_seeded_config_without_seed_uses_documented_fallback(
             overrides=["experiment=surge/eval_flow_sketch_nsynth", "feature_flags=[9999]"],
         )
     with open_dict(cfg):
-        del cfg["seed"]
-        cfg.seeded_evaluation = True
+        cfg.seed = 0
+        cfg.model.seeded_evaluation = True
     HydraConfig().set_config(cfg)
     seed_everything_mock = MagicMock()
     monkeypatch.setattr("synth_setter.cli.eval.seed_everything", seed_everything_mock)
@@ -427,7 +477,34 @@ def test_evaluate_seeded_config_without_seed_uses_documented_fallback(
     with pytest.raises(ValidationError, match="unknown feature flag number: 9999"):
         evaluate(cfg)
 
-    seed_everything_mock.assert_called_once_with(42, workers=True)
+    seed_everything_mock.assert_called_once_with(0, workers=True)
+
+
+def test_evaluate_unseeded_config_does_not_validate_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default-off evaluation ignores an otherwise invalid seed.
+
+    :param monkeypatch: Scoped replacement for the Lightning seeding boundary.
+    """
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/eval_flow_sketch_nsynth", "feature_flags=[9999]"],
+        )
+    with open_dict(cfg):
+        cfg.seed = True
+        cfg.model.seeded_evaluation = False
+    HydraConfig().set_config(cfg)
+    seed_everything_mock = MagicMock()
+    monkeypatch.setattr("synth_setter.cli.eval.seed_everything", seed_everything_mock)
+
+    with pytest.raises(ValidationError, match="unknown feature flag number: 9999"):
+        evaluate(cfg)
+
+    seed_everything_mock.assert_not_called()
 
 
 def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -> None:
@@ -720,8 +797,24 @@ def test_evaluate_pyfdn_sketch_experiment_uses_temporal_profile(
     assert objects["datamodule"].sketch_controls.num_frames == 32
 
 
-def test_eval_faust_render_group_resolves_production_renderer_contract() -> None:
-    """The eval operator config accepts the production brightOrgan render group."""
+@pytest.mark.parametrize(
+    ("render_group", "backend", "block_size"),
+    [
+        pytest.param("faust", "dawdreamer", None, id="dawdreamer"),
+        pytest.param("faustwasm", "faustwasm", 128, id="faustwasm"),
+    ],
+)
+def test_eval_faust_render_group_resolves_production_renderer_contract(
+    render_group: str,
+    backend: str,
+    block_size: int | None,
+) -> None:
+    """The eval operator config accepts each production brightOrgan render group.
+
+    :param render_group: Hydra render group under test.
+    :param backend: Expected rendering backend.
+    :param block_size: Expected optional offline-processing block size.
+    """
     try:
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             cfg = compose(
@@ -732,15 +825,16 @@ def test_eval_faust_render_group_resolves_production_renderer_contract() -> None
                     "trainer=cpu",
                     "ckpt_path=.",
                     "synth=faust_bright_organ",
-                    "render=faust",
+                    f"render={render_group}",
                 ],
             )
         render = RenderConfig.from_cfg_nodes(cfg.render, cfg.synth)
     finally:
         GlobalHydra.instance().clear()
 
-    assert render.renderer_backend == "dawdreamer"
-    assert render.backend_version == "0.8.3"
+    assert render.renderer_backend == backend
+    assert render.backend_version == str(cfg.render.backend_version)
+    assert render.block_size == block_size
     assert render.plugin_path == "registry://faust/faust_bright_organ"
     assert render.synth.format == "faust"
     assert render.plugin_reload_cadence == "render"
@@ -1161,6 +1255,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
 
     val_loss = metric_dict["val/param_mse"]
     assert torch.isfinite(val_loss)
+    assert torch.pi == math.pi
     assert val_loss < initial_val_loss * (1 - _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT)
     val_dataloader = eval_objects["datamodule"].val_dataloader()
     assert val_dataloader.num_workers == 0
@@ -1172,7 +1267,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
 def test_eval_torchsynth_flow_logs_grouped_per_param_metrics_by_default(
     cfg_torchsynth_flow_audio_train: DictConfig,
 ) -> None:
-    """The eval entrypoint publishes grouped-swap errors for the active synth spec.
+    """The eval entrypoint publishes grouped assignment errors for the active synth spec.
 
     :param cfg_torchsynth_flow_audio_train: Composed tiny production flow configuration.
     """
@@ -1189,7 +1284,9 @@ def test_eval_torchsynth_flow_logs_grouped_per_param_metrics_by_default(
     finally:
         GlobalHydra.instance().clear()
 
-    assert torch.isfinite(metric_dict["val/per_param_mse_number_group_swap/adsr_1.attack"]).all()
+    assert torch.isfinite(
+        metric_dict["val/number_group_optimal_assignment_mse/adsr_1.attack"]
+    ).all()
 
 
 @pytest.mark.slow
@@ -1574,13 +1671,11 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
     )
 
 
-@pytest.mark.slow
-def test_evaluate_seeded_override_repeats_legacy_mixed_endpoint_checkpoint(
-    tmp_path: Path,
-) -> None:
-    """Evaluation opts a legacy mixed-endpoint checkpoint into repeatable sampling.
+def _prepare_flowmol3_eval_checkpoint(tmp_path: Path) -> DictConfig:
+    """Compose a tiny eval config and write its matching FlowMol3 checkpoint.
 
     :param tmp_path: Checkpoint and evaluation output directory.
+    :returns: Evaluation config pointing at the saved checkpoint.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -1591,7 +1686,6 @@ def test_evaluate_seeded_override_repeats_legacy_mixed_endpoint_checkpoint(
                 "synth=cardinal",
                 "trainer=cpu",
                 "model=vst_flow",
-                "seeded_evaluation=true",
             ],
         )
     checkpoint_path = tmp_path / "mixed.ckpt"
@@ -1602,6 +1696,7 @@ def test_evaluate_seeded_override_repeats_legacy_mixed_endpoint_checkpoint(
         cfg.mode = "test"
         cfg.model.compile = False
         cfg.model.endpoint_loss = "mixed"
+        cfg.model.endpoint_time_weighting = "flowmol3"
         cfg.model.parameterization = "endpoint"
         cfg.model.encoder.d_model = 16
         cfg.model.encoder.n_heads = 1
@@ -1633,9 +1728,21 @@ def test_evaluate_seeded_override_repeats_legacy_mixed_endpoint_checkpoint(
     )
     trainer.strategy.connect(instantiate(cfg.model))
     trainer.save_checkpoint(checkpoint_path)
+    return cfg
 
+
+@pytest.mark.slow
+def test_evaluate_seeded_override_repeats_flowmol3_mixed_endpoint_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """Evaluation opts a mixed-endpoint checkpoint into repeatable sampling.
+
+    :param tmp_path: Checkpoint and evaluation output directory.
+    """
+    cfg = _prepare_flowmol3_eval_checkpoint(tmp_path)
     with open_dict(cfg):
-        del cfg["seed"]
+        cfg.model.seeded_evaluation = True
+        cfg.seed = 42
     HydraConfig().set_config(cfg)
     seed_everything(999, workers=True)
     metric_dict, object_dict = evaluate(cfg)
@@ -1664,7 +1771,23 @@ def test_evaluate_seeded_override_repeats_legacy_mixed_endpoint_checkpoint(
         for key in endpoint_metric_keys
     )
     assert object_dict["model"].hparams.endpoint_loss == "mixed"
+    assert object_dict["model"].hparams.endpoint_time_weighting == "flowmol3"
     assert object_dict["model"].hparams.seeded_evaluation is True
+
+
+@pytest.mark.slow
+def test_evaluate_uniform_override_of_flowmol3_checkpoint_raises(tmp_path: Path) -> None:
+    """The real eval entrypoint rejects a checkpoint trained with another weighting.
+
+    :param tmp_path: Checkpoint and evaluation output directory.
+    """
+    cfg = _prepare_flowmol3_eval_checkpoint(tmp_path)
+    with open_dict(cfg):
+        cfg.model.endpoint_time_weighting = "uniform"
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(ValueError, match="endpoint_time_weighting"):
+        evaluate(cfg)
 
 
 def test_evaluate_loads_compiled_cpu_training_checkpoint(
@@ -2058,6 +2181,80 @@ def test_evaluate_predict_mode_pyfdn_renders_finite_audio_end_to_end(
         rendered = audio_file.read(audio_file.frames)
     assert rendered.shape == (1, 176_400)
     assert np.isfinite(rendered).all()
+
+
+@pytest.mark.fake_vst
+def test_evaluate_predict_mode_mismatched_audio_lengths_raise(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """The eval entrypoint rejects rendered pairs with mismatched sample counts.
+
+    :param tmp_path: Hydra output root containing the malformed rendered pair.
+    :param fake_surge_smoke_datasets: Tiny real Lance predict split.
+    :param capfd: Captures the real metrics subprocess diagnostic.
+    """
+    sample_dir = tmp_path / "audio" / "sample_0"
+    sample_dir.mkdir(parents=True)
+    sf.write(sample_dir / "target.wav", np.zeros(4096, dtype=np.float32), 44100)
+    sf.write(sample_dir / "pred.wav", np.zeros(2048, dtype=np.float32), 44100)
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        mode="predict",
+        datamodule="surge_lance",
+    )
+    with open_dict(cfg):
+        cfg.evaluation.render_vst = False
+        cfg.evaluation.compute_metrics = True
+        cfg.evaluation.num_workers = 1
+
+    HydraConfig().set_config(cfg)
+    try:
+        with pytest.raises(subprocess.CalledProcessError):
+            evaluate(cfg)
+        assert "target and pred must have the same shape" in capfd.readouterr().err
+    finally:
+        GlobalHydra.instance().clear()
+
+
+@pytest.mark.fake_vst
+def test_evaluate_predict_mode_nonfinite_audio_raises(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """The eval entrypoint rejects rendered audio containing non-finite samples.
+
+    :param tmp_path: Hydra output root containing the malformed rendered pair.
+    :param fake_surge_smoke_datasets: Tiny real Lance predict split.
+    :param capfd: Captures the real metrics subprocess diagnostic.
+    """
+    sample_dir = tmp_path / "audio" / "sample_0"
+    sample_dir.mkdir(parents=True)
+    target = np.zeros(4096, dtype=np.float32)
+    target[0] = np.nan
+    sf.write(sample_dir / "target.wav", target, 44100, subtype="FLOAT")
+    sf.write(sample_dir / "pred.wav", np.zeros_like(target), 44100, subtype="FLOAT")
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        mode="predict",
+        datamodule="surge_lance",
+    )
+    with open_dict(cfg):
+        cfg.evaluation.render_vst = False
+        cfg.evaluation.compute_metrics = True
+        cfg.evaluation.num_workers = 1
+
+    HydraConfig().set_config(cfg)
+    try:
+        with pytest.raises(subprocess.CalledProcessError):
+            evaluate(cfg)
+        assert "target and pred must contain only finite values" in capfd.readouterr().err
+    finally:
+        GlobalHydra.instance().clear()
 
 
 @pytest.mark.fake_vst

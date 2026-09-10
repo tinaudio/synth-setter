@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Literal, NewType
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from synth_setter.param_spec_name import ParamSpecName, ValidatedParamSpecName
-from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME
+from synth_setter.renderer_backend import FAUST_REGISTRY_PREFIX, TORCHSYNTH_PLUGIN_NAME
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -34,7 +34,6 @@ _FAUST_SOURCE_SHA256 = {
     "faust_church_organ": "c753731f4053210d42757acb179010185e91d37fb56a8b45e093222be688b512",
     "faust_filter_osc": "6ad65d28d787f08a3fa66eb4de7d4091be8d2267ad1e9edc200618effbbe588c",
 }
-_FAUST_REGISTRY_PREFIX = "registry://faust/"
 
 
 def validate_faust_registry_reference(reference: str, param_spec_name: str) -> ParamSpecName:
@@ -45,11 +44,11 @@ def validate_faust_registry_reference(reference: str, param_spec_name: str) -> P
     :returns: Registered Faust source identity named by the reference.
     :raises ValueError: The URI is malformed, unknown, or mismatches ``param_spec_name``.
     """
-    if not reference.startswith(_FAUST_REGISTRY_PREFIX):
+    if not reference.startswith(FAUST_REGISTRY_PREFIX):
         raise ValueError(
             "Faust registry reference must be registry://faust/<registered-source-name>"
         )
-    identity = reference.removeprefix(_FAUST_REGISTRY_PREFIX)
+    identity = reference.removeprefix(FAUST_REGISTRY_PREFIX)
     if not identity or any(character in identity for character in "/?#"):
         raise ValueError(
             "Faust registry reference must be registry://faust/<registered-source-name>"

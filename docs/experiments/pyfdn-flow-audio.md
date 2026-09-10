@@ -3,7 +3,7 @@
 `experiment=pyfdn/flow_audio_flamo` attaches the FLAMO renderer when Hydra
 constructs the flow model. No pretrained checkpoint or separate simulator
 finetuning stage is required. The experiment loads target audio from Lance and
-uses the existing multi-scale spectral loss alongside flow matching; its inherited
+uses the shared multichannel audio distance alongside flow matching; its inherited
 `lambda_audio=0.03` already contributes to optimization.
 
 ```text
@@ -11,7 +11,7 @@ flow prediction / endpoint estimate
   → PyFDNParameterDecoder
   → native tensor matrices, delays, and filter controls
   → FLAMO graph with externally bound parameters
-  → waveform → spectral distance to target audio → flow-network gradients
+  → waveform → multichannel audio distance to target audio → flow-network gradients
 ```
 
 ## Decoder and graph construction
@@ -48,10 +48,17 @@ impulse is rendered separately; output shape is
 `channel = output * input_count + input`. No transfer path is summed or selected
 away. All three optional SOS hooks are bound in the upstream graph.
 
-Audio feedback compares corresponding channels before averaging their scalar
-losses. It rejects channel-count mismatches rather than broadcasting or downmixing.
-A singleton channel axis may be removed for legacy consumers without changing
-samples; multiple channels remain intact.
+The injected `MultichannelAudioDistance` owns channel policy once. It canonicalizes
+`(batch, samples)` and `(batch, channels, samples)` to channelized audio, rejects
+non-finite or nonmatching nonempty geometry, then combines corresponding-channel MSS,
+corresponding-channel differentiable MLDR, and MLDR over every unordered within-signal
+channel pair after energy-preserving sum/difference transforms. Mono has no pair term;
+no target channel is cross-matched against a prediction channel. The initial Hydra
+weights (`1.0` MSS, `0.1` channel MLDR, `0.1` pair MLDR) keep MSS dominant for scale
+balancing and are not empirically optimal.
+
+CLAP and SAME distances remain mono-only and remove at most a singleton channel axis
+at their own embedding boundary; they are not wrapped in the multichannel composite.
 
 The `from_param_spec()` factory adapts these currently registered basic encodings:
 
@@ -71,6 +78,17 @@ does not make these complete `BasicFDN` effects, and no fallback graph is suppli
 Integer delays and Kronecker reflection choices have zero gradients. Continuous
 gains, feedback coordinates, and filter controls retain gradients.
 
+## Channel-aware consumers
+
+`MultichannelAudioDistance` remains the single channel-aware differentiable loss for
+audio feedback, simulator gradient control, and rendered rewards. Simulator finetuning
+retains channels in both control arms and bound sampling observations; the learned-control
+width probe uses the renderer's actual geometry. Mismatched residual shapes are rejected.
+
+Response, octave-decay, and acoustic evaluation metrics analyze each corresponding
+channel independently, then average scalar and per-band results across channels. A failed
+channel is not silently omitted. Multichannel WAV evaluation uses the same path.
+
 ## Numerical and runtime limits
 
 FLAMO evaluates a frequency-domain response. Finite FFT periods introduce circular
@@ -89,6 +107,10 @@ approximation (#3402). This makes subsequent float64 FLAMO construction lose
 precision, including strict MIMO parity tests when run after TorchSynth training
 tests. Isolated parity runs pass; mixed-backend float64 parity remains blocked.
 No tolerance relaxation or local DSP workaround masks this defect.
+
+Legacy simulator-control helpers still clip unrestricted responses to `[-1, 1]`
+(#3404). This is separate from channel preservation; unrestricted-amplitude
+finetuning parity is not claimed until that backend-specific policy is removed.
 
 ## Reproducible integration experiment
 

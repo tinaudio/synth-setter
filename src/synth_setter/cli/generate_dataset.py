@@ -179,6 +179,9 @@ def _run_oracle_eval_subprocess(
         if render.backend_version is None
         else [f"++render.backend_version={render.backend_version}"]
     )
+    block_size_override = (
+        [] if render.block_size is None else [f"++render.block_size={render.block_size}"]
+    )
     argv = [
         sys.executable,
         "-m",
@@ -200,6 +203,7 @@ def _run_oracle_eval_subprocess(
         ),
         f"render.renderer_backend={render.renderer_backend}",
         *backend_version_override,
+        *block_size_override,
         f"++render.render_contract_version={render.render_contract_version}",
         f"render.plugin_reload_cadence={render.plugin_reload_cadence}",
         f"render.gui_toggle_cadence={render.gui_toggle_cadence}",

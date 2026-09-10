@@ -121,6 +121,16 @@ class TestRenderConfig:
         assert cfg.audio_dtype == "float16"
         assert cfg.mel_spec_dtype == "float32"
 
+    def test_non_faust_historical_digest_ignores_absent_block_size(self) -> None:
+        """Adding the optional field does not invalidate existing VST shards."""
+        cfg = RenderConfig(**_valid_render_kwargs())
+
+        assert cfg.block_size is None
+        assert (
+            cfg.shard_metadata().render_contract_digest
+            == "611848f43224078da8d98f866b0428d7c7a24eac7aa472bc537193ac7c9a1abb"
+        )
+
     @pytest.mark.parametrize("field", ["audio_dtype", "mel_spec_dtype"])
     def test_storage_dtype_accepts_float16_and_float32(self, field: str) -> None:
         """Each stored signal tensor accepts either supported floating-point width.
@@ -470,12 +480,158 @@ class TestRenderConfig:
         values["renderer_backend"] = "faustwasm"
         values["backend_version"] = "0.18.3"
         values["render_contract_version"] = 2
+        values["block_size"] = 128
         values["plugin_reload_cadence"] = "render"
         values["gui_toggle_cadence"] = "never"
 
         config = RenderConfig(**values)
 
         assert config.renderer_backend == "faustwasm"
+        assert config.block_size == 128
+
+    @pytest.mark.parametrize(
+        ("identity", "channels"),
+        [("faust_bright_organ", 1), ("faust_filter_osc", 2)],
+    )
+    def test_faustwasm_backend_rejects_source_channel_mismatch(
+        self, identity: str, channels: int
+    ) -> None:
+        """FaustWasm config cannot contradict registered source geometry.
+
+        :param identity: Registered source whose native channel count differs.
+        :param channels: Invalid configured channel count.
+        """
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName(identity)],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=128,
+            channels=channels,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+
+        with pytest.raises(ValidationError, match="faustwasm requires channels="):
+            RenderConfig(**values)
+
+    def test_faustwasm_backend_rejects_param_spec_duration_mismatch(self) -> None:
+        """FaustWasm config cannot change the identity-stable note-time domain."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=128,
+            signal_duration_seconds=2.0,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+
+        with pytest.raises(
+            ValidationError,
+            match="faustwasm requires signal_duration_seconds>=4.0",
+        ):
+            RenderConfig(**values)
+
+    def test_faustwasm_backend_accepts_render_longer_than_note_domain(self) -> None:
+        """A longer output preserves every identity-stable note endpoint."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=128,
+            signal_duration_seconds=5.0,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+
+        config = RenderConfig(**values)
+
+        assert config.signal_duration_seconds == 5.0
+
+    def test_faustwasm_backend_requires_explicit_block_size(self) -> None:
+        """FaustWasm refuses an unspecified runtime block size."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+
+        with pytest.raises(ValidationError, match="faustwasm requires an explicit block_size"):
+            RenderConfig(**values)
+
+    @pytest.mark.parametrize("block_size", [0, -1, True, 1.5])
+    def test_faustwasm_backend_rejects_invalid_block_size(self, block_size: object) -> None:
+        """FaustWasm block size must be a strict positive integer.
+
+        :param block_size: Invalid block size under test.
+        """
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=block_size,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+
+        with pytest.raises(ValidationError, match="block_size"):
+            RenderConfig(**values)
+
+    def test_non_faustwasm_backend_rejects_block_size(self) -> None:
+        """Block size cannot silently affect backends that do not consume it."""
+        with pytest.raises(ValidationError, match="block_size is supported only for faustwasm"):
+            RenderConfig(**(_valid_render_kwargs() | {"block_size": 128}))
+
+    def test_faustwasm_backend_rejects_once_reload_with_lifecycle_error(self) -> None:
+        """FaustWasm reports its isolated-process lifecycle requirement."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=128,
+            plugin_reload_cadence="once",
+            gui_toggle_cadence="never",
+        )
+
+        with pytest.raises(
+            ValidationError,
+            match='faustwasm requires plugin_reload_cadence="render": each render uses an isolated Node process',
+        ):
+            RenderConfig(**values)
+
+    def test_faustwasm_block_size_changes_v2_digest(self) -> None:
+        """Runtime block size participates in the FaustWasm shard identity."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=128,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+        first = RenderConfig(**values)
+        second = RenderConfig(**(values | {"block_size": 64}))
+
+        assert (
+            first.shard_metadata().render_contract_digest
+            != second.shard_metadata().render_contract_digest
+        )
 
     def test_faust_format_rejects_pedalboard_backend(self) -> None:
         """A source program cannot be passed to a VST3-only host."""

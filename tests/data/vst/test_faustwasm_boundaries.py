@@ -2,23 +2,28 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import shutil
 
 import numpy as np
 import pytest
+from hydra import compose, initialize_config_module
 
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
-from synth_setter.data.vst.faustwasm_renderer import (
-    FAUSTWASM_VERSION,
-    FaustWasmRenderer,
-    _quantize_note_window,
-)
+from synth_setter.data.vst.faustwasm_renderer import FaustWasmRenderer, _quantize_note_window
 from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.synth_spec import SYNTHS, SynthName
 
-_ROOT = Path(__file__).parents[3]
-_NODE_MODULE = _ROOT / "node_modules/@grame/faustwasm/package.json"
+_NODE_UNAVAILABLE = shutil.which("node") is None
+
+
+def _configured_backend_version() -> str:
+    """Return the authored FaustWasm package pin.
+
+    :returns: Configured backend version.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        return str(compose(config_name="render/faustwasm").render.backend_version)
 
 
 def _patch(identity: str) -> dict[str, float]:
@@ -65,7 +70,7 @@ def _renderer(
         signal_duration_seconds=duration,
         param_spec_name=synth.param_spec_name,
         source_sha256=synth.source_sha256 or "",
-        backend_version=FAUSTWASM_VERSION,
+        backend_version=_configured_backend_version(),
         block_size=1,
     )
 
@@ -93,30 +98,34 @@ def test_quantize_note_window_subsample_interval_remains_representable() -> None
 
 
 @pytest.mark.parametrize(
-    "window",
+    ("window", "frames", "duration"),
     [
-        (float("nan"), 0.1),
-        (0.0, float("inf")),
-        (-0.1, 0.1),
-        (0.1, 0.1),
-        (0.2, 0.1),
-        (0.0, 0.21),
-        (0.11, 0.15),
+        ((float("nan"), 0.1), 1, 0.15),
+        ((0.0, float("inf")), 1, 0.15),
+        ((-0.1, 0.1), 1, 0.15),
+        ((0.1, 0.1), 1, 0.15),
+        ((0.2, 0.1), 1, 0.15),
+        ((0.0, 0.21), 2, 0.2),
+        ((0.11, 0.15), 1, 0.15),
     ],
 )
 def test_quantize_note_window_invalid_or_unrepresentable_window_rejected(
     window: tuple[float, float],
+    frames: int,
+    duration: float,
 ) -> None:
     """Malformed, out-of-range, and discarded-tail windows fail before Node.
 
     :param window: Invalid note window under test.
+    :param frames: Fixed output frame count.
+    :param duration: Configured output duration in seconds.
     """
     with pytest.raises(ValueError, match="note times"):
         _quantize_note_window(
             window,
             sample_rate=10,
-            frames=2 if window[-1] > 0.15 else 1,
-            signal_duration_seconds=0.2 if window[-1] > 0.15 else 0.15,
+            frames=frames,
+            signal_duration_seconds=duration,
         )
 
 
@@ -137,12 +146,33 @@ def test_faustwasm_renderer_invalid_block_size_fails_before_compile(block_size: 
             signal_duration_seconds=0.1,
             param_spec_name=synth.param_spec_name,
             source_sha256=synth.source_sha256 or "",
-            backend_version=FAUSTWASM_VERSION,
+            backend_version=_configured_backend_version(),
             block_size=block_size,  # type: ignore[arg-type]
         )
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+def test_faustwasm_renderer_rejects_registered_source_channel_mismatch() -> None:
+    """Direct construction rejects geometry before compiling the source."""
+    with pytest.raises(ValueError, match="FaustWasm source requires channels=1"):
+        _renderer("faust_filter_osc", sample_rate=44_100, duration=4.0, channels=2)
+
+
+@pytest.mark.parametrize("channels", [1.0, True])
+def test_faustwasm_renderer_rejects_non_integer_channels(channels: object) -> None:
+    """Direct construction rejects non-integer geometry before compilation.
+
+    :param channels: Value equal to one without the required integer type.
+    """
+    with pytest.raises(ValueError, match="channels must be a positive integer"):
+        _renderer(
+            "faust_filter_osc",
+            sample_rate=44_100,
+            duration=4.0,
+            channels=channels,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_registry_reference_renders_real_source() -> None:
     """A canonical registry URI selects source consumed by the real runtime."""
     renderer = _renderer(
@@ -195,7 +225,7 @@ def test_faustwasm_mismatched_registry_reference_fails_before_compile() -> None:
         )
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_blank_plugin_path_retains_legacy_compatibility() -> None:
     """A blank source path retains the pathless legacy render contract."""
     renderer = _renderer(
@@ -212,7 +242,7 @@ def test_faustwasm_blank_plugin_path_retains_legacy_compatibility() -> None:
     assert np.isfinite(audio).all()
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_real_render_clamps_fractional_duration_boundary() -> None:
     """The real runtime renders a final fractional duration into fixed frames."""
     renderer = _renderer("faust_filter_osc", sample_rate=10, duration=0.15, channels=1)
@@ -224,7 +254,7 @@ def test_faustwasm_real_render_clamps_fractional_duration_boundary() -> None:
     assert np.isfinite(audio).all()
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize(
     ("identity", "address"),
     [
@@ -249,7 +279,7 @@ def test_faustwasm_discrete_patch_rejects_fractional_value(
         renderer.render(patch, 60, 100, (0.0, 0.005))
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize("raw_value", [0.0, 1.0])
 def test_faustwasm_discrete_patch_accepts_canonical_endpoints(raw_value: float) -> None:
     """Every registered button state reaches the real runtime.

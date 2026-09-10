@@ -1249,7 +1249,7 @@ def test_log_per_param_mse_config_requires_synth_selection() -> None:
 
 @pytest.mark.parametrize("model_name", ["vst_flow", "vst_flowmlp"])
 def test_vst_flow_config_uses_active_synth_spec_for_structured_metrics(model_name: str) -> None:
-    """Every flow model receives the selected ParamSpec for number-group swaps.
+    """Every flow model receives the selected ParamSpec for grouped assignment metrics.
 
     :param model_name: Hydra flow-model group under test.
     """
@@ -1712,6 +1712,22 @@ def test_torchsynth_finetune_arm_composes_to_its_control_mode(
     assert (cfg.model.cost is not None) == (control_mode == "gradient_spectral")
 
 
+def test_torchsynth_gradient_finetune_uses_multichannel_distance() -> None:
+    """Gradient control uses the same channel-aware objective as other render consumers."""
+    cfg = _compose(
+        "train.yaml",
+        ["experiment=torchsynth/flow_finetune", "trainer=cpu", "model.base_checkpoint=base.ckpt"],
+    )
+
+    assert (
+        cfg.model.cost._target_
+        == "synth_setter.models.components.audio_distance.MultichannelAudioDistance"
+    )
+    assert cfg.model.cost.spectral_weight == 1.0
+    assert cfg.model.cost.channel_mldr_weight == 0.1
+    assert cfg.model.cost.pair_mldr_weight == 0.1
+
+
 @pytest.mark.parametrize(
     "experiment", ["flow_finetune", "flow_finetune_learned", "flow_finetune_null"]
 )
@@ -1781,6 +1797,13 @@ def test_torchsynth_flow_ram_composes_the_post_training_module() -> None:
 
     assert cfg.model._target_ == "synth_setter.models.vst_flow_ram_module.VSTFlowRAMModule"
     assert cfg.model.reward.signal_length == cfg.datamodule.signal_length
+    assert (
+        cfg.model.reward.distance._target_
+        == "synth_setter.models.components.audio_distance.MultichannelAudioDistance"
+    )
+    assert cfg.model.reward.distance.spectral_weight == 1.0
+    assert cfg.model.reward.distance.channel_mldr_weight == 0.1
+    assert cfg.model.reward.distance.pair_mldr_weight == 0.1
     # The reward renders through torchsynth, which graph-breaks under compile (#2585).
     assert cfg.model.compile is False
     # Paper appendix D: no learning-rate schedule during post-training.
@@ -1850,6 +1873,13 @@ def test_surge_flow_ram_composes_the_surgepy_render_reward() -> None:
     assert cfg.synth.name == "surge_simple_surgepy"
     assert cfg.model.reward.render.renderer_backend == "surgepy"
     assert cfg.model.reward.distance.sample_rate == cfg.render.sample_rate
+    assert (
+        cfg.model.reward.distance._target_
+        == "synth_setter.models.components.audio_distance.MultichannelAudioDistance"
+    )
+    assert cfg.model.reward.distance.spectral_weight == 1.0
+    assert cfg.model.reward.distance.channel_mldr_weight == 0.1
+    assert cfg.model.reward.distance.pair_mldr_weight == 0.1
     assert cfg.model.compile is False
 
 

@@ -11,9 +11,15 @@ from scipy.optimize import linear_sum_assignment
 from torchmetrics import Metric
 
 if TYPE_CHECKING:
-    from synth_setter.data.vst.param_spec import DiscreteLiteralParameter, ParamSpec
+    from synth_setter.data.vst.param_spec import (
+        CategoricalParameter,
+        DiscreteLiteralParameter,
+        Parameter,
+        ParamSpec,
+    )
 
-_NUMBER_VALUE_PATTERN = re.compile(r"[\s_.-]*\d+[\s_.-]*")
+_NUMBER_GROUP_PATTERN = re.compile(r"[\s_.-]*\d+[\s_.-]*")
+_DIGIT_RUN_PATTERN = re.compile(r"\d+")
 
 
 def _scalar_midi_pitch_field(
@@ -95,18 +101,8 @@ def spec_quantized_per_param_mse(
     :param target: Ground-truth model-space vectors with the same shape.
     :param param_spec: Spec defining clipping and discrete parameter values.
     :returns: Per-encoded-column mean squared error shaped ``(num_params,)``.
-    :raises ValueError: Shapes mismatch or either tensor contains a non-finite value.
     """
-    if predicted.ndim != 2 or predicted.shape != target.shape:
-        raise ValueError(
-            f"expected matching 2-D shapes, got {tuple(predicted.shape)} and {tuple(target.shape)}"
-        )
-    if predicted.shape[1] != param_spec.encoded_width:
-        raise ValueError(
-            f"expected ParamSpec width {param_spec.encoded_width}, got {predicted.shape[1]}"
-        )
-    if not torch.isfinite(predicted).all() or not torch.isfinite(target).all():
-        raise ValueError("predicted and target parameters must contain only finite values")
+    _validate_semantic_metric_inputs(predicted, target, param_spec)
 
     from synth_setter.data.vst.param_spec import spec_quantize_model_output
 
@@ -237,27 +233,339 @@ class SpectralDistance(Metric):
         return self.sd / self.count
 
 
-def _number_group_indices(
+def _number_groups(
     param_spec: "ParamSpec",
-) -> tuple[tuple[tuple[int, ...], ...], ...]:
-    grouped_spans: defaultdict[tuple[str, int], list[tuple[int, ...]]] = defaultdict(list)
+) -> tuple[tuple[str, tuple[tuple[int, ...], ...]], ...]:
+    groups: defaultdict[tuple[str, int], list[tuple[str, tuple[int, ...]]]] = defaultdict(list)
     for param, span in param_spec.encoded_slices():
-        number_group_name = _NUMBER_VALUE_PATTERN.sub("#", param.name)
-        grouped_spans[(number_group_name, len(param))].append(tuple(range(span.start, span.stop)))
-    return tuple(tuple(spans) for spans in grouped_spans.values())
+        group_key = (_NUMBER_GROUP_PATTERN.sub("#", param.name), len(param))
+        groups[group_key].append((param.name, tuple(range(span.start, span.stop))))
+
+    labelled_groups = [
+        (
+            names_and_spans[0][0]
+            if len(names_and_spans) == 1
+            else _DIGIT_RUN_PATTERN.sub("N", names_and_spans[0][0]),
+            tuple(name for name, _ in names_and_spans),
+            tuple(span for _, span in names_and_spans),
+        )
+        for names_and_spans in groups.values()
+    ]
+    label_counts = defaultdict(int)
+    for label, _, _ in labelled_groups:
+        label_counts[label] += 1
+    return tuple(
+        (
+            label if label_counts[label] == 1 else f"{label}__members_{'-'.join(names)}",
+            spans,
+        )
+        for label, names, spans in labelled_groups
+    )
 
 
-def number_group_swap_per_param_mse(
+def _validate_semantic_metric_inputs(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> None:
+    if predicted.ndim != 2 or predicted.shape != target.shape:
+        raise ValueError(
+            f"expected matching 2-D shapes, got {tuple(predicted.shape)} and {tuple(target.shape)}"
+        )
+    if predicted.shape[1] != param_spec.encoded_width:
+        raise ValueError(
+            f"expected ParamSpec width {param_spec.encoded_width}, got {predicted.shape[1]}"
+        )
+    if predicted.shape[0] == 0:
+        raise ValueError("expected a non-empty batch")
+    if not torch.isfinite(predicted).all() or not torch.isfinite(target).all():
+        raise ValueError("predicted and target parameters must contain only finite values")
+
+
+def _model_rows_as_numpy(values: torch.Tensor) -> np.ndarray:
+    cpu_values = values.detach().cpu()
+    if cpu_values.dtype == torch.bfloat16:
+        cpu_values = cpu_values.float()
+    return cpu_values.numpy()
+
+
+def _categorical_identities(
+    values: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> dict[str, np.ndarray]:
+    from synth_setter.data.vst.param_spec import CategoricalParameter
+
+    model_rows = _model_rows_as_numpy(values)
+    identities = {}
+    for parameter, span in param_spec.encoded_slices():
+        if not isinstance(parameter, CategoricalParameter):
+            continue
+        encoded_field = parameter.model_to_encoded(model_rows[:, span])
+        if parameter.encoding == "onehot":
+            identities[parameter.name] = encoded_field.argmax(axis=1)
+        else:
+            raw_values = np.asarray(parameter.raw_values)
+            identities[parameter.name] = np.abs(encoded_field - raw_values).argmin(axis=1)
+    return identities
+
+
+def _renderer_native_rows(parameter: "Parameter", model_rows: np.ndarray) -> np.ndarray:
+    effective_rows = parameter.model_to_encoded(model_rows)
+    return np.stack([parameter.decode(row) for row in effective_rows])
+
+
+def semantic_parameter_distances(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> dict[str, torch.Tensor]:
+    """Return renderer-effective distances for specialized parameter types.
+
+    :param predicted: Model-space parameter vectors shaped ``(batch, num_params)``.
+    :param target: Ground-truth model-space vectors with the same shape.
+    :param param_spec: Spec defining parameter spans and renderer decoding behavior.
+    :returns: ``<metric namespace>/<parameter name>`` keys mapped to scalar means.
+    """
+    _validate_semantic_metric_inputs(predicted, target, param_spec)
+
+    from synth_setter.data.vst.param_spec import (
+        AngleArrayParameter,
+        DirectionArrayParameter,
+        DiscreteArrayParameter,
+        DiscreteLiteralParameter,
+        NoteDurationParameter,
+    )
+
+    predicted_rows = _model_rows_as_numpy(predicted)
+    target_rows = _model_rows_as_numpy(target)
+    metrics = {}
+    for parameter, span in param_spec.encoded_slices():
+        if not isinstance(
+            parameter,
+            (
+                AngleArrayParameter,
+                DirectionArrayParameter,
+                DiscreteArrayParameter,
+                DiscreteLiteralParameter,
+                NoteDurationParameter,
+            ),
+        ):
+            continue
+        predicted_native = _renderer_native_rows(parameter, predicted_rows[:, span])
+        target_native = _renderer_native_rows(parameter, target_rows[:, span])
+        difference = predicted_native - target_native
+
+        if isinstance(parameter, AngleArrayParameter):
+            values = np.abs(np.arctan2(np.sin(difference), np.cos(difference)))
+            namespaces = {"angular_mae_radians": values.mean()}
+        elif isinstance(parameter, DirectionArrayParameter):
+            predicted_unit = predicted_native.reshape(predicted.shape[0], -1)
+            target_unit = target_native.reshape(target.shape[0], -1)
+            dot = np.sum(predicted_unit * target_unit, axis=1)
+            namespaces = {
+                "axis_angular_error_radians": np.arccos(np.clip(np.abs(dot), 0, 1)).mean()
+            }
+        elif isinstance(parameter, (DiscreteArrayParameter, DiscreteLiteralParameter)):
+            namespaces = {
+                "discrete_mae": np.abs(difference).mean(),
+                "discrete_mismatch_rate": np.not_equal(predicted_native, target_native).mean(),
+            }
+        else:
+            namespaces = {"note_timing_mae_seconds": np.abs(difference).mean()}
+
+        metrics.update(
+            {
+                f"{namespace}/{parameter.name}": torch.tensor(
+                    value, device=predicted.device, dtype=torch.float32
+                )
+                for namespace, value in namespaces.items()
+            }
+        )
+    return metrics
+
+
+def _categorical_mismatch_rates_from_ids(
+    predicted_ids: dict[str, np.ndarray],
+    target_ids: dict[str, np.ndarray],
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    return {
+        name: torch.tensor(
+            np.not_equal(identities, target_ids[name]).mean(),
+            device=device,
+            dtype=torch.float32,
+        )
+        for name, identities in predicted_ids.items()
+    }
+
+
+def categorical_mismatch_rates(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> dict[str, torch.Tensor]:
+    """Return decoded mismatch rate for each logical categorical field.
+
+    :param predicted: Model-space parameter vectors shaped ``(batch, num_params)``.
+    :param target: Ground-truth model-space vectors with the same shape.
+    :param param_spec: Spec defining categorical encodings and category domains.
+    :returns: Parameter names mapped to batch mismatch rates.
+    """
+    _validate_semantic_metric_inputs(predicted, target, param_spec)
+    predicted_ids = _categorical_identities(predicted, param_spec)
+    target_ids = _categorical_identities(target, param_spec)
+    return _categorical_mismatch_rates_from_ids(predicted_ids, target_ids, predicted.device)
+
+
+def _categorical_number_groups(
+    param_spec: "ParamSpec",
+) -> tuple[tuple[str, tuple["CategoricalParameter", ...]], ...]:
+    from synth_setter.data.vst.param_spec import CategoricalParameter
+
+    groups: defaultdict[tuple[object, ...], list[CategoricalParameter]] = defaultdict(list)
+    for parameter, _ in param_spec.encoded_slices():
+        if not isinstance(parameter, CategoricalParameter):
+            continue
+        compatibility = (
+            _NUMBER_GROUP_PATTERN.sub("#", parameter.name),
+            parameter.encoding,
+            tuple(map(repr, parameter.values)),
+            tuple(parameter.raw_values),
+        )
+        groups[compatibility].append(parameter)
+    labelled_groups = [
+        (
+            parameters[0].name
+            if len(parameters) == 1
+            else _DIGIT_RUN_PATTERN.sub("N", parameters[0].name),
+            tuple(parameters),
+        )
+        for parameters in groups.values()
+    ]
+    label_counts = defaultdict(int)
+    for label, _ in labelled_groups:
+        label_counts[label] += 1
+    return tuple(
+        (
+            label
+            if label_counts[label] == 1
+            else f"{label}__members_{'-'.join(param.name for param in parameters)}",
+            parameters,
+        )
+        for label, parameters in labelled_groups
+    )
+
+
+def _grouped_categorical_mismatch_rates_from_ids(
+    predicted_ids: dict[str, np.ndarray],
+    target_ids: dict[str, np.ndarray],
+    batch_size: int,
+    device: torch.device,
+    param_spec: "ParamSpec",
+) -> dict[str, torch.Tensor]:
+    rates = {}
+    for label, parameters in _categorical_number_groups(param_spec):
+        predicted_group = np.stack([predicted_ids[param.name] for param in parameters], axis=1)
+        target_group = np.stack([target_ids[param.name] for param in parameters], axis=1)
+        categories = np.arange(len(parameters[0].raw_values))
+        predicted_counts = (predicted_group[:, :, None] == categories).sum(axis=1)
+        target_counts = (target_group[:, :, None] == categories).sum(axis=1)
+        match_count = np.minimum(predicted_counts, target_counts).sum()
+        decision_count = batch_size * len(parameters)
+        rates[label] = torch.tensor(
+            1 - match_count / decision_count,
+            device=device,
+            dtype=torch.float32,
+        )
+    return rates
+
+
+def number_group_optimal_assignment_categorical_mismatch_rates(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> dict[str, torch.Tensor]:
+    """Return mismatch-minimizing rates within compatible numbered families.
+
+    :param predicted: Model-space parameter vectors shaped ``(batch, num_params)``.
+    :param target: Ground-truth model-space vectors with the same shape.
+    :param param_spec: Spec defining compatible categorical numbered families.
+    :returns: Collapsed family labels mapped to decoded mismatch rates.
+    """
+    _validate_semantic_metric_inputs(predicted, target, param_spec)
+    predicted_ids = _categorical_identities(predicted, param_spec)
+    target_ids = _categorical_identities(target, param_spec)
+    return _grouped_categorical_mismatch_rates_from_ids(
+        predicted_ids, target_ids, predicted.shape[0], predicted.device, param_spec
+    )
+
+
+def categorical_mismatch_metric_families(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> dict[str, dict[str, torch.Tensor]]:
+    """Decode categorical identities once and return both mismatch families.
+
+    :param predicted: Model-space parameter vectors shaped ``(batch, num_params)``.
+    :param target: Ground-truth model-space vectors with the same shape.
+    :param param_spec: Spec defining compatible categorical fields and families.
+    :returns: Metric namespaces mapped to parameter or family mismatch rates.
+    """
+    _validate_semantic_metric_inputs(predicted, target, param_spec)
+    predicted_ids = _categorical_identities(predicted, param_spec)
+    target_ids = _categorical_identities(target, param_spec)
+    return {
+        "categorical_mismatch_rate": _categorical_mismatch_rates_from_ids(
+            predicted_ids, target_ids, predicted.device
+        ),
+        "number_group_optimal_assignment_categorical_mismatch_rate": (
+            _grouped_categorical_mismatch_rates_from_ids(
+                predicted_ids, target_ids, predicted.shape[0], predicted.device, param_spec
+            )
+        ),
+    }
+
+
+def number_group_optimal_assignment_mse_groups(
+    per_param_mse: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> dict[str, torch.Tensor]:
+    """Collapse assigned coordinate errors into one mean per numbered family.
+
+    :param per_param_mse: Assigned MSE for each encoded coordinate.
+    :param param_spec: Parameter names and encoded spans defining numbered families.
+    :returns: Display label to mean assigned squared error.
+    :raises ValueError: If the metric width does not match the ParamSpec.
+    """
+    if per_param_mse.ndim != 1 or per_param_mse.shape[0] != param_spec.encoded_width:
+        raise ValueError(
+            f"expected {param_spec.encoded_width} per-parameter errors, "
+            f"got shape {tuple(per_param_mse.shape)}"
+        )
+
+    grouped_mse = {}
+    for label, spans in _number_groups(param_spec):
+        indices = []
+        for span in spans:
+            indices.extend(span)
+        grouped_mse[label] = per_param_mse[
+            torch.tensor(indices, device=per_param_mse.device)
+        ].mean()
+    return grouped_mse
+
+
+def number_group_optimal_assignment_per_param_mse(
     predicted: torch.Tensor,
     target: torch.Tensor,
     param_spec: "ParamSpec",
 ) -> torch.Tensor:
-    """Return per-parameter MSE after swaps within number-collapsed name groups.
+    """Return per-coordinate MSE after optimal assignment within numbered families.
 
     :param predicted: Parameter vectors, shape ``(batch, num_params)``.
     :param target: Ground-truth vectors, same shape as ``predicted``.
-    :param param_spec: Parameter names and encoded spans defining eligible swaps.
-    :returns: Per-target-dimension mean squared error, shape ``(num_params,)``.
+    :param param_spec: Parameter names and encoded spans defining eligible assignments.
+    :returns: Per-coordinate mean squared error, shape ``(num_params,)``.
     :raises ValueError: If tensor shapes or the ParamSpec width do not match.
     """
     if predicted.ndim != 2 or predicted.shape != target.shape:
@@ -270,7 +578,7 @@ def number_group_swap_per_param_mse(
         )
 
     per_target_errors = torch.empty_like(predicted, dtype=torch.float32)
-    for group in _number_group_indices(param_spec):
+    for _, group in _number_groups(param_spec):
         block_indices = [torch.tensor(block, device=predicted.device) for block in group]
         predicted_blocks = torch.stack([predicted[:, block] for block in block_indices], dim=1)
         target_blocks = torch.stack([target[:, block] for block in block_indices], dim=1)
@@ -323,13 +631,13 @@ def best_swap_per_param_mse(predicted: torch.Tensor, target: torch.Tensor) -> to
     return per_target_errors.mean(dim=0)
 
 
-class NumberGroupSwapParamMSE(Metric):
-    """MSE after optimal swaps within number-collapsed parameter-name groups."""
+class NumberGroupOptimalAssignmentParamMSE(Metric):
+    """MSE after optimal assignment within number-collapsed parameter-name groups."""
 
     def __init__(self, param_spec: "ParamSpec") -> None:
-        """Register accumulators and the ParamSpec defining eligible swaps.
+        """Register accumulators and the ParamSpec defining eligible assignments.
 
-        :param param_spec: Parameter names and encoded spans defining eligible swaps.
+        :param param_spec: Parameter names and encoded spans defining eligible assignments.
         """
         super().__init__()
         self.param_spec = param_spec
@@ -337,17 +645,19 @@ class NumberGroupSwapParamMSE(Metric):
         self.add_state("element_count", default=torch.tensor(0), dist_reduce_fx="sum")
 
     def update(self, predicted: torch.Tensor, target: torch.Tensor) -> None:
-        """Accumulate number-group-constrained squared errors.
+        """Accumulate number-group optimal-assignment squared errors.
 
         :param predicted: Parameter vectors, shape ``(batch, num_params)``.
         :param target: Ground-truth vectors, same shape as ``predicted``.
         """
-        per_param_mse = number_group_swap_per_param_mse(predicted, target, self.param_spec)
+        per_param_mse = number_group_optimal_assignment_per_param_mse(
+            predicted, target, self.param_spec
+        )
         self.sum_squared_error = self.sum_squared_error + per_param_mse.sum() * predicted.shape[0]
         self.element_count = self.element_count + predicted.numel()
 
     def compute(self) -> torch.Tensor:
-        """Return the accumulated mean constrained-swap squared error.
+        """Return the accumulated mean constrained-assignment squared error.
 
         :returns: Scalar mean over every accumulated element.
         """

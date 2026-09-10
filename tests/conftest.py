@@ -943,9 +943,13 @@ def cfg_dataset_obxf(tmp_path: Path) -> Iterator[DictConfig]:
 
 
 @pytest.fixture(scope="function")
-def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose ``dataset.yaml`` with the production brightOrgan render group.
+def cfg_dataset_faust(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+) -> Iterator[DictConfig]:
+    """Compose ``dataset.yaml`` with a production brightOrgan render group.
 
+    :param request: Indirectly parametrized render-group name.
     :param tmp_path: Per-test output/work/log root.
     :yields DictConfig: Faust cfg with ``tmp_path``-pinned paths.
     """
@@ -955,7 +959,7 @@ def cfg_dataset_faust(tmp_path: Path) -> Iterator[DictConfig]:
             overrides=[
                 "experiment=generate_dataset/smoke-shard",
                 "synth=faust_bright_organ",
-                "render=faust",
+                f"render={request.param}",
                 "render.gui_toggle_cadence=never",
             ],
         )

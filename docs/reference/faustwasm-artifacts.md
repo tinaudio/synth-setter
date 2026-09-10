@@ -10,9 +10,9 @@ uv run python -m synth_setter.tools.export_faustwasm \
 
 The destination must not exist. Compilation uses a sibling staging directory and publishes the
 completed artifact atomically, so a failed export never leaves the requested destination looking
-successful. Python callers can use
-`export_faustwasm_artifact(SynthName("faust_bright_organ"), Path("build/faust-bright-organ"))`.
-The compiler derives the native output count from Faust metadata; renderer-owned compilation also
+successful. Python callers can pass `extract_backend_version("faustwasm")` as the
+`backend_version` argument to `export_faustwasm_artifact`. The compiler derives the native output
+count from Faust metadata; renderer-owned compilation also
 checks that count against its configured channels.
 
 To bundle the artifact with the browser player and serve it locally:

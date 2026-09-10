@@ -142,6 +142,7 @@ jobs:
           root = Path("faust-filter-osc")
           manifest = json.loads((root / "manifest.json").read_text())
           request = {
+              "expectedFaustWasmVersion": manifest["faustwasmVersion"],
               "sampleRate": 44_100,
               "blockSize": 128,
               "frames": 256,

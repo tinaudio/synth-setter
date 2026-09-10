@@ -244,20 +244,30 @@ def test_cfg_dataset_render_obxf_resolves_param_spec_through_spec_from_cfg(
     assert spec.num_params == 187
 
 
+@pytest.mark.parametrize(
+    ("cfg_dataset_faust", "backend", "block_size"),
+    [
+        pytest.param("faust", "dawdreamer", None, id="dawdreamer"),
+        pytest.param("faustwasm", "faustwasm", 128, id="faustwasm"),
+    ],
+    indirect=["cfg_dataset_faust"],
+)
 def test_cfg_dataset_faust_resolves_production_renderer_contract(
     cfg_dataset_faust: DictConfig,
+    backend: str,
+    block_size: int | None,
 ) -> None:
-    """The operator config resolves the production brightOrgan renderer contract.
-
-    The real worker subprocess and Lance artifact are exercised in
-    ``tests/data/vst/test_faust_dataset_e2e.py``.
+    """The operator config resolves each production brightOrgan renderer contract.
 
     :param cfg_dataset_faust: Composed production brightOrgan dataset config.
+    :param backend: Expected rendering backend.
+    :param block_size: Expected optional offline-processing block size.
     """
     spec = spec_from_cfg(cfg_dataset_faust)
 
-    assert spec.render.renderer_backend == "dawdreamer"
-    assert spec.render.backend_version == "0.8.3"
+    assert spec.render.renderer_backend == backend
+    assert spec.render.backend_version == str(cfg_dataset_faust.render.backend_version)
+    assert spec.render.block_size == block_size
     assert spec.render.plugin_path == "registry://faust/faust_bright_organ"
     assert spec.render.synth.format == "faust"
     assert spec.render.plugin_reload_cadence == "render"

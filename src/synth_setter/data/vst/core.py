@@ -61,9 +61,12 @@ def extract_backend_version(renderer_backend: str) -> str:
         package = faustwasm_dir() / "vendor" / "package.json"
         if not package.is_file():
             raise RuntimeError("packaged @grame/faustwasm metadata is unavailable")
-        version = json.loads(package.read_text()).get("version")
-        if not isinstance(version, str):
-            raise RuntimeError("@grame/faustwasm package metadata has no version")
+        try:
+            version = json.loads(package.read_text()).get("version")
+        except (json.JSONDecodeError, AttributeError) as error:
+            raise RuntimeError("packaged @grame/faustwasm metadata is malformed") from error
+        if not isinstance(version, str) or not version.strip():
+            raise RuntimeError("packaged @grame/faustwasm metadata is malformed")
         return version
     raise ValueError(f"renderer backend has no separate version contract: {renderer_backend!r}")
 

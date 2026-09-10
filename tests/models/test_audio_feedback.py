@@ -7,7 +7,11 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.data.torchsynth_datamodule import _make_renderer, render_torchsynth
+from synth_setter.data.torchsynth_datamodule import (
+    _make_renderer,
+    _torchsynth_types,
+    render_torchsynth,
+)
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
@@ -19,6 +23,7 @@ from synth_setter.data.vst.torchsynth_param_spec import (
 from synth_setter.models.components.audio_distance import (
     CosineEmbeddingDistance,
     LatentMseDistance,
+    MultichannelAudioDistance,
 )
 from synth_setter.models.components.audio_feedback import (
     AudioFeedbackLoss,
@@ -120,6 +125,29 @@ def _linear_encoder(scale: float = 1.0) -> torch.nn.Module:
     return encoder
 
 
+class _StereoPolarityRenderer(torch.nn.Module):
+    """Render a fixed antiphase stereo waveform through the differentiable boundary."""
+
+    def validate(self, params: torch.Tensor) -> None:
+        """Accept finite test parameter rows.
+
+        :param params: Model-space rows.
+        :raises ValueError: A row contains a non-finite parameter.
+        """
+        if not torch.isfinite(params).all():
+            raise ValueError("params must be finite")
+
+    def forward(self, params: torch.Tensor) -> torch.Tensor:
+        """Return antiphase stereo while retaining a graph edge to parameters.
+
+        :param params: Model-space rows.
+        :returns: Stereo audio shaped ``(batch, 2, 3000)``.
+        """
+        signal = torch.sin(torch.arange(3_000, device=params.device) * 0.07)
+        stereo = torch.stack((signal, -signal)).expand(params.shape[0], -1, -1)
+        return stereo + params[:, :1, None] * 0.0
+
+
 class _OrdinaryEmbedEncoder(torch.nn.Module):
     """Trainable encoder whose ordinary ``embed`` must not imply a frozen tap."""
 
@@ -143,6 +171,30 @@ class _OrdinaryEmbedEncoder(torch.nn.Module):
         :returns: Flat embedding batch.
         """
         return self.linear(audio)
+
+
+def test_audio_feedback_scores_multichannel_spatial_error_in_distance_once() -> None:
+    """The consumer passes full channel geometry directly to the composite distance."""
+    signal = torch.sin(torch.arange(3_000) * 0.07)
+    target = torch.stack((signal, signal)).expand(2, -1, -1)
+    loss = AudioFeedbackLoss(
+        lambda_audio=1.0,
+        t_min=0.0,
+        sample_rate=1_000,
+        signal_length=3_000,
+        render_batch_size=2,
+        distance=MultichannelAudioDistance(
+            sample_rate=1_000,
+            spectral_weight=0.0,
+            channel_mldr_weight=0.0,
+            pair_mldr_weight=1.0,
+        ),
+        renderer=_StereoPolarityRenderer(),
+    )
+
+    actual = loss(torch.zeros(2, 2), torch.ones(2, 1), target)
+
+    assert actual.item() > 0.0
 
 
 def test_differentiable_decode_matches_the_linear_map_across_the_working_range() -> None:
@@ -339,6 +391,7 @@ def clipping_voice(monkeypatch: pytest.MonkeyPatch) -> None:
 
     :param monkeypatch: Pytest patcher, restored on teardown.
     """
+    _torchsynth_types()
     import torchsynth.util
 
     monkeypatch.setattr(torchsynth.util, "normalize_if_clipping", lambda signal: signal)
@@ -416,6 +469,7 @@ def test_grad_render_leaves_the_torchsynth_module_class_unmutated_mid_render() -
 
     Sampled from inside the render, where a monkeypatch would still be installed.
     """
+    _torchsynth_types()
     from torchsynth.module import SynthModule
 
     stock_p = SynthModule.p

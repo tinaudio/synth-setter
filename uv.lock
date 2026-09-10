@@ -43,6 +43,18 @@ wheels = [
 ]
 
 [[package]]
+name = "adac"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/df/67/102ab149dd3a189be8e627ff5593535a82dd50f482e039e89ac185719410/adac-0.1.0.tar.gz", hash = "sha256:a97918148df58e2d85f69eece0fbfc971e11c6854ad057e941af0eb9574f2743", size = 75654, upload-time = "2026-07-11T20:39:10.568Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/02/30/caa0b8d3c1cd1883ac07bee16d024b9083360f3a02ec346d72a3e1ced4e8/adac-0.1.0-py3-none-any.whl", hash = "sha256:941ae4c42e2201acedf795947ba0f801dd7a436b4ccb2d6d95a3047b2d902f12", size = 53138, upload-time = "2026-07-11T20:39:09.289Z" },
+]
+
+[[package]]
 name = "aiodns"
 version = "3.6.1"
 source = { registry = "https://pypi.org/simple" }
@@ -5016,6 +5028,7 @@ tiv-cpu = [
 
 [package.dev-dependencies]
 audio = [
+    { name = "adac" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'darwin' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "flamo" },
     { name = "librosa" },
@@ -5048,6 +5061,7 @@ data = [
     { name = "sentence-transformers" },
 ]
 dev = [
+    { name = "adac" },
     { name = "beartype" },
     { name = "click" },
     { name = "cqt-nsgt-pytorch" },
@@ -5159,6 +5173,7 @@ onnx = [
     { name = "onnxscript" },
 ]
 runtime = [
+    { name = "adac" },
     { name = "beartype" },
     { name = "click" },
     { name = "cqt-nsgt-pytorch" },
@@ -5281,6 +5296,7 @@ provides-extras = ["tiv-cpu", "cpu", "cu128"]
 
 [package.metadata.requires-dev]
 audio = [
+    { name = "adac", specifier = "==0.1.0" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')", specifier = "==0.8.3" },
     { name = "flamo", specifier = "==0.2.18" },
     { name = "librosa", specifier = "==0.11.0" },
@@ -5313,6 +5329,7 @@ data = [
     { name = "sentence-transformers", specifier = ">=5.1,<6" },
 ]
 dev = [
+    { name = "adac", specifier = "==0.1.0" },
     { name = "beartype", specifier = ">=0.19" },
     { name = "click", specifier = "<8.2" },
     { name = "cqt-nsgt-pytorch", git = "https://github.com/eloimoliner/CQT_pytorch?rev=2404597d0ccef74a93cad05d0619cb42728f987b" },
@@ -5418,6 +5435,7 @@ onnx = [
     { name = "onnxscript", specifier = ">=0.3" },
 ]
 runtime = [
+    { name = "adac", specifier = "==0.1.0" },
     { name = "beartype", specifier = ">=0.19" },
     { name = "click", specifier = "<8.2" },
     { name = "cqt-nsgt-pytorch", git = "https://github.com/eloimoliner/CQT_pytorch?rev=2404597d0ccef74a93cad05d0619cb42728f987b" },

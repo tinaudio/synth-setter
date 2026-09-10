@@ -18,6 +18,22 @@ URI; embedding augmentation takes one split `.lance` URI. The root layout comes 
 [`r2` config](../../src/synth_setter/configs/r2/default.yaml) and the selected
 [dataset experiment](../../src/synth_setter/configs/experiment/generate_dataset/).
 
+## Export a BasicFDN build to Faust
+
+Convert a pyFDN v2 build JSON into a fixed-value Faust program:
+
+```bash
+FDN_BUILD_JSON='PATH/TO/fdn.json'
+FAUST_DSP='PATH/TO/fdn.dsp'
+synth-setter-export-fdn-faust "$FDN_BUILD_JSON" "$FAUST_DSP"
+```
+
+The command preserves the build's sample rate and MIMO topology while converting
+`BasicFDN` through FLAMO and ADAC. It exposes no runtime controls and compiles the generated
+source directly with DawDreamer before atomically publishing the destination. The output path
+must not already exist. This standalone artifact export does not register the DSP as a synth or
+route it through the registry-backed Faust renderer.
+
 ## Generate a dataset
 
 Select a checked-in dataset experiment and run it locally:
@@ -160,6 +176,17 @@ TIVs before temporal pooling. The frontends produce different features; choose
 one consistently for training and evaluation. Both add extraction cost to every
 train, validation, and test batch; no precomputed sketch column is required.
 
+For repeatable standalone flow evaluation, opt in through the model config and provide the seed
+explicitly:
+
+```bash
+synth-setter-eval experiment=surge/flow_simple ckpt_path=/path/to/model.ckpt model.seeded_evaluation=true seed=12345
+```
+
+The eval config declares `seed: null` so Hydra accepts `seed=...`; it supplies no fallback. When
+`model.seeded_evaluation=false` (the default), evaluation ignores the seed and retains fresh
+sampling.
+
 ## Create a synth-parameter W&B workspace
 
 Create a shared workspace whose regex-backed panels discover each synth's parameter names:
@@ -173,6 +200,19 @@ synth-setter-create-wandb-parameter-workspace \
 The command prints the saved workspace URL. Its run set has no synth-name filter, so the same
 panels cover Surge, pyFDN, TorchSynth, OB-Xf, Faust, Cardinal, and KR-106 runs. It creates a new
 saved view each time; retain the printed URL instead of rerunning it for the same project.
+
+For a controlled endpoint-loss A/B run, keep the finalized dataset, one-hot parameter schema,
+and seed identical. All four combinations require endpoint parameterization:
+
+```bash
+synth-setter-train experiment=surge/flow_simple seed=12345 model.parameterization=endpoint model.endpoint_loss=mse model.endpoint_time_weighting=uniform
+synth-setter-train experiment=surge/flow_simple seed=12345 model.parameterization=endpoint model.endpoint_loss=mse model.endpoint_time_weighting=flowmol3
+synth-setter-train experiment=surge/flow_simple seed=12345 model.parameterization=endpoint model.endpoint_loss=mixed model.endpoint_time_weighting=uniform
+synth-setter-train experiment=surge/flow_simple seed=12345 model.parameterization=endpoint model.endpoint_loss=mixed model.endpoint_time_weighting=flowmol3
+```
+
+These commands define comparable configurations; they do not establish a measured quality
+improvement for either objective or weighting.
 
 ## Launch with SkyPilot
 

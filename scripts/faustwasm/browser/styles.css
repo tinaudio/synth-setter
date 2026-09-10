@@ -1,0 +1,38 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  background: #151822;
+  color: #f5f7ff;
+  margin: 0;
+}
+
+main {
+  margin: 0 auto;
+  max-width: 48rem;
+  padding: 2rem 1rem;
+}
+
+button,
+input {
+  accent-color: #8fa7ff;
+  font: inherit;
+}
+
+button {
+  margin: 0.25rem;
+  padding: 0.65rem 1rem;
+}
+
+.control {
+  display: grid;
+  gap: 0.4rem;
+  grid-template-columns: minmax(10rem, 1fr) 2fr 5rem;
+  margin: 0.75rem 0;
+}
+
+#error {
+  color: #ffb4b4;
+}

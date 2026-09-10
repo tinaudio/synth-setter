@@ -26,7 +26,6 @@ from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.resources import as_file, faustwasm_dir
 from synth_setter.synth_spec import SYNTHS, SynthName, SynthSpec
 
-FAUSTWASM_VERSION = "0.18.3"
 _NODE_TIMEOUT_SECONDS = 60
 _RENAME_NOREPLACE = 1
 _RENAME_EXCL = 4
@@ -239,11 +238,11 @@ def _assemble_faustwasm_file(resource_directory: Path, filename: str) -> None:
                 shutil.copyfileobj(source, destination)
 
 
-def _compile_request(synth: SynthSpec, expected_outputs: int | None) -> dict[str, object]:
+def _compile_request(synth: SynthSpec, backend_version: str) -> dict[str, object]:
     """Build the single registry-backed request accepted by the Node compiler.
 
     :param synth: Registered digest-pinned Faust synth identity.
-    :param expected_outputs: Optional renderer-owned channel-count pin.
+    :param backend_version: Expected FaustWasm package version.
     :returns: JSON-compatible compile request.
     """
     identity = ParamSpecName(synth.param_spec_name)
@@ -260,12 +259,13 @@ def _compile_request(synth: SynthSpec, expected_outputs: int | None) -> dict[str
         for item in faustwasm_parameter_contract(identity)
     ]
     return {
+        "expectedFaustWasmVersion": backend_version,
         "identity": identity,
         "source": dsp.source,
         "sourceSha256": synth.source_sha256,
         "mode": "poly" if dsp.num_voices else "mono",
         "voices": dsp.num_voices,
-        "expectedOutputs": expected_outputs,
+        "expectedOutputs": dsp.outputs,
         "parameters": parameters,
         "reservedWasmAddresses": faustwasm_reserved_addresses(identity),
     }
@@ -275,25 +275,24 @@ def compile_faustwasm_artifact(
     synth: SynthSpec,
     output_directory: Path,
     *,
-    expected_outputs: int | None = None,
+    backend_version: str,
 ) -> ArtifactManifest:
     """Compile one registered Faust synth into ``output_directory``.
 
     :param synth: Registered digest-pinned Faust synth identity.
     :param output_directory: Existing or new directory for compiled modules and manifest.
-    :param expected_outputs: Required channel count for renderer-owned compilation.
+    :param backend_version: Expected FaustWasm package version.
     :returns: Validated manifest whose paths are relative to ``output_directory``.
     :raises ValueError: The synth or compiled provenance differs from the registry contract.
+
+    Runtime setup errors (``RuntimeError``), compilation timeouts
+    (``subprocess.TimeoutExpired``), and failures (``subprocess.CalledProcessError``)
+    propagate to the caller.
     """
     if synth.format != "faust" or synth.source_sha256 is None:
         raise ValueError("FaustWasm artifacts require a registered Faust source")
-    if expected_outputs is not None and (
-        isinstance(expected_outputs, bool) or not isinstance(expected_outputs, int) or expected_outputs < 1
-    ):
-        raise ValueError("expected_outputs must be a positive integer")
-
     output_directory.mkdir(parents=True, exist_ok=True)
-    request = _compile_request(synth, expected_outputs)
+    request = _compile_request(synth, backend_version)
     request_path = output_directory / ".compile-request.json"
     request_path.write_text(json.dumps(request))
     try:
@@ -328,11 +327,11 @@ def compile_faustwasm_artifact(
     actual_parameters = [parameter.model_dump() for parameter in manifest.parameters]
     if (
         manifest.identity != synth.param_spec_name
-        or manifest.faustwasmVersion != FAUSTWASM_VERSION
+        or manifest.faustwasmVersion != backend_version
         or manifest.sourceSha256 != synth.source_sha256
         or manifest.mode != request["mode"]
         or manifest.voices != request["voices"]
-        or (expected_outputs is not None and manifest.outputs != expected_outputs)
+        or manifest.outputs != request["expectedOutputs"]
         or actual_parameters != expected_parameters
     ):
         raise ValueError("compiled FaustWasm artifact provenance does not match the synth registry")
@@ -370,11 +369,14 @@ def run_faustwasm_render_worker(
 def export_faustwasm_artifact(
     synth_name: SynthName,
     output_directory: Path,
+    *,
+    backend_version: str,
 ) -> ArtifactManifest:
     """Atomically publish one registry-backed artifact to an absent destination.
 
     :param synth_name: Key of a registered Faust synth.
     :param output_directory: Destination directory, which must not exist.
+    :param backend_version: Expected FaustWasm package version.
     :returns: Validated manifest for the published artifact.
     :raises FileExistsError: The destination already exists.
     """
@@ -389,7 +391,11 @@ def export_faustwasm_artifact(
         )
     )
     try:
-        manifest = compile_faustwasm_artifact(synth, staging)
+        manifest = compile_faustwasm_artifact(
+            synth,
+            staging,
+            backend_version=backend_version,
+        )
         _rename_without_replace(staging, output_directory)
         return manifest
     finally:

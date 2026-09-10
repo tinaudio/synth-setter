@@ -31,6 +31,50 @@ if TYPE_CHECKING:
 class TestExtractBackendVersion:
     """Rendering-host package version extractor."""
 
+    @staticmethod
+    def _replace_packaged_resources(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> Path:
+        resource_directory = tmp_path / "faustwasm"
+        monkeypatch.setattr(core, "faustwasm_dir", lambda: resource_directory)
+        return resource_directory / "vendor/package.json"
+
+    def test_faustwasm_missing_package_metadata_raises_packaging_error(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """An incomplete installed package reports missing bundled metadata.
+
+        :param monkeypatch: Replaces packaged resource discovery.
+        :param tmp_path: Isolated package resource directory.
+        """
+        self._replace_packaged_resources(monkeypatch, tmp_path)
+
+        with pytest.raises(RuntimeError, match="packaged @grame/faustwasm metadata is unavailable"):
+            core.extract_backend_version("faustwasm")
+
+    @pytest.mark.parametrize(
+        "contents",
+        ['{}', '{"version": ""}', '{"version": 3}', "not-json"],
+    )
+    def test_faustwasm_invalid_package_metadata_raises_actionable_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        contents: str,
+    ) -> None:
+        """Missing, non-string, and malformed versions share a metadata error.
+
+        :param monkeypatch: Replaces packaged resource discovery.
+        :param tmp_path: Isolated package resource directory.
+        :param contents: Invalid package metadata under test.
+        """
+        package = self._replace_packaged_resources(monkeypatch, tmp_path)
+        package.parent.mkdir(parents=True)
+        package.write_text(contents)
+
+        with pytest.raises(RuntimeError, match="packaged @grame/faustwasm metadata is malformed"):
+            core.extract_backend_version("faustwasm")
+
     def test_unversioned_backend_rejects_separate_version_lookup(self) -> None:
         """A host without an independent version contract fails closed."""
         with pytest.raises(ValueError, match="no separate version contract"):

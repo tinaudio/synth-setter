@@ -3,8 +3,6 @@ import {
     FaustPolyDspGenerator,
 } from './vendor/faustwasm.mjs';
 
-const PACKAGE_VERSION = '0.18.3';
-
 const verifyBytes = async (entry, loadBytes) => {
     const bytes = await loadBytes(entry.path);
     const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -24,9 +22,13 @@ const makeFactory = async (bytes, meta, poly) => ({
     soundfiles: {},
 });
 
-export const loadFaustArtifact = async (manifest, loadBytes) => {
+export const loadFaustArtifact = async (manifest, loadBytes, packageVersion) => {
     if (manifest.schemaVersion !== 1) throw new Error('unsupported Faust artifact schema');
-    if (manifest.faustwasmVersion !== PACKAGE_VERSION) throw new Error('FaustWasm version mismatch');
+    if (manifest.faustwasmVersion !== packageVersion) {
+        throw new Error(
+            `FaustWasm version mismatch: artifact ${manifest.faustwasmVersion}, installed ${packageVersion}`,
+        );
+    }
     const dspBytes = await verifyBytes(manifest.files.dsp, loadBytes);
     const dspFactory = await makeFactory(dspBytes, manifest.dspMeta, manifest.mode === 'poly');
     const artifact = { manifest, dspFactory };
@@ -114,13 +116,14 @@ export const renderNote = (synth, { frames, note, velocity, startFrame, endFrame
         throw new Error('manifest outputs must be a positive integer');
     }
     const output = Array.from({ length: manifest.outputs }, () => new Float32Array(frames));
+    const blockOutput = Array.from(
+        { length: manifest.outputs },
+        () => new Float32Array(blockSize),
+    );
     processor.start();
     for (let blockStart = 0; blockStart < frames; blockStart += blockSize) {
         const count = Math.min(blockSize, frames - blockStart);
-        const blockOutput = Array.from(
-            { length: manifest.outputs },
-            () => new Float32Array(blockSize),
-        );
+        for (const channel of blockOutput) channel.fill(0);
         const events = [];
         if (manifest.mode === 'poly' && startFrame >= blockStart && startFrame < blockStart + blockSize) {
             events.push({

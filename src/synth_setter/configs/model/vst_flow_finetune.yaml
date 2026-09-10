@@ -25,8 +25,11 @@ render_batch_size: ${datamodule.batch_size}
 
 # Parameter-free, so the space the control is scored in cannot drift under training.
 cost:
-  _target_: synth_setter.models.components.audio_distance.MultiScaleSpectralDistance
+  _target_: synth_setter.models.components.audio_distance.MultichannelAudioDistance
   sample_rate: ${datamodule.sample_rate}
+  spectral_weight: 1.0
+  channel_mldr_weight: 0.1
+  pair_mldr_weight: 0.1
 
 # The renderer graph-breaks under torch.compile, and wrong gradients beat no run (#2585).
 compile: false

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from hydra import compose, initialize_config_module
 from omegaconf import DictConfig
@@ -9,6 +11,7 @@ from omegaconf import DictConfig
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.renderer_backend import FlushBlocks
+from synth_setter.resources import faustwasm_dir
 from synth_setter.synth_spec import SynthName, SynthSpec
 
 _GENERIC_RENDER_FIELDS = {
@@ -262,6 +265,13 @@ def test_render_faust_composes_into_valid_render_config(
     assert spec.num_params == num_params
 
 
+def test_faustwasm_hydra_version_matches_pinned_node_dependency() -> None:
+    """The authored render contract and installed dependency pin cannot drift."""
+    package = json.loads((faustwasm_dir() / "vendor" / "package.json").read_text())
+
+    assert _compose_render_group("faustwasm").backend_version == package["version"]
+
+
 @pytest.mark.parametrize(
     ("name", "channels", "render_group"),
     [
@@ -285,7 +295,8 @@ def test_render_faustwasm_composes_with_explicit_v2_contract(
     spec = _spec_from_dataset_overrides([f"synth={name}", f"render={render_group}"])
 
     assert spec.render.renderer_backend == "faustwasm"
-    assert spec.render.backend_version == "0.18.3"
+    assert spec.render.backend_version == _compose_render_group("faustwasm").backend_version
+    assert spec.render.block_size == 128
     assert spec.render.render_contract_version == 2
     assert spec.render.channels == channels
     assert spec.render.plugin_reload_cadence == "render"
