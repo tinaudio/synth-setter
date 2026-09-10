@@ -217,6 +217,10 @@ docs:
         covers: "Shared SAME checkpoint resolution, autoencoder loading, and latent-frame geometry used by both add-embeddings and the training-time audio loss."
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
         covers: "Registry-driven Lance embedding augmentation with resumable artifact and index identity."
+      - pattern: "src/synth_setter/pipeline/data/cqt.py"
+        covers: "Commit-pinned GPU CQT extraction, storage geometry, and policy identity."
+      - pattern: "src/synth_setter/configs/conditioning/cqt.yaml"
+        covers: "Four-second CQT EmbeddingPool conditioning profile."
       - pattern: "src/synth_setter/pipeline/data/ssondo.py"
         covers: "Pinned S-SONDO checkpoint resolution and audio encoding."
       - pattern: "src/synth_setter/pipeline/data/meanaudio.py"
@@ -658,6 +662,22 @@ docs:
       - pattern: "tart/**"
         covers: "Packer provisioning for the developer environment"
         scope: "tart"
+
+  - doc: docs/guides/surgepy-browser-evaluation.md
+    description: Browser-to-SurgePy evaluation playbook
+    sources:
+      - pattern: "src/synth_setter/cli/sketch_render.py"
+        covers: "Browser runtime selection and evaluation artifacts"
+      - pattern: "src/synth_setter/evaluation/browser_flow.py"
+        covers: "Loopback serving and prediction validation"
+      - pattern: "src/synth_setter/models/flow_onnx.py"
+        covers: "Supported checkpoint and export contracts"
+      - pattern: "src/synth_setter/web/**"
+        covers: "Browser runtime, dependency installation, and RK4 sampling"
+      - pattern: "tests/integration/test_browser_surgepy_e2e.py"
+        covers: "Real checkpoint, browser, and audio-consumer verification"
+      - pattern: ".github/workflows/browser-flow-e2e.yml"
+        covers: "Trusted CI execution and retained evidence"
 
   - doc: docs/guides/vst-interactive.md
     description: Interactive VST prediction audition and patch-recording guide

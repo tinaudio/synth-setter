@@ -166,14 +166,17 @@ class TestValidateStructure:
         assert any("missing" in e and "r2" in e for e in errors)
 
     def test_required_top_level_fields_match_dataset_spec_model(self) -> None:
-        """Required top-level set is derived from DatasetSpec, not hand-mirrored."""
-        expected = set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields)
+        """Only optional parameter-language metadata may be omitted at the top level."""
+        expected = (set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields)) - {
+            "param_language_dimension"
+        }
         assert set(_REQUIRED_TOP_LEVEL_FIELDS) == expected
 
     def test_required_render_fields_match_render_config_model(self) -> None:
         """Only backward-compatible storage fields may be omitted."""
         assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
             "audio_dtype",
+            "block_size",
             "mel_spec_dtype",
             "post_load_flush_blocks",
             "post_param_flush_blocks",

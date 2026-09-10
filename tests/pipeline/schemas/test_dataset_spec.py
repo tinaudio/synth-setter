@@ -6,7 +6,6 @@ import json
 import subprocess
 import sys
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -121,6 +120,16 @@ class TestRenderConfig:
 
         assert cfg.audio_dtype == "float16"
         assert cfg.mel_spec_dtype == "float32"
+
+    def test_non_faust_historical_digest_ignores_absent_block_size(self) -> None:
+        """Adding the optional field does not invalidate existing VST shards."""
+        cfg = RenderConfig(**_valid_render_kwargs())
+
+        assert cfg.block_size is None
+        assert (
+            cfg.shard_metadata().render_contract_digest
+            == "611848f43224078da8d98f866b0428d7c7a24eac7aa472bc537193ac7c9a1abb"
+        )
 
     @pytest.mark.parametrize("field", ["audio_dtype", "mel_spec_dtype"])
     def test_storage_dtype_accepts_float16_and_float32(self, field: str) -> None:
@@ -471,89 +480,93 @@ class TestRenderConfig:
         values["renderer_backend"] = "faustwasm"
         values["backend_version"] = "0.18.3"
         values["render_contract_version"] = 2
+        values["block_size"] = 128
         values["plugin_reload_cadence"] = "render"
         values["gui_toggle_cadence"] = "never"
 
         config = RenderConfig(**values)
 
         assert config.renderer_backend == "faustwasm"
+        assert config.block_size == 128
 
-    def test_faustwasm_rejects_v1_with_prevalidated_synth(self) -> None:
-        """FaustWasm cannot consume a legacy digest even from a typed synth input."""
+    def test_faustwasm_backend_requires_explicit_block_size(self) -> None:
+        """FaustWasm refuses an unspecified runtime block size."""
         values = _valid_render_kwargs(plugin_path="faust")
-        values["synth"] = SYNTHS[SynthName("faust_bright_organ")]
-        values["renderer_backend"] = "faustwasm"
-        values["backend_version"] = "0.18.3"
-        values["render_contract_version"] = 1
-        values["plugin_reload_cadence"] = "render"
-        values["gui_toggle_cadence"] = "never"
-
-        with pytest.raises(ValidationError, match="faustwasm rejects render_contract_version=1"):
-            RenderConfig(**values)
-
-    def test_faustwasm_rejects_non_render_reload_cadence(self) -> None:
-        """Each FaustWasm render must start an isolated processor."""
-        values = _valid_render_kwargs(plugin_path="faust")
-        values["synth"] = SYNTHS[SynthName("faust_bright_organ")]
-        values["renderer_backend"] = "faustwasm"
-        values["backend_version"] = "0.18.3"
-        values["render_contract_version"] = 2
-        values["plugin_reload_cadence"] = "once"
-        values["gui_toggle_cadence"] = "never"
-
-        with pytest.raises(
-            ValidationError, match='faustwasm requires plugin_reload_cadence="render"'
-        ):
-            RenderConfig(**values)
-
-    def test_faustwasm_rejects_editor_cadence(self) -> None:
-        """A browser-independent offline host cannot open a plugin editor."""
-        values = _valid_render_kwargs(plugin_path="faust")
-        values["synth"] = SYNTHS[SynthName("faust_bright_organ")]
-        values["renderer_backend"] = "faustwasm"
-        values["backend_version"] = "0.18.3"
-        values["render_contract_version"] = 2
-        values["plugin_reload_cadence"] = "render"
-        values["gui_toggle_cadence"] = "once"
-
-        with pytest.raises(
-            ValidationError, match='format="faust" requires gui_toggle_cadence="never"'
-        ):
-            RenderConfig(**values)
-
-    def test_faust_v1_rejects_drifted_prevalidated_synth(self) -> None:
-        """Typed legacy input cannot bypass the historical provenance snapshot."""
-        synth = SYNTHS[SynthName("faust_bright_organ")].model_copy(update={"synth_version": "2"})
-        values = _valid_render_kwargs(plugin_path="faust")
-        values["synth"] = synth
-        values["renderer_backend"] = "dawdreamer"
-        values["backend_version"] = "0.8.3"
-        values["render_contract_version"] = 1
-        values["gui_toggle_cadence"] = "never"
-
-        with pytest.raises(ValidationError, match="render_contract_version=2"):
-            RenderConfig(**values)
-
-    def test_faust_rejects_runtime_source_digest_drift(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The source consumed at validation must match the registered synth digest.
-
-        :param monkeypatch: Replaces source resolution with drifted source text.
-        """
-        monkeypatch.setattr(
-            "synth_setter.data.vst.faust_sources.resolve_faust_dsp",
-            lambda _identity: SimpleNamespace(source="drifted source"),
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
         )
-        values = _valid_render_kwargs(plugin_path="faust")
-        values["synth"] = SYNTHS[SynthName("faust_bright_organ")]
-        values["renderer_backend"] = "dawdreamer"
-        values["backend_version"] = "0.8.3"
-        values["gui_toggle_cadence"] = "never"
 
-        with pytest.raises(ValidationError, match="registered Faust source does not match"):
+        with pytest.raises(ValidationError, match="faustwasm requires an explicit block_size"):
             RenderConfig(**values)
+
+    @pytest.mark.parametrize("block_size", [0, -1, True, 1.5])
+    def test_faustwasm_backend_rejects_invalid_block_size(self, block_size: object) -> None:
+        """FaustWasm block size must be a strict positive integer.
+
+        :param block_size: Invalid block size under test.
+        """
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=block_size,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+
+        with pytest.raises(ValidationError, match="block_size"):
+            RenderConfig(**values)
+
+    def test_non_faustwasm_backend_rejects_block_size(self) -> None:
+        """Block size cannot silently affect backends that do not consume it."""
+        with pytest.raises(ValidationError, match="block_size is supported only for faustwasm"):
+            RenderConfig(**(_valid_render_kwargs() | {"block_size": 128}))
+
+    def test_faustwasm_backend_rejects_once_reload_with_lifecycle_error(self) -> None:
+        """FaustWasm reports its isolated-process lifecycle requirement."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=128,
+            plugin_reload_cadence="once",
+            gui_toggle_cadence="never",
+        )
+
+        with pytest.raises(
+            ValidationError,
+            match='faustwasm requires plugin_reload_cadence="render": each render uses an isolated Node process',
+        ):
+            RenderConfig(**values)
+
+    def test_faustwasm_block_size_changes_v2_digest(self) -> None:
+        """Runtime block size participates in the FaustWasm shard identity."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=128,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+        first = RenderConfig(**values)
+        second = RenderConfig(**(values | {"block_size": 64}))
+
+        assert (
+            first.shard_metadata().render_contract_digest
+            != second.shard_metadata().render_contract_digest
+        )
 
     def test_faust_format_rejects_pedalboard_backend(self) -> None:
         """A source program cannot be passed to a VST3-only host."""

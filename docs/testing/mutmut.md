@@ -21,12 +21,13 @@ standardizes on Python 3.12.13, which the CI workflow pins for reproducibility.
 
 mutmut copies the paths under `paths_to_mutate` into a `mutants/` sandbox and
 strips the real `src/` off `sys.path`. Any module a test imports transitively
-must come along via `also_copy`. `also_copy = ["src/synth_setter/"]` therefore
-includes the *whole* package, not just the mutated subdirs.
+must come along via `also_copy`. `also_copy` therefore
+includes the *whole* package, not just the mutated subdirs, plus `scripts/dev/`
+for research-runner imports exercised by `tests/tools/`.
 
-Only revisit the `[tool.mutmut]` config when adding a *new* top-level mutate
-path under `src/`. All other `synth_setter.*` imports are covered
-automatically — `also_copy` already pulls in any module added outside
+Revisit the `[tool.mutmut]` config when adding a *new* top-level mutate path
+or a non-package dependency imported by the selected tests. New
+`synth_setter.*` imports are covered automatically, including modules outside
 `paths_to_mutate`.
 
 ## Pytest capture must stay disabled
@@ -49,6 +50,11 @@ Use the parser directly with `capsys` / `CliRunner` (argparse / click) rather
 than `subprocess.run([sys.executable, "-m", …])`. The reference test is
 `test_cli_help_advertises_mask_degenerate_bins_flag` in
 `tests/pipeline/data/test_stats.py`.
+
+Spawn-only tests also reimport the `mutmut` executable in each worker, where
+mutmut's forced `fork` context conflicts with spawn initialization. Such tests
+may skip only during mutmut's embedded stats run; the real multiprocessing path
+remains required in normal CI ([#3435](https://github.com/tinaudio/synth-setter/issues/3435)).
 
 ## macOS gotcha
 

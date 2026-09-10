@@ -12,6 +12,7 @@ import re
 import runpy
 import shutil
 import signal
+import subprocess
 import sys
 import time
 import tomllib
@@ -994,13 +995,11 @@ def test_codex_review_launcher_resolves_runtime_model_policy() -> None:
             assert "<N>" not in brief
 
 
-@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_codex_review_python_launcher_executes_resolved_command(tmp_path: Path) -> None:
     """Protect direct-entrypoint execution parity with the shell wrapper.
 
     :param tmp_path: Directory for the fake Codex executable.
     """
-    sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
     codex = tmp_path / "codex"
     codex.write_text(
@@ -1014,25 +1013,32 @@ def test_codex_review_python_launcher_executes_resolved_command(tmp_path: Path) 
     shadowed_python.write_text("#!/bin/bash\nexit 1\n")
     shadowed_python.chmod(0o755)
 
-    result = sh.Command(sys.executable)(
-        str(launcher),
-        "pr-review-worker-fast",
-        "--prompt",
-        "routing probe",
-        _cwd=REPO_ROOT,
-        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    environment = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    result = subprocess.run(  # noqa: S603 — fixed interpreter, launcher, and arguments
+        [
+            sys.executable,
+            str(launcher),
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+        ],
+        check=False,
+        capture_output=True,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
     )
 
-    assert str(result) == "structured report"
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == "structured report"
 
 
-@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_codex_review_python_launcher_ignores_blank_ndjson_lines(tmp_path: Path) -> None:
     """Preserve valid reports around blank NDJSON records.
 
     :param tmp_path: Directory for the fake Codex executable.
     """
-    sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
     codex = tmp_path / "codex"
     codex.write_text(
@@ -1045,16 +1051,25 @@ def test_codex_review_python_launcher_ignores_blank_ndjson_lines(tmp_path: Path)
     )
     codex.chmod(0o755)
 
-    result = sh.Command(sys.executable)(
-        str(launcher),
-        "pr-review-worker-fast",
-        "--prompt",
-        "routing probe",
-        _cwd=REPO_ROOT,
-        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    environment = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    result = subprocess.run(  # noqa: S603 — fixed interpreter, launcher, and arguments
+        [
+            sys.executable,
+            str(launcher),
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+        ],
+        check=False,
+        capture_output=True,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
     )
 
-    assert str(result) == "structured report"
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == "structured report"
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")

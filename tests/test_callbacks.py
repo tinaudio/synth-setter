@@ -742,6 +742,76 @@ def test_abs_cosine_logging_distributed_ranks_weights_samples(
     )
 
 
+def test_log_per_param_mse_emits_number_group_optimal_assignment_aggregate() -> None:
+    """Each numbered family emits one mean across all assigned coordinates."""
+    spec = param_specs["surge_simple"]
+    callback = LogPerParamMSE("surge_simple")
+    module = _RecordingModule()
+    trainer = cast("Trainer", None)
+    pl_module = cast("LightningModule", module)
+    outputs = {
+        "per_param_mse_number_group_optimal_assignment": torch.arange(
+            spec.encoded_width, dtype=torch.float32
+        )
+    }
+
+    callback.on_validation_epoch_start(trainer, pl_module)
+    callback.on_validation_batch_end(trainer, pl_module, outputs, None, 0)
+    callback.on_validation_epoch_end(trainer, pl_module)
+
+    namespace = "val/number_group_optimal_assignment_mse/"
+    assert module.logged[f"{namespace}a_filter_N_cutoff"] == pytest.approx(5.5)
+    assert module.logged[f"{namespace}a_amp_eg_attack"] == pytest.approx(0.0)
+    assert f"{namespace}a_filter_1_cutoff" not in module.logged
+    assert f"{namespace}a_filter_2_cutoff" not in module.logged
+
+
+def test_log_per_param_mse_preserves_collapsed_onehot_label_separators() -> None:
+    """One-hot numbered families replace only digit runs in their displayed label."""
+    spec = param_specs["surge_xt"]
+    callback = LogPerParamMSE("surge_xt")
+    module = _RecordingModule()
+    trainer = cast("Trainer", None)
+    pl_module = cast("LightningModule", module)
+
+    callback.on_validation_epoch_start(trainer, pl_module)
+    callback.on_validation_batch_end(
+        trainer,
+        pl_module,
+        {"per_param_mse_number_group_optimal_assignment": torch.ones(spec.encoded_width)},
+        None,
+        0,
+    )
+    callback.on_validation_epoch_end(trainer, pl_module)
+
+    namespace = "val/number_group_optimal_assignment_mse/"
+    assert module.logged[f"{namespace}a_filter_N_type"] == 1.0
+    assert f"{namespace}a_filter_1_type" not in module.logged
+    assert f"{namespace}a_filter_2_type" not in module.logged
+
+
+def test_log_per_param_mse_emits_number_group_optimal_assignment_test_namespace() -> None:
+    """Test aggregates use the test namespace with separator-preserving labels."""
+    spec = param_specs["surge_simple"]
+    callback = LogPerParamMSE("surge_simple")
+    module = _RecordingModule()
+    trainer = cast("Trainer", None)
+    pl_module = cast("LightningModule", module)
+
+    callback.on_test_epoch_start(trainer, pl_module)
+    callback.on_test_batch_end(
+        trainer,
+        pl_module,
+        {"per_param_mse_number_group_optimal_assignment": torch.ones(spec.encoded_width)},
+        None,
+        0,
+    )
+    callback.on_test_epoch_end(trainer, pl_module)
+
+    assert module.logged["test/number_group_optimal_assignment_mse/a_osc_N_pitch"] == 1.0
+    assert not any(name.startswith("val/") for name in module.logged)
+
+
 def test_log_per_param_mse_emits_optional_best_swap_metrics() -> None:
     """Best-swap vectors use a separate per-parameter namespace when present."""
     spec = param_specs["surge_4"]

@@ -98,6 +98,7 @@ def test_faustwasm_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
         synth=SYNTHS[SynthName("faust_bright_organ")],
         renderer_backend="faustwasm",
         backend_version="0.18.3",
+        block_size=64,
         render_contract_version=2,
         sample_rate=44100,
         channels=2,
@@ -121,6 +122,7 @@ def test_faustwasm_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
     )
     args = build_generate_args(spec, spec.shards[0], tmp_path)
     shard = Path(args[2])
+    assert args[args.index("--block_size") + 1] == "64"
 
     result = subprocess.run(  # noqa: S603
         args,

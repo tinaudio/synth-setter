@@ -48,6 +48,7 @@ import lance
 import numpy as np
 import pyarrow as pa
 import pytest
+from huggingface_hub import get_token
 from lance.file import LanceFileReader
 from omegaconf import DictConfig, OmegaConf, open_dict
 from pedalboard.io import AudioFile
@@ -67,6 +68,7 @@ from synth_setter.evaluation.oracle_probe import OracleProbeProvenance
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt, split_for_shard
+from synth_setter.pipeline.data.param_language import load_param_language
 from synth_setter.pipeline.schemas.render_metrics import (
     RenderRejectionMetrics,
     render_metrics_path,
@@ -242,20 +244,32 @@ def test_cfg_dataset_render_obxf_resolves_param_spec_through_spec_from_cfg(
     assert spec.num_params == 187
 
 
+@pytest.mark.parametrize(
+    ("cfg_dataset_faust", "backend", "version", "block_size"),
+    [
+        pytest.param("faust", "dawdreamer", "0.8.3", None, id="dawdreamer"),
+        pytest.param("faustwasm", "faustwasm", "0.18.3", 128, id="faustwasm"),
+    ],
+    indirect=["cfg_dataset_faust"],
+)
 def test_cfg_dataset_faust_resolves_production_renderer_contract(
     cfg_dataset_faust: DictConfig,
+    backend: str,
+    version: str,
+    block_size: int | None,
 ) -> None:
-    """The operator config resolves the production brightOrgan renderer contract.
-
-    The real worker subprocess and Lance artifact are exercised in
-    ``tests/data/vst/test_faust_dataset_e2e.py``.
+    """The operator config resolves each production brightOrgan renderer contract.
 
     :param cfg_dataset_faust: Composed production brightOrgan dataset config.
+    :param backend: Expected rendering backend.
+    :param version: Expected rendering runtime version.
+    :param block_size: Expected optional offline-processing block size.
     """
     spec = spec_from_cfg(cfg_dataset_faust)
 
-    assert spec.render.renderer_backend == "dawdreamer"
-    assert spec.render.backend_version == "0.8.3"
+    assert spec.render.renderer_backend == backend
+    assert spec.render.backend_version == version
+    assert spec.render.block_size == block_size
     assert spec.render.plugin_path == "registry://faust/faust_bright_organ"
     assert spec.render.synth.format == "faust"
     assert spec.render.plugin_reload_cadence == "render"
@@ -2231,3 +2245,59 @@ def test_cfg_dataset_carries_ram_bounded_num_workers_for_oracle_eval(
     :param cfg_dataset: Composed config; read only for ``datamodule.num_workers``.
     """
     assert cfg_dataset.datamodule.num_workers == 4
+
+
+@pytest.mark.integration_r2
+@pytest.mark.r2
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.timeout(300)
+def test_generate_dataset_cli_publishes_consumable_param_language(tmp_path: Path) -> None:
+    """The real generate CLI publishes normalized parameter-language embeddings.
+
+    :param tmp_path: Holds Hydra output and downloaded final artifacts.
+    """
+    if get_token() is None:
+        pytest.skip("requires accepted embedding-model license and HF_TOKEN authentication")
+
+    bucket = "intermediate-data"
+    prefix = f"test-runs/param-language/{uuid.uuid4().hex}/"
+    try:
+        result = subprocess.run(  # noqa: S603 — args are test-controlled literals
+            [
+                str(Path(sys.executable).parent / "synth-setter-generate-dataset"),
+                "experiment=generate_dataset/smoke-shard",
+                "synth=surge_simple",
+                "param_language_dimension=128",
+                "finalize_inline=true",
+                "train_val_test_sizes=[4,0,0]",
+                "render.samples_per_shard=4",
+                "render.samples_per_render_batch=4",
+                f"r2.bucket={bucket}",
+                f"+r2.prefix={prefix}",
+                f"paths.output_dir={tmp_path}",
+                f"paths.log_dir={tmp_path}",
+                "logger=[]",
+                "extras.enforce_tags=false",
+                "extras.print_config=false",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=240,
+        )
+        assert result.returncode == 0, (
+            f"generate-dataset CLI exited {result.returncode}\n"
+            f"--- STDOUT ---\n{result.stdout}\n"
+            f"--- STDERR ---\n{result.stderr}"
+        )
+
+        uri = f"r2://{bucket}/{prefix}param_language.npz"
+        with r2_io.downloaded_to_tempfile(uri) as path:
+            embeddings, metadata = load_param_language(path, "surge_simple", "surge_simple")
+        assert embeddings.shape == (len(metadata.descriptions), 128)
+        np.testing.assert_allclose(np.linalg.norm(embeddings, axis=1), 1, atol=1e-6)
+        assert not np.allclose(embeddings[0], embeddings[1])
+        assert r2_io.object_size(f"r2://{bucket}/{prefix}dataset.complete") is not None
+    finally:
+        r2_io.purge_prefix(bucket, prefix)

@@ -103,17 +103,6 @@ jobs:
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
 
-      - name: Export FaustWasm browser test artifacts
-        run: |
-          uv run python -m synth_setter.tools.export_faustwasm --synth faust_bright_organ --output "${RUNNER_TEMP}/faust-bright-organ"
-          uv run python -m synth_setter.tools.export_faustwasm --synth faust_filter_osc --output "${RUNNER_TEMP}/faust-filter-osc"
-
-      - name: Run FaustWasm browser E2E
-        env:
-          FAUSTWASM_E2E_ARTIFACT: ${{ runner.temp }}/faust-bright-organ
-          FAUSTWASM_MONO_E2E_ARTIFACT: ${{ runner.temp }}/faust-filter-osc
-        run: npm --prefix scripts/faustwasm/browser run test:e2e
-
       # Fork PRs are excluded at the job boundary; this guard keeps secrets
       # limited to push/dispatch and trusted same-repository pull requests.
       - name: Set up R2

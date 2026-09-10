@@ -72,6 +72,10 @@ def _quantize_note_window(
 class FaustWasmRenderer(AudioRenderer):
     """Compile a checked-in Faust source once and render isolated Node processes.
 
+    .. attribute :: block_size
+       :type: int
+
+       Node offline-processing block size.
     .. attribute :: param_spec_name
        :type: ParamSpecName
 
@@ -84,16 +88,12 @@ class FaustWasmRenderer(AudioRenderer):
        :type: str
 
        Required FaustWasm package version.
-    .. attribute :: block_size
-       :type: int
-
-       Node offline-processing block size.
     """
 
+    block_size: int = field(kw_only=True)
     param_spec_name: ParamSpecName = field(kw_only=True)
     source_sha256: str = field(kw_only=True)
     backend_version: str = field(kw_only=True)
-    block_size: int = 128
     _temporary_directory: tempfile.TemporaryDirectory[str] = field(init=False, repr=False)
     _manifest: ArtifactManifest = field(init=False, repr=False)
 

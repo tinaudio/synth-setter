@@ -145,6 +145,28 @@ def _module(baseline: Path, active_path: str | Path) -> LanceVSTDataModule:
     )
 
 
+def test_audio_feedback_after_growing_refresh_retains_target_audio(tmp_path: Path) -> None:
+    """Adopting a newer snapshot must preserve opt-in waveform loading.
+
+    :param tmp_path: Isolated baseline and growing roots.
+    """
+    baseline = _baseline(tmp_path)
+    active_path, active = _active_snapshot(tmp_path, baseline)
+    module = LanceVSTDataModule(
+        dataset_root=baseline,
+        growing_active_record=active_path,
+        batch_size=4,
+        num_workers=0,
+        include_audio=True,
+        param_spec_name=ParamSpecName("surge_xt"),
+    )
+    module.setup("fit")
+    assert next(iter(module.train_dataloader()))["audio"] is not None
+    _newer_identity(active_path, active)
+
+    assert next(iter(module.train_dataloader()))["audio"] is not None
+
+
 def test_checkpoint_persists_full_strict_active_snapshot(tmp_path: Path) -> None:
     """Checkpoint state retains every remote and local identity field.
 

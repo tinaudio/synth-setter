@@ -74,37 +74,37 @@ to all loggers via `logger.log_hyperparams()`:
 
 Logged via `self.log()` in each LightningModule:
 
-| Module                  | Metric                                                       | Step | Epoch |
-| ----------------------- | ------------------------------------------------------------ | ---- | ----- |
-| `VSTFlowMatchingModule` | `train/loss`                                                 | yes  | yes   |
-|                         | `train/audio_loss` (when `model/audio_loss` is set)          | yes  | yes   |
-|                         | `train/audio_grad_ratio` (audio/flow gradient norm)          | yes  | —     |
-|                         | `train/audio_grad_cosine` (gradient alignment)               | yes  | —     |
-|                         | `train/slot_cosine` (layerwise conditioning only)            | yes  | —     |
-|                         | `train/penalty`                                              | yes  | yes   |
-|                         | `train/weighted_{velocity,endpoint}_mse`                     | —    | yes   |
-|                         | `train/{velocity_endpoint,endpoint}_mse`                     | —    | yes   |
-|                         | `train/per_param_weighted_{velocity,endpoint}_mse/{name}`    | —    | yes   |
-|                         | `train/per_param_{velocity_endpoint,endpoint}_mse/{name}`    | —    | yes   |
-|                         | `{val,test}/{velocity_endpoint,endpoint}_mse/t_{05..95}`     | —    | yes   |
-|                         | `{val,test}/{velocity_endpoint,endpoint}_mse/equal_bin_mean` | —    | yes   |
-|                         | `val/param_mse`                                              | —    | yes   |
-|                         | `test/param_mse`                                             | —    | yes   |
-|                         | `val/param_mse_best_swap`                                    | —    | yes   |
-|                         | `test/param_mse_best_swap`                                   | —    | yes   |
-|                         | `val/param_mse_number_group_swap` (with ParamSpec)           | —    | yes   |
-|                         | `test/param_mse_number_group_swap` (with ParamSpec)          | —    | yes   |
-|                         | `vector_field/*_norm`                                        | yes  | —     |
-|                         | `encoder/*_norm`                                             | yes  | —     |
-| `VSTFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std`          | yes  | yes   |
-|                         | `train/{reconstruction,latent,param}_loss`                   | yes  | yes   |
-|                         | `train/beta`                                                 | yes  | —     |
-|                         | `val/{reconstruction,latent,param}_loss`                     | —    | yes   |
-|                         | `val/param_mean`, `val/param_std`                            | —    | yes   |
-|                         | `test/{reconstruction,latent,param}_loss`                    | —    | yes   |
-|                         | `net/*` gradient norms                                       | yes  | —     |
-| `VSTFeedForwardModule`  | `train/loss`                                                 | yes  | yes   |
-|                         | `val/param_mse`, `test/param_mse`                            | —    | yes   |
+| Module                  | Metric                                                            | Step | Epoch |
+| ----------------------- | ----------------------------------------------------------------- | ---- | ----- |
+| `VSTFlowMatchingModule` | `train/loss`                                                      | yes  | yes   |
+|                         | `train/audio_loss` (when `model/audio_loss` is set)               | yes  | yes   |
+|                         | `train/audio_grad_ratio` (audio/flow gradient norm)               | yes  | —     |
+|                         | `train/audio_grad_cosine` (gradient alignment)                    | yes  | —     |
+|                         | `train/slot_cosine` (layerwise conditioning only)                 | yes  | —     |
+|                         | `train/penalty`                                                   | yes  | yes   |
+|                         | `train/weighted_{velocity,endpoint}_mse`                          | —    | yes   |
+|                         | `train/{velocity_endpoint,endpoint}_mse`                          | —    | yes   |
+|                         | `train/per_param_weighted_{velocity,endpoint}_mse/{name}`         | —    | yes   |
+|                         | `train/per_param_{velocity_endpoint,endpoint}_mse/{name}`         | —    | yes   |
+|                         | `{val,test}/{velocity_endpoint,endpoint}_mse/t_{05..95}`          | —    | yes   |
+|                         | `{val,test}/{velocity_endpoint,endpoint}_mse/equal_bin_mean`      | —    | yes   |
+|                         | `val/param_mse`                                                   | —    | yes   |
+|                         | `test/param_mse`                                                  | —    | yes   |
+|                         | `val/param_mse_best_swap`                                         | —    | yes   |
+|                         | `test/param_mse_best_swap`                                        | —    | yes   |
+|                         | `val/param_mse_number_group_optimal_assignment` (with ParamSpec)  | —    | yes   |
+|                         | `test/param_mse_number_group_optimal_assignment` (with ParamSpec) | —    | yes   |
+|                         | `vector_field/*_norm`                                             | yes  | —     |
+|                         | `encoder/*_norm`                                                  | yes  | —     |
+| `VSTFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std`               | yes  | yes   |
+|                         | `train/{reconstruction,latent,param}_loss`                        | yes  | yes   |
+|                         | `train/beta`                                                      | yes  | —     |
+|                         | `val/{reconstruction,latent,param}_loss`                          | —    | yes   |
+|                         | `val/param_mean`, `val/param_std`                                 | —    | yes   |
+|                         | `test/{reconstruction,latent,param}_loss`                         | —    | yes   |
+|                         | `net/*` gradient norms                                            | yes  | —     |
+| `VSTFeedForwardModule`  | `train/loss`                                                      | yes  | yes   |
+|                         | `val/param_mse`, `test/param_mse`                                 | —    | yes   |
 
 The two audio-gradient diagnostics are emitted only when audio feedback is enabled, once per
 `trainer.log_every_n_steps` cadence. `train/slot_cosine` rides the same cadence but is emitted only
@@ -123,12 +123,13 @@ the primary final sampled parameter-space comparison.
 
 ### Seeded flow evaluation
 
-Set `seeded_evaluation=true` on the evaluation CLI, or `model.seeded_evaluation=true` during
-training, to derive validation and test noise from the seed, stage, loader batch index, and
-distributed rank without advancing the global RNG stream. Standalone evaluation seeds model and
-datamodule construction only in this mode; it uses seed 42 when an enabled legacy config omits or
-nulls `seed`. The default `false` preserves fresh `torch.randn_like` sampling and does not seed the
-evaluation entrypoint.
+Set `model.seeded_evaluation=true seed=<integer>` for standalone evaluation or training to derive
+validation and test noise from the seed, stage, loader batch index, and distributed rank without
+advancing the global RNG stream. Standalone evaluation accepts explicit seeds from 0 through
+4294967295 and seeds model and datamodule construction only in this mode. Enabling the flag without
+a seed is a configuration error; the `seed: null` eval slot allows Hydra CLI `seed=...` overrides
+without supplying an arbitrary default. The default `false` preserves fresh `torch.randn_like`
+sampling and does not require, validate, or use the evaluation seed.
 
 The ten fixed-time diagnostics reuse the sampling noise at centers 0.05 through 0.95, run fully
 conditional (no CFG dropout), report unweighted endpoint-space MSE per bin, and average the bins
@@ -144,20 +145,6 @@ device kernels, or dependency versions may change results. `val/param_mse` and
 metrics remain available in predict mode. Fixed diagnostics establish comparability, not model
 quality; quality claims still require matched checkpoints, compute, seeds, and representative data.
 
-### Seeded flow evaluation
-
-Set `seeded_evaluation=true` on the evaluation CLI, or `model.seeded_evaluation=true` during
-training, to derive validation and test noise from the seed, stage, loader batch index, and
-distributed rank without advancing the global RNG stream. Standalone evaluation seeds model and
-datamodule construction only in this mode; it uses seed 42 when an enabled legacy config omits or
-nulls `seed`. The default `false` preserves fresh `torch.randn_like` sampling and does not seed the
-evaluation entrypoint.
-
-A comparison must record the dataset artifact/version, seed, loader batch size and worker count,
-rank/world-size topology, sampler steps, and content/sketch CFG strengths. Repeatability requires
-the same ordered dataset and loader topology; changing batching, world size, model, checkpoint,
-device kernels, or dependency versions may change results.
-
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 
 Image-producing callbacks route figures through `_log_figure` in
@@ -167,12 +154,18 @@ Under the default `many_loggers` composition (W&B + CSV + TB), plots land in
 both W&B and TensorBoard; with `logger=tensorboard` they go to TensorBoard
 only; with `logger=wandb` they go to W&B only.
 
-| Callback                 | Logged key                                                                                                                                                                                                                                                                          | Trigger                                                                                                                                                           | Symbol                                                                                                               |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `PlotLossPerTimestep`    | `plot` (image)                                                                                                                                                                                                                                                                      | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`                                                 |
-| `PlotLearntProjection`   | `assignment`, `value` (images)                                                                                                                                                                                                                                                      | `on_validation_epoch_end` or every N steps                                                                                                                        | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`                                               |
-| `LogPerParamMSE`         | `{val,test}/per_param_mse/{name}`, `{val,test}_per_param_mse_best_swap/{name}`, `{val,test}/per_param_mse_number_group_swap/{name}`, `{val,test}/per_param_mse_spec_quantized/{name}`, `{val,test}/param_mse_spec_quantized`, and `{val,test}/per_param_abs_cosine_distance/{name}` | `on_{validation,test}_epoch_end` (via `pl_module.log_dict`)                                                                                                       | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
-| `ValAudioProbe` (opt-in) | `val_audio/<metric>_<stat>` + `val_audio/probe_step`                                                                                                                                                                                                                                | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
+| Callback                 | Logged key                                                                                                                                                                                                                                                                                        | Trigger                                                                                                                                                           | Symbol                                                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `PlotLossPerTimestep`    | `plot` (image)                                                                                                                                                                                                                                                                                    | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`                                                 |
+| `PlotLearntProjection`   | `assignment`, `value` (images)                                                                                                                                                                                                                                                                    | `on_validation_epoch_end` or every N steps                                                                                                                        | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`                                               |
+| `LogPerParamMSE`         | `{val,test}/per_param_mse/{name}`, `{val,test}_per_param_mse_best_swap/{name}`, `{val,test}/number_group_optimal_assignment_mse/{collapsed-name}`, `{val,test}/per_param_mse_spec_quantized/{name}`, `{val,test}/param_mse_spec_quantized`, and `{val,test}/per_param_abs_cosine_distance/{name}` | `on_{validation,test}_epoch_end` (via `pl_module.log_dict`)                                                                                                       | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
+| `ValAudioProbe` (opt-in) | `val_audio/<metric>_<stat>` + `val_audio/probe_step`                                                                                                                                                                                                                                              | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
+
+Number-group optimal-assignment metrics match complete encoded fields only within
+number-collapsed, equal-width name families. Each per-group key averages every
+assigned coordinate and replaces digit runs in the representative name with `N`
+(for example, `a_filter_1_type` becomes `a_filter_N_type`); singleton labels are
+unchanged.
 
 `{val,test}/param_mse_spec_quantized` clips predictions to the ParamSpec domain
 and snaps categorical and integral fields to the values used for rendering
@@ -282,14 +275,14 @@ ______________________________________________________________________
 
 ## 3. Artifacts
 
-| Artifact                 | Source                                                                                           | When                                                                                                                                                                                                                                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Model checkpoints        | `ModelCheckpoint` (best ckpt → R2; `log_model: False`)                                           | Best + last + every-5000-step `.ckpt` written locally; only the best is uploaded to R2 at train end (no checkpoint files go to W&B)                                                                                                                                                             |
-| Source code              | `wandb.Settings(code_dir=".")`                                                                   | Run start                                                                                                                                                                                                                                                                                       |
-| `<task_name>-input-spec` | `_log_spec_artifact` in `src/synth_setter/cli/generate_dataset.py`                               | Dataset-generation run start; artifact type `dataset-spec`, payload = `DatasetSpec.model_dump_json`                                                                                                                                                                                             |
-| `data-{task_name}`       | `build_dataset_artifact` / `_log_dataset_artifact` in `src/synth_setter/cli/finalize_dataset.py` | Finalize, after the R2 outputs land; type `dataset`, `s3://` R2 references (`checksum=False`), metadata `shard_count` / `n_samples` / `git_sha`                                                                                                                                                 |
-| `model-{config_id}`      | `build_model_artifact` / `_log_model_artifact` in `src/synth_setter/cli/train.py`                | Train end, after fit/test (global-zero); type `model`, metadata `git_sha`; the best ckpt is uploaded to `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` and referenced as an `s3://` URI (`checksum=False`); degrades to lineage-only when R2 is unreachable or no ckpt was written (#92) |
-| `eval-{config_id}`       | `build_eval_results_artifact` / `_log_eval_results_artifact` in `src/synth_setter/cli/eval.py`   | After the eval output dir is mirrored to R2 (global-zero only); type `eval-results`, `s3://` R2 reference (`checksum=False`), metadata = scalar summary metrics + `git_sha`                                                                                                                     |
+| Artifact                 | Source                                                                                           | When                                                                                                                                                                                                                                                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Model checkpoints        | `ModelCheckpoint` (best ckpt → R2; `log_model: False`)                                           | Best + last + every-5000-step `.ckpt` written locally; only the best is uploaded to R2 at train end (no checkpoint files go to W&B)                                                                                                                                                                                        |
+| Source code              | `wandb.Settings(code_dir=".")`                                                                   | Run start                                                                                                                                                                                                                                                                                                                  |
+| `<task_name>-input-spec` | `_log_spec_artifact` in `src/synth_setter/cli/generate_dataset.py`                               | Dataset-generation run start; artifact type `dataset-spec`, payload = `DatasetSpec.model_dump_json`                                                                                                                                                                                                                        |
+| `data-{task_name}`       | `build_dataset_artifact` / `_log_dataset_artifact` in `src/synth_setter/cli/finalize_dataset.py` | Finalize, after the R2 outputs land; type `dataset`, `s3://` R2 references (`checksum=False`), metadata `shard_count` / `n_samples` / `git_sha`                                                                                                                                                                            |
+| `model-{config_id}`      | `build_model_artifact` / `_log_model_artifact` in `src/synth_setter/cli/train.py`                | Train end, after fit/test (global-zero); type `model`, metadata `git_sha`; the best ckpt is uploaded to `r2://{r2.bucket}/checkpoints/{training_config_id}/{training_run_id}/model.ckpt` and referenced as an `s3://` URI (`checksum=False`); degrades to lineage-only when R2 is unreachable or no ckpt was written (#92) |
+| `eval-{config_id}`       | `build_eval_results_artifact` / `_log_eval_results_artifact` in `src/synth_setter/cli/eval.py`   | After the eval output dir is mirrored to R2 (global-zero only); type `eval-results`, `s3://` R2 reference (`checksum=False`), metadata = scalar summary metrics + `git_sha`                                                                                                                                                |
 
 ______________________________________________________________________
 

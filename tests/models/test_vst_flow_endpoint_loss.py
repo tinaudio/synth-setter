@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import fsspec
 import lightning
 import pytest
 import torch
@@ -152,12 +153,28 @@ class _ConditionedControlLogitField(_ConstantField):
         return row.expand(x.shape[0], -1)
 
 
+class _PenaltyField(_ConstantField):
+    """Constant field with a fixed auxiliary penalty."""
+
+    def penalty(self) -> torch.Tensor:
+        """Return an unweighted penalty attached to the field graph.
+
+        :returns: Fixed penalty scalar.
+        """
+        return self.row.sum() * 0.0 + 5.0
+
+
 class _RecordingAudioLoss(torch.nn.Module):
     """Record the endpoint handed to audio feedback."""
 
-    def __init__(self) -> None:
+    def __init__(self, value: float = 0.0) -> None:
+        """Set the scalar returned after recording.
+
+        :param value: Audio term returned by ``forward``.
+        """
         super().__init__()
         self.endpoint: torch.Tensor | None = None
+        self.value = value
 
     def forward(
         self,
@@ -172,15 +189,16 @@ class _RecordingAudioLoss(torch.nn.Module):
         :param t: Flow time.
         :param target_audio: Ignored target audio.
         :param keep: Ignored row keep mask.
-        :returns: Zero scalar connected to ``theta_hat``.
+        :returns: Configured scalar connected to ``theta_hat``.
         """
         self.endpoint = theta_hat.detach().clone()
-        return theta_hat.sum() * 0.0
+        return theta_hat.sum() * 0.0 + self.value
 
 
 def _module(
     *,
     endpoint_loss: str = "mse",
+    endpoint_time_weighting: str = "uniform",
     parameterization: str = "endpoint",
     param_spec: str | None = "cardinal",
     rectified_sigma_min: float = 0.0,
@@ -191,6 +209,7 @@ def _module(
     """Build a tiny endpoint module using the registered Cardinal spec.
 
     :param endpoint_loss: Endpoint objective selection.
+    :param endpoint_time_weighting: Endpoint time-weighting selection.
     :param parameterization: Field output parameterization.
     :param param_spec: Registered ParamSpec name, or ``None``.
     :param rectified_sigma_min: Residual source-noise scale.
@@ -212,6 +231,7 @@ def _module(
         cfg_dropout_rate=0.0,
         compile=False,
         endpoint_loss=endpoint_loss,  # pyright: ignore[reportArgumentType]
+        endpoint_time_weighting=endpoint_time_weighting,  # pyright: ignore[reportArgumentType]
         parameterization=parameterization,  # pyright: ignore[reportArgumentType]
         rectified_sigma_min=rectified_sigma_min,
     )
@@ -252,6 +272,17 @@ def test_module_endpoint_loss_defaults_to_flat_mse() -> None:
     assert outputs.loss.item() == pytest.approx(1.0)
 
 
+def test_endpoint_time_weighting_defaults_to_uniform() -> None:
+    """The default gives every endpoint row unit weight."""
+    module = _module(param_spec=None)
+    time = torch.tensor([[0.0], [0.8]])
+
+    weights = module._weight_time(time)  # noqa: SLF001
+
+    assert module.hparams["endpoint_time_weighting"] == "uniform"
+    torch.testing.assert_close(weights, torch.ones_like(time))
+
+
 @pytest.mark.parametrize(
     ("endpoint_loss", "parameterization", "param_spec", "message"),
     [
@@ -286,6 +317,43 @@ def test_module_invalid_rectified_sigma_min_raises(sigma: float) -> None:
     """
     with pytest.raises(ValueError, match="rectified_sigma_min"):
         _module(rectified_sigma_min=sigma)
+
+
+@pytest.mark.parametrize(
+    ("weighting", "parameterization", "message"),
+    [
+        pytest.param("importance", "endpoint", "endpoint_time_weighting", id="unknown"),
+        pytest.param("flowmol3", "velocity", "parameterization", id="velocity"),
+    ],
+)
+def test_module_invalid_endpoint_time_weighting_raises(
+    weighting: str, parameterization: str, message: str
+) -> None:
+    """Unknown weighting and velocity-weighted endpoint objectives fail closed.
+
+    :param weighting: Time-weighting selection under test.
+    :param parameterization: Field parameterization under test.
+    :param message: Expected error fragment.
+    """
+    with pytest.raises(ValueError, match=message):
+        _module(
+            endpoint_time_weighting=weighting,
+            parameterization=parameterization,
+        )
+
+
+def test_flowmol3_endpoint_time_weights_match_pinned_paper_bounds() -> None:
+    """FlowMol3 weighting uses the agreed 0.005 floor and a finite 1.5 ceiling."""
+    module = _module(endpoint_time_weighting="flowmol3")
+    time = torch.tensor([[0.0], [0.1], [0.5], [0.8], [1.0]])
+
+    weights = module._weight_time(time)  # noqa: SLF001
+
+    torch.testing.assert_close(
+        weights,
+        torch.tensor([[0.005], [1 / 9], [1.0], [1.5], [1.5]]),
+    )
+    assert torch.isfinite(weights).all()
 
 
 def test_mixed_endpoint_row_loss_averages_each_logical_parameter_once() -> None:
@@ -468,6 +536,78 @@ def test_fixed_time_endpoint_mse_uses_direct_endpoint_namespace() -> None:
     torch.testing.assert_close(metrics["endpoint_mse/equal_bin_mean"], torch.tensor(1.0))
 
 
+def test_train_step_flowmol3_mse_pairs_unequal_row_losses_and_gradients() -> None:
+    """MSE weights each row before final reduction without cross-batch broadcasting."""
+    field = _ConstantField(torch.zeros(_WIDTH))
+    module = _module(
+        endpoint_time_weighting="flowmol3",
+        param_spec=None,
+        vector_field=field,
+    )
+    module._sample_time = lambda n, device: torch.tensor(  # pyright: ignore[reportAttributeAccessIssue]
+        [[0.5], [0.8]], device=device
+    )
+    target = torch.stack((torch.ones(_WIDTH), torch.full((_WIDTH,), 2.0)))
+
+    outputs = module._train_step(_batch(target))  # noqa: SLF001
+    outputs.loss.backward()
+
+    assert outputs.loss.item() == pytest.approx(3.5)
+    torch.testing.assert_close(outputs.per_param_flow_mse, torch.full((_WIDTH,), 3.5))
+    assert field.row.grad is not None
+    torch.testing.assert_close(field.row.grad, torch.full((_WIDTH,), -4.0 / _WIDTH))
+
+
+def test_train_step_flowmol3_mixed_pairs_unequal_row_losses_and_gradients() -> None:
+    """Mixed CE/MSE row losses retain their matching FlowMol3 weights and gradients."""
+    prediction = torch.zeros(_WIDTH)
+    prediction[0] = 1.0
+    prediction[8:10] = torch.tensor([2.0, 0.0])
+    field = _ConstantField(prediction)
+    module = _module(
+        endpoint_loss="mixed",
+        endpoint_time_weighting="flowmol3",
+        vector_field=field,
+    )
+    module._sample_time = lambda n, device: torch.tensor(  # pyright: ignore[reportAttributeAccessIssue]
+        [[0.5], [0.8]], device=device
+    )
+
+    outputs = module._train_step(_batch(_target()))  # noqa: SLF001
+    outputs.loss.backward()
+
+    easy_ce = math.log1p(math.exp(-2.0))
+    hard_ce = math.log1p(math.exp(2.0))
+    expected = ((1.0 + easy_ce) + 1.5 * (1.0 + hard_ce)) / (2 * 11)
+    assert outputs.loss.item() == pytest.approx(expected)
+    assert field.row.grad is not None
+    probability = torch.sigmoid(torch.tensor(2.0)).item()
+    expected_logit_gradient = (-1 + probability + 1.5 * probability) / (2 * 11)
+    assert field.row.grad[8].item() == pytest.approx(expected_logit_gradient)
+    assert field.row.grad[9].item() == pytest.approx(-expected_logit_gradient)
+    assert field.row.grad[0].item() == pytest.approx(5 / 22)
+
+
+def test_train_step_flowmol3_does_not_weight_audio_or_penalty_terms() -> None:
+    """Time weighting changes only the endpoint objective row losses."""
+    module = _module(
+        audio_loss=_RecordingAudioLoss(value=3.0),
+        endpoint_loss="mixed",
+        endpoint_time_weighting="flowmol3",
+        vector_field=_PenaltyField(torch.zeros(_WIDTH)),
+    )
+    module._sample_time = lambda n, device: torch.full(  # pyright: ignore[reportAttributeAccessIssue]
+        (n, 1), 0.8, device=device
+    )
+
+    outputs = module._train_step(_batch(_target()))  # noqa: SLF001
+
+    assert outputs.audio_term is not None
+    assert outputs.audio_term.item() == pytest.approx(3.0)
+    assert outputs.penalty is not None
+    assert outputs.penalty.item() == pytest.approx(5.0)
+
+
 def test_endpoint_prediction_to_model_softmaxes_only_onehot_spans() -> None:
     """Categorical logits become ``2p - 1`` while ordered pitch and numerics stay unchanged."""
     prediction = torch.arange(_WIDTH, dtype=torch.float32).unsqueeze(0)
@@ -521,6 +661,7 @@ def test_mixed_endpoint_multi_cfg_converts_guided_logits_once() -> None:
 
     expected_endpoint = 2 * torch.softmax(torch.tensor([3.5, -2.5]), dim=0) - 1
     torch.testing.assert_close(velocity[0, 8:10], expected_endpoint / 0.5)
+    assert torch.all(expected_endpoint.abs() <= 1.0)
 
 
 def test_sample_mixed_endpoint_finishes_on_typed_endpoint_without_sampling_classes() -> None:
@@ -550,12 +691,17 @@ def test_audio_feedback_mixed_endpoint_receives_typed_endpoint() -> None:
     torch.testing.assert_close(recorder.endpoint, expected)
 
 
-def _save_checkpoint(module: VSTFlowMatchingModule, path: Path, *, legacy: bool = False) -> Path:
-    """Write a loadable checkpoint, optionally without endpoint-loss metadata.
+def _save_checkpoint(
+    module: VSTFlowMatchingModule,
+    path: Path,
+    *,
+    omit_metadata: str | None = None,
+) -> Path:
+    """Write a loadable checkpoint with one optional legacy metadata omission.
 
     :param module: Module supplying state and hyperparameters.
     :param path: Checkpoint destination.
-    :param legacy: Whether to remove endpoint-loss metadata.
+    :param omit_metadata: Top-level and hyperparameter key to omit.
     :returns: Checkpoint path.
     """
     checkpoint = {
@@ -564,9 +710,9 @@ def _save_checkpoint(module: VSTFlowMatchingModule, path: Path, *, legacy: bool 
         "pytorch-lightning_version": lightning.__version__,
     }
     module.on_save_checkpoint(checkpoint)
-    if legacy:
-        checkpoint.pop("endpoint_loss")
-        checkpoint["hyper_parameters"].pop("endpoint_loss", None)
+    if omit_metadata is not None:
+        checkpoint.pop(omit_metadata)
+        checkpoint["hyper_parameters"].pop(omit_metadata, None)
     torch.save(checkpoint, path)
     return path
 
@@ -592,13 +738,203 @@ def test_load_legacy_checkpoint_without_endpoint_loss_counts_as_mse(tmp_path: Pa
 
     :param tmp_path: Checkpoint directory.
     """
-    path = _save_checkpoint(_module(endpoint_loss="mse"), tmp_path / "legacy.ckpt", legacy=True)
+    path = _save_checkpoint(
+        _module(endpoint_loss="mse"),
+        tmp_path / "legacy.ckpt",
+        omit_metadata="endpoint_loss",
+    )
 
     loaded = VSTFlowMatchingModule.load_from_checkpoint(
         path, encoder=_WaveformEncoder(), weights_only=False
     )
 
     assert loaded.hparams["endpoint_loss"] == "mse"
+
+
+def test_load_checkpoint_with_other_endpoint_time_weighting_raises(tmp_path: Path) -> None:
+    """Resume rejects silently switching a same-shaped endpoint objective.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="flowmol3"),
+        tmp_path / "flowmol3.ckpt",
+    )
+
+    with pytest.raises(ValueError, match="endpoint_time_weighting"):
+        VSTFlowMatchingModule.load_from_checkpoint(
+            path,
+            encoder=_WaveformEncoder(),
+            endpoint_time_weighting="uniform",
+            weights_only=False,
+        )
+
+
+def test_load_pre_stamp_flowmol3_checkpoint_uses_saved_hyperparameter(tmp_path: Path) -> None:
+    """A pre-stamp FlowMol3 checkpoint retains its recorded objective.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="flowmol3"),
+        tmp_path / "pre-stamp.ckpt",
+    )
+    checkpoint = torch.load(path, weights_only=False)
+    checkpoint.pop("endpoint_time_weighting")
+    torch.save(checkpoint, path)
+
+    loaded = VSTFlowMatchingModule.load_from_checkpoint(
+        path,
+        encoder=_WaveformEncoder(),
+        weights_only=False,
+    )
+
+    assert loaded.hparams["endpoint_time_weighting"] == "flowmol3"
+
+
+def test_load_pre_stamp_flowmol3_checkpoint_with_uniform_override_raises(tmp_path: Path) -> None:
+    """A load-time override cannot replace pre-stamp FlowMol3 metadata.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="flowmol3"),
+        tmp_path / "pre-stamp.ckpt",
+    )
+    checkpoint = torch.load(path, weights_only=False)
+    checkpoint.pop("endpoint_time_weighting")
+    torch.save(checkpoint, path)
+
+    with pytest.raises(ValueError, match="endpoint_time_weighting"):
+        VSTFlowMatchingModule.load_from_checkpoint(
+            path,
+            encoder=_WaveformEncoder(),
+            endpoint_time_weighting="uniform",
+            weights_only=False,
+        )
+
+
+def test_load_pre_stamp_checkpoint_with_hparams_file_raises(tmp_path: Path) -> None:
+    """External hyperparameters cannot obscure an unstamped checkpoint objective.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="flowmol3"),
+        tmp_path / "pre-stamp.ckpt",
+    )
+    checkpoint = torch.load(path, weights_only=False)
+    checkpoint.pop("endpoint_time_weighting")
+    torch.save(checkpoint, path)
+
+    with pytest.raises(ValueError, match="hparams_file"):
+        VSTFlowMatchingModule.load_from_checkpoint(
+            path,
+            hparams_file=tmp_path / "overrides.yaml",
+            weights_only=False,
+        )
+
+
+def test_load_checkpoint_from_file_object_restores_module(tmp_path: Path) -> None:
+    """Raw metadata inspection preserves file-object checkpoint loading.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(_module(), tmp_path / "checkpoint.ckpt")
+
+    with path.open("rb") as checkpoint_file:
+        loaded = VSTFlowMatchingModule.load_from_checkpoint(
+            checkpoint_file,
+            encoder=_WaveformEncoder(),
+            weights_only=False,
+        )
+
+    assert loaded.hparams["endpoint_time_weighting"] == "uniform"
+
+
+def test_load_checkpoint_from_memory_filesystem_restores_module(tmp_path: Path) -> None:
+    """Remote fsspec checkpoint paths retain Lightning loading behavior.
+
+    :param tmp_path: Checkpoint staging directory.
+    """
+    source = _module(row=torch.linspace(0.0, 1.0, _WIDTH))
+    path = _save_checkpoint(source, tmp_path / "checkpoint.ckpt")
+    checkpoint_uri = "memory://flowmol3-review/checkpoint.ckpt"
+    fsspec.filesystem("memory").pipe(checkpoint_uri, path.read_bytes())
+
+    loaded = VSTFlowMatchingModule.load_from_checkpoint(
+        checkpoint_uri,
+        encoder=_WaveformEncoder(),
+        weights_only=False,
+    )
+
+    assert loaded.hparams["endpoint_time_weighting"] == "uniform"
+    torch.testing.assert_close(loaded.state_dict(), source.state_dict())
+
+
+@pytest.mark.parametrize("error_type", [FileNotFoundError, PermissionError])
+def test_load_checkpoint_permanent_path_error_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[OSError],
+) -> None:
+    """Permanent path failures propagate after one open attempt.
+
+    :param monkeypatch: Patches the fsspec boundary.
+    :param error_type: Permanent path exception under test.
+    """
+    open_attempts = 0
+
+    def fail_open(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        nonlocal open_attempts
+        open_attempts += 1
+        raise error_type("permanent checkpoint read failure")
+
+    monkeypatch.setattr(fsspec, "open", fail_open)
+
+    with pytest.raises(error_type, match="permanent checkpoint read failure"):
+        VSTFlowMatchingModule.load_from_checkpoint("memory://missing.ckpt")
+
+    assert open_attempts == 1
+
+
+def test_load_legacy_checkpoint_without_endpoint_time_weighting_counts_as_uniform(
+    tmp_path: Path,
+) -> None:
+    """Metadata-free checkpoints retain the historical uniform objective.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="uniform"),
+        tmp_path / "legacy.ckpt",
+        omit_metadata="endpoint_time_weighting",
+    )
+
+    loaded = VSTFlowMatchingModule.load_from_checkpoint(
+        path,
+        encoder=_WaveformEncoder(),
+        weights_only=False,
+    )
+
+    assert loaded.hparams["endpoint_time_weighting"] == "uniform"
+
+
+def test_load_legacy_checkpoint_with_flowmol3_module_raises(tmp_path: Path) -> None:
+    """A metadata-free uniform checkpoint cannot resume under FlowMol3 weighting.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(endpoint_time_weighting="uniform"),
+        tmp_path / "legacy.ckpt",
+        omit_metadata="endpoint_time_weighting",
+    )
+    checkpoint = torch.load(path, weights_only=False)
+    module = _module(endpoint_time_weighting="flowmol3")
+
+    with pytest.raises(ValueError, match="endpoint_time_weighting"):
+        module.on_load_checkpoint(checkpoint)
 
 
 def test_vst_flow_config_defaults_endpoint_loss_to_mse() -> None:
@@ -608,3 +944,4 @@ def test_vst_flow_config_defaults_endpoint_loss_to_mse() -> None:
     config = OmegaConf.load(path)
 
     assert config.endpoint_loss == "mse"
+    assert config.endpoint_time_weighting == "uniform"

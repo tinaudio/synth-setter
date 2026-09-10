@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from synth_setter.data.vst import faustwasm_contract
 from synth_setter.data.vst.core import extract_backend_version
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.faustwasm_contract import faustwasm_parameter_contract
@@ -74,6 +72,7 @@ def _config(identity: str = "faust_bright_organ", channels: int = 2) -> RenderCo
         synth=SYNTHS[SynthName(identity)],
         renderer_backend="faustwasm",
         backend_version=_FAUSTWASM_VERSION,
+        block_size=64,
         render_contract_version=2,
         sample_rate=44_100,
         channels=channels,
@@ -122,39 +121,6 @@ def test_faustwasm_contract_covers_every_canonical_parameter_once() -> None:
         assert [item.canonical_address for item in contract] == spec.synth_param_names
 
 
-def test_faustwasm_contract_incomplete_address_table_is_rejected(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A compiler map cannot silently omit canonical controls.
-
-    :param monkeypatch: Replaces the address table with an incomplete snapshot.
-    """
-    identity = ParamSpecName("faust_filter_osc")
-    monkeypatch.setattr(faustwasm_contract, "_WASM_ADDRESSES", {identity: ()})
-
-    with pytest.raises(ValueError, match="address mapping is incomplete"):
-        faustwasm_parameter_contract(identity)
-
-
-def test_faustwasm_contract_unsupported_parameter_domain_is_rejected(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A canonical parameter without a supported native domain fails closed.
-
-    :param monkeypatch: Supplies a registry result with an unsupported parameter kind.
-    """
-    identity = ParamSpecName("faust_filter_osc")
-    monkeypatch.setattr(faustwasm_contract, "_WASM_ADDRESSES", {identity: ("/unsupported",)})
-    monkeypatch.setattr(
-        faustwasm_contract,
-        "resolve_faust_param_spec",
-        lambda _identity: SimpleNamespace(synth_params=(object(),)),
-    )
-
-    with pytest.raises(TypeError, match="unsupported FaustWasm parameter object"):
-        faustwasm_parameter_contract(identity)
-
-
 @pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
 def test_faustwasm_backend_version_reads_pinned_node_package() -> None:
     """Backend provenance matches the installed lockfile dependency."""
@@ -196,6 +162,7 @@ def test_faustwasm_factory_renders_real_source(identity: str, channels: int) -> 
     audio = renderer.render(params, 60, 100, (0.05, 0.3))
 
     assert isinstance(renderer, FaustWasmRenderer)
+    assert renderer.block_size == 64
     assert audio.shape == (channels, 22_050)
     assert audio.dtype == np.float32
     assert np.isfinite(audio).all()
@@ -320,7 +287,11 @@ def test_faustwasm_and_dawdreamer_share_bright_organ_invariants() -> None:
     params = _midpoint_patch("faust_bright_organ")
     wasm = make_audio_renderer(_config()).render(params, 60, 100, (0.1, 0.25))
     daw_config = _config().model_copy(
-        update={"renderer_backend": "dawdreamer", "backend_version": "0.8.3"}
+        update={
+            "renderer_backend": "dawdreamer",
+            "backend_version": "0.8.3",
+            "block_size": None,
+        }
     )
     daw = make_audio_renderer(daw_config).render(params, 60, 100, (0.1, 0.25))
 

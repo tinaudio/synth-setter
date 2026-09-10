@@ -269,6 +269,10 @@ def compile_faustwasm_artifact(
     :param expected_outputs: Required channel count for renderer-owned compilation.
     :returns: Validated manifest whose paths are relative to ``output_directory``.
     :raises ValueError: The synth or compiled provenance differs from the registry contract.
+
+    Runtime setup errors (``RuntimeError``), compilation timeouts
+    (``subprocess.TimeoutExpired``), and failures (``subprocess.CalledProcessError``)
+    propagate to the caller.
     """
     if synth.format != "faust" or synth.source_sha256 is None:
         raise ValueError("FaustWasm artifacts require a registered Faust source")

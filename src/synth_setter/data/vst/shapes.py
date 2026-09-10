@@ -49,6 +49,7 @@ AUDIO_MP3_FIELD_METADATA: dict[bytes, bytes] = {b"mime_type": b"audio/mpeg"}
 # not in DATASET_FIELD_NAMES because the writers never emit them.
 M2L_FIELD: str = "m2l"
 CLAP_FIELD: str = "clap"
+CQT_FIELD: str = "cqt"
 SAME_S_FIELD: str = "same_s"
 SAME_L_FIELD: str = "same_l"
 SSONDO_FIELD: str = "ssondo"

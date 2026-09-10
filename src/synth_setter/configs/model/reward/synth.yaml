@@ -3,6 +3,10 @@
 _target_: synth_setter.models.components.rendered_reward.SynthRenderedReward.from_cfg_nodes
 render: ${render}
 synth: ${synth}
+# Initial scale-balancing weights keep MSS dominant; they are not empirically optimal.
 distance:
-  _target_: synth_setter.models.components.audio_distance.MultiScaleSpectralDistance
+  _target_: synth_setter.models.components.audio_distance.MultichannelAudioDistance
   sample_rate: ${render.sample_rate}
+  spectral_weight: 1.0
+  channel_mldr_weight: 0.1
+  pair_mldr_weight: 0.1

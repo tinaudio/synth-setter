@@ -388,6 +388,7 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
 @pytest.mark.parametrize(
     ("profile", "input_shape"),
     [
+        pytest.param("cqt", (256, 401), id="cqt"),
         pytest.param("same_s", (256, 44), id="same-s"),
         pytest.param("same_l", (256, 44), id="same-l"),
         pytest.param("t5gemma", (T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH), id="t5gemma"),
@@ -1248,7 +1249,7 @@ def test_log_per_param_mse_config_requires_synth_selection() -> None:
 
 @pytest.mark.parametrize("model_name", ["vst_flow", "vst_flowmlp"])
 def test_vst_flow_config_uses_active_synth_spec_for_structured_metrics(model_name: str) -> None:
-    """Every flow model receives the selected ParamSpec for number-group swaps.
+    """Every flow model receives the selected ParamSpec for grouped assignment metrics.
 
     :param model_name: Hydra flow-model group under test.
     """
@@ -1780,6 +1781,13 @@ def test_torchsynth_flow_ram_composes_the_post_training_module() -> None:
 
     assert cfg.model._target_ == "synth_setter.models.vst_flow_ram_module.VSTFlowRAMModule"
     assert cfg.model.reward.signal_length == cfg.datamodule.signal_length
+    assert (
+        cfg.model.reward.distance._target_
+        == "synth_setter.models.components.audio_distance.MultichannelAudioDistance"
+    )
+    assert cfg.model.reward.distance.spectral_weight == 1.0
+    assert cfg.model.reward.distance.channel_mldr_weight == 0.1
+    assert cfg.model.reward.distance.pair_mldr_weight == 0.1
     # The reward renders through torchsynth, which graph-breaks under compile (#2585).
     assert cfg.model.compile is False
     # Paper appendix D: no learning-rate schedule during post-training.
@@ -1849,6 +1857,13 @@ def test_surge_flow_ram_composes_the_surgepy_render_reward() -> None:
     assert cfg.synth.name == "surge_simple_surgepy"
     assert cfg.model.reward.render.renderer_backend == "surgepy"
     assert cfg.model.reward.distance.sample_rate == cfg.render.sample_rate
+    assert (
+        cfg.model.reward.distance._target_
+        == "synth_setter.models.components.audio_distance.MultichannelAudioDistance"
+    )
+    assert cfg.model.reward.distance.spectral_weight == 1.0
+    assert cfg.model.reward.distance.channel_mldr_weight == 0.1
+    assert cfg.model.reward.distance.pair_mldr_weight == 0.1
     assert cfg.model.compile is False
 
 

@@ -5,13 +5,18 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+from pathlib import Path
+from shutil import copyfileobj
+from tempfile import SpooledTemporaryFile
+from typing import IO, TYPE_CHECKING, Literal, Protocol, TypeVar, cast, runtime_checkable
 
+import fsspec
 import torch
 from beartype import beartype
 from jaxtyping import Bool, Float, Shaped, jaxtyped
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
+from torch.serialization import MAP_LOCATION
 
 from synth_setter.conditioning import (
     Conditioning,
@@ -21,12 +26,13 @@ from synth_setter.conditioning import (
 )
 from synth_setter.metrics import (
     BestSwapParamMSE,
-    NumberGroupSwapParamMSE,
+    NumberGroupOptimalAssignmentParamMSE,
     best_swap_per_param_mse,
     midi_pitch_residuals,
-    number_group_swap_per_param_mse,
+    number_group_optimal_assignment_per_param_mse,
     supports_midi_pitch_residuals,
 )
+from synth_setter.model_cache import retry_external_io
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 from synth_setter.models.components.sketch_tokens import CONTROL_GROUPS, SketchControlTokens
 
@@ -37,20 +43,59 @@ _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 _PARAM_SHAPE = "params"
 _SampleBatch = Mapping[str, Shaped[torch.Tensor, _BATCH_ANY_SHAPE] | None]
 # Stored outside hyper_parameters because Lightning replaces those with load-time kwargs
-# before the hook runs; missing keys retain their legacy velocity/MSE meanings.
+# before the hook runs; missing keys retain their legacy objective meanings.
 _ENDPOINT_LOSS_KEY = "endpoint_loss"
 _LEGACY_ENDPOINT_LOSS = "mse"
+_ENDPOINT_TIME_WEIGHTING_KEY = "endpoint_time_weighting"
+_LEGACY_ENDPOINT_TIME_WEIGHTING = "uniform"
 _PARAMETERIZATION_KEY = "parameterization"
 _LEGACY_PARAMETERIZATION = "velocity"
 
 EndpointLoss = Literal["mse", "mixed"]
+EndpointTimeWeighting = Literal["uniform", "flowmol3"]
 Parameterization = Literal["velocity", "endpoint"]
 _ENDPOINT_LOSSES: frozenset[str] = frozenset(("mixed", "mse"))
+_ENDPOINT_TIME_WEIGHTINGS: frozenset[str] = frozenset(("flowmol3", "uniform"))
 _PARAMETERIZATIONS: frozenset[str] = frozenset(("endpoint", "velocity"))
 _EVAL_BATCH_SEED_STRIDE = 2**16
 _EVAL_SEED_MODULUS = 2**63 - 1
 _EVAL_TEST_SEED_OFFSET = 1_000_003
 _FIXED_TIME_PERCENT_CENTERS = tuple(range(5, 100, 10))
+_CHECKPOINT_SPOOL_BYTES = 64 * 1024**2
+_VSTFlowMatchingModuleT = TypeVar(
+    "_VSTFlowMatchingModuleT",
+    bound="VSTFlowMatchingModule",
+)
+
+
+@retry_external_io(retry_exceptions=(ConnectionError, TimeoutError))
+@jaxtyped(typechecker=beartype)
+def _copy_checkpoint_path(checkpoint_path: str | Path, destination: IO[bytes]) -> None:
+    """Copy a checkpoint into a seekable buffer with bounded I/O retries.
+
+    :param checkpoint_path: Local or fsspec-compatible checkpoint path.
+    :param destination: Reusable binary buffer reset before every attempt.
+    """
+    destination.seek(0)
+    destination.truncate()
+    with fsspec.open(str(checkpoint_path), "rb") as source:
+        copyfileobj(source, destination)
+    destination.seek(0)
+
+
+@jaxtyped(typechecker=beartype)
+def _checkpoint_endpoint_time_weighting(checkpoint: Mapping[str, object]) -> object:
+    stored = checkpoint.get(_ENDPOINT_TIME_WEIGHTING_KEY)
+    if stored is not None:
+        return stored
+    hyperparameters = checkpoint.get("hyper_parameters")
+    if isinstance(hyperparameters, Mapping):
+        return hyperparameters.get(
+            _ENDPOINT_TIME_WEIGHTING_KEY,
+            _LEGACY_ENDPOINT_TIME_WEIGHTING,
+        )
+    return _LEGACY_ENDPOINT_TIME_WEIGHTING
+
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import (
@@ -446,6 +491,76 @@ def integrate_flow(
 class VSTFlowMatchingModule(LightningModule):
     """Flow-matching LightningModule for VST parameter prediction (CFG + RK4 sampling)."""
 
+    @classmethod
+    @jaxtyped(typechecker=beartype)
+    def load_from_checkpoint(
+        cls: type[_VSTFlowMatchingModuleT],
+        checkpoint_path: str | Path | IO[bytes],
+        map_location: MAP_LOCATION = None,
+        hparams_file: str | Path | None = None,
+        strict: bool | None = None,
+        weights_only: bool | None = None,
+        **kwargs: object,
+    ) -> _VSTFlowMatchingModuleT:
+        r"""Load weights without letting overrides erase an unstamped objective.
+
+        .. note:: Raw metadata is checked before Lightning applies constructor overrides.
+
+        :param checkpoint_path: Local or remote Lightning checkpoint.
+        :param map_location: Device remapping accepted by Lightning.
+        :param hparams_file: Optional external hyperparameter file.
+        :param strict: Whether state-dict keys must match exactly.
+        :param weights_only: Whether torch loading is restricted to weights-safe types.
+        :param \**kwargs: Constructor overrides applied by Lightning.
+        :returns: Restored module.
+        :raises TypeError: The checkpoint payload is not a mapping.
+        :raises ValueError: An override conflicts with pre-stamp objective metadata, or an external
+            hyperparameter file makes that metadata unverifiable.
+        """
+        with SpooledTemporaryFile(max_size=_CHECKPOINT_SPOOL_BYTES) as staged_checkpoint:
+            if isinstance(checkpoint_path, (str, Path)):
+                _copy_checkpoint_path(checkpoint_path, staged_checkpoint)
+            else:
+                copyfileobj(checkpoint_path, staged_checkpoint)
+                staged_checkpoint.seek(0)
+
+            checkpoint = torch.load(
+                staged_checkpoint,
+                map_location=map_location,
+                weights_only=weights_only,
+            )
+            if not isinstance(checkpoint, Mapping):
+                raise TypeError("Lightning checkpoint payload must be a mapping")
+            if _ENDPOINT_TIME_WEIGHTING_KEY not in checkpoint:
+                stored_time_weighting = _checkpoint_endpoint_time_weighting(checkpoint)
+                if hparams_file is not None:
+                    raise ValueError(
+                        "cannot verify endpoint_time_weighting for an unstamped checkpoint "
+                        "when hparams_file is provided"
+                    )
+                requested_time_weighting = kwargs.get(
+                    _ENDPOINT_TIME_WEIGHTING_KEY,
+                    stored_time_weighting,
+                )
+                if requested_time_weighting != stored_time_weighting:
+                    raise ValueError(
+                        f"checkpoint trained endpoint_time_weighting={stored_time_weighting!r}, "
+                        f"load override requested {requested_time_weighting!r}"
+                    )
+            del checkpoint
+            staged_checkpoint.seek(0)
+            return cast(
+                _VSTFlowMatchingModuleT,
+                super().load_from_checkpoint(
+                    staged_checkpoint,
+                    map_location=map_location,
+                    hparams_file=hparams_file,
+                    strict=strict,
+                    weights_only=weights_only,
+                    **kwargs,
+                ),
+            )
+
     def __init__(
         self,
         encoder: torch.nn.Module,
@@ -468,6 +583,7 @@ class VSTFlowMatchingModule(LightningModule):
         rectified_sigma_min: float = 0.0,
         parameterization: Parameterization = "velocity",
         endpoint_loss: EndpointLoss = "mse",
+        endpoint_time_weighting: EndpointTimeWeighting = "uniform",
         seeded_evaluation: bool = False,
         validation_sample_steps: int = 50,
         validation_cfg_strength: float = 4.0,
@@ -485,7 +601,7 @@ class VSTFlowMatchingModule(LightningModule):
             ``_partial_: true``); invoked in :meth:`configure_optimizers`.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param num_params: Parameter-vector width the field operates on.
-        :param param_spec: Registered parameter spec enabling structured swap metrics.
+        :param param_spec: Registered parameter spec enabling grouped assignment metrics.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
         :param sketch_controls: Optional sketch-control spec enabling concat
             control-token injection into the vector field (#2612).
@@ -503,6 +619,8 @@ class VSTFlowMatchingModule(LightningModule):
         :param parameterization: What the field predicts: the velocity ``x1 - x0`` or the
             clean endpoint ``x1``; the sampler converts an endpoint to a velocity.
         :param endpoint_loss: Flat endpoint MSE, or per-parameter MSE/CE for one-hot spans.
+        :param endpoint_time_weighting: Uniform endpoint-row weighting, or clipped FlowMol3
+            odds weighting.
         :param seeded_evaluation: Whether validation and test use seed-derived local noise.
         :param validation_sample_steps: RK4 integration steps used at validation.
         :param validation_cfg_strength: Content guidance strength at validation.
@@ -535,6 +653,15 @@ class VSTFlowMatchingModule(LightningModule):
             raise ValueError("endpoint_loss='mixed' requires parameterization='endpoint'")
         if endpoint_loss == "mixed" and param_spec is None:
             raise ValueError("endpoint_loss='mixed' requires param_spec")
+        if endpoint_time_weighting not in _ENDPOINT_TIME_WEIGHTINGS:
+            raise ValueError(
+                "endpoint_time_weighting must be one of "
+                f"{sorted(_ENDPOINT_TIME_WEIGHTINGS)}, got {endpoint_time_weighting!r}"
+            )
+        if endpoint_time_weighting == "flowmol3" and parameterization != "endpoint":
+            raise ValueError(
+                "endpoint_time_weighting='flowmol3' requires parameterization='endpoint'"
+            )
 
         # Saving hyperparameters deep-copies them, which a weight-normalized frozen encoder
         # inside the audio term cannot survive; the term is training-time only, so it is not
@@ -592,11 +719,11 @@ class VSTFlowMatchingModule(LightningModule):
             if metric_spec is not None and supports_midi_pitch_residuals(metric_spec)
             else None
         )
-        self.val_param_mse_number_group_swap = (
-            NumberGroupSwapParamMSE(metric_spec) if metric_spec is not None else None
+        self.val_param_mse_number_group_optimal_assignment = (
+            NumberGroupOptimalAssignmentParamMSE(metric_spec) if metric_spec is not None else None
         )
-        self.test_param_mse_number_group_swap = (
-            NumberGroupSwapParamMSE(metric_spec) if metric_spec is not None else None
+        self.test_param_mse_number_group_optimal_assignment = (
+            NumberGroupOptimalAssignmentParamMSE(metric_spec) if metric_spec is not None else None
         )
 
     def on_train_start(self) -> None:
@@ -614,12 +741,13 @@ class VSTFlowMatchingModule(LightningModule):
 
     @jaxtyped(typechecker=beartype)
     def on_save_checkpoint(self, checkpoint: dict[str, object]) -> None:
-        """Stamp output semantics and exclude re-resolvable frozen CLAP state.
+        """Stamp objective semantics and exclude re-resolvable frozen CLAP state.
 
         :param checkpoint: Mutable Lightning checkpoint payload.
         :raises TypeError: A pretrained-encoder checkpoint has malformed state metadata.
         """
         checkpoint[_ENDPOINT_LOSS_KEY] = self.hparams.endpoint_loss
+        checkpoint[_ENDPOINT_TIME_WEIGHTING_KEY] = self.hparams.endpoint_time_weighting
         checkpoint[_PARAMETERIZATION_KEY] = self.hparams.parameterization
         if not isinstance(self.encoder, PretrainedConditioningEncoder):
             return
@@ -640,8 +768,8 @@ class VSTFlowMatchingModule(LightningModule):
 
         :param checkpoint: Mutable Lightning checkpoint payload.
         :raises TypeError: A pretrained-encoder checkpoint has a malformed state dictionary.
-        :raises ValueError: The checkpoint trained another parameterization or endpoint loss; same-
-            shaped weights would load but carry incompatible output semantics.
+        :raises ValueError: The checkpoint trained another parameterization, endpoint loss, or
+            endpoint time weighting; same-shaped weights would load under another objective.
         """
         stored_parameterization = checkpoint.get(_PARAMETERIZATION_KEY, _LEGACY_PARAMETERIZATION)
         if stored_parameterization != self.hparams.parameterization:
@@ -654,6 +782,12 @@ class VSTFlowMatchingModule(LightningModule):
             raise ValueError(
                 f"checkpoint trained endpoint_loss={stored_endpoint_loss!r}, "
                 f"module expects {self.hparams.endpoint_loss!r}"
+            )
+        stored_time_weighting = _checkpoint_endpoint_time_weighting(checkpoint)
+        if stored_time_weighting != self.hparams.endpoint_time_weighting:
+            raise ValueError(
+                f"checkpoint trained endpoint_time_weighting={stored_time_weighting!r}, "
+                f"module expects {self.hparams.endpoint_time_weighting!r}"
             )
         if not isinstance(self.encoder, PretrainedConditioningEncoder):
             return
@@ -668,7 +802,15 @@ class VSTFlowMatchingModule(LightningModule):
         return torch.rand(n, 1, device=device)
 
     def _weight_time(self, t: torch.Tensor) -> torch.Tensor:
-        return torch.ones_like(t)
+        """Return the configured per-row endpoint objective weight.
+
+        :param t: Flow time shaped ``(batch, 1)``.
+        :returns: Unit weights or clipped FlowMol3 odds weights with the same shape.
+        """
+        if self.hparams.endpoint_time_weighting == "uniform":
+            return torch.ones_like(t)
+        denominator = (1 - t).clamp_min(torch.finfo(t.dtype).eps)
+        return (t / denominator).clamp(min=0.005, max=1.5)
 
     def _basic_sample(self, params: torch.Tensor, oversample: float = 1.0):
         if oversample == 1.0:
@@ -1253,13 +1395,13 @@ class VSTFlowMatchingModule(LightningModule):
         self,
         predicted: Float[torch.Tensor, "batch params"],
         target: Float[torch.Tensor, "batch params"],
-        number_group_metric: NumberGroupSwapParamMSE | None,
+        number_group_metric: NumberGroupOptimalAssignmentParamMSE | None,
     ) -> dict[str, Shaped[torch.Tensor, ...]]:
         """Build the per-parameter metrics consumed by evaluation callbacks.
 
         :param predicted: Sampled model-space parameter vectors.
         :param target: Ground-truth model-space parameter vectors.
-        :param number_group_metric: Structured metric defining eligible parameter swaps.
+        :param number_group_metric: Structured metric defining eligible grouped assignments.
         :returns: Scalar, per-parameter, and prediction tensors for one batch.
         """
         per_param_mse = (predicted - target).square().mean(dim=0)
@@ -1270,10 +1412,12 @@ class VSTFlowMatchingModule(LightningModule):
             "preds": predicted,
         }
         if number_group_metric is not None:
-            outputs["per_param_mse_number_group_swap"] = number_group_swap_per_param_mse(
-                predicted,
-                target,
-                number_group_metric.param_spec,
+            outputs["per_param_mse_number_group_optimal_assignment"] = (
+                number_group_optimal_assignment_per_param_mse(
+                    predicted,
+                    target,
+                    number_group_metric.param_spec,
+                )
             )
         return outputs
 
@@ -1308,7 +1452,7 @@ class VSTFlowMatchingModule(LightningModule):
         outputs = self._per_param_mse_outputs(
             pred_params,
             batch["params"],
-            self.val_param_mse_number_group_swap,
+            self.val_param_mse_number_group_optimal_assignment,
         )
         self.log(
             "val/param_mse", outputs["param_mse"], on_step=False, on_epoch=True, prog_bar=True
@@ -1321,11 +1465,11 @@ class VSTFlowMatchingModule(LightningModule):
             on_step=False,
             on_epoch=True,
         )
-        if self.val_param_mse_number_group_swap is not None:
-            self.val_param_mse_number_group_swap.update(pred_params, batch["params"])
+        if self.val_param_mse_number_group_optimal_assignment is not None:
+            self.val_param_mse_number_group_optimal_assignment.update(pred_params, batch["params"])
             self.log(
-                "val/param_mse_number_group_swap",
-                self.val_param_mse_number_group_swap,
+                "val/param_mse_number_group_optimal_assignment",
+                self.val_param_mse_number_group_optimal_assignment,
                 on_step=False,
                 on_epoch=True,
             )
@@ -1364,7 +1508,7 @@ class VSTFlowMatchingModule(LightningModule):
         outputs = self._per_param_mse_outputs(
             pred_params,
             batch["params"],
-            self.test_param_mse_number_group_swap,
+            self.test_param_mse_number_group_optimal_assignment,
         )
         self.log(
             "test/param_mse", outputs["param_mse"], on_step=False, on_epoch=True, prog_bar=True
@@ -1377,11 +1521,13 @@ class VSTFlowMatchingModule(LightningModule):
             on_step=False,
             on_epoch=True,
         )
-        if self.test_param_mse_number_group_swap is not None:
-            self.test_param_mse_number_group_swap.update(pred_params, batch["params"])
+        if self.test_param_mse_number_group_optimal_assignment is not None:
+            self.test_param_mse_number_group_optimal_assignment.update(
+                pred_params, batch["params"]
+            )
             self.log(
-                "test/param_mse_number_group_swap",
-                self.test_param_mse_number_group_swap,
+                "test/param_mse_number_group_optimal_assignment",
+                self.test_param_mse_number_group_optimal_assignment,
                 on_step=False,
                 on_epoch=True,
             )

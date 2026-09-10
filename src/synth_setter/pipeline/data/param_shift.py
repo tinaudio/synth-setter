@@ -212,19 +212,19 @@ def _shift_metrics(original: np.ndarray, shifted: np.ndarray, sample_rate: int) 
     :raises ValueError: A metric produced a non-finite score.
     """
     from synth_setter.evaluation.compute_audio_metrics import (
-        compute_mss,
-        compute_rms,
-        compute_sot,
-        compute_wmfcc,
+        compute_mss_corresponding_channels,
+        compute_rms_downmix,
+        compute_sot_downmix,
+        compute_wmfcc_global_joint,
     )
 
     target = np.ascontiguousarray(original, dtype=np.float32)
     pred = np.ascontiguousarray(shifted, dtype=np.float32)
     scores = {
-        SHIFT_RMS_SUBFIELD: float(compute_rms(target, pred, sample_rate)),
-        SHIFT_SOT_SUBFIELD: float(compute_sot(target, pred, sample_rate)),
-        SHIFT_WMFCC_SUBFIELD: float(compute_wmfcc(target, pred, sample_rate)),
-        SHIFT_MSS_SUBFIELD: float(compute_mss(target, pred, sample_rate)),
+        SHIFT_RMS_SUBFIELD: float(compute_rms_downmix(target, pred, sample_rate)),
+        SHIFT_SOT_SUBFIELD: float(compute_sot_downmix(target, pred, sample_rate)),
+        SHIFT_WMFCC_SUBFIELD: float(compute_wmfcc_global_joint(target, pred, sample_rate)),
+        SHIFT_MSS_SUBFIELD: float(compute_mss_corresponding_channels(target, pred, sample_rate)),
     }
     non_finite = sorted(name for name, score in scores.items() if not np.isfinite(score))
     if non_finite:

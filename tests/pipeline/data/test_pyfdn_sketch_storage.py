@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import os
 from pathlib import Path
+import sys
 from typing import cast
 
 import lance
@@ -37,6 +39,13 @@ PYFDN_SKETCH_FRAMES = 32
 PYFDN_EDC_BANDS = 8
 PYFDN_SKETCH_CONTROLS = 10
 _REAL_ADD_COLUMNS = lance.LanceDataset.add_columns
+_MUTMUT_STATS = (
+    os.environ.get("MUTANT_UNDER_TEST") == "stats" and "mutmut.__main__" in sys.modules
+)
+_MUTMUT_SPAWN_SKIP = pytest.mark.skipif(
+    _MUTMUT_STATS,
+    reason="mutmut's embedded pytest cannot start spawn workers; see #3435",
+)
 
 
 def _add_columns_in_process(
@@ -46,6 +55,13 @@ def _add_columns_in_process(
     read_columns: list[str],
     batch_size: int,
 ) -> None:
+    """Run Lance column encoding synchronously for deterministic assertions.
+
+    :param dataset: Dataset receiving the encoded columns.
+    :param udf: Encoder applied to each source batch.
+    :param read_columns: Source columns passed to the encoder.
+    :param batch_size: Number of rows encoded per batch.
+    """
     outputs = []
     for batch in dataset.to_batches(columns=read_columns, batch_size=batch_size):
         output = udf(batch)
@@ -55,6 +71,11 @@ def _add_columns_in_process(
 
 
 def _controls(rows: int = 2) -> np.ndarray:
+    """Build deterministic temporal controls for storage assertions.
+
+    :param rows: Number of control rows to build.
+    :returns: Fixed-shape temporal controls in the persisted value range.
+    """
     values = np.arange(
         rows * PYFDN_SKETCH_CONTROLS * PYFDN_SKETCH_FRAMES, dtype=np.float32
     )
@@ -202,6 +223,7 @@ def test_add_embeddings_config_num_workers_below_one_raises() -> None:
         )
 
 
+@_MUTMUT_SPAWN_SKIP
 def test_pyfdn_sketch_pooled_encoder_matches_serial_output_bit_exact() -> None:
     """A worker pool changes throughput only; every output byte matches serial."""
     sample_rate = 44_100
@@ -333,7 +355,9 @@ def test_write_columns_with_failing_encoder_still_closes_pools(tmp_path: Path) -
     assert encoder.closed
 
 
-@pytest.mark.parametrize("num_workers", [1, 2])
+@pytest.mark.parametrize(
+    "num_workers", [1, pytest.param(2, marks=_MUTMUT_SPAWN_SKIP)]
+)
 def test_pyfdn_sketch_augmentation_round_trip_through_datamodule(
     tmp_path: Path, num_workers: int
 ) -> None:

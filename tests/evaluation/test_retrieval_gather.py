@@ -1,5 +1,7 @@
 """Rank-global retrieval handles padding, empty ranks, and ragged observations."""
 
+import os
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -43,6 +45,12 @@ def test_gather_two_cpu_processes_deduplicates_padding_and_handles_empty_rank(
 
     :param tmp_path: Rendezvous and result directory.
     """
+    if os.environ.get("MUTANT_UNDER_TEST") == "stats" and "mutmut.__main__" in sys.modules:
+        pytest.xfail(
+            "https://github.com/tinaudio/synth-setter/issues/3358: mutmut's embedded pytest "
+            "cannot reimport its CLI in spawn workers"
+        )
+
     spawn(
         _gather_worker,
         args=(f"file://{tmp_path / 'rendezvous'}", str(tmp_path)),

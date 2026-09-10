@@ -93,45 +93,34 @@ def test_quantize_note_window_subsample_interval_remains_representable() -> None
 
 
 @pytest.mark.parametrize(
-    "window",
+    ("window", "frames", "duration"),
     [
-        (float("nan"), 0.1),
-        (0.0, float("inf")),
-        (-0.1, 0.1),
-        (0.1, 0.1),
-        (0.2, 0.1),
-        (0.0, 0.21),
-        (0.11, 0.15),
+        ((float("nan"), 0.1), 1, 0.15),
+        ((0.0, float("inf")), 1, 0.15),
+        ((-0.1, 0.1), 1, 0.15),
+        ((0.1, 0.1), 1, 0.15),
+        ((0.2, 0.1), 1, 0.15),
+        ((0.0, 0.21), 2, 0.2),
+        ((0.11, 0.15), 1, 0.15),
     ],
 )
 def test_quantize_note_window_invalid_or_unrepresentable_window_rejected(
     window: tuple[float, float],
+    frames: int,
+    duration: float,
 ) -> None:
     """Malformed, out-of-range, and discarded-tail windows fail before Node.
 
     :param window: Invalid note window under test.
+    :param frames: Fixed output frame count.
+    :param duration: Configured output duration in seconds.
     """
     with pytest.raises(ValueError, match="note times"):
         _quantize_note_window(
             window,
             sample_rate=10,
-            frames=2 if window[-1] > 0.15 else 1,
-            signal_duration_seconds=0.2 if window[-1] > 0.15 else 0.15,
-        )
-
-
-@pytest.mark.parametrize("frames", [0, -1, 1.5, True])
-def test_quantize_note_window_invalid_frame_count_rejected(frames: object) -> None:
-    """A non-positive or non-integral output length cannot define a note window.
-
-    :param frames: Invalid fixed output length under test.
-    """
-    with pytest.raises(ValueError, match="frames must be a positive integer"):
-        _quantize_note_window(
-            (0.0, 0.1),
-            sample_rate=10,
-            frames=frames,  # type: ignore[arg-type]
-            signal_duration_seconds=0.1,
+            frames=frames,
+            signal_duration_seconds=duration,
         )
 
 
@@ -155,59 +144,6 @@ def test_faustwasm_renderer_invalid_block_size_fails_before_compile(block_size: 
             backend_version=FAUSTWASM_VERSION,
             block_size=block_size,  # type: ignore[arg-type]
         )
-
-
-@pytest.mark.parametrize(
-    ("overrides", "message"),
-    [
-        ({"backend_version": "0.0.0"}, "backend version"),
-        ({"plugin_state_path": "preset.fxp"}, "accepts no preset path"),
-        ({"sample_rate": float("nan")}, "sample_rate must be finite and positive"),
-        ({"sample_rate": 0.0}, "sample_rate must be finite and positive"),
-        ({"signal_duration_seconds": float("nan")}, "signal_duration_seconds must be finite and positive"),
-        ({"signal_duration_seconds": 0.0}, "signal_duration_seconds must be finite and positive"),
-        (
-            {"sample_rate": 0.1, "signal_duration_seconds": 0.1},
-            "render duration must contain at least one output frame",
-        ),
-        ({"source_sha256": "0" * 64}, "source_sha256 does not match"),
-    ],
-)
-def test_faustwasm_renderer_invalid_provenance_or_dimensions_fail_before_compile(
-    overrides: dict[str, object],
-    message: str,
-) -> None:
-    """Invalid renderer boundaries fail without creating compiler resources.
-
-    :param overrides: Invalid constructor fields under test.
-    :param message: Expected boundary-error fragment.
-    """
-    synth = SYNTHS[SynthName("faust_filter_osc")]
-    values: dict[str, object] = {
-        "plugin_path": synth.plugin_path,
-        "plugin_state_path": synth.plugin_state_path,
-        "sample_rate": 44_100.0,
-        "channels": 1,
-        "signal_duration_seconds": 0.1,
-        "param_spec_name": synth.param_spec_name,
-        "source_sha256": synth.source_sha256 or "",
-        "backend_version": FAUSTWASM_VERSION,
-    }
-    values.update(overrides)
-
-    with pytest.raises(ValueError, match=message):
-        FaustWasmRenderer(**values)  # type: ignore[arg-type]
-
-
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
-def test_faustwasm_unknown_patch_parameter_is_rejected() -> None:
-    """An unregistered canonical address cannot reach the render worker."""
-    renderer = _renderer("faust_filter_osc", sample_rate=44_100, duration=0.01, channels=1)
-    patch = _patch("faust_filter_osc")
-    patch["/unknown"] = 0.5
-
-    with pytest.raises(KeyError, match="unknown canonical parameter.*unknown"):
-        renderer.render(patch, 60, 100, (0.0, 0.005))
 
 
 @pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")

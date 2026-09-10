@@ -31,39 +31,51 @@ if TYPE_CHECKING:
 class TestExtractBackendVersion:
     """Rendering-host package version extractor."""
 
-    def test_missing_faustwasm_package_reports_npm_command(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    @staticmethod
+    def _relocate_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+        relocated = tmp_path / "src/synth_setter/data/vst/core.py"
+        relocated.parent.mkdir(parents=True)
+        relocated.touch()
+        monkeypatch.setattr(core, "__file__", str(relocated))
+        return tmp_path / "node_modules/@grame/faustwasm/package.json"
+
+    def test_faustwasm_missing_package_metadata_raises_install_error(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """A checkout without Node dependencies reports the install command.
+        """A relocated checkout without npm metadata reports the install command.
 
-        :param tmp_path: Isolated checkout-shaped root.
-        :param monkeypatch: Redirects package discovery to the isolated root.
+        :param monkeypatch: Relocates the module file used to resolve the checkout root.
+        :param tmp_path: Real temporary checkout layout.
         """
-        module_path = tmp_path / "src/synth_setter/data/vst/core.py"
-        monkeypatch.setattr(core, "__file__", str(module_path))
+        self._relocate_module(monkeypatch, tmp_path)
 
-        with pytest.raises(RuntimeError, match="run `npm ci`"):
+        with pytest.raises(RuntimeError, match=r"not installed; run `npm ci`"):
             core.extract_backend_version("faustwasm")
 
-    def test_faustwasm_package_without_string_version_is_rejected(
+    @pytest.mark.parametrize(
+        "contents",
+        ['{}', '{"version": ""}', '{"version": 3}', "not-json"],
+    )
+    def test_faustwasm_invalid_package_metadata_raises_actionable_error(
         self,
-        tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        contents: str,
     ) -> None:
-        """Malformed Node package metadata cannot establish host provenance.
+        """Missing, non-string, and malformed versions share a metadata error.
 
-        :param tmp_path: Isolated checkout-shaped root.
-        :param monkeypatch: Redirects package discovery to the isolated root.
+        :param monkeypatch: Relocates the module file used to resolve the checkout root.
+        :param tmp_path: Real temporary checkout layout.
+        :param contents: Invalid package metadata under test.
         """
-        module_path = tmp_path / "src/synth_setter/data/vst/core.py"
-        monkeypatch.setattr(core, "__file__", str(module_path))
-        package = tmp_path / "node_modules/@grame/faustwasm/package.json"
+        package = self._relocate_module(monkeypatch, tmp_path)
         package.parent.mkdir(parents=True)
-        package.write_text('{"version": 18}')
+        package.write_text(contents)
 
-        with pytest.raises(RuntimeError, match="metadata has no version"):
+        with pytest.raises(
+            RuntimeError,
+            match=r"@grame/faustwasm package metadata .*run `npm ci`",
+        ):
             core.extract_backend_version("faustwasm")
 
     def test_unversioned_backend_rejects_separate_version_lookup(self) -> None:
