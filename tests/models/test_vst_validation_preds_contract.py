@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -321,9 +322,12 @@ def test_flow_matching_evaluation_noise_separates_stage_and_batch() -> None:
     val_first = module._evaluation_noise(params, 0, "val")  # noqa: SLF001
     val_second = module._evaluation_noise(params, 1, "val")  # noqa: SLF001
     test_first = module._evaluation_noise(params, 0, "test")  # noqa: SLF001
+    module._trainer = SimpleNamespace(global_rank=1)  # pyright: ignore[reportAttributeAccessIssue]
+    rank_one = module._evaluation_noise(params, 0, "val")  # noqa: SLF001
 
     assert not torch.equal(val_first, val_second)
     assert not torch.equal(val_first, test_first)
+    assert not torch.equal(val_first, rank_one)
 
 
 def test_flow_matching_sample_batch_changed_explicit_noise_changes_prediction() -> None:
