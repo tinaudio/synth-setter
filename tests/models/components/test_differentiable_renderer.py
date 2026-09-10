@@ -12,6 +12,28 @@ from synth_setter.models.components.differentiable_renderer import (
 )
 
 
+@pytest.mark.parametrize("field", ["sample_rate", "signal_length"])
+def test_flamo_experiment_geometry_override_propagates_to_renderer(field: str) -> None:
+    """Dependent components inherit the loss's configured geometry rather than stale literals.
+
+    :param field: Shared geometry coordinate to override.
+    """
+    from pathlib import Path
+
+    from omegaconf import OmegaConf
+
+    path = (
+        Path(__file__).parents[3]
+        / "src/synth_setter/configs/experiment/pyfdn/flow_audio_flamo.yaml"
+    )
+    config = OmegaConf.load(path)
+    config.model.audio_loss[field] += 1
+
+    assert config.model.audio_loss.renderer[field] == config.model.audio_loss[field]
+    if field == "sample_rate":
+        assert config.model.audio_loss.distance.sample_rate == config.model.audio_loss.sample_rate
+
+
 def _model_row(seed: int) -> tuple[torch.Tensor, ParameterValues]:
     spec = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
     native, note = spec.sample(np.random.default_rng(seed))

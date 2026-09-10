@@ -20,7 +20,9 @@ flow prediction / endpoint estimate
 registered ParamSpec. It reproduces offline `decode_model_output`: clipping for
 ordinary controls, whole-vector projection for directions, periodic angle-pair
 decoding, and the declared integer rounding rules. Feedback matrices are derived
-in PyTorch, not replaced with a fixed Householder matrix.
+in PyTorch, not replaced with a fixed Householder matrix. Ordinary clipping uses
+an affine straight-through gradient so out-of-range flow predictions are not
+stranded at physical bounds; forward values still match offline decoding exactly.
 
 `BasicFDNParamSpec.to_basic_fdn()` converts a native template into a
 `BasicFDN(build: pyFDN.FDNBuild)` describing the **entire** effect. Offline
