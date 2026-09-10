@@ -1128,7 +1128,7 @@ class VSTFlowMatchingModule(LightningModule):
     ) -> Float[torch.Tensor, "batch params"]:
         """Generate stage-local sampling noise without advancing global RNG state.
 
-        :param params: Target rows defining output shape, dtype, and device.
+        :param params: Target rows defining output shape and device; noise is float32.
         :param batch_idx: Stable loader batch position within the current rank.
         :param stage: Evaluation split namespace.
         :returns: Deterministic noise for a fixed seed and loader topology.
@@ -1159,7 +1159,12 @@ class VSTFlowMatchingModule(LightningModule):
         x0 = batch["noise"] if noise is None else noise
         conditioning = self.encoder(self._get_conditioning_from_batch(batch))
         control_branches = self._control_token_branches_from_batch(batch)
-        control_tokens = None if control_branches is None else control_branches.conditional
+        velocity_field = self._velocity_field(
+            conditioning,
+            1.0,
+            control_branches,
+            sketch_cfg_strength=1.0,
+        )
         prefix = (
             "endpoint_mse"
             if self.hparams.parameterization == "endpoint"
@@ -1170,11 +1175,14 @@ class VSTFlowMatchingModule(LightningModule):
         for index in _FIXED_TIME_PERCENT_CENTERS:
             t = torch.full((x1.shape[0], 1), index / 100, dtype=x1.dtype, device=x1.device)
             x_t = self._sample_probability_path(x0, x1, t)
-            if control_tokens is None:
-                prediction = self.vector_field(x_t, t, conditioning)
-            else:
-                prediction = self.vector_field(x_t, t, conditioning, control_tokens=control_tokens)
-            mse = (self._one_step_estimate(x_t, t, prediction) - x1).square().mean()
+            velocity = velocity_field(x_t, t)
+            # Endpoint fields are exposed to sampling as velocity, so reverse that adapter here.
+            endpoint = (
+                x_t + (1 - t) * velocity
+                if self.hparams.parameterization == "endpoint"
+                else self._one_step_estimate(x_t, t, velocity)
+            )
+            mse = (endpoint - x1).square().mean()
             metrics[f"{prefix}/t_{index:02d}"] = mse
             bin_values.append(mse)
         metrics[f"{prefix}/equal_bin_mean"] = torch.stack(bin_values).mean()

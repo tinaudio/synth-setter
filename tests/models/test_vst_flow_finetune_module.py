@@ -4,6 +4,7 @@ Every arm renders real torchsynth audio through the production differentiable re
 with the production spectral distance; nothing here stands in for the simulator.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -482,6 +483,33 @@ def _logged_control_metrics(
     module.log_dict = capture  # pyright: ignore[reportAttributeAccessIssue]
     module._train_step(batch)
     return logged
+
+
+def test_finetune_fixed_time_diagnostics_use_controlled_sampling_field(tmp_path: Path) -> None:
+    """Held-out diagnostics measure the finetuned field rather than its frozen base.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path), control_mode="null")
+    batch = _batch()
+    perfect_velocity = batch["params"] - batch["noise"]
+
+    def controlled_field(
+        *args: object, **kwargs: object
+    ) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+        del args, kwargs
+
+        def velocity(x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+            del t
+            return perfect_velocity.to(x_t)
+
+        return velocity
+
+    module._velocity_field = controlled_field  # pyright: ignore[reportAttributeAccessIssue]
+
+    metrics = module._fixed_time_endpoint_mse(batch, batch["noise"])  # noqa: SLF001
+
+    torch.testing.assert_close(metrics["velocity_endpoint_mse/equal_bin_mean"], torch.tensor(0.0))
 
 
 def test_finetune_train_step_loss_carries_no_audio_term(tmp_path: Path) -> None:

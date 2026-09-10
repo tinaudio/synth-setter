@@ -92,7 +92,7 @@ def _flow_module(
     """Build a tiny real flow-matching module with a 1-step sampler.
 
     :param num_params: Parameter-vector width.
-    :param endpoint_loss: Endpoint objective selection.
+    :param endpoint_loss: Flat MSE or per-parameter MSE/CE for one-hot spans.
     :param parameterization: Field output semantics.
     :param param_spec: Optional registered spec enabling structured swap metrics.
     :returns: Module wired for the fake batch shapes.
