@@ -386,6 +386,24 @@ def test_velocity_endpoint_diagnostic_nonzero_sigma_is_exact_for_perfect_field()
     torch.testing.assert_close(outputs.per_param_endpoint_mse, torch.zeros(_WIDTH))
 
 
+def test_velocity_endpoint_diagnostic_near_one_sigma_avoids_float32_cancellation() -> None:
+    """A valid near-one noise scale reconstructs a finite endpoint at zero time."""
+    sigma = 0.99999999
+    module = _module(
+        parameterization="velocity",
+        param_spec=None,
+        rectified_sigma_min=sigma,
+    )
+    x0 = torch.ones(_BATCH, _WIDTH)
+    endpoint = torch.full_like(x0, 2.0)
+    t = torch.zeros(_BATCH, 1)
+    x_t = (1 - sigma) * x0
+
+    estimate = module._one_step_estimate(x_t, t, endpoint - x0)  # noqa: SLF001
+
+    torch.testing.assert_close(estimate, endpoint)
+
+
 def test_train_step_mse_and_mixed_share_unweighted_endpoint_diagnostic() -> None:
     """Endpoint diagnostics compare typed model-space predictions under both objectives."""
     target = _target()
