@@ -197,27 +197,26 @@ requests never receive R2 credentials.
 ### Faust host parity
 
 [`test_faustwasm_dawdreamer_parity_e2e.py`](../../tests/data/vst/test_faustwasm_dawdreamer_parity_e2e.py)
-renders the same four-second bright-organ A/B/A volume workload through
-FaustWasm 0.18.3 and DawDreamer 0.8.3. Both paths use the production renderer
-factory, Lance writer, and Lance reader. Parity metrics cover the calibrated
-first 0.5 seconds. The test requires byte-identical normalized parameter rows,
-non-early aligned onsets, deterministic repeated A rows, and a causal difference
-for the B row.
+renders the same four-second bright-organ A/B/A volume workload through FaustWasm 0.18.3,
+DawDreamer 0.8.3, and the installed native Faust compiler. All paths use the production renderer
+factory, Lance writer, and Lance reader; metrics cover the calibrated first 0.5 seconds. The test
+requires byte-identical normalized parameter rows, non-early onsets aligned within one sample,
+deterministic repeated A rows, and a causal difference for the B row.
 
-Every matched row must satisfy mel RMSE ≤ 0.1, MSS ≤ 0.06, RMS-envelope cosine
-≥ 0.999, SOT ≤ 0.0001, and wMFCC ≤ 0.06. The calibration run observed mel RMSE
-0.057182, MSS 0.037057, RMS cosine 1.0, SOT 0.0000135, and wMFCC 0.029312 at
-worst. Run it locally with:
+The established DawDreamer/FaustWasm limits remain mel RMSE ≤ 0.1, MSS ≤ 0.06, RMS-envelope
+cosine ≥ 0.999, SOT ≤ 0.0001, and wMFCC ≤ 0.06. Native C++/FaustWasm uses compiler-calibrated
+limits of mel RMSE ≤ 3.75, MSS ≤ 1.5, RMS-envelope cosine ≥ 0.997, SOT ≤ 0.0013, and wMFCC ≤
+2.3. The Faust 2.70.3 calibration observed 3.109090, 1.170763, 0.997801, 0.001048, and 1.901054,
+respectively. Run all host-parity cases locally with:
 
 ```bash
 npm ci
 uv run pytest -vv -s tests/data/vst/test_faustwasm_dawdreamer_parity_e2e.py
 ```
 
-The test is `slow` but not `requires_vst`, so both CPU-slow CI selectors collect
-it after installing Node and Python dependencies. That lane also runs the real
-browser AudioWorklet E2E, guarding the browser-to-offline and
-offline-to-DawDreamer legs together.
+The test is `slow` but not `requires_vst`, so both CPU-slow CI selectors collect it after the
+workflow installs Node, Python dependencies, Faust, and `g++`. That lane also runs the real browser
+AudioWorklet E2E, guarding the browser-to-offline and both offline-host legs together.
 
 ## Metric input contract
 

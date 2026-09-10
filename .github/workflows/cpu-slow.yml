@@ -70,6 +70,11 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Install native Faust toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends faust g++
+
       - name: Install FaustWasm browser dependencies
         run: |
           npm --prefix scripts/faustwasm/browser ci

@@ -33,20 +33,35 @@ The E2E test drives `build_generate_args()` through the real generate-dataset su
 compiler, C++ compiler, native renderer, mel/MP3 transforms, and Lance writer. It then reads the
 row with Lance and checks its shapes, dtypes, finiteness, and non-silence.
 
-## DawDreamer comparison
+## Three-backend dataset benchmark
 
-A local AB/BA benchmark ran five trials per backend with 16 rows per trial. Both backends used the
-bright-organ source, seed 1808, 44.1 kHz stereo four-second audio, velocity 100, one-row render
-batches, per-render DSP isolation, no loudness floor, and block size 2048. Every accepted
-`param_array` was byte-identical across each backend pair. Timings include renderer construction
-and compilation, all renders, mel/MP3 transforms, and the Lance commit.
+Run the reproducible benchmark with:
+
+```bash
+synth-setter-benchmark-faust-backends \
+  --output /tmp/faust-backends-16x5 \
+  --rows 16 \
+  --trials 5 \
+  --seed 1808 \
+  --block-size 2048
+```
+
+The benchmark builds one deterministic bounded bright-organ corpus, then passes those exact synth
+patches and MIDI events to every host. Five rotated forward/reverse trials reduce execution-order
+bias. Each timing covers renderer construction and compilation, 16 four-second 44.1 kHz stereo
+renders, mel/MP3 transforms, and the Lance commit. The runner consumes every Lance dataset,
+requires byte-identical normalized parameter rows across all 15 runs, and writes raw timings,
+provenance, corpus digest, medians, and interquartile ranges to `results.json`.
+
+A local run on an Intel Core i9-14900KF running Linux 6.17 produced:
 
 | Backend          | Version | Median wall time | Wall-time IQR | Median throughput | Throughput IQR |
 | ---------------- | ------- | ---------------: | ------------: | ----------------: | -------------: |
-| DawDreamer Faust | 0.8.3   |          8.166 s |       0.098 s |      1.959 rows/s |   0.023 rows/s |
-| Native Faust C++ | 2.70.3  |          5.584 s |       0.101 s |      2.865 rows/s |   0.052 rows/s |
+| DawDreamer Faust | 0.8.3   |          4.995 s |       0.042 s |      3.203 rows/s |   0.027 rows/s |
+| Native Faust C++ | 2.70.3  |          3.036 s |       0.117 s |      5.269 rows/s |   0.200 rows/s |
+| FaustWasm        | 0.18.3  |          2.557 s |       0.174 s |      6.257 rows/s |   0.443 rows/s |
 
-On an Intel Core i9-14900KF running Linux 6.17, native C++ completed the full generation path
-1.46× faster, reducing median wall time by 31.6%. These figures characterize this machine and
-small-shard workload; run the same production-path comparison on target worker hardware before
-using the ratio for capacity planning.
+Native C++ was 1.65× faster than DawDreamer with 39.2% lower median wall time. FaustWasm was 1.19×
+faster than native C++ on this workload. These figures characterize one machine, the bounded
+benchmark corpus, and a small shard. The committed production config pins Faust 2.37.3 rather than
+the locally available 2.70.3, so benchmark target worker images before capacity planning.
