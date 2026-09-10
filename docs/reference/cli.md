@@ -129,6 +129,17 @@ synth-setter-train experiment=surge/flow_simple seed=12345 model.seeded_evaluati
 These commands define comparable configurations; they do not establish a measured quality
 improvement for either objective or weighting.
 
+For repeatable standalone flow evaluation, opt in through the model config and provide the seed
+explicitly:
+
+```bash
+synth-setter-eval experiment=surge/flow_simple ckpt_path=/path/to/model.ckpt model.seeded_evaluation=true seed=12345
+```
+
+The eval config declares `seed: null` so Hydra accepts `seed=...`; it supplies no fallback. When
+`model.seeded_evaluation=false` (the default), evaluation ignores the seed and retains fresh
+sampling.
+
 ## Create a synth-parameter W&B workspace
 
 Create a shared workspace whose regex-backed panels discover each synth's parameter names:

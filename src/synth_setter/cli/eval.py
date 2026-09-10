@@ -18,7 +18,7 @@ import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer, seed_everything
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, OmegaConf
 from pydantic_settings import CliApp
 
 from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
@@ -68,7 +68,7 @@ register_resolvers()
 
 log = RankedLogger(__name__, rank_zero_only=True)
 
-_DEFAULT_EVALUATION_SEED = 42
+_MAX_EVALUATION_SEED = 2**32 - 1
 
 
 def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:  # noqa: DOC502 — raised by load_aggregated_metrics
@@ -475,14 +475,21 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         ``trainer.callback_metrics`` (``torch.Tensor`` values) with audio
         metrics from :func:`_run_predict_postprocessing` (Python ``float``),
         so callers iterating values must handle both.
+    :raises ValueError: Seeded evaluation lacks a supported explicit integer seed.
     """
-    seeded_evaluation = cfg.get("seeded_evaluation", False)
-    if "seeded_evaluation" in cfg.model:
-        with open_dict(cfg.model):
-            cfg.model.seeded_evaluation = seeded_evaluation
+    seeded_evaluation = OmegaConf.select(cfg, "model.seeded_evaluation", default=False)
     if seeded_evaluation:
-        configured_seed = cfg.get("seed", _DEFAULT_EVALUATION_SEED)
-        evaluation_seed = _DEFAULT_EVALUATION_SEED if configured_seed is None else configured_seed
+        evaluation_seed = cfg.get("seed")
+        valid_seed = (
+            isinstance(evaluation_seed, int)
+            and not isinstance(evaluation_seed, bool)
+            and 0 <= evaluation_seed <= _MAX_EVALUATION_SEED
+        )
+        if not valid_seed:
+            raise ValueError(
+                "model.seeded_evaluation=true requires cfg.seed to be an integer in "
+                f"[0, {_MAX_EVALUATION_SEED}]; got {evaluation_seed!r}"
+            )
         seed_everything(evaluation_seed, workers=True)
     apply_feature_flags(cfg)
     checkpoint_path = _localize_eval_checkpoint(cfg.ckpt_path, cfg.get("ckpt_sha256"))
