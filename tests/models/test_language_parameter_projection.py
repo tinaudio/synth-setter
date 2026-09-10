@@ -30,6 +30,7 @@ def artifact(tmp_path: Path) -> Path:
     """
     count = len(describe_fields("surge_4", "surge_4"))
     vectors = np.random.default_rng(7).normal(size=(count, 128)).astype(np.float32)
+    vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
     path = tmp_path / "language.npz"
     save_param_language(path, vectors, "surge_4", "surge_4")
     return path
@@ -154,7 +155,8 @@ def test_projection_native_width_metadata_produces_model_width(tmp_path: Path) -
     """
     count = len(describe_fields("surge_4", "surge_4"))
     path = tmp_path / "full.npz"
-    save_param_language(path, np.ones((count, 768), dtype=np.float32), "surge_4", "surge_4")
+    vectors = np.full((count, 768), 1 / np.sqrt(768), dtype=np.float32)
+    save_param_language(path, vectors, "surge_4", "surge_4")
     projection = LanguageParameterProjection(
         16, "surge_4", "surge_4", embedding_dim=768, embedding_path=str(path)
     )

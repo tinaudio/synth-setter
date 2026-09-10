@@ -64,4 +64,42 @@ OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 uv run pytest \
 
 The integration test uses the real pretrained encoder, real staged Lance data,
 real R2 publication, and the artifact loader. It proves artifact usability, not
-improved model quality. Projection and training ablations are subsequent PRs.
+improved model quality. Real training coverage also lives in
+`tests/integration/test_language_projection_training.py`.
+
+## Research ablations
+
+The paired-seed research runner uses real Surge audio, finalized-format field
+metadata, production training modules, checkpoint restoration, and held-out
+inference:
+
+```bash
+export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2
+ROOT="$PWD/.cache/param-language-research"
+uv run python -m scripts.dev.param_language_ablation --root "$ROOT"
+for seed in 101 102; do
+  for variant in grouped learned random language128 language768; do
+    uv run python -m scripts.dev.param_language_ablation --root "$ROOT" \
+      --consumer flow --variant "$variant" --seed "$seed" --steps 200
+    uv run python -m scripts.dev.param_language_ablation --root "$ROOT" \
+      --consumer slap --variant "$variant" --seed "$seed" --steps 1000
+  done
+done
+```
+
+Use a fresh root for an independent matrix; completed run directories are not
+silently overwritten. The CLI accepts 100–1,000 optimizer steps. The recorded
+matrix reverses variant order for seed 102; no treatments run concurrently on
+the GPU. Results, CSV loss histories, resolved configs, and checkpoints remain
+under `$ROOT/runs/`. A dataset fingerprint rejects accidental changes between
+preparation and training.
+
+Controls share initial numeric heads/backbone weights. All residual variants use
+`value + fusion(concat(value, semantic))`, a shared adapter/fusion, and zero final
+fusion weights at initialization. `learned` trains independently seeded field
+identity vectors; `random` freezes the same initial vectors. Neither consumes
+language artifacts. Language variants freeze actual EmbeddingGemma vectors.
+Flow output heads stay unrestricted; SLAP keeps unused decoder heads frozen.
+
+The published [smoke-study results](parameter-language-projection-results.md)
+are a mechanics check, not evidence of a semantic quality advantage.
