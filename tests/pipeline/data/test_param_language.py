@@ -230,6 +230,25 @@ def test_prepare_truncated_cache_regenerates_artifact(
     np.testing.assert_allclose(selected, matryoshka_vectors(full, 128))
 
 
+def test_prepare_non_native_cache_regenerates_full_width(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid selected-width artifact cannot stand in for the native cache.
+
+    :param tmp_path: Isolated artifact directory.
+    :param monkeypatch: Replaces only expensive external encoding.
+    """
+    count = len(describe_fields("surge_4", "surge_4"))
+    cache = tmp_path / "param_language_full.npz"
+    selected = np.full((count, 128), 1 / np.sqrt(128), dtype=np.float32)
+    save_param_language(cache, selected, "surge_4", "surge_4")
+    full = np.full((count, 768), 1 / np.sqrt(768), dtype=np.float32)
+    monkeypatch.setattr(param_language, "encode_param_language", lambda *args, **kwargs: full)
+    prepare_param_language(tmp_path, "surge_4", "surge_4", dimension=128)
+    _, metadata = load_param_language(cache, "surge_4", "surge_4")
+    assert metadata.dimension == 768
+
+
 def test_artifact_wrong_field_count_rejected(tmp_path: Path) -> None:
     """Partial field coverage cannot be published as a complete spec.
 

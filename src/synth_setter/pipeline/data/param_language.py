@@ -278,13 +278,17 @@ def prepare_param_language(
     :param synth_name: Dataset synth identity.
     :param dimension: Supported output width.
     :returns: Validated, staged dataset-level NPZ path.
+    :raises ValueError: Requested width or freshly encoded vectors are invalid.
     """
     cache_path = work_dir / "param_language_full.npz"
     embeddings = None
     if cache_path.exists():
         try:
-            embeddings, _ = load_param_language(cache_path, param_spec_name, synth_name)
+            embeddings, metadata = load_param_language(cache_path, param_spec_name, synth_name)
+            if metadata.dimension != 768:
+                raise ValueError("parameter language full cache requires native width")
         except (OSError, ValueError, EOFError, zipfile.BadZipFile, KeyError):
+            embeddings = None
             logger.warning("param_language_cache_invalid", path=str(cache_path))
     if embeddings is None:
         embeddings = encode_param_language(param_spec_name, synth_name)
