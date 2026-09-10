@@ -1062,11 +1062,10 @@ def render_and_upload_shard(
         attempt_uuid=attempt_uuid,
         attempt_staging_dir_uri=attempt_staging_dir_uri,
     )
-    # Zipped wheels extract the wrapper to a temp file that only lives while
-    # ``as_file()`` is open; ``ExitStack`` keeps it on disk across the retry
-    # loop, and skips materialization on non-Linux.
+    # ExitStack keeps a zipped-wheel wrapper available across renderer retries.
+    # Non-VST renderers have no X11 dependency, so they bypass materialization.
     with ExitStack() as stack:
-        if sys.platform == "linux":
+        if sys.platform == "linux" and spec.render.synth.format == "vst3":
             wrapper_path = stack.enter_context(as_file(vst_headless_wrapper()))
             args = [str(wrapper_path)]
         else:

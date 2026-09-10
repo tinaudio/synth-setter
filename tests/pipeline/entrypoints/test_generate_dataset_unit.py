@@ -40,6 +40,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from hydra import compose, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
 
 from synth_setter.cli.generate_dataset import (
     _RENDERER_SCRIPT,
@@ -66,6 +68,7 @@ from synth_setter.synth_spec import SYNTHS, SynthName
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.finalize_shards import write_minimal_lance_shard
 from tests.helpers.subprocess_args import find_script_index
+from tests.helpers.xvfb import install_failing_xvfb
 
 VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 
@@ -232,6 +235,57 @@ def _renderer_argv_lists(mock: MagicMock) -> list[list[str]]:
         for call in mock.call_args_list
         if not (call.args and call.args[0] and call.args[0][0] == "rclone")
     ]
+
+
+def _capture_renderer_dispatch(
+    spec: DatasetSpec,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[str]:
+    """Capture renderer argv before execution or marker I/O.
+
+    :param spec: Dataset specification dispatched at the shard boundary.
+    :param work_dir: Scratch output directory passed to the renderer.
+    :param monkeypatch: Replaces marker I/O and stops at subprocess dispatch.
+    :returns: Renderer command assembled for the first shard.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset
+
+    renderer_args: list[str] = []
+
+    def _capture_then_stop(args: list[str]) -> None:
+        renderer_args.extend(args)
+        raise subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(generate_dataset, "_check_call_streamed", _capture_then_stop)
+    monkeypatch.setattr(generate_dataset, "write_rendering_marker", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        render_and_upload_shard(spec, spec.shards[0], work_dir, loggers=[])
+    return renderer_args
+
+
+def _compose_renderer_spec(synth_group: str, render_group: str) -> DatasetSpec:
+    """Compose a production renderer pair into its validated dataset spec.
+
+    :param synth_group: Hydra synth registry selection.
+    :param render_group: Hydra renderer configuration selection.
+    :returns: Validated dataset spec for the selected renderer pair.
+    """
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="dataset",
+                overrides=[
+                    "experiment=generate_dataset/smoke-shard",
+                    f"synth={synth_group}",
+                    f"render={render_group}",
+                    "render.gui_toggle_cadence=never",
+                ],
+            )
+            return DatasetSpec.from_hydra_cfg(cfg)
+    finally:
+        GlobalHydra.instance().clear()
 
 
 def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
@@ -996,6 +1050,60 @@ class TestRun(RenderSeamFixtures):
         assert renderer_script.as_posix().endswith("synth_setter/data/vst/generate_vst_dataset.py")
         assert renderer_script.is_absolute()
         assert renderer_script.is_file()
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux headless dispatch contract")
+    def test_vst_shard_failing_xvfb_invokes_headless_wrapper(
+        self,
+        spec: DatasetSpec,
+        fake_r2_remote: Path,  # noqa: ARG002
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A VST shard reaches the shipped wrapper before renderer startup.
+
+        :param spec: VST-configured dataset specification.
+        :param fake_r2_remote: Activates the local-filesystem ``r2:`` remote.
+        :param tmp_path: Scratch root for the work directory and failing Xvfb.
+        :param monkeypatch: Installs a deterministic failing Xvfb executable.
+        """
+        marker = install_failing_xvfb(tmp_path, monkeypatch)
+
+        with pytest.raises(subprocess.CalledProcessError):
+            generate(spec, tmp_path / "work", [])
+
+        assert marker.read_text() == "called"
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux headless dispatch contract")
+    @pytest.mark.parametrize(
+        ("synth_group", "render_group"),
+        [
+            pytest.param("faust_bright_organ", "faust", id="dawdreamer-faust"),
+            pytest.param("faust_bright_organ", "faustwasm", id="faustwasm"),
+            pytest.param("pyfdn_n8_mono_householder", "pyfdn", id="pyfdn"),
+            pytest.param("surge_simple_surgepy", "surgepy", id="surgepy"),
+            pytest.param("torchsynth_simple", "torchsynth", id="torchsynth"),
+        ],
+    )
+    def test_non_vst_shard_bypasses_headless_wrapper(
+        self,
+        synth_group: str,
+        render_group: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A non-VST shard dispatches Python without the VST wrapper.
+
+        :param synth_group: Production synth identity under test.
+        :param render_group: Compatible production renderer under test.
+        :param tmp_path: Caller-supplied work directory.
+        :param monkeypatch: Captures the renderer command before execution.
+        """
+        non_vst_spec = _compose_renderer_spec(synth_group, render_group)
+
+        renderer_args = _capture_renderer_dispatch(non_vst_spec, tmp_path, monkeypatch)
+
+        assert renderer_args[0] == sys.executable
+        assert VST_HEADLESS_WRAPPER not in renderer_args
 
     def test_uploads_shard_to_r2_after_generation(
         self,
