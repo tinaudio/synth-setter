@@ -224,6 +224,9 @@ def test_compute_jtfs_distance_corresponding_channels_wrong_rank_raises() -> Non
 @pytest.mark.parametrize(
     "metric_name",
     [
+        "compute_octave_rt60_log_rmse",
+        "compute_octave_edc_rmse_db",
+        "compute_acoustic_parameter_metrics",
         "compute_octave_rt60_log_rmse_mono_only",
         "compute_octave_edc_rmse_db_mono_only",
         "compute_acoustic_parameter_metrics_mono_only",
@@ -463,19 +466,111 @@ def test_pyfdn_reverb_metric_mismatched_lengths_raise(
 
 @pytest.mark.parametrize(
     "metric",
-    [cam.compute_octave_rt60_log_rmse, cam.compute_octave_edc_rmse_db],
+    [
+        cam.compute_octave_rt60_log_rmse_corresponding_channels,
+        cam.compute_octave_edc_rmse_db_corresponding_channels,
+    ],
 )
-def test_pyfdn_reverb_metric_stereo_input_raises(
+def test_pyfdn_reverb_metric_multichannel_averages_corresponding_channel_scores(
     metric: Callable[[np.ndarray, np.ndarray, float], float],
 ) -> None:
-    """Reverb metrics reject multi-channel audio rather than collapsing it silently.
+    """A matching first channel cannot hide a wrong second-channel decay.
 
     :param metric: pyFDN metric under test.
     """
-    stereo = np.zeros((2, _SR), dtype=np.float32)
+    rng = np.random.default_rng(29)
+    time = np.arange(_SR, dtype=np.float64) / _SR
+    noise = rng.standard_normal(_SR)
+    first = (noise * np.exp(-20.0 * time))[None, :]
+    second_target = (noise * np.exp(-24.0 * time))[None, :]
+    second_pred = (noise * np.exp(-8.0 * time))[None, :]
+    target = np.concatenate((first, second_target), axis=0)
+    pred = np.concatenate((first, second_pred), axis=0)
 
-    with pytest.raises(ValueError, match="mono"):
-        metric(stereo, stereo, _SR)
+    score = metric(target, pred, _SR)
+    second_score = metric(second_target, second_pred, _SR)
+
+    assert score == pytest.approx(second_score / 2.0)
+    assert score > 0.0
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        cam.compute_octave_rt60_log_rmse_corresponding_channels,
+        cam.compute_octave_edc_rmse_db_corresponding_channels,
+        cam.compute_acoustic_parameter_metrics_corresponding_channels,
+    ],
+)
+def test_pyfdn_reverb_metric_channel_count_mismatch_raises(
+    metric: Callable[[np.ndarray, np.ndarray, float], object],
+) -> None:
+    """Mono and stereo responses cannot broadcast during metric evaluation.
+
+    :param metric: pyFDN metric under test.
+    """
+    mono = np.zeros((1, _SR), dtype=np.float64)
+    stereo = np.zeros((2, _SR), dtype=np.float64)
+
+    with pytest.raises(ValueError, match="same shape"):
+        metric(mono, stereo, _SR)
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        cam.compute_octave_rt60_log_rmse_corresponding_channels,
+        cam.compute_acoustic_parameter_metrics_corresponding_channels,
+    ],
+)
+def test_multichannel_reverb_metric_invalid_second_channel_raises(
+    metric: Callable[[np.ndarray, np.ndarray, float], object],
+) -> None:
+    """An invalid second channel is not omitted from the scalar average.
+
+    :param metric: Reverb metric under test.
+    """
+    rng = np.random.default_rng(31)
+    time = np.arange(_SR, dtype=np.float64) / _SR
+    valid = rng.standard_normal(_SR) * np.exp(-20.0 * time)
+    audio = np.stack((valid, np.zeros_like(valid)))
+
+    with (
+        np.errstate(divide="ignore"),
+        pytest.raises(ValueError, match="no valid paired octave-band"),
+    ):
+        metric(audio, audio, _SR)
+
+
+def test_acoustic_parameter_metrics_multichannel_average_measurements() -> None:
+    """Scalar errors and raw bands average independent channel measurements."""
+    rng = np.random.default_rng(37)
+    time = np.arange(_SR, dtype=np.float64) / _SR
+    noise = rng.standard_normal(_SR)
+    first_target = (noise * np.exp(-20.0 * time))[None, :]
+    first_pred = (noise * np.exp(-16.0 * time))[None, :]
+    second_target = (noise * np.exp(-24.0 * time))[None, :]
+    second_pred = (noise * np.exp(-10.0 * time))[None, :]
+    target = np.concatenate((first_target, second_target), axis=0)
+    pred = np.concatenate((first_pred, second_pred), axis=0)
+
+    metrics = cam.compute_acoustic_parameter_metrics_corresponding_channels(target, pred, _SR)
+    first = cam.compute_acoustic_parameter_metrics_corresponding_channels(
+        first_target, first_pred, _SR
+    )
+    second = cam.compute_acoustic_parameter_metrics_corresponding_channels(
+        second_target, second_pred, _SR
+    )
+
+    for name in (
+        "t30_mape",
+        "c50_mae_db",
+        "acoustic_param/t30/1000hz/target",
+        "acoustic_param/t30/1000hz/pred",
+        "acoustic_param/c50/1000hz/target",
+        "acoustic_param/c50/1000hz/pred",
+    ):
+        assert metrics[name] == pytest.approx((first[name] + second[name]) / 2.0)
 
 
 def test_compute_rms_downmix_accepts_three_channels() -> None:
@@ -1171,6 +1266,45 @@ def test_compute_metrics_on_dir_stereo_adds_mid_side_metric(tmp_path: Path) -> N
     metrics = compute_metrics_on_dir(sample_dir)
 
     assert metrics["mldr_mid_side"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_compute_metrics_on_dir_pyfdn_scores_wrong_second_channel(tmp_path: Path) -> None:
+    """The real WAV consumer includes a mismatched second transfer path in its score.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    rng = np.random.default_rng(41)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    first = rng.standard_normal(_SR).astype(np.float32) * np.exp(-20.0 * time)
+    second = rng.standard_normal(_SR).astype(np.float32) * np.exp(-12.0 * time)
+    target = np.stack((first, second))
+    pred = np.stack((first, -second))
+    sample_dir = _make_sample_dir(tmp_path, "0", target, pred)
+
+    metrics = compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
+
+    assert metrics["pyfdn_match_impulse_response"] > 0.0
+
+
+def test_compute_metrics_on_dir_pyfdn_uses_explicit_corresponding_channel_edc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Directory scoring does not route multichannel EDC through its mono compatibility alias.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces the explicit EDC policy with a recognizable score.
+    """
+    rng = np.random.default_rng(43)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    decay = (rng.standard_normal(_SR).astype(np.float32) * np.exp(-20.0 * time))[None, :]
+    sample_dir = _make_sample_dir(tmp_path, "0", decay, decay)
+    monkeypatch.setattr(
+        cam, "compute_octave_edc_rmse_db_corresponding_channels", lambda *_args: 17.0
+    )
+
+    metrics = compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
+
+    assert metrics["octave_edc_rmse_db"] == 17.0
 
 
 def test_compute_metrics_on_dir_pyfdn_adds_reverb_metrics(tmp_path: Path) -> None:

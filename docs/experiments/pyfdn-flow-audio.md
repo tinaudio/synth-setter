@@ -78,6 +78,17 @@ does not make these complete `BasicFDN` effects, and no fallback graph is suppli
 Integer delays and Kronecker reflection choices have zero gradients. Continuous
 gains, feedback coordinates, and filter controls retain gradients.
 
+## Channel-aware consumers
+
+`MultichannelAudioDistance` remains the single channel-aware differentiable loss for
+audio feedback, simulator gradient control, and rendered rewards. Simulator finetuning
+retains channels in both control arms and bound sampling observations; the learned-control
+width probe uses the renderer's actual geometry. Mismatched residual shapes are rejected.
+
+Response, octave-decay, and acoustic evaluation metrics analyze each corresponding
+channel independently, then average scalar and per-band results across channels. A failed
+channel is not silently omitted. Multichannel WAV evaluation uses the same path.
+
 ## Numerical and runtime limits
 
 FLAMO evaluates a frequency-domain response. Finite FFT periods introduce circular
@@ -96,6 +107,10 @@ approximation (#3402). This makes subsequent float64 FLAMO construction lose
 precision, including strict MIMO parity tests when run after TorchSynth training
 tests. Isolated parity runs pass; mixed-backend float64 parity remains blocked.
 No tolerance relaxation or local DSP workaround masks this defect.
+
+Legacy simulator-control helpers still clip unrestricted responses to `[-1, 1]`
+(#3404). This is separate from channel preservation; unrestricted-amplitude
+finetuning parity is not claimed until that backend-specific policy is removed.
 
 ## Reproducible integration experiment
 

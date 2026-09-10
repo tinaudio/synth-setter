@@ -1712,6 +1712,22 @@ def test_torchsynth_finetune_arm_composes_to_its_control_mode(
     assert (cfg.model.cost is not None) == (control_mode == "gradient_spectral")
 
 
+def test_torchsynth_gradient_finetune_uses_multichannel_distance() -> None:
+    """Gradient control uses the same channel-aware objective as other render consumers."""
+    cfg = _compose(
+        "train.yaml",
+        ["experiment=torchsynth/flow_finetune", "trainer=cpu", "model.base_checkpoint=base.ckpt"],
+    )
+
+    assert (
+        cfg.model.cost._target_
+        == "synth_setter.models.components.audio_distance.MultichannelAudioDistance"
+    )
+    assert cfg.model.cost.spectral_weight == 1.0
+    assert cfg.model.cost.channel_mldr_weight == 0.1
+    assert cfg.model.cost.pair_mldr_weight == 0.1
+
+
 @pytest.mark.parametrize(
     "experiment", ["flow_finetune", "flow_finetune_learned", "flow_finetune_null"]
 )

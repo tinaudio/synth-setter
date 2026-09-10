@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from itertools import chain
 from pathlib import Path
 from typing import Literal
 
@@ -23,7 +24,7 @@ from beartype import beartype
 from jaxtyping import Float, Shaped, jaxtyped
 from torch import Tensor
 
-from synth_setter.models.components.audio_feedback import canonical_target_audio
+from synth_setter.models.components.audio_shape import canonical_audio
 from synth_setter.models.components.differentiable_renderer import (
     DifferentiableRenderer,
     TorchSynthDifferentiableRenderer,
@@ -52,7 +53,7 @@ logger = logging.getLogger(__name__)
 type ControlMode = Literal["gradient_spectral", "learned_audio", "null"]
 
 _BATCH_PARAMS_SHAPE = "batch params"
-_BATCH_AUDIO_SHAPE = "batch samples"
+_BATCH_AUDIO_SHAPE = "batch *channels samples"
 _BATCH_TIME_SHAPE = "batch 1"
 _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_SHAPE = "batch"
@@ -224,7 +225,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
             t_min=control_t_min,
         )
         # Bound per batch by the validation/test hooks; sampling outside one cannot score.
-        self._sampling_target: Tensor | None = None
+        self._sampling_target: Float[Tensor, _BATCH_AUDIO_SHAPE] | None = None
         # Lightning does not call train() before the first steps, so the override alone would
         # leave the pretrained modules in nn.Module's default training mode until then.
         self._freeze_pretrained_modes()
@@ -273,7 +274,24 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         self.control_encoder.eval()
         try:
             with torch.no_grad():
-                probe = self.control_encoder(torch.zeros(1, self.signal_length))
+                renderer_state = (
+                    tuple(chain(self.renderer.parameters(), self.renderer.buffers()))
+                    if isinstance(self.renderer, torch.nn.Module)
+                    else ()
+                )
+                module_state = renderer_state or tuple(chain(self.parameters(), self.buffers()))
+                reference = next(
+                    (tensor for tensor in module_state if tensor.is_floating_point()),
+                    module_state[0] if module_state else None,
+                )
+                device = reference.device if reference is not None else torch.get_default_device()
+                dtype = (
+                    reference.dtype
+                    if reference is not None and reference.is_floating_point()
+                    else torch.get_default_dtype()
+                )
+                centre = torch.zeros(1, self.num_params, device=device, dtype=dtype)
+                probe = self.control_encoder(torch.zeros_like(self._render(centre)))
         finally:
             self.control_encoder.train(was_training)
         return int(probe.flatten(start_dim=1).shape[-1])
@@ -301,9 +319,9 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         """Render a model-space estimate through the production differentiable renderer.
 
         :param theta_hat: One-step estimate in model space ``[-1, 1]``.
-        :returns: Audio shaped ``(batch, signal_length)``.
+        :returns: Audio preserving the renderer's channels and sample length.
         """
-        return canonical_target_audio(self.renderer(theta_hat))
+        return canonical_audio(self.renderer(theta_hat))
 
     @jaxtyped(typechecker=beartype)
     def _control_signal(
@@ -319,7 +337,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         batch would spend most of the step on a signal :meth:`ControlledFlow.combine` discards.
 
         :param theta_hat: One-step parameter estimate in model space, detached from the flow.
-        :param target_audio: Observed audio shaped ``(batch, signal_length)``.
+        :param target_audio: Observed audio with the renderer's channel/sample geometry.
         :param active: Rows whose signal is used; the rest come back zeroed.
         :returns: Control signal shaped ``(batch, control_dim)``.
         """
@@ -488,7 +506,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         :param batch_idx: Lightning's batch index.
         :param dataloader_idx: Lightning's dataloader index.
         """
-        self._sampling_target = canonical_target_audio(batch["audio"])
+        self._sampling_target = canonical_audio(batch["audio"])
 
     @jaxtyped(typechecker=beartype)
     def on_validation_batch_end(
@@ -523,7 +541,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         :param batch_idx: Lightning's batch index.
         :param dataloader_idx: Lightning's dataloader index.
         """
-        self._sampling_target = canonical_target_audio(batch["audio"])
+        self._sampling_target = canonical_audio(batch["audio"])
 
     @jaxtyped(typechecker=beartype)
     def on_predict_batch_end(
@@ -555,7 +573,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         :param batch_idx: Lightning's batch index.
         :param dataloader_idx: Lightning's dataloader index.
         """
-        self._sampling_target = canonical_target_audio(batch["audio"])
+        self._sampling_target = canonical_audio(batch["audio"])
 
     @jaxtyped(typechecker=beartype)
     def on_test_batch_end(
@@ -632,7 +650,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         active = (t.squeeze(-1) >= self.vector_field.t_min) & conditioning_keep.identity_keep
         control_input = self._control_signal(
             self._one_step_estimate(x_t, t, velocity),
-            canonical_target_audio(batch["audio"]),
+            canonical_audio(batch["audio"]),
             active,
         )
         self._log_control_telemetry(control_input, active)

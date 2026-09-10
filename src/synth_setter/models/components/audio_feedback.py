@@ -42,18 +42,6 @@ _SCALAR_SHAPE = ""
 
 
 @jaxtyped(typechecker=beartype)
-def canonical_target_audio(
-    audio: Float[Tensor, _BATCH_AUDIO_SHAPE] | Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE],
-) -> Float[Tensor, _BATCH_AUDIO_SHAPE] | Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE]:
-    """Remove only a singleton channel axis, preserving every multichannel observation.
-
-    :param audio: Batched waveform, optionally carrying a channel axis.
-    :returns: The unchanged channels, or a flat batch when exactly one channel is present.
-    """
-    return audio[:, 0] if audio.ndim == 3 and audio.shape[1] == 1 else audio
-
-
-@jaxtyped(typechecker=beartype)
 def _log_non_finite_estimate(
     theta_hat: Float[Tensor, _BATCH_PARAMS_SHAPE],
 ) -> None:

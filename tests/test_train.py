@@ -464,7 +464,6 @@ def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
     assert math.isfinite(audio_metrics["audio/pyfdn_match_impulse_response_mean"])
     assert math.isfinite(audio_metrics["audio/pyfdn_match_energy_decay_mean"])
 
-    from synth_setter.models.components.audio_distance import MultiScaleSpectralDistance
     from synth_setter.models.vst_flow_finetune_module import VSTFlowFinetuneModule
 
     finetune = VSTFlowFinetuneModule(
@@ -479,9 +478,15 @@ def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
         render_batch_size=1,
         control_t_min=0.0,
         cfg_dropout_rate=0.0,
-        cost=MultiScaleSpectralDistance(sample_rate=44_100),
+        cost=MultichannelAudioDistance(
+            sample_rate=44_100,
+            spectral_weight=1.0,
+            channel_mldr_weight=0.0,
+            pair_mldr_weight=0.0,
+        ),
         renderer=model.audio_loss.renderer,
     )
+    assert isinstance(finetune.cost, MultichannelAudioDistance)
     assert batch["audio"].ndim == 3
     finetune_step = finetune._train_step(batch)
     finetune_step.loss.backward()
