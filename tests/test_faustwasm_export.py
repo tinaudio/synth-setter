@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from hydra import compose, initialize_config_module
 
 from synth_setter.data.vst import faustwasm_artifacts
 from synth_setter.data.vst.faustwasm_artifacts import (
@@ -20,6 +21,15 @@ from synth_setter.tools.export_faustwasm import main
 
 _ROOT = Path(__file__).parents[1]
 _NODE_MODULE = _ROOT / "node_modules/@grame/faustwasm/package.json"
+
+
+def _configured_backend_version() -> str:
+    """Return the authored FaustWasm version from Hydra's render contract.
+
+    :returns: Configured backend version.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        return str(compose(config_name="render/faustwasm").render.backend_version)
 
 
 def _relocate_artifact_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
@@ -113,6 +123,7 @@ def test_export_cli_persists_hashed_artifact_consumed_by_real_runtime(
     main(["--synth", identity, "--output", str(output_dir)])
     manifest = json.loads((output_dir / "manifest.json").read_text())
     assert manifest["identity"] == identity
+    assert manifest["faustwasmVersion"] == _configured_backend_version()
     assert manifest["mode"] == expected_mode
     assert manifest["outputs"] == expected_outputs
     assert len(manifest["files"]["dsp"]["sha256"]) == 64
@@ -130,6 +141,7 @@ def test_export_cli_persists_hashed_artifact_consumed_by_real_runtime(
     request_path.write_text(
         json.dumps(
             {
+                "expectedFaustWasmVersion": _configured_backend_version(),
                 "sampleRate": 44_100,
                 "blockSize": 128,
                 "frames": 513,
@@ -149,6 +161,88 @@ def test_export_cli_persists_hashed_artifact_consumed_by_real_runtime(
 
 
 @pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+def test_real_runtime_rejects_configured_backend_version_mismatch(tmp_path: Path) -> None:
+    """The render worker checks its request against installed package metadata.
+
+    :param tmp_path: Isolated persistent artifact and render destination.
+    """
+    output_dir = tmp_path / "artifact"
+    main(["--synth", "faust_filter_osc", "--output", str(output_dir)])
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    request_path = tmp_path / "render.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "expectedFaustWasmVersion": "999.0.0",
+                "sampleRate": 44_100,
+                "blockSize": 128,
+                "frames": 128,
+                "note": 60,
+                "velocity": 100,
+                "startFrame": 0,
+                "endFrame": 64,
+                "params": {
+                    parameter["canonicalAddress"]: (
+                        parameter["values"][0]
+                        if parameter["kind"] == "discrete"
+                        else (parameter["min"] + parameter["max"]) / 2.0
+                    )
+                    for parameter in manifest["parameters"]
+                },
+            }
+        )
+    )
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        run_faustwasm_render_worker(output_dir, request_path, tmp_path / "audio.f32")
+
+    assert "FaustWasm version mismatch" in exc_info.value.stderr
+
+
+@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+def test_real_runtime_rejects_persisted_manifest_version_mismatch(tmp_path: Path) -> None:
+    """The Node consumer compares persisted provenance with its installed package.
+
+    :param tmp_path: Isolated persistent artifact and render destination.
+    """
+    output_dir = tmp_path / "artifact"
+    main(["--synth", "faust_filter_osc", "--output", str(output_dir)])
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    patch = {
+        parameter["canonicalAddress"]: (
+            parameter["values"][0]
+            if parameter["kind"] == "discrete"
+            else (parameter["min"] + parameter["max"]) / 2.0
+        )
+        for parameter in manifest["parameters"]
+    }
+    manifest["faustwasmVersion"] = "999.0.0"
+    manifest_path.write_text(json.dumps(manifest))
+    request_path = tmp_path / "render.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "expectedFaustWasmVersion": _configured_backend_version(),
+                "sampleRate": 44_100,
+                "blockSize": 128,
+                "frames": 128,
+                "note": 60,
+                "velocity": 100,
+                "startFrame": 0,
+                "endFrame": 64,
+                "params": patch,
+            }
+        )
+    )
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        run_faustwasm_render_worker(output_dir, request_path, tmp_path / "audio.f32")
+
+    assert "artifact 999.0.0, installed" in exc_info.value.stderr
+
+
+@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
 def test_real_runtime_rejects_corrupted_persisted_module(tmp_path: Path) -> None:
     """The Node consumer rejects module bytes that drift from the manifest digest.
 
@@ -163,6 +257,7 @@ def test_real_runtime_rejects_corrupted_persisted_module(tmp_path: Path) -> None
     request_path.write_text(
         json.dumps(
             {
+                "expectedFaustWasmVersion": _configured_backend_version(),
                 "sampleRate": 44_100,
                 "blockSize": 128,
                 "frames": 128,
@@ -186,6 +281,24 @@ def test_real_runtime_rejects_corrupted_persisted_module(tmp_path: Path) -> None
         run_faustwasm_render_worker(output_dir, request_path, tmp_path / "audio.f32")
 
     assert "artifact digest mismatch" in exc_info.value.stderr
+
+
+@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+def test_compile_rejects_backend_version_that_differs_from_installed_package(
+    tmp_path: Path,
+) -> None:
+    """The Node compiler compares Hydra-owned provenance with package metadata.
+
+    :param tmp_path: Isolated compilation destination.
+    """
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        compile_faustwasm_artifact(
+            SYNTHS[SynthName("faust_bright_organ")],
+            tmp_path,
+            backend_version="999.0.0",
+        )
+
+    assert "FaustWasm version mismatch" in exc_info.value.stderr
 
 
 @pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
@@ -230,7 +343,7 @@ def test_compile_rejects_each_corrupted_manifest_provenance_field(
         compile_faustwasm_artifact(
             SYNTHS[SynthName("faust_bright_organ")],
             tmp_path,
-            expected_outputs=2,
+            backend_version=_configured_backend_version(),
         )
 
 

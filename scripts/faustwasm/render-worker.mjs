@@ -7,6 +7,7 @@ import {
     loadFaustArtifact,
     renderNote,
 } from './runtime.mjs';
+import { readFaustWasmPackageVersion } from './package-version.mjs';
 
 const main = async () => {
     const [, , manifestPath, requestPath, outputPath] = process.argv;
@@ -15,10 +16,17 @@ const main = async () => {
     }
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
     const request = JSON.parse(await readFile(requestPath, 'utf8'));
+    const packageVersion = await readFaustWasmPackageVersion();
+    if (request.expectedFaustWasmVersion !== packageVersion) {
+        throw new Error(
+            `FaustWasm version mismatch: expected ${request.expectedFaustWasmVersion}, installed ${packageVersion}`,
+        );
+    }
     const baseDir = dirname(resolve(manifestPath));
     const artifact = await loadFaustArtifact(
         manifest,
         async (path) => new Uint8Array(await readFile(join(baseDir, path))),
+        packageVersion,
     );
     const synth = await createOfflineSynth(artifact, request);
     applyCanonicalPatch(synth, manifest, request.params);

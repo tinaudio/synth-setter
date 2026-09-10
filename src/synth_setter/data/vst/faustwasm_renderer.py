@@ -11,8 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
+from synth_setter.data.vst.faust_sources import resolve_faust_dsp
 from synth_setter.data.vst.faustwasm_artifacts import (
-    FAUSTWASM_VERSION,
     ArtifactManifest,
     compile_faustwasm_artifact,
     run_faustwasm_render_worker,
@@ -102,11 +102,6 @@ class FaustWasmRenderer(AudioRenderer):
 
         :raises ValueError: Renderer provenance or dimensions violate the backend contract.
         """
-        if self.backend_version != FAUSTWASM_VERSION:
-            raise ValueError(
-                f"FaustWasm backend version {self.backend_version!r} does not match "
-                f"installed {FAUSTWASM_VERSION!r}"
-            )
         if self.plugin_state_path:
             raise ValueError("FaustWasm renderer accepts no preset path")
         source_identity = self.param_spec_name
@@ -126,13 +121,18 @@ class FaustWasmRenderer(AudioRenderer):
             raise ValueError("render duration must contain at least one output frame")
 
         synth = SYNTHS[SynthName(source_identity)]
+        if type(self.channels) is not int or self.channels < 1:
+            raise ValueError("channels must be a positive integer")
+        expected_channels = resolve_faust_dsp(source_identity).outputs
+        if self.channels != expected_channels:
+            raise ValueError(f"FaustWasm source requires channels={expected_channels}")
         if synth.source_sha256 != self.source_sha256:
             raise ValueError("source_sha256 does not match the registered Faust source")
         self._temporary_directory = tempfile.TemporaryDirectory(prefix="synth-setter-faustwasm-")
         self._manifest = compile_faustwasm_artifact(
             synth,
             Path(self._temporary_directory.name),
-            expected_outputs=self.channels,
+            backend_version=self.backend_version,
         )
 
     def _validate_patch(self, params: dict[str, float]) -> None:
@@ -187,6 +187,7 @@ class FaustWasmRenderer(AudioRenderer):
             signal_duration_seconds=self.signal_duration_seconds,
         )
         request = {
+            "expectedFaustWasmVersion": self.backend_version,
             "sampleRate": self.sample_rate,
             "blockSize": self.block_size,
             "frames": frames,

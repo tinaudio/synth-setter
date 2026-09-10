@@ -24,7 +24,7 @@ from synth_setter.param_spec_name import ParamSpecName
 
 @dataclass(frozen=True)
 class FaustDsp:
-    """One in-memory Faust program and its compile-time voice count.
+    """One in-memory Faust program and its compile-time geometry.
 
     .. attribute :: source
 
@@ -33,10 +33,15 @@ class FaustDsp:
     .. attribute :: num_voices
 
        Faust polyphony count; zero selects monophonic compilation.
+
+    .. attribute :: outputs
+
+       Native output channel count.
     """
 
     source: str
-    num_voices: int = 0
+    num_voices: int
+    outputs: int
 
 
 _BRIGHT_ORGAN_SOURCE = r'''import("stdfaust.lib");
@@ -200,10 +205,16 @@ process = button("drop") : bubble(hslider("v:bubble/freq", 600, 150, 2000, 1)) <
 '''
 
 _faust_dsps: dict[ParamSpecName, FaustDsp] = {
-    ParamSpecName("faust_bright_organ"): FaustDsp(_BRIGHT_ORGAN_SOURCE, num_voices=1),
-    ParamSpecName("faust_bubble"): FaustDsp(_BUBBLE_SOURCE),
-    ParamSpecName("faust_church_organ"): FaustDsp(_CHURCH_ORGAN_SOURCE),
-    ParamSpecName("faust_filter_osc"): FaustDsp(_FILTER_OSC_SOURCE),
+    ParamSpecName("faust_bright_organ"): FaustDsp(
+        _BRIGHT_ORGAN_SOURCE, num_voices=1, outputs=2
+    ),
+    ParamSpecName("faust_bubble"): FaustDsp(_BUBBLE_SOURCE, num_voices=0, outputs=2),
+    ParamSpecName("faust_church_organ"): FaustDsp(
+        _CHURCH_ORGAN_SOURCE, num_voices=0, outputs=2
+    ),
+    ParamSpecName("faust_filter_osc"): FaustDsp(
+        _FILTER_OSC_SOURCE, num_voices=0, outputs=1
+    ),
 }
 faust_dsps = cast(Mapping[str, FaustDsp], MappingProxyType(_faust_dsps))
 

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
     FaustCompiler,
@@ -10,7 +10,11 @@ import {
     instantiateFaustModuleFromFile,
 } from '../../node_modules/@grame/faustwasm/dist/esm/index.js';
 
-export const FAUSTWASM_VERSION = '0.18.3';
+import {
+    FAUSTWASM_PACKAGE_ROOT,
+    readFaustWasmPackageVersion,
+} from './package-version.mjs';
+
 export const COMPILE_OPTIONS = '-ftz 2';
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -36,8 +40,13 @@ const writeArtifactFile = async (outputDir, name, bytes) => {
 };
 
 export const compileFaustArtifact = async (request, outputDir) => {
-    const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../node_modules/@grame/faustwasm');
-    const modulePath = join(packageRoot, 'libfaust-wasm/libfaust-wasm.js');
+    const packageVersion = await readFaustWasmPackageVersion();
+    if (request.expectedFaustWasmVersion !== packageVersion) {
+        throw new Error(
+            `FaustWasm version mismatch: expected ${request.expectedFaustWasmVersion}, installed ${packageVersion}`,
+        );
+    }
+    const modulePath = join(FAUSTWASM_PACKAGE_ROOT, 'libfaust-wasm/libfaust-wasm.js');
     const faustModule = await instantiateFaustModuleFromFile(modulePath);
     const libFaust = new LibFaust(faustModule);
     const compiler = new FaustCompiler(libFaust);
@@ -108,7 +117,7 @@ export const compileFaustArtifact = async (request, outputDir) => {
     const manifest = {
         schemaVersion: 1,
         identity: request.identity,
-        faustwasmVersion: FAUSTWASM_VERSION,
+        faustwasmVersion: packageVersion,
         libfaustVersion: libFaust.version(),
         compileOptions: COMPILE_OPTIONS,
         sourceSha256: sha256(request.source),
