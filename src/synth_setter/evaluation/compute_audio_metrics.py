@@ -517,23 +517,17 @@ def compute_sot_downmix(
 compute_sot = compute_sot_downmix
 
 
-def compute_octave_rt60_log_rmse_mono_only(
-    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+def _mono_octave_rt60_log_rmse(
+    target_ir: np.ndarray, pred_ir: np.ndarray, sample_rate: float
 ) -> float:
-    """Return mono-only log-RMSE between valid paired octave-band RT60 estimates.
+    """Return octave-band RT60 log-RMSE for one validated channel pair.
 
-    pyFDN returns zero when a band's decay cannot be fitted. Such bands and any
-    non-finite estimates are excluded jointly so logarithms cannot contaminate logs.
-
-    :param target: Target mono impulse response, shape ``(1, samples)``.
-    :param pred: Predicted mono impulse response, same shape as ``target``.
+    :param target_ir: One-dimensional target impulse response.
+    :param pred_ir: One-dimensional predicted impulse response.
     :param sample_rate: Sample rate in Hz.
     :returns: Root mean squared natural-log RT60 ratio across valid octave bands.
-    :raises ValueError: Shapes, centre frequencies, or fitted bands are invalid.
+    :raises ValueError: Centre frequencies differ or no band is jointly fitted.
     """
-    target, pred = _validate_audio_pair(target, pred, channel_policy="mono-only")
-    sample_rate = _normalize_sample_rate(sample_rate)
-    target_ir, pred_ir = validate_mono_impulse_response_pair(target, pred)
     target_rt, target_centres = estimate_rt_bands(target_ir, sample_rate)
     pred_rt, pred_centres = estimate_rt_bands(pred_ir, sample_rate)
     if not np.array_equal(target_centres, pred_centres):
@@ -546,15 +540,48 @@ def compute_octave_rt60_log_rmse_mono_only(
     return float(np.sqrt(np.mean(log_error**2)))
 
 
+def compute_octave_rt60_log_rmse_mono_only(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return mono-only log-RMSE between valid paired octave-band RT60 estimates.
+
+    :param target: Target mono impulse response, shape ``(1, samples)``.
+    :param pred: Predicted mono impulse response, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Root mean squared natural-log RT60 ratio across valid octave bands.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="mono-only")
+    rate = _normalize_sample_rate(sample_rate)
+    target_ir, pred_ir = validate_mono_impulse_response_pair(target, pred)
+    return _mono_octave_rt60_log_rmse(target_ir, pred_ir, rate)
+
+
+def compute_octave_rt60_log_rmse_corresponding_channels(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return channel-mean octave-band RT60 log-RMSE.
+
+    :param target: Target impulse response, shape ``(channels, samples)``.
+    :param pred: Predicted impulse response with exactly the same shape.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Mean of independently analyzed corresponding-channel values.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="corresponding-channels")
+    rate = _normalize_sample_rate(sample_rate)
+    values = [
+        _mono_octave_rt60_log_rmse(target_ir, pred_ir, rate)
+        for target_ir, pred_ir in zip(target, pred, strict=True)
+    ]
+    return float(np.mean(values))
+
+
 compute_octave_rt60_log_rmse = compute_octave_rt60_log_rmse_mono_only
 
 
 def compute_octave_edc_rmse_db_mono_only(
     target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
 ) -> float:
-    """Return pyFDN's octave-band energy-decay-curve RMSE in dB.
-
-    Invalid inputs and failed or non-finite upstream losses propagate ``ValueError``.
+    """Return mono-only pyFDN octave-band energy-decay-curve RMSE in dB.
 
     :param target: Target mono impulse response, shape ``(1, samples)``.
     :param pred: Predicted mono impulse response, same shape as ``target``.
@@ -562,28 +589,36 @@ def compute_octave_edc_rmse_db_mono_only(
     :returns: RMS dB difference over target-valid octave-band decay frames.
     """
     target, pred = _validate_audio_pair(target, pred, channel_policy="mono-only")
-    sample_rate = _normalize_sample_rate(sample_rate)
-    return compute_pyfdn_match_energy_decay(target, pred, sample_rate)
+    return compute_pyfdn_match_energy_decay(target, pred, _normalize_sample_rate(sample_rate))
+
+
+def compute_octave_edc_rmse_db_corresponding_channels(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return channel-mean pyFDN octave-band energy-decay-curve RMSE in dB.
+
+    :param target: Target impulse response, shape ``(channels, samples)``.
+    :param pred: Predicted impulse response with exactly the same shape.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Mean of independently analyzed corresponding-channel values.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="corresponding-channels")
+    return compute_pyfdn_match_energy_decay(target, pred, _normalize_sample_rate(sample_rate))
 
 
 compute_octave_edc_rmse_db = compute_octave_edc_rmse_db_mono_only
 
 
-def compute_acoustic_parameter_metrics_mono_only(
-    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat
+def _mono_acoustic_parameter_metrics(
+    target_ir: np.ndarray, pred_ir: np.ndarray, sample_rate: float
 ) -> dict[str, float]:
-    """Return Götz et al. T30/C50 errors plus the raw per-band parameters of both sides.
+    """Return acoustic metrics for one validated channel pair.
 
-    :param target: Target mono impulse response, shape ``(1, samples)``.
-    :param pred: Predicted mono impulse response, same shape as ``target``.
+    :param target_ir: One-dimensional target impulse response.
+    :param pred_ir: One-dimensional predicted impulse response.
     :param sample_rate: Sample rate in Hz.
-    :returns: ``t30_mape``, ``c50_mae_db`` and one ``acoustic_param/...`` entry per
-        parameter, octave band and side; unfittable T30 bands read ``NaN``. Invalid
-        shapes and a T30 that fits on no band on both sides raise ``ValueError``.
+    :returns: Scalar errors and raw per-band parameter measurements.
     """
-    target, pred = _validate_audio_pair(target, pred, channel_policy="mono-only")
-    sample_rate = _normalize_sample_rate(sample_rate)
-    target_ir, pred_ir = validate_mono_impulse_response_pair(target, pred)
     target_t30, _ = acoustic_parameters.octave_band_t30(target_ir, sample_rate)
     pred_t30, _ = acoustic_parameters.octave_band_t30(pred_ir, sample_rate)
     target_c50, _ = acoustic_parameters.octave_band_c50(target_ir, sample_rate)
@@ -599,6 +634,44 @@ def compute_acoustic_parameter_metrics_mono_only(
             metrics[_acoustic_parameter_column(name, centre, "target")] = float(target_value)
             metrics[_acoustic_parameter_column(name, centre, "pred")] = float(pred_value)
     return metrics
+
+
+def compute_acoustic_parameter_metrics_mono_only(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat
+) -> dict[str, float]:
+    """Return mono-only Götz et al. T30/C50 errors and per-band parameters.
+
+    :param target: Target mono impulse response, shape ``(1, samples)``.
+    :param pred: Predicted mono impulse response, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Scalar errors and raw per-band parameter measurements.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="mono-only")
+    rate = _normalize_sample_rate(sample_rate)
+    target_ir, pred_ir = validate_mono_impulse_response_pair(target, pred)
+    return _mono_acoustic_parameter_metrics(target_ir, pred_ir, rate)
+
+
+def compute_acoustic_parameter_metrics_corresponding_channels(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat
+) -> dict[str, float]:
+    """Return channel-mean Götz et al. T30/C50 errors and per-band parameters.
+
+    :param target: Target impulse response, shape ``(channels, samples)``.
+    :param pred: Predicted impulse response with exactly the same shape.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Scalar errors and raw per-band measurements averaged after channel analysis.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="corresponding-channels")
+    rate = _normalize_sample_rate(sample_rate)
+    channel_metrics = [
+        _mono_acoustic_parameter_metrics(target_ir, pred_ir, rate)
+        for target_ir, pred_ir in zip(target, pred, strict=True)
+    ]
+    return {
+        name: float(np.mean([metrics[name] for metrics in channel_metrics]))
+        for name in channel_metrics[0]
+    }
 
 
 compute_acoustic_parameter_metrics = compute_acoustic_parameter_metrics_mono_only
@@ -855,14 +928,18 @@ def compute_metrics_on_dir(
                 "joint_time_frequency_ot": compute_joint_time_frequency_ot(
                     target, pred, target_sample_rate
                 ),
-                "octave_edc_rmse_db": response_losses["pyfdn_match_energy_decay"],
-                "octave_rt60_log_rmse": compute_octave_rt60_log_rmse_mono_only(
+                "octave_edc_rmse_db": compute_octave_edc_rmse_db_corresponding_channels(
+                    target, pred, target_sample_rate
+                ),
+                "octave_rt60_log_rmse": compute_octave_rt60_log_rmse_corresponding_channels(
                     target, pred, target_sample_rate
                 ),
             }
         )
         metrics.update(
-            compute_acoustic_parameter_metrics_mono_only(target, pred, target_sample_rate)
+            compute_acoustic_parameter_metrics_corresponding_channels(
+                target, pred, target_sample_rate
+            )
         )
     return metrics
 
