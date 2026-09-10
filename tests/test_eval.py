@@ -2563,11 +2563,11 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
 
 
 @pytest.mark.fake_vst
-def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
+def test_evaluate_validate_mode_onset_duration_runs_oracle(
     tmp_path: Path,
     fake_surge_smoke_datasets: Path,
 ) -> None:
-    """``datamodule=surge_lance`` drives ``evaluate`` end-to-end over Lance splits.
+    """The eval entrypoint consumes onset-duration rows from Lance splits.
 
     The oracle returns params verbatim, so ``val/param_mse`` is exactly zero,
     with every batch read from Lance.
@@ -2575,8 +2575,13 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
     :param fake_surge_smoke_datasets: Natively-generated Lance smoke dataset.
     """
+    identity = "surge_4_onset_duration"
     cfg = _compose_fake_oracle_eval_cfg(
-        tmp_path, fake_surge_smoke_datasets, mode="validate", datamodule="surge_lance"
+        tmp_path,
+        fake_surge_smoke_datasets,
+        mode="validate",
+        param_spec_name=identity,
+        datamodule="surge_lance",
     )
 
     HydraConfig().set_config(cfg)
@@ -2585,7 +2590,7 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     finally:
         GlobalHydra.instance().clear()
 
-    assert_log_per_param_mse_wired(object_dict["trainer"], "surge_4")
+    assert_log_per_param_mse_wired(object_dict["trainer"], identity)
     assert object_dict["datamodule"].val_num_workers == 0
 
     param_mse = metric_dict["val/param_mse"]

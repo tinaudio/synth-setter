@@ -1289,19 +1289,20 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
 
 
 @pytest.mark.slow
-def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: Path) -> None:
-    """Fake-mode train through the entrypoint sizes batches from a non-default ``param_spec_name``.
+def test_train_fake_mode_onset_duration_sizes_batches_from_registry(tmp_path: Path) -> None:
+    """Fake-mode training consumes the onset-duration parameter-spec identity.
 
     Drives the real ``train(cfg)`` entrypoint with ``datamodule.fake=true`` and the
-    non-default ``surge_simple`` spec: no dataset on disk, so the run exercises the
+    ``surge_simple_onset_duration`` spec: no dataset on disk, so the run exercises the
     registry-derived fake width end-to-end. The width-agnostic ``surge/fake_oracle``
     experiment (oracle returns ``batch["params"]``) tolerates the registry-width batches,
     and the datamodule the entrypoint built carries that registry-derived width.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
     """
-    expected_width = len(param_specs["surge_simple"])
-    cfg = build_fake_train_cfg(tmp_path, param_spec_name="surge_simple")
+    identity = "surge_simple_onset_duration"
+    expected_width = len(param_specs[identity])
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name=identity)
 
     HydraConfig().set_config(cfg)
     _, object_dict = train(cfg)
@@ -1309,7 +1310,7 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
 
-    assert_log_per_param_mse_wired(trainer, "surge_simple")
+    assert_log_per_param_mse_wired(trainer, identity)
 
     datamodule = object_dict["datamodule"]
     datamodule.setup("fit")
