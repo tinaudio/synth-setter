@@ -117,6 +117,14 @@ unchanged. No paid compute was launched.
 
 ## What is and is not verified
 
+Additional 300-step fixed-batch diagnostics (`15ae095cc5`) require a greater-than-90% reduction
+in first-ten versus last-ten mean loss. Both pass: flow falls from 1.1272 to
+0.0063; SLAP's selected cross-modal loss falls from 0.2932 to approximately zero.
+Time/noise/dropout draws are fixed. For SLAP, EMA targets are frozen and the
+supported cross-modal-only objective is selected, making stationary zero-loss
+memorization feasible. This diagnostic does not replace the default mixed-BYOL
+results above or establish retrieval quality.
+
 The committed tests cover zero-residual equality with grouped projection,
 field-local numeric gradients, semantic-gradient activation after optimization,
 learned-vector updates, unrestricted flow outputs, decoder freezing, real CUDA
