@@ -589,9 +589,11 @@ class TestRenderConfig:
         with pytest.raises(ValidationError, match="block_size"):
             RenderConfig(**values)
 
-    def test_non_faustwasm_backend_rejects_block_size(self) -> None:
+    def test_non_faust_backend_rejects_block_size(self) -> None:
         """Block size cannot silently affect backends that do not consume it."""
-        with pytest.raises(ValidationError, match="block_size is supported only for faustwasm"):
+        with pytest.raises(
+            ValidationError, match="block_size is supported only for FaustWasm and Faust C\\+\\+"
+        ):
             RenderConfig(**(_valid_render_kwargs() | {"block_size": 128}))
 
     def test_faustwasm_backend_rejects_once_reload_with_lifecycle_error(self) -> None:
@@ -609,7 +611,7 @@ class TestRenderConfig:
 
         with pytest.raises(
             ValidationError,
-            match='faustwasm requires plugin_reload_cadence="render": each render uses an isolated Node process',
+            match='faustwasm requires plugin_reload_cadence="render": each render uses an isolated DSP instance',
         ):
             RenderConfig(**values)
 

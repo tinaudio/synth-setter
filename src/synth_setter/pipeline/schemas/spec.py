@@ -321,7 +321,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     block_size: int | None = Field(
         default=None,
         ge=1,
-        description="Offline processing block size; required only for FaustWasm.",
+        description="Offline processing block size; required for FaustWasm and native Faust C++.",
     )
     # CliApp.serialize omits literal defaults; a factory preserves v2 during worker transport.
     render_contract_version: Literal[1, 2] = Field(
@@ -730,7 +730,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             if self.backend_version is not None:
                 raise ValueError("backend_version is supported only for format='faust'")
             if self.block_size is not None:
-                raise ValueError("block_size is supported only for faustwasm")
+                raise ValueError("block_size is supported only for FaustWasm and Faust C++")
             return self
         from synth_setter.data.vst.faust_param_spec import FAUST_NOTE_DURATION_SECONDS
         from synth_setter.data.vst.faust_sources import resolve_faust_dsp
@@ -741,27 +741,29 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
         )
         source = resolve_faust_dsp(source_identity)
-        if self.renderer_backend == "faustwasm":
+        isolated_backends = {"faustcpp", "faustwasm"}
+        if self.renderer_backend in isolated_backends:
             if self.render_contract_version == 1:
                 raise ValueError(
-                    "faustwasm rejects render_contract_version=1 legacy digest projection"
+                    f"{self.renderer_backend} rejects render_contract_version=1 legacy digest projection"
                 )
             if self.block_size is None:
-                raise ValueError("faustwasm requires an explicit block_size")
+                raise ValueError(f"{self.renderer_backend} requires an explicit block_size")
             expected_channels = source.outputs
             if self.channels != expected_channels:
-                raise ValueError(f"faustwasm requires channels={expected_channels}")
+                raise ValueError(f"{self.renderer_backend} requires channels={expected_channels}")
             if self.signal_duration_seconds < FAUST_NOTE_DURATION_SECONDS:
                 raise ValueError(
-                    f"faustwasm requires signal_duration_seconds>={FAUST_NOTE_DURATION_SECONDS}"
+                    f"{self.renderer_backend} requires "
+                    f"signal_duration_seconds>={FAUST_NOTE_DURATION_SECONDS}"
                 )
             if self.plugin_reload_cadence != "render":
                 raise ValueError(
-                    'faustwasm requires plugin_reload_cadence="render": '
-                    "each render uses an isolated Node process"
+                    f'{self.renderer_backend} requires plugin_reload_cadence="render": '
+                    "each render uses an isolated DSP instance"
                 )
         elif self.block_size is not None:
-            raise ValueError("block_size is supported only for faustwasm")
+            raise ValueError("block_size is supported only for FaustWasm and Faust C++")
         if self.backend_version is None or not self.backend_version.strip():
             raise ValueError("format='faust' requires a non-blank backend_version")
         if self.gui_toggle_cadence != "never":
@@ -835,7 +837,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         :raises ValueError: The backend and synth format are incompatible.
         """
         allowed = {
-            "faust": {"dawdreamer", "faustwasm"},
+            "faust": {"dawdreamer", "faustcpp", "faustwasm"},
             "pyfdn": {"pyfdn"},
             "surgepy": {"surgepy"},
             "torchsynth": {"torchsynth"},

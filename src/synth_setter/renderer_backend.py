@@ -13,6 +13,7 @@ from typing import Literal
 type PyFDNExcitation = Literal["chirp", "impulse"]
 type RendererBackend = Literal[
     "dawdreamer",
+    "faustcpp",
     "faustwasm",
     "pedalboard",
     "pyfdn",

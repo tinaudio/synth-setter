@@ -45,9 +45,9 @@ jobs:
     # the `pull_request` trigger checks head-repo identity (see #1206).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
 
-    # Standard 2-core/7 GB `ubuntu-latest`: the suite runs serially (no `-n auto`),
-    # so per-test PyTorch peak is the only OOM risk; an exit-137 OOM means re-pin to `ubuntu-latest-4core`.
-    runs-on: ubuntu-latest
+    # Jammy matches the production worker image and its Faust 2.37.3 package.
+    # The suite runs serially, so per-test PyTorch peak is the only OOM risk.
+    runs-on: ubuntu-22.04
 
     timeout-minutes: 90
 
@@ -69,6 +69,14 @@ jobs:
 
       - name: Install Node dependencies
         run: npm ci
+
+      - name: Install native Faust toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends faust g++
+
+      - name: Verify production Faust version
+        run: faust --version 2>&1 | grep -F "FAUST Version 2.37.3"
 
       - name: Install FaustWasm browser dependencies
         run: |

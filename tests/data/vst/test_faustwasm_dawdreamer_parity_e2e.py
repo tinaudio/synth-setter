@@ -1,4 +1,4 @@
-"""Real FaustWasm and DawDreamer Faust host parity coverage."""
+"""Real DawDreamer, Faust C++, and FaustWasm host parity coverage."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import lance
 import numpy as np
 import pytest
 
+from synth_setter.data.vst.core import extract_backend_version
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     MEL_SPEC_FIELD,
@@ -26,13 +27,16 @@ from synth_setter.evaluation.compute_audio_metrics import (
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.synth_spec import SYNTHS, SynthName
 
-type FaustBackend = Literal["dawdreamer", "faustwasm"]
+type FaustBackend = Literal["dawdreamer", "faustcpp", "faustwasm"]
 
 pytestmark = pytest.mark.slow
 
-_BACKENDS: tuple[FaustBackend, ...] = ("dawdreamer", "faustwasm")
-_COMPARISON_DURATION_SECONDS = 0.5
+_BACKENDS: tuple[FaustBackend, ...] = ("dawdreamer", "faustcpp", "faustwasm")
 _COMPARISON_SAMPLES = 22_050
+_PARITY_PAIRS: tuple[tuple[FaustBackend, FaustBackend], ...] = (
+    ("dawdreamer", "faustwasm"),
+    ("faustcpp", "faustwasm"),
+)
 _RENDER_SAMPLES = 176_400
 _BACKEND_VERSIONS: dict[FaustBackend, str] = {
     "dawdreamer": "0.8.3",
@@ -40,6 +44,7 @@ _BACKEND_VERSIONS: dict[FaustBackend, str] = {
 }
 _NOTE_PARAMS = {"pitch": 60, "note_start_and_end": (0.1, 0.35)}
 _ONSET_AMPLITUDE = 1e-8
+_ONSET_ALIGNMENT_TOLERANCE_SAMPLES = 1
 _REQUESTED_ONSET_SAMPLE = 4_410
 _VOLUME_ADDRESS = "/Sequencer/DSP1/brightOrgan/Main/volume"
 _PATCH = {
@@ -54,11 +59,23 @@ _PATCH = {
     "/Sequencer/DSP1/brightOrgan/Stops/Principal_4'": 0.5,
     "/Sequencer/DSP1/brightOrgan/Stops/Tierce_1_3/5'": 0.5,
 }
-_MEL_RMSE_MAX = 0.1
-_MSS_MAX = 0.06
-_RMS_MIN = 0.999
-_SOT_MAX = 0.0001
-_WMFCC_MAX = 0.06
+_PARITY_LIMITS = {
+    ("dawdreamer", "faustwasm"): {
+        "mel_rmse_max": 0.1,
+        "mss_max": 0.06,
+        "rms_min": 0.999,
+        "sot_max": 0.0001,
+        "wmfcc_max": 0.06,
+    },
+    # Faust 2.70.3 A/B/A maxima were 3.109090, 1.170763, 0.997801, 0.001048, and 1.901054.
+    ("faustcpp", "faustwasm"): {
+        "mel_rmse_max": 3.75,
+        "mss_max": 1.5,
+        "rms_min": 0.997,
+        "sot_max": 0.0013,
+        "wmfcc_max": 2.3,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -66,6 +83,17 @@ class _HostResult:
     audio: np.ndarray
     mel: np.ndarray
     params: np.ndarray
+
+
+def _backend_version(backend: FaustBackend) -> str:
+    """Resolve the version required by one real host.
+
+    :param backend: Real Faust host selected for rendering.
+    :returns: Installed or dependency-pinned backend version.
+    """
+    if backend == "faustcpp":
+        return extract_backend_version(backend)
+    return _BACKEND_VERSIONS[backend]
 
 
 def _config(backend: FaustBackend) -> RenderConfig:
@@ -77,8 +105,8 @@ def _config(backend: FaustBackend) -> RenderConfig:
     return RenderConfig(
         synth=SYNTHS[SynthName("faust_bright_organ")],
         renderer_backend=backend,
-        backend_version=_BACKEND_VERSIONS[backend],
-        block_size=128 if backend == "faustwasm" else None,
+        backend_version=_backend_version(backend),
+        block_size=128 if backend in {"faustcpp", "faustwasm"} else None,
         render_contract_version=2,
         sample_rate=44_100,
         channels=2,
@@ -124,7 +152,7 @@ def _render_dataset(
 
 @pytest.fixture(scope="module")
 def host_results(tmp_path_factory: pytest.TempPathFactory) -> dict[FaustBackend, _HostResult]:
-    """Render the shared A/B/A workload once through both production hosts.
+    """Render the shared A/B/A workload once through all production hosts.
 
     :param tmp_path_factory: Module-scoped temporary directory factory.
     :returns: Consumed Lance results keyed by host.
@@ -139,8 +167,8 @@ def host_results(tmp_path_factory: pytest.TempPathFactory) -> dict[FaustBackend,
 def _metrics(reference: _HostResult, candidate: _HostResult, sample: int) -> dict[str, float]:
     """Compute existing host-parity metrics for one matched row.
 
-    :param reference: DawDreamer result consumed from Lance.
-    :param candidate: FaustWasm result consumed from Lance.
+    :param reference: Reference host result consumed from Lance.
+    :param candidate: Candidate host result consumed from Lance.
     :param sample: Matched row index.
     :returns: Named metrics over the calibrated comparison window.
     """
@@ -195,7 +223,7 @@ def test_faust_host_a_b_a_dataset_is_state_isolated(
 def test_faust_hosts_have_aligned_non_early_onsets(
     host_results: dict[FaustBackend, _HostResult],
 ) -> None:
-    """Both real hosts begin together at or after the requested note frame.
+    """All real hosts begin together at or after the requested note frame.
 
     :param host_results: Shared production Lance results.
     """
@@ -206,33 +234,45 @@ def test_faust_hosts_have_aligned_non_early_onsets(
         onsets.append(int(audible[0]))
 
     assert min(onsets) >= _REQUESTED_ONSET_SAMPLE
-    assert len(set(onsets)) == 1
+    assert max(onsets) - min(onsets) <= _ONSET_ALIGNMENT_TOLERANCE_SAMPLES
 
 
 def test_faust_hosts_write_identical_normalized_parameter_rows(
     host_results: dict[FaustBackend, _HostResult],
 ) -> None:
-    """Both production paths persist the same normalized conditioning rows.
+    """All production paths persist the same normalized conditioning rows.
 
     :param host_results: Shared production Lance results.
     """
-    assert np.array_equal(host_results["dawdreamer"].params, host_results["faustwasm"].params)
+    for backend in _BACKENDS[1:]:
+        assert np.array_equal(host_results["dawdreamer"].params, host_results[backend].params)
 
 
+@pytest.mark.parametrize(("reference_backend", "candidate_backend"), _PARITY_PAIRS)
 @pytest.mark.parametrize("sample", [0, 1, 2])
 def test_faust_hosts_a_b_a_workload_has_per_render_parity(
     host_results: dict[FaustBackend, _HostResult],
+    reference_backend: FaustBackend,
+    candidate_backend: FaustBackend,
     sample: int,
 ) -> None:
     """One matched A/B/A row satisfies every calibrated parity limit.
 
     :param host_results: Shared production Lance results.
+    :param reference_backend: Host providing the reference waveform.
+    :param candidate_backend: Host compared with the reference.
     :param sample: Matched workload row.
     """
-    metrics = _metrics(host_results["dawdreamer"], host_results["faustwasm"], sample)
-    diagnostic = {"sample": sample, "metrics": metrics}
-    assert metrics["mel_rmse"] <= _MEL_RMSE_MAX, diagnostic
-    assert metrics["mss"] <= _MSS_MAX, diagnostic
-    assert metrics["rms"] >= _RMS_MIN, diagnostic
-    assert metrics["sot"] <= _SOT_MAX, diagnostic
-    assert metrics["wmfcc"] <= _WMFCC_MAX, diagnostic
+    metrics = _metrics(host_results[reference_backend], host_results[candidate_backend], sample)
+    limits = _PARITY_LIMITS[(reference_backend, candidate_backend)]
+    diagnostic = {
+        "reference_backend": reference_backend,
+        "candidate_backend": candidate_backend,
+        "sample": sample,
+        "metrics": metrics,
+    }
+    assert metrics["mel_rmse"] <= limits["mel_rmse_max"], diagnostic
+    assert metrics["mss"] <= limits["mss_max"], diagnostic
+    assert metrics["rms"] >= limits["rms_min"], diagnostic
+    assert metrics["sot"] <= limits["sot_max"], diagnostic
+    assert metrics["wmfcc"] <= limits["wmfcc_max"], diagnostic

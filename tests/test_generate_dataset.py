@@ -248,6 +248,7 @@ def test_cfg_dataset_render_obxf_resolves_param_spec_through_spec_from_cfg(
     ("cfg_dataset_faust", "backend", "block_size"),
     [
         pytest.param("faust", "dawdreamer", None, id="dawdreamer"),
+        pytest.param("faustcpp", "faustcpp", 128, id="faustcpp"),
         pytest.param("faustwasm", "faustwasm", 128, id="faustwasm"),
     ],
     indirect=["cfg_dataset_faust"],
