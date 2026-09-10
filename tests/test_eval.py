@@ -1700,6 +1700,52 @@ def test_evaluate_unpinned_remote_checkpoint_records_resolved_digest(
     assert Path(objects["trainer"].ckpt_path).read_bytes() == local_checkpoint.read_bytes()
 
 
+def test_evaluate_unpinned_local_checkpoint_inside_predictions_survives_reset(
+    cfg_train: DictConfig,
+    cfg_eval: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Evaluate a local checkpoint stored inside the reset-owned predictions root.
+
+    :param cfg_train: Tiny TorchSynth CPU training configuration.
+    :param cfg_eval: Matching TorchSynth CPU evaluation configuration.
+    :param monkeypatch: Isolates the content-addressed checkpoint cache.
+    """
+    for cfg in (cfg_train, cfg_eval):
+        with open_dict(cfg):
+            cfg.datamodule.signal_length = 512
+            cfg.model.net.channels = 2
+            cfg.model.net.encoder_blocks = 1
+            cfg.model.net.hidden_dim = 8
+            cfg.model.net.norm = "ln"
+            cfg.model.net.trunk_blocks = 1
+    with open_dict(cfg_train):
+        cfg_train.test = False
+        cfg_train.trainer.limit_train_batches = 1
+        cfg_train.trainer.limit_val_batches = 1
+    with open_dict(cfg_eval):
+        cfg_eval.trainer.limit_test_batches = 1
+
+    HydraConfig().set_config(cfg_train)
+    train(cfg_train)
+
+    source_checkpoint = Path(cfg_train.paths.output_dir) / "checkpoints" / "last.ckpt"
+    configured_checkpoint = Path(cfg_eval.paths.output_dir) / "predictions" / "model.ckpt"
+    configured_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source_checkpoint, configured_checkpoint)
+    with open_dict(cfg_eval):
+        cfg_eval.ckpt_path = str(configured_checkpoint)
+        cfg_eval.ckpt_sha256 = None
+    monkeypatch.setenv("XDG_CACHE_HOME", str(Path(cfg_eval.paths.output_dir) / "cache"))
+
+    HydraConfig().set_config(cfg_eval)
+    metrics, objects = evaluate(cfg_eval)
+
+    assert math.isfinite(metrics["test/param_mse"].item())
+    assert configured_checkpoint.read_bytes() == source_checkpoint.read_bytes()
+    assert Path(objects["trainer"].ckpt_path) == configured_checkpoint
+
+
 def _prepare_flowmol3_eval_checkpoint(tmp_path: Path) -> DictConfig:
     """Compose a tiny eval config and write its matching FlowMol3 checkpoint.
 
@@ -2431,6 +2477,15 @@ def test_evaluate_unknown_mode_returns_only_callback_metrics(
     :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
     """
     cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="bogus-mode")
+    audio_path = tmp_path / "audio" / "existing.wav"
+    metrics_path = tmp_path / "metrics" / "existing.json"
+    predictions_path = tmp_path / "predictions" / "existing.pt"
+    audio_path.parent.mkdir(parents=True)
+    metrics_path.parent.mkdir(parents=True)
+    predictions_path.parent.mkdir(parents=True)
+    audio_path.write_text("existing")
+    metrics_path.write_text("existing")
+    predictions_path.write_text("existing")
 
     HydraConfig().set_config(cfg)
     try:
@@ -2439,6 +2494,9 @@ def test_evaluate_unknown_mode_returns_only_callback_metrics(
         GlobalHydra.instance().clear()
 
     assert metric_dict == {}
+    assert audio_path.read_text() == "existing"
+    assert metrics_path.read_text() == "existing"
+    assert predictions_path.read_text() == "existing"
 
 
 @pytest.mark.parametrize("synth_group", ["surge_simple", "surge_xt"])

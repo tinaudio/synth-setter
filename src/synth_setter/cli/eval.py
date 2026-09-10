@@ -9,8 +9,10 @@ import sys
 import tempfile
 from collections.abc import Callable
 from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 import hydra
 import pandas as pd
@@ -69,6 +71,155 @@ register_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)
 
 _MAX_EVALUATION_SEED = 2**32 - 1
+_PUBLICATION_POINTER_FILENAME = "latest.json"
+_PUBLISHED_OUTPUT_DIRECTORIES = ("audio", "metrics", "predictions")
+
+
+@dataclass(frozen=True)
+class _OutputPublicationAttempt:
+    """Identify one evaluation invocation's publication namespace.
+
+    .. attribute :: attempt_id
+
+        Collision-resistant immutable payload path segment.
+
+    .. attribute :: excluded_paths
+
+        Output-relative inputs retained locally but omitted from publication.
+    """
+
+    attempt_id: str
+    excluded_paths: tuple[Path, ...] = ()
+
+
+def _preserved_output_paths(
+    path: Path,
+    output_dir: Path,
+    reset_directories: tuple[str, ...],
+) -> tuple[tuple[Path, ...], tuple[Path, ...]] | None:
+    """Locate an input and every semantic-root alias that can publish it.
+
+    :param path: Existing input path that may be beneath a reset output root.
+    :param output_dir: Evaluation output root.
+    :param reset_directories: Semantic output roots cleared for this invocation.
+    :returns: Paths to move and output-relative publication exclusions, or ``None``.
+    """
+    matches: list[tuple[Path, Path]] = []
+    for resolve in (False, True):
+        candidate = path.resolve() if resolve else path.absolute()
+        for directory_name in reset_directories:
+            semantic_root = output_dir / directory_name
+            root = semantic_root.resolve() if resolve else semantic_root.absolute()
+            if not candidate.is_relative_to(root):
+                continue
+            relative_path = candidate.relative_to(root)
+            boundary = Path(*relative_path.parts[:1])
+            matches.append((root / boundary, Path(directory_name) / boundary))
+    if not matches:
+        return None
+    source_paths: list[Path] = []
+    source_identities: set[tuple[str, Path]] = set()
+    for source_path, _ in matches:
+        identity = (
+            ("symlink", source_path.absolute())
+            if source_path.is_symlink()
+            else ("target", source_path.resolve())
+        )
+        if identity not in source_identities:
+            source_paths.append(source_path)
+            source_identities.add(identity)
+    excluded_paths = tuple(dict.fromkeys(excluded_path for _, excluded_path in matches))
+    return tuple(source_paths), excluded_paths
+
+
+def _remove_output_directory(path: Path) -> None:
+    """Remove output contents without replacing a directory symlink.
+
+    :param path: Semantic output directory to clear.
+    :raises NotADirectoryError: If a semantic output symlink targets a non-directory.
+    """
+    if path.is_symlink():
+        try:
+            target = path.resolve(strict=True)
+        except FileNotFoundError:
+            path.unlink()
+            return
+        if not target.is_dir():
+            raise NotADirectoryError(path)
+        for child in target.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def _start_output_publication_attempt(
+    output_dir: Path,
+    *,
+    reset_directories: tuple[str, ...] = _PUBLISHED_OUTPUT_DIRECTORIES,
+    preserve_paths: tuple[Path, ...] = (),
+) -> _OutputPublicationAttempt:
+    """Remove stale semantic roots and create an identity for one invocation.
+
+    :param output_dir: Reused Hydra directory whose generated semantic roots are reset.
+    :param reset_directories: Semantic roots produced rather than consumed by this invocation.
+    :param preserve_paths: Inputs inside reset roots that must remain at their configured paths.
+    :returns: Attempt identity used for the immutable remote payload.
+    """
+    preserved_paths: list[Path] = []
+    excluded_paths: list[Path] = []
+    for path in preserve_paths:
+        located_path = _preserved_output_paths(path, output_dir, reset_directories)
+        if located_path is None:
+            continue
+        path_sources, path_exclusions = located_path
+        for preserved_path in path_sources:
+            if preserved_path not in preserved_paths:
+                preserved_paths.append(preserved_path)
+        for excluded_path in path_exclusions:
+            if excluded_path not in excluded_paths:
+                excluded_paths.append(excluded_path)
+
+    with tempfile.TemporaryDirectory(prefix="synth-setter-eval-reset-") as temp_dir:
+        moved_paths: list[tuple[Path, Path]] = []
+        try:
+            for index, path in enumerate(preserved_paths):
+                temporary_path = Path(temp_dir) / str(index)
+                shutil.move(path, temporary_path)
+                moved_paths.append((temporary_path, path))
+            for directory_name in reset_directories:
+                _remove_output_directory(output_dir / directory_name)
+        finally:
+            for temporary_path, restored_path in moved_paths:
+                restored_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(temporary_path, restored_path)
+    (output_dir / "predictions").mkdir(parents=True, exist_ok=True)
+    return _OutputPublicationAttempt(uuid4().hex, tuple(excluded_paths))
+
+
+def _stage_attempt_outputs(
+    output_dir: Path,
+    staging_dir: Path,
+    excluded_paths: tuple[Path, ...],
+) -> None:
+    """Copy this invocation's semantic output roots into an isolated tree.
+
+    :param output_dir: Hydra directory containing attempt-owned generated roots.
+    :param staging_dir: Empty local payload directory populated by this function.
+    :param excluded_paths: Output-relative inputs omitted from the publication payload.
+    """
+    for directory_name in _PUBLISHED_OUTPUT_DIRECTORIES:
+        source_dir = output_dir / directory_name
+        if source_dir.is_dir():
+            shutil.copytree(source_dir, staging_dir / directory_name)
+    for relative_path in excluded_paths:
+        staged_path = staging_dir / relative_path
+        if staged_path.is_dir() and not staged_path.is_symlink():
+            shutil.rmtree(staged_path)
+        else:
+            staged_path.unlink(missing_ok=True)
 
 
 class _CheckpointChangedDuringDownloadError(RuntimeError):
@@ -468,6 +619,23 @@ def _localize_eval_checkpoint(
     return str(_cached_remote_checkpoint(r2_uri, digest))
 
 
+def _output_directories_to_reset(cfg: DictConfig) -> tuple[str, ...]:
+    """Return semantic roots produced by this evaluation invocation.
+
+    :param cfg: Evaluation config whose predict postprocessing may consume existing audio.
+    :returns: Output directory names safe to clear before evaluation.
+    """
+    mode = cfg.get("mode", "test")
+    if mode not in ("test", "val", "validate", "predict"):
+        return ()
+    consumes_existing_audio = (
+        mode == "predict" and cfg.evaluation.compute_metrics and not cfg.evaluation.render_vst
+    )
+    if consumes_existing_audio:
+        return ("metrics", "predictions")
+    return _PUBLISHED_OUTPUT_DIRECTORIES
+
+
 def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], list[str]]:
     """Build the consumed-artifact lineage edges for an eval run (spec §5).
 
@@ -563,6 +731,18 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         with open_dict(cfg):
             cfg.ckpt_sha256 = _checkpoint_sha256(Path(checkpoint_path))
 
+    output_dir = Path(cfg.paths.output_dir)
+    reset_directories = _output_directories_to_reset(cfg)
+    publication_attempt = None
+    if trainer.is_global_zero:
+        preserve_paths = (Path(checkpoint_path),) if checkpoint_path is not None else ()
+        publication_attempt = _start_output_publication_attempt(
+            output_dir,
+            reset_directories=reset_directories,
+            preserve_paths=preserve_paths,
+        )
+    trainer.strategy.barrier("eval-attempt-output-reset")
+
     object_dict = {
         "cfg": cfg,
         "datamodule": datamodule,
@@ -627,8 +807,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     # upload + artifact log below) to avoid concurrent writers corrupting metrics.json.
     if trainer.is_global_zero:
         _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
-    _maybe_upload_output_dir(cfg, trainer.is_global_zero)
-    upload_uri = _upload_output_dir_uri(cfg)
+    upload_uri = _maybe_upload_output_dir(cfg, trainer.is_global_zero, attempt=publication_attempt)
     # _get_git_sha() shells out, so only invoke it on the path that actually logs
     # the artifact (global-zero with a configured R2 prefix).
     if trainer.is_global_zero and upload_uri:
@@ -765,41 +944,62 @@ def _upload_output_dir_uri(cfg: DictConfig) -> str | None:
     return OmegaConf.select(cfg, "evaluation.upload_output_dir_uri")
 
 
-def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> None:
-    """Mirror the whole Hydra run dir to R2 when ``evaluation.upload_output_dir_uri`` is set.
+def _maybe_upload_output_dir(
+    cfg: DictConfig, is_global_zero: bool, *, attempt: _OutputPublicationAttempt | None
+) -> str | None:
+    """Publish one successful attempt beneath the configured R2 suite root.
 
-    Opt-in: a null URI is a no-op. Runs last so every artifact — metrics,
-    predictions, rendered audio, config logs — is on disk before the copy. The
-    configured URI is the exact destination prefix; the run dir's contents land
-    directly beneath it. Credential validation is delegated to
-    :func:`r2_io.ensure_r2_env_loaded`, matching the datamodule's R2 prefetch.
+    The immutable payload lands at ``<root>/attempts/<attempt_id>/``. Only after
+    that upload succeeds is ``<root>/latest.json`` replaced with a pointer to the
+    payload. Files predating the invocation and W&B operational state are not
+    staged, so a reused Hydra workspace cannot contaminate a successful retry.
 
-    Only the global-zero rank uploads: under DDP ``main`` runs on every rank
-    against the one shared ``output_dir``, so an ungated copy would race N
-    redundant uploads — the same rank gate :func:`evaluate` puts on predict
-    postprocessing.
-
-    :param cfg: Reads ``cfg.evaluation.upload_output_dir_uri`` (``r2://`` prefix or
-        null) and ``cfg.paths.output_dir`` (the local tree to copy).
-    :param is_global_zero: Whether this is the global-zero rank; non-zero ranks
-        return without touching R2.
-    :raises ValueError: ``upload_output_dir_uri`` is set but not an ``r2://`` URI;
-        checked before the credential ping so a misconfigured destination is
-        attributed to the URI rather than surfacing as an auth failure.
+    :param cfg: Reads the optional suite root and local Hydra output directory.
+    :param is_global_zero: Whether this is the sole rank allowed to publish.
+    :param attempt: Global-zero attempt identity created after stale semantic roots were reset.
+    :returns: Published immutable payload URI, or ``None`` when publication is disabled.
+    :raises RuntimeError: Global zero did not initialize an attempt identity.
+    :raises ValueError: The configured suite root is not an ``r2://`` URI.
     """
     if not is_global_zero:
-        return
-    dest_uri = _upload_output_dir_uri(cfg)
-    if not dest_uri:
-        return
-    if not r2_io.is_r2_uri(dest_uri):
+        return None
+    if attempt is None:
+        raise RuntimeError("global-zero eval publication requires an attempt identity")
+    publication_root_uri = _upload_output_dir_uri(cfg)
+    if not publication_root_uri:
+        return None
+    if not r2_io.is_r2_uri(publication_root_uri):
         raise ValueError(
-            f"evaluation.upload_output_dir_uri must be an r2:// URI; got {dest_uri!r}."
+            f"evaluation.upload_output_dir_uri must be an r2:// URI; got {publication_root_uri!r}."
         )
+
+    publication_root_uri = publication_root_uri.rstrip("/")
+    payload_uri = f"{publication_root_uri}/attempts/{attempt.attempt_id}"
     output_dir = Path(cfg.paths.output_dir)
-    log.info(f"Uploading eval output dir {output_dir} to {dest_uri}")
+    log.info(f"Publishing eval output attempt {attempt.attempt_id} to {payload_uri}")
     r2_io.ensure_r2_env_loaded()
-    r2_io.upload_dir(output_dir, dest_uri)
+    with tempfile.TemporaryDirectory(prefix="synth-setter-eval-publication-") as temp_dir:
+        staging_dir = Path(temp_dir) / "payload"
+        staging_dir.mkdir()
+        _stage_attempt_outputs(output_dir, staging_dir, attempt.excluded_paths)
+        r2_io.upload_dir_immutable(staging_dir, payload_uri)
+
+        pointer_path = Path(temp_dir) / _PUBLICATION_POINTER_FILENAME
+        pointer_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "attempt_id": attempt.attempt_id,
+                    "payload_uri": payload_uri,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        r2_io.upload_to_uri(
+            pointer_path, f"{publication_root_uri}/{_PUBLICATION_POINTER_FILENAME}"
+        )
+    return payload_uri
 
 
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="eval.yaml")
@@ -816,7 +1016,7 @@ def main(cfg: DictConfig) -> None:
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
 
-    # evaluate() persists metrics, mirrors the output dir to R2, and logs the
+    # evaluate() persists metrics, publishes the output suite to R2, and logs the
     # eval-results artifact internally (before @task_wrapper closes the run).
     evaluate(cfg)
 

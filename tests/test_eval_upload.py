@@ -15,7 +15,10 @@ from pathlib import Path
 import pytest
 from omegaconf import DictConfig, OmegaConf
 
-from synth_setter.cli.eval import _maybe_upload_output_dir
+from synth_setter.cli.eval import (
+    _maybe_upload_output_dir,
+    _start_output_publication_attempt,
+)
 
 
 def _upload_cfg(output_dir: Path, upload_output_dir_uri: str | None) -> DictConfig:
@@ -62,13 +65,14 @@ def _storage_env() -> dict[str, str]:
 
 
 def _write_output_tree(output_dir: Path) -> None:
-    """Populate ``output_dir`` with a nested file and a top-level file to mirror.
+    """Populate ``output_dir`` with representative semantic output files.
 
     :param output_dir: Created here, then filled with the two-level tree.
     """
-    (output_dir / "predictions").mkdir(parents=True)
+    (output_dir / "predictions").mkdir(parents=True, exist_ok=True)
     (output_dir / "predictions" / "pred.json").write_text('{"ok": true}')
-    (output_dir / "metrics.json").write_text('{"param_mse": 0.0}')
+    (output_dir / "metrics").mkdir()
+    (output_dir / "metrics" / "metrics.json").write_text('{"param_mse": 0.0}')
 
 
 def test_maybe_upload_output_dir_noop_when_uri_unset(fake_r2_remote: Path, tmp_path: Path) -> None:
@@ -80,8 +84,11 @@ def test_maybe_upload_output_dir_noop_when_uri_unset(fake_r2_remote: Path, tmp_p
     output_dir = tmp_path / "run"
     _write_output_tree(output_dir)
 
+    attempt = _start_output_publication_attempt(output_dir)
     _maybe_upload_output_dir(
-        _upload_cfg(output_dir, upload_output_dir_uri=None), is_global_zero=True
+        _upload_cfg(output_dir, upload_output_dir_uri=None),
+        is_global_zero=True,
+        attempt=attempt,
     )
 
     assert list(fake_r2_remote.glob("bucket/**/*")) == []
@@ -101,32 +108,299 @@ def test_maybe_upload_output_dir_skips_non_global_zero_rank(
     output_dir = tmp_path / "run"
     _write_output_tree(output_dir)
 
+    attempt = _start_output_publication_attempt(output_dir)
     _maybe_upload_output_dir(
-        _upload_cfg(output_dir, "r2://bucket/evals/run-1"), is_global_zero=False
+        _upload_cfg(output_dir, "r2://bucket/evals/run-1"),
+        is_global_zero=False,
+        attempt=attempt,
     )
 
     assert list(fake_r2_remote.glob("bucket/**/*")) == []
 
 
-def test_maybe_upload_output_dir_mirrors_tree_when_uri_set(
+def test_maybe_upload_output_dir_retry_publishes_only_successful_attempt(
     fake_r2_remote: Path, storage_credentials: None, tmp_path: Path
 ) -> None:
-    """A set URI mirrors the whole output dir beneath the destination prefix.
+    """A retry publishes only files written by its successful attempt.
 
-    :param fake_r2_remote: Local-backed ``r2:`` remote where the mirror lands.
+    :param fake_r2_remote: Local-backed ``r2:`` remote where publication lands.
     :param storage_credentials: Dummy secrets so the real credential check passes.
-    :param tmp_path: Holds the output dir copied to R2.
+    :param tmp_path: Holds the reused output workspace.
     """
     output_dir = tmp_path / "run"
-    _write_output_tree(output_dir)
+    failed_attempt = _start_output_publication_attempt(output_dir)
+    (output_dir / "predictions" / "failed.json").write_text("failed")
+    (output_dir / "metrics").mkdir()
+    (output_dir / "metrics" / "metrics.json").write_text('{"failed": true}')
+    (output_dir / "wandb" / "run-failed").mkdir(parents=True)
+    (output_dir / "wandb" / "run-failed" / "run.wandb").write_text("operational")
+    del failed_attempt
 
-    _maybe_upload_output_dir(
-        _upload_cfg(output_dir, "r2://bucket/evals/run-1"), is_global_zero=True
+    retry_attempt = _start_output_publication_attempt(output_dir)
+    (output_dir / "predictions" / "current.json").write_text("current")
+    (output_dir / "metrics").mkdir()
+    (output_dir / "metrics" / "metrics.json").write_text('{"param_mse": 0.0}')
+
+    payload_uri = _maybe_upload_output_dir(
+        _upload_cfg(output_dir, "r2://bucket/evals/run-1"),
+        is_global_zero=True,
+        attempt=retry_attempt,
     )
 
-    dest = fake_r2_remote / "bucket" / "evals" / "run-1"
-    assert (dest / "predictions" / "pred.json").read_text() == '{"ok": true}'
-    assert (dest / "metrics.json").read_text() == '{"param_mse": 0.0}'
+    publication_root = fake_r2_remote / "bucket" / "evals" / "run-1"
+    manifest = json.loads((publication_root / "latest.json").read_text())
+    assert payload_uri == manifest["payload_uri"]
+    payload_root = publication_root / "attempts" / manifest["attempt_id"]
+    assert (payload_root / "predictions" / "current.json").read_text() == "current"
+    assert (payload_root / "metrics" / "metrics.json").is_file()
+    assert not (payload_root / "predictions" / "failed.json").exists()
+    assert not (payload_root / "wandb").exists()
+
+
+def test_start_output_publication_attempt_preserves_checkpoint_through_output_symlink(
+    tmp_path: Path,
+) -> None:
+    """A checkpoint reached through an output alias survives semantic-root reset.
+
+    :param tmp_path: Holds the real output root and its symlink alias.
+    """
+    output_dir = tmp_path / "output"
+    checkpoint = output_dir / "predictions" / "model.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
+    (checkpoint.parent / "stale.pt").write_bytes(b"stale")
+    output_alias = tmp_path / "output-link"
+    output_alias.symlink_to(output_dir, target_is_directory=True)
+
+    _start_output_publication_attempt(output_alias, preserve_paths=(checkpoint,))
+
+    assert checkpoint.read_bytes() == b"checkpoint"
+    assert not (checkpoint.parent / "stale.pt").exists()
+
+
+def test_start_output_attempt_preserves_internal_checkpoint_symlink_target(
+    tmp_path: Path,
+) -> None:
+    """An output-owned checkpoint alias and its output-owned target both survive.
+
+    :param tmp_path: Holds the checkpoint target and its sibling symlink.
+    """
+    output_dir = tmp_path / "output"
+    checkpoint = output_dir / "predictions" / "checkpoints" / "model.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
+    checkpoint_alias = output_dir / "predictions" / "latest.ckpt"
+    checkpoint_alias.symlink_to(checkpoint)
+
+    _start_output_publication_attempt(output_dir, preserve_paths=(checkpoint_alias,))
+
+    assert checkpoint_alias.is_symlink()
+    assert checkpoint_alias.read_bytes() == b"checkpoint"
+    assert checkpoint.read_bytes() == b"checkpoint"
+
+
+def test_start_output_attempt_preserves_external_symlink_to_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """A checkpoint reached through an external symlink survives output reset.
+
+    :param tmp_path: Holds the output checkpoint and its external symlink.
+    """
+    output_dir = tmp_path / "output"
+    checkpoint = output_dir / "predictions" / "model.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
+    checkpoint_alias = tmp_path / "model.ckpt"
+    checkpoint_alias.symlink_to(checkpoint)
+
+    _start_output_publication_attempt(output_dir, preserve_paths=(checkpoint_alias,))
+
+    assert checkpoint_alias.read_bytes() == b"checkpoint"
+    assert checkpoint.read_bytes() == b"checkpoint"
+
+
+def test_start_output_attempt_preserves_checkpoint_in_symlinked_semantic_root(
+    tmp_path: Path,
+) -> None:
+    """A symlinked predictions root is cleared without replacing the alias.
+
+    :param tmp_path: Holds the output symlink and its external target.
+    """
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    external_predictions = tmp_path / "external-predictions"
+    external_predictions.mkdir()
+    checkpoint = external_predictions / "model.ckpt"
+    checkpoint.write_bytes(b"checkpoint")
+    stale_prediction = external_predictions / "stale.pt"
+    stale_prediction.write_bytes(b"stale")
+    predictions_alias = output_dir / "predictions"
+    predictions_alias.symlink_to(external_predictions, target_is_directory=True)
+
+    _start_output_publication_attempt(
+        output_dir, preserve_paths=(predictions_alias / checkpoint.name,)
+    )
+
+    assert predictions_alias.is_symlink()
+    assert checkpoint.read_bytes() == b"checkpoint"
+    assert not stale_prediction.exists()
+
+
+def test_start_output_attempt_preserves_external_alias_into_symlinked_root(
+    tmp_path: Path,
+) -> None:
+    """Combined checkpoint and output aliases retain the checkpoint across reset.
+
+    :param tmp_path: Holds both aliases and the external checkpoint target.
+    """
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    external_predictions = tmp_path / "external-predictions"
+    external_predictions.mkdir()
+    checkpoint = external_predictions / "model.ckpt"
+    checkpoint.write_bytes(b"checkpoint")
+    predictions_alias = output_dir / "predictions"
+    predictions_alias.symlink_to(external_predictions, target_is_directory=True)
+    checkpoint_alias = tmp_path / "checkpoint.ckpt"
+    checkpoint_alias.symlink_to(predictions_alias / checkpoint.name)
+
+    _start_output_publication_attempt(output_dir, preserve_paths=(checkpoint_alias,))
+
+    assert predictions_alias.is_symlink()
+    assert checkpoint_alias.read_bytes() == b"checkpoint"
+    assert checkpoint.read_bytes() == b"checkpoint"
+
+
+def test_start_output_attempt_excludes_all_aliases_to_preserved_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """Every published semantic-root alias to an input is excluded.
+
+    :param tmp_path: Holds aliased output roots and their checkpoint target.
+    """
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    external_outputs = tmp_path / "external-outputs"
+    external_outputs.mkdir()
+    checkpoint = external_outputs / "model.ckpt"
+    checkpoint.write_bytes(b"checkpoint")
+    (output_dir / "audio").symlink_to(external_outputs, target_is_directory=True)
+    (output_dir / "predictions").symlink_to(external_outputs, target_is_directory=True)
+    checkpoint_alias = tmp_path / "checkpoint.ckpt"
+    checkpoint_alias.symlink_to(checkpoint)
+
+    attempt = _start_output_publication_attempt(output_dir, preserve_paths=(checkpoint_alias,))
+
+    assert checkpoint_alias.read_bytes() == b"checkpoint"
+    assert attempt.excluded_paths == (Path("audio/model.ckpt"), Path("predictions/model.ckpt"))
+
+
+def test_start_output_attempt_preserves_checkpoint_below_output_symlink(
+    tmp_path: Path,
+) -> None:
+    """A checkpoint directory symlink remains an alias after output reset.
+
+    :param tmp_path: Holds the output symlink and its external target.
+    """
+    output_dir = tmp_path / "output"
+    predictions_dir = output_dir / "predictions"
+    predictions_dir.mkdir(parents=True)
+    external_dir = tmp_path / "external-checkpoints"
+    external_dir.mkdir()
+    checkpoint = external_dir / "model.ckpt"
+    checkpoint.write_bytes(b"checkpoint")
+    checkpoint_alias_dir = predictions_dir / "checkpoints"
+    checkpoint_alias_dir.symlink_to(external_dir, target_is_directory=True)
+
+    attempt = _start_output_publication_attempt(
+        output_dir,
+        preserve_paths=(checkpoint_alias_dir / checkpoint.name,),
+    )
+
+    assert checkpoint.read_bytes() == b"checkpoint"
+    assert checkpoint_alias_dir.is_symlink()
+    assert (checkpoint_alias_dir / checkpoint.name).read_bytes() == b"checkpoint"
+    assert attempt.excluded_paths == (Path("predictions/checkpoints"),)
+
+
+def test_maybe_upload_output_dir_preserved_checkpoint_is_not_published(
+    fake_r2_remote: Path, storage_credentials: None, tmp_path: Path
+) -> None:
+    """A checkpoint inside predictions survives reset without entering the payload.
+
+    :param fake_r2_remote: Local-backed remote holding the published payload.
+    :param storage_credentials: Dummy secrets so the real credential check passes.
+    :param tmp_path: Holds the reused output workspace.
+    """
+    output_dir = tmp_path / "run"
+    checkpoint = output_dir / "predictions" / "model.ckpt"
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_bytes(b"checkpoint")
+
+    attempt = _start_output_publication_attempt(output_dir, preserve_paths=(checkpoint,))
+    (output_dir / "predictions" / "current.json").write_text("current")
+    payload_uri = _maybe_upload_output_dir(
+        _upload_cfg(output_dir, "r2://bucket/evals/run-1"),
+        is_global_zero=True,
+        attempt=attempt,
+    )
+
+    assert payload_uri is not None
+    payload_root = fake_r2_remote / payload_uri.removeprefix("r2://")
+    assert checkpoint.read_bytes() == b"checkpoint"
+    assert (payload_root / "predictions" / "current.json").is_file()
+    assert not (payload_root / "predictions" / "model.ckpt").exists()
+
+
+def test_maybe_upload_output_dir_attempt_payload_is_immutable(
+    fake_r2_remote: Path, storage_credentials: None, tmp_path: Path
+) -> None:
+    """Republishing one attempt cannot replace its remote payload.
+
+    :param fake_r2_remote: Local-backed remote holding the first payload.
+    :param storage_credentials: Dummy secrets so the real credential check passes.
+    :param tmp_path: Holds the output workspace.
+    """
+    output_dir = tmp_path / "run"
+    attempt = _start_output_publication_attempt(output_dir)
+    (output_dir / "metrics").mkdir(parents=True)
+    metrics_path = output_dir / "metrics" / "metrics.json"
+    metrics_path.write_text('{"value": 1}')
+    cfg = _upload_cfg(output_dir, "r2://bucket/evals/run-1")
+    _maybe_upload_output_dir(cfg, is_global_zero=True, attempt=attempt)
+
+    metrics_path.write_text('{"value": 2}')
+    with pytest.raises(subprocess.CalledProcessError):
+        _maybe_upload_output_dir(cfg, is_global_zero=True, attempt=attempt)
+
+    payload_root = fake_r2_remote / "bucket" / "evals" / "run-1" / "attempts" / attempt.attempt_id
+    assert json.loads((payload_root / "metrics" / "metrics.json").read_text()) == {"value": 1}
+
+
+def test_maybe_upload_output_dir_payload_failure_does_not_commit_pointer(
+    fake_r2_remote: Path, storage_credentials: None, tmp_path: Path
+) -> None:
+    """A failed real-rclone payload upload leaves no publication pointer.
+
+    :param fake_r2_remote: Local-backed remote made invalid at the payload prefix.
+    :param storage_credentials: Dummy secrets so the real credential check passes.
+    :param tmp_path: Holds the output workspace.
+    """
+    output_dir = tmp_path / "run"
+    attempt = _start_output_publication_attempt(output_dir)
+    _write_output_tree(output_dir)
+    publication_root = fake_r2_remote / "bucket" / "evals" / "run-1"
+    publication_root.mkdir(parents=True)
+    (publication_root / "attempts").write_text("blocks attempt directories")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _maybe_upload_output_dir(
+            _upload_cfg(output_dir, "r2://bucket/evals/run-1"),
+            is_global_zero=True,
+            attempt=attempt,
+        )
+
+    assert not (publication_root / "latest.json").exists()
 
 
 def test_maybe_upload_output_dir_rejects_non_r2_uri(tmp_path: Path) -> None:
@@ -143,7 +417,9 @@ def test_maybe_upload_output_dir_rejects_non_r2_uri(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="must be an r2:// URI"):
         _maybe_upload_output_dir(
-            _upload_cfg(output_dir, "s3://bucket/evals/run-1"), is_global_zero=True
+            _upload_cfg(output_dir, "s3://bucket/evals/run-1"),
+            is_global_zero=True,
+            attempt=_start_output_publication_attempt(output_dir),
         )
 
 
@@ -238,6 +514,10 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
     remote_root = tmp_path / "r2"
     remote_root.mkdir()
     output_dir = tmp_path / "out"
+    (output_dir / "predictions").mkdir(parents=True)
+    (output_dir / "predictions" / "failed.json").write_text("failed")
+    (output_dir / "wandb" / "failed-run").mkdir(parents=True)
+    (output_dir / "wandb" / "failed-run" / "run.wandb").write_text("operational")
     upload_uri = "r2://eval-artifacts/run-1"
 
     env = {
@@ -271,15 +551,10 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
     )
     assert proc.returncode == 0, proc.stderr
 
-    local_files = {p.relative_to(output_dir) for p in output_dir.rglob("*") if p.is_file()}
-    assert local_files, "eval produced no output files to upload"
-
-    uploaded_root = remote_root / "eval-artifacts" / "run-1"
-    uploaded_files = {
-        p.relative_to(uploaded_root) for p in uploaded_root.rglob("*") if p.is_file()
-    }
-    missing = local_files - uploaded_files
-    assert not missing, f"output dir not fully uploaded; missing {sorted(map(str, missing))}"
-
-    uploaded_metrics = json.loads((uploaded_root / "metrics" / "metrics.json").read_text())
+    publication_root = remote_root / "eval-artifacts" / "run-1"
+    manifest = json.loads((publication_root / "latest.json").read_text())
+    payload_root = publication_root / "attempts" / manifest["attempt_id"]
+    uploaded_metrics = json.loads((payload_root / "metrics" / "metrics.json").read_text())
     assert uploaded_metrics["test/param_mse"] == 0.0
+    assert not (payload_root / "predictions" / "failed.json").exists()
+    assert not (payload_root / "wandb").exists()
