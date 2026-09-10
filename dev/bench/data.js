@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789009777197,
+  "lastUpdate": 1789009781609,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -27062,6 +27062,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.784081670100012,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cb77998f6945dc33e822947b8b290d7eb588f61b",
+          "message": "internal-feat(data): add KR-106 single-note rendering identity (#3327)\n\n* internal-feat(data): add KR-106 single-note identity\n\n* test(data): verify KR-106 alias equivalence\n\n* test(data): pin KR-106 chorus baseline\n\n* test(data): address KR-106 review feedback\n\n* test(data): align excluded-setting parameters\n\n* internal-fix(data): remove KR-106 transpose controls\n\n* internal-fix(data): remove KR-106 reload special case",
+          "timestamp": "2026-09-09T21:26:53-04:00",
+          "tree_id": "077fbbe40a0b9aee09f56a771c8d6070f8a27e0d",
+          "url": "https://github.com/tinaudio/synth-setter/commit/cb77998f6945dc33e822947b8b290d7eb588f61b"
+        },
+        "date": 1789009780731,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.459159851074219,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.536070828139781,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09084278345108032,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.004641354084014893,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.175049304962158,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 13.082383579100007,
             "unit": "seconds"
           }
         ]
