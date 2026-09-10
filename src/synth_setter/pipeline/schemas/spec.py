@@ -725,6 +725,13 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             if self.backend_version is not None:
                 raise ValueError("backend_version is supported only for format='faust'")
             return self
+        if self.renderer_backend == "faustwasm":
+            if self.render_contract_version == 1:
+                raise ValueError(
+                    "faustwasm rejects render_contract_version=1 legacy digest projection"
+                )
+            if self.plugin_reload_cadence != "render":
+                raise ValueError('faustwasm requires plugin_reload_cadence="render"')
         if self.backend_version is None or not self.backend_version.strip():
             raise ValueError("format='faust' requires a non-blank backend_version")
         if self.gui_toggle_cadence != "never":
@@ -806,7 +813,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         :raises ValueError: The backend and synth format are incompatible.
         """
         allowed = {
-            "faust": {"dawdreamer"},
+            "faust": {"dawdreamer", "faustwasm"},
             "pyfdn": {"pyfdn"},
             "surgepy": {"surgepy"},
             "torchsynth": {"torchsynth"},
