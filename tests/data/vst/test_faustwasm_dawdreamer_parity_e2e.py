@@ -70,6 +70,7 @@ def _config(backend: FaustBackend) -> RenderConfig:
         synth=SYNTHS[SynthName("faust_bright_organ")],
         renderer_backend=backend,
         backend_version=_BACKEND_VERSIONS[backend],
+        block_size=128 if backend == "faustwasm" else None,
         render_contract_version=2,
         sample_rate=44_100,
         channels=2,
