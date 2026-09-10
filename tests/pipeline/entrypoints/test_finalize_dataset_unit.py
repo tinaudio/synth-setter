@@ -31,6 +31,8 @@ from unittest.mock import MagicMock
 import pytest
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
+from omegaconf import OmegaConf
+from pydantic import ValidationError
 
 from synth_setter.cli import finalize_dataset
 from synth_setter.pipeline import r2_io
@@ -57,6 +59,66 @@ def stub_finalize_setup(monkeypatch: pytest.MonkeyPatch) -> Callable[[int | None
         an ``int`` short-circuits).
     """
     return install_finalize_setup_stubs(monkeypatch)
+
+
+@pytest.mark.parametrize("enabled", [1, 1.0, "true", "false", None])
+def test_finalize_estimation_non_boolean_flag_rejected(enabled: object) -> None:
+    """Only a boolean can opt into normalization estimation.
+
+    :param enabled: Non-boolean value that must not enable calibration by coercion.
+    """
+    cfg = OmegaConf.create({"estimate_normalization_stats": enabled, "seed": 1234})
+
+    with pytest.raises(ValidationError, match="estimate_normalization_stats"):
+        finalize_dataset._normalization_estimation_settings(cfg)
+
+
+def test_finalize_enabled_estimation_rejects_coercible_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An enabled estimation run rejects a string seed at the config boundary.
+
+    :param monkeypatch: Guards the R2 setup boundary from being reached.
+    """
+    ensure_r2 = MagicMock()
+    monkeypatch.setattr(finalize_dataset.r2_io, "ensure_r2_env_loaded", ensure_r2)
+    cfg = OmegaConf.create(
+        {
+            "dataset_root_uri": "r2://bucket/run/",
+            "estimate_normalization_stats": True,
+            "paths": {"output_dir": "/unused"},
+            "seed": "1234",
+        }
+    )
+
+    with pytest.raises(ValidationError, match="seed"):
+        finalize_dataset.finalize(cfg)
+
+    ensure_r2.assert_not_called()
+
+
+def test_finalize_disabled_estimation_ignores_seed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A disabled estimation run leaves a bogus seed unused.
+
+    :param monkeypatch: Replaces setup and spec loading at their boundaries.
+    :param tmp_path: Scratch path surfaced through the finalize config.
+    """
+    spec = build_lance_smoke_spec(task_name="disabled-estimation-seed-unused")
+    monkeypatch.setattr(finalize_dataset.r2_io, "ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(finalize_dataset, "load_spec_from_root", lambda _uri: spec)
+    monkeypatch.setattr(finalize_dataset.r2_io, "object_size", lambda _uri: 0)
+    cfg = OmegaConf.create(
+        {
+            "dataset_root_uri": "r2://bucket/run/",
+            "estimate_normalization_stats": False,
+            "paths": {"output_dir": str(tmp_path)},
+            "seed": {"unused": "value"},
+        }
+    )
+
+    finalize_dataset.finalize(cfg)
 
 
 def test_finalize_progress_accumulates_events_and_emits_summary(

@@ -57,8 +57,11 @@ all_conditioning_dropout_rate: 0.1
 rectified_sigma_min: 0.0
 # What the field predicts: the velocity x1 - x0, or the clean endpoint x1.
 parameterization: velocity
+# Mixed applies per-parameter CE only to one-hot endpoint spans.
+endpoint_loss: mse
 
 # sampling
+seeded_evaluation: false
 validation_sample_steps: 50
 validation_cfg_strength: 2.0
 validation_sketch_cfg_strength: ${model.validation_cfg_strength}

@@ -74,44 +74,89 @@ to all loggers via `logger.log_hyperparams()`:
 
 Logged via `self.log()` in each LightningModule:
 
-| Module                  | Metric                                                            | Step | Epoch |
-| ----------------------- | ----------------------------------------------------------------- | ---- | ----- |
-| `VSTFlowMatchingModule` | `train/loss`                                                      | yes  | yes   |
-|                         | `train/audio_loss` (when `model/audio_loss` is set)               | yes  | yes   |
-|                         | `train/audio_grad_ratio` (audio/flow gradient norm)               | yes  | —     |
-|                         | `train/audio_grad_cosine` (gradient alignment)                    | yes  | —     |
-|                         | `train/slot_cosine` (layerwise conditioning only)                 | yes  | —     |
-|                         | `train/penalty`                                                   | yes  | yes   |
-|                         | `train/per_param_flow_mse/{name}` (with ParamSpec)                | —    | yes   |
-|                         | `train/per_param_endpoint_mse/{name}` (endpoint parameterization) | —    | yes   |
-|                         | `val/param_mse`                                                   | —    | yes   |
-|                         | `test/param_mse`                                                  | —    | yes   |
-|                         | `val/param_mse_best_swap`                                         | —    | yes   |
-|                         | `test/param_mse_best_swap`                                        | —    | yes   |
-|                         | `val/param_mse_number_group_swap` (with ParamSpec)                | —    | yes   |
-|                         | `test/param_mse_number_group_swap` (with ParamSpec)               | —    | yes   |
-|                         | `vector_field/*_norm`                                             | yes  | —     |
-|                         | `encoder/*_norm`                                                  | yes  | —     |
-| `VSTFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std`               | yes  | yes   |
-|                         | `train/{reconstruction,latent,param}_loss`                        | yes  | yes   |
-|                         | `train/beta`                                                      | yes  | —     |
-|                         | `val/{reconstruction,latent,param}_loss`                          | —    | yes   |
-|                         | `val/param_mean`, `val/param_std`                                 | —    | yes   |
-|                         | `test/{reconstruction,latent,param}_loss`                         | —    | yes   |
-|                         | `net/*` gradient norms                                            | yes  | —     |
-| `VSTFeedForwardModule`  | `train/loss`                                                      | yes  | yes   |
-|                         | `val/param_mse`, `test/param_mse`                                 | —    | yes   |
+| Module                  | Metric                                                       | Step | Epoch |
+| ----------------------- | ------------------------------------------------------------ | ---- | ----- |
+| `VSTFlowMatchingModule` | `train/loss`                                                 | yes  | yes   |
+|                         | `train/audio_loss` (when `model/audio_loss` is set)          | yes  | yes   |
+|                         | `train/audio_grad_ratio` (audio/flow gradient norm)          | yes  | —     |
+|                         | `train/audio_grad_cosine` (gradient alignment)               | yes  | —     |
+|                         | `train/slot_cosine` (layerwise conditioning only)            | yes  | —     |
+|                         | `train/penalty`                                              | yes  | yes   |
+|                         | `train/weighted_{velocity,endpoint}_mse`                     | —    | yes   |
+|                         | `train/{velocity_endpoint,endpoint}_mse`                     | —    | yes   |
+|                         | `train/per_param_weighted_{velocity,endpoint}_mse/{name}`    | —    | yes   |
+|                         | `train/per_param_{velocity_endpoint,endpoint}_mse/{name}`    | —    | yes   |
+|                         | `{val,test}/{velocity_endpoint,endpoint}_mse/t_{05..95}`     | —    | yes   |
+|                         | `{val,test}/{velocity_endpoint,endpoint}_mse/equal_bin_mean` | —    | yes   |
+|                         | `val/param_mse`                                              | —    | yes   |
+|                         | `test/param_mse`                                             | —    | yes   |
+|                         | `val/param_mse_best_swap`                                    | —    | yes   |
+|                         | `test/param_mse_best_swap`                                   | —    | yes   |
+|                         | `val/param_mse_number_group_swap` (with ParamSpec)           | —    | yes   |
+|                         | `test/param_mse_number_group_swap` (with ParamSpec)          | —    | yes   |
+|                         | `vector_field/*_norm`                                        | yes  | —     |
+|                         | `encoder/*_norm`                                             | yes  | —     |
+| `VSTFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std`          | yes  | yes   |
+|                         | `train/{reconstruction,latent,param}_loss`                   | yes  | yes   |
+|                         | `train/beta`                                                 | yes  | —     |
+|                         | `val/{reconstruction,latent,param}_loss`                     | —    | yes   |
+|                         | `val/param_mean`, `val/param_std`                            | —    | yes   |
+|                         | `test/{reconstruction,latent,param}_loss`                    | —    | yes   |
+|                         | `net/*` gradient norms                                       | yes  | —     |
+| `VSTFeedForwardModule`  | `train/loss`                                                 | yes  | yes   |
+|                         | `val/param_mse`, `test/param_mse`                            | —    | yes   |
 
 The two audio-gradient diagnostics are emitted only when audio feedback is enabled, once per
 `trainer.log_every_n_steps` cadence. `train/slot_cosine` rides the same cadence but is emitted only
 when the encoder returns more than one conditioning slot; it is the mean off-diagonal cosine
 similarity between those slots, so a value approaching one means they have collapsed to one read.
 All three are step-only metrics and have no epoch aggregate.
-`train/per_param_flow_mse/{name}` is the weighted velocity-field objective grouped by ParamSpec
-parameter; `train/per_param_endpoint_mse/{name}` is the same objective when
-`model.parameterization=endpoint` scores the predicted `x1` directly, logged under its own key so
-the two are never overlaid. Both are distinct from `val/per_param_mse/{name}`, which measures
-sampled endpoint error under either parameterization.
+The former `train/per_param_flow_mse/{name}` and ambiguous weighted
+`train/per_param_endpoint_mse/{name}` keys are retired. Their replacements are
+`train/per_param_weighted_velocity_mse/{name}` and
+`train/per_param_weighted_endpoint_mse/{name}`. Unweighted one-step endpoint diagnostics use
+`train/per_param_velocity_endpoint_mse/{name}` for velocity-derived estimates and
+`train/per_param_endpoint_mse/{name}` for direct endpoint predictions. The weighted MSE family is
+a model-space diagnostic; with `endpoint_loss=mixed`, `train/loss` remains the optimized mixed
+CE/MSE objective. These training diagnostics remain distinct from `{val,test}/per_param_mse/{name}`,
+the primary final sampled parameter-space comparison.
+
+### Seeded flow evaluation
+
+Set `seeded_evaluation=true` on the evaluation CLI, or `model.seeded_evaluation=true` during
+training, to derive validation and test noise from the seed, stage, loader batch index, and
+distributed rank without advancing the global RNG stream. Standalone evaluation seeds model and
+datamodule construction only in this mode; it uses seed 42 when an enabled legacy config omits or
+nulls `seed`. The default `false` preserves fresh `torch.randn_like` sampling and does not seed the
+evaluation entrypoint.
+
+The ten fixed-time diagnostics reuse the sampling noise at centers 0.05 through 0.95, run fully
+conditional (no CFG dropout), report unweighted endpoint-space MSE per bin, and average the bins
+equally. Direct endpoint predictions use the `endpoint_mse` namespace; one-step estimates from
+velocity use `velocity_endpoint_mse`. In the default mode these diagnostics vary with the fresh
+sampling noise; enabling seeded evaluation makes them repeatable under the same topology.
+
+A comparison must record the dataset artifact/version, seed, loader batch size and worker count,
+rank/world-size topology, sampler steps, and content/sketch CFG strengths. Repeatability requires
+the same ordered dataset and loader topology; changing batching, world size, model, checkpoint,
+device kernels, or dependency versions may change results. `val/param_mse` and
+`test/param_mse` remain the primary sampled-output parameter metrics, and rendered `audio/*`
+metrics remain available in predict mode. Fixed diagnostics establish comparability, not model
+quality; quality claims still require matched checkpoints, compute, seeds, and representative data.
+
+### Seeded flow evaluation
+
+Set `seeded_evaluation=true` on the evaluation CLI, or `model.seeded_evaluation=true` during
+training, to derive validation and test noise from the seed, stage, loader batch index, and
+distributed rank without advancing the global RNG stream. Standalone evaluation seeds model and
+datamodule construction only in this mode; it uses seed 42 when an enabled legacy config omits or
+nulls `seed`. The default `false` preserves fresh `torch.randn_like` sampling and does not seed the
+evaluation entrypoint.
+
+A comparison must record the dataset artifact/version, seed, loader batch size and worker count,
+rank/world-size topology, sampler steps, and content/sketch CFG strengths. Repeatability requires
+the same ordered dataset and loader topology; changing batching, world size, model, checkpoint,
+device kernels, or dependency versions may change results.
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 
@@ -126,7 +171,7 @@ only; with `logger=wandb` they go to W&B only.
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `PlotLossPerTimestep`    | `plot` (image)                                                                                                                                                                                                                                                                      | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`                                                 |
 | `PlotLearntProjection`   | `assignment`, `value` (images)                                                                                                                                                                                                                                                      | `on_validation_epoch_end` or every N steps                                                                                                                        | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`                                               |
-| `LogPerParamMSE`         | `{val,test}/per_param_mse/{name}`, `{val,test}/per_param_mse_best_swap/{name}`, `{val,test}/per_param_mse_number_group_swap/{name}`, `{val,test}/per_param_mse_spec_quantized/{name}`, `{val,test}/param_mse_spec_quantized`, and `{val,test}/per_param_abs_cosine_distance/{name}` | `on_{validation,test}_epoch_end` (via `pl_module.log_dict`)                                                                                                       | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
+| `LogPerParamMSE`         | `{val,test}/per_param_mse/{name}`, `{val,test}_per_param_mse_best_swap/{name}`, `{val,test}/per_param_mse_number_group_swap/{name}`, `{val,test}/per_param_mse_spec_quantized/{name}`, `{val,test}/param_mse_spec_quantized`, and `{val,test}/per_param_abs_cosine_distance/{name}` | `on_{validation,test}_epoch_end` (via `pl_module.log_dict`)                                                                                                       | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
 | `ValAudioProbe` (opt-in) | `val_audio/<metric>_<stat>` + `val_audio/probe_step`                                                                                                                                                                                                                                | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
 
 `{val,test}/param_mse_spec_quantized` clips predictions to the ParamSpec domain

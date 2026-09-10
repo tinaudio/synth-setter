@@ -370,8 +370,7 @@ class VSTDataModule(LightningDataModule):
         :param predict_file: Prediction split; defaults to ``test.lance``. A path
             naming the configured ``dataset_root`` rebases onto the subset directory.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
-        :param sketch: Optional sketch-control spec adding its stored column to
-            every split's read set (#2612).
+        :param sketch: Optional stored or online-audio sketch-control spec.
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param param_spec_name: Registry key selecting parameter width.
         :param download_dataset_txids: Per-split transaction uuids pinning the
@@ -504,7 +503,13 @@ class VSTDataModule(LightningDataModule):
         """
         columns = ["param_array", self._conditioning_column()]
         if self.sketch_controls is not None:
-            columns.append(self.sketch_controls.column)
+            sketch_column = (
+                "audio"
+                if self.sketch_controls.source == "online"
+                else self.sketch_controls.column
+            )
+            if sketch_column not in columns:
+                columns.append(sketch_column)
         if read_audio and "audio" not in columns:
             columns.append("audio")
         return columns

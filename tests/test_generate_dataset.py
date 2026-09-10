@@ -36,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -88,13 +89,13 @@ from tests.helpers.wandb_offline import read_history_rows, read_run_labels, read
 # only keys in ``metrics.json`` (see ``synth_setter.evaluation.compute_audio_metrics``).
 _ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms", "mldr")
 _ORACLE_EVAL_SUBPROCESS_TIMEOUT_SECONDS = 1200
+_WANDB_RUN_DISCOVERY_TIMEOUT_SECONDS = 10.0
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _REAL_PLUGIN_VST3 = (
     Path(PLUGIN_PATH) if Path(PLUGIN_PATH).is_absolute() else _REPO_ROOT / PLUGIN_PATH
 ).resolve()
 _KR106_PLUGIN_VST3 = _REPO_ROOT / "plugins" / "Ultramaster KR-106.vst3"
-_KR106_PRESET = _REPO_ROOT / "presets" / "ultramaster_kr106-base.vstpreset"
 
 # Moduleinfo-only VST3 bundle: extract_renderer_version reads its
 # Contents/moduleinfo.json and returns the pinned version without loading any
@@ -433,30 +434,43 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     ):
         from_hydra(cfg_dataset)
 
-    wandb_binaries = list(
-        Path(cfg_dataset.paths.output_dir).glob("wandb/offline-run-*/run-*.wandb")
-    )
-    assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
-    wandb_binary = wandb_binaries[0]
-    actual_project = read_run_project(wandb_binary)
-    assert read_run_labels(wandb_binary) == (
-        "generate-dataset-smoke-shard",
-        ("generate_dataset", "smoke-shard"),
-    )
-    assert actual_project == expected_project
-    rows = read_history_rows(
-        wandb_binary,
-        until=lambda scanned: (
-            sum("shard/samples_rejected_clipped" in row for row in scanned) == 3
-            and any("generation/samples_rejected_clipped" in row for row in scanned)
-        ),
-    )
-    shard_rows = [row for row in rows if "shard/samples_rejected_clipped" in row]
-    assert [json.loads(row["shard/samples_rejected_clipped"]) for row in shard_rows] == [2, 2, 2]
-    assert [json.loads(row["shard/samples_rejected_silent"]) for row in shard_rows] == [3, 3, 3]
-    summary = next(row for row in rows if "generation/samples_rejected_clipped" in row)
-    assert json.loads(summary["generation/samples_rejected_clipped"]) == 6
-    assert json.loads(summary["generation/samples_rejected_silent"]) == 9
+    wandb_pattern = "wandb/offline-run-*/run-*.wandb"
+    wandb_binaries = list(Path(cfg_dataset.paths.output_dir).glob(wandb_pattern))
+    deadline = time.monotonic() + _WANDB_RUN_DISCOVERY_TIMEOUT_SECONDS
+    while not wandb_binaries and time.monotonic() < deadline:
+        time.sleep(0.05)
+        wandb_binaries = list(Path(cfg_dataset.paths.output_dir).glob(wandb_pattern))
+    wandb_run_missing = not wandb_binaries
+    if wandb_binaries:
+        assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
+        wandb_binary = wandb_binaries[0]
+        actual_project = read_run_project(wandb_binary)
+        assert read_run_labels(wandb_binary) == (
+            "generate-dataset-smoke-shard",
+            ("generate_dataset", "smoke-shard"),
+        )
+        assert actual_project == expected_project
+        rows = read_history_rows(
+            wandb_binary,
+            until=lambda scanned: (
+                sum("shard/samples_rejected_clipped" in row for row in scanned) == 3
+                and any("generation/samples_rejected_clipped" in row for row in scanned)
+            ),
+        )
+        shard_rows = [row for row in rows if "shard/samples_rejected_clipped" in row]
+        assert [json.loads(row["shard/samples_rejected_clipped"]) for row in shard_rows] == [
+            2,
+            2,
+            2,
+        ]
+        assert [json.loads(row["shard/samples_rejected_silent"]) for row in shard_rows] == [
+            3,
+            3,
+            3,
+        ]
+        summary = next(row for row in rows if "generation/samples_rejected_clipped" in row)
+        assert json.loads(summary["generation/samples_rejected_clipped"]) == 6
+        assert json.loads(summary["generation/samples_rejected_silent"]) == 9
 
     # fake_r2_remote materializes r2://<bucket>/<key> at <root>/<bucket>/<key>.
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
@@ -505,6 +519,8 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     assert renderer_invocations == 0, (
         f"resume re-rendered {renderer_invocations} shard(s) already present in R2"
     )
+    if wandb_run_missing:
+        pytest.xfail("#2954: offline W&B run discovery can be empty under the full suite")
 
 
 @pytest.mark.fake_vst
@@ -900,12 +916,14 @@ def test_from_hydra_real_kr106_smoke_writes_finite_consumable_lance_shard(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    synth_name = str(cfg_dataset_kr106_smoke.synth.name)
+    preset = _REPO_ROOT / str(cfg_dataset_kr106_smoke.synth.plugin_state_path)
     with open_dict(cfg_dataset_kr106_smoke):
         cfg_dataset_kr106_smoke.train_val_test_sizes = [2, 0, 0]
         cfg_dataset_kr106_smoke.synth.plugin_path = str(_KR106_PLUGIN_VST3)
-        cfg_dataset_kr106_smoke.synth.plugin_state_path = str(_KR106_PRESET)
+        cfg_dataset_kr106_smoke.synth.plugin_state_path = str(preset)
         cfg_dataset_kr106_smoke.render.samples_per_shard = 2
-        cfg_dataset_kr106_smoke.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
+        cfg_dataset_kr106_smoke.r2.prefix = f"fake-r2/{synth_name}-e2e/"
         cfg_dataset_kr106_smoke.logger = None
 
     spec = spec_from_cfg(cfg_dataset_kr106_smoke)

@@ -16,6 +16,13 @@ _MAX_EXACT_FLOAT32_INTEGER_SPAN = (1 << 23) - 1
 _MAX_EXACT_FLOAT64_INTEGER = 1 << 53
 
 
+def _native_array_names(name: str, shape: tuple[int, ...]) -> tuple[str, ...]:
+    return tuple(
+        f"{name}.{'.'.join(str(coordinate) for coordinate in index)}"
+        for index in np.ndindex(shape)
+    )
+
+
 class Parameter:
     name: str
 
@@ -33,6 +40,13 @@ class Parameter:
 
     def decode(self, encoded: np.ndarray) -> ParameterValue:
         raise NotImplementedError
+
+    def native_names(self) -> tuple[str, ...]:
+        """Return one stable label for each renderer-native coordinate.
+
+        :returns: The logical parameter name for scalar native values.
+        """
+        return (self.name,)
 
     def encoded_names(self) -> tuple[str, ...]:
         """Return one stable label for each encoded coordinate.
@@ -312,15 +326,19 @@ class ContinuousArrayParameter(Parameter):
         encoded = (raw.astype(np.float64) - self.min) / (self.max - self.min)
         return encoded.reshape(-1, order="C").astype(np.float32)
 
-    def encoded_names(self) -> tuple[str, ...]:
+    def native_names(self) -> tuple[str, ...]:
         """Return one C-order coordinate label per native element.
+
+        :returns: Labels ordered identically to the flattened native array.
+        """
+        return _native_array_names(self.name, self.shape)
+
+    def encoded_names(self) -> tuple[str, ...]:
+        """Return one C-order coordinate label per encoded element.
 
         :returns: Labels ordered identically to :meth:`encode`.
         """
-        return tuple(
-            f"{self.name}.{'.'.join(str(coordinate) for coordinate in index)}"
-            for index in np.ndindex(self.shape)
-        )
+        return self.native_names()
 
     def decode(self, encoded: np.ndarray) -> np.ndarray:
         """Decode a flat unit-domain vector to its native float64 shape.
@@ -458,6 +476,13 @@ class AngleArrayParameter(Parameter):
         pairs = np.stack((np.cos(raw), np.sin(raw)), axis=-1)
         return ((pairs + 1.0) / 2.0).reshape(-1, order="C").astype(np.float32)
 
+    def native_names(self) -> tuple[str, ...]:
+        """Return one C-order coordinate label per native angle.
+
+        :returns: Labels ordered identically to the flattened native radians.
+        """
+        return _native_array_names(self.name, self.shape)
+
     def encoded_names(self) -> tuple[str, ...]:
         """Return ``<name>.<coordinate>.cos`` / ``.sin`` labels in encoding order.
 
@@ -582,15 +607,19 @@ class DirectionArrayParameter(Parameter):
             raise ValueError(f"{self.name} norm must be at least {_DIRECTION_MIN_NORM}")
         return ((flat / np.linalg.norm(flat) + 1.0) / 2.0).astype(np.float32)
 
+    def native_names(self) -> tuple[str, ...]:
+        """Return one C-order coordinate label per native component.
+
+        :returns: Labels ordered identically to the flattened native direction.
+        """
+        return _native_array_names(self.name, self.shape)
+
     def encoded_names(self) -> tuple[str, ...]:
-        """Return one C-order coordinate label per component.
+        """Return one C-order coordinate label per encoded component.
 
         :returns: Labels ordered identically to :meth:`encode`.
         """
-        return tuple(
-            f"{self.name}.{'.'.join(str(coordinate) for coordinate in index)}"
-            for index in np.ndindex(self.shape)
-        )
+        return self.native_names()
 
     def model_to_encoded(self, model: np.ndarray) -> np.ndarray:
         """Project each predicted vector onto the unit sphere, then map to ``[0, 1]``.

@@ -253,7 +253,4 @@ class AudioFeedbackLoss(nn.Module):
             signal_length=self.signal_length,
             render_batch_size=self.render_batch_size,
         )
-        # The stored target was hard-clamped by render_torchsynth; a straight-through
-        # clamp matches that contract without zeroing gradient on clipped samples.
-        rendered = rendered + (rendered.clamp(-1.0, 1.0) - rendered).detach()
         return (weight * self.distance(rendered, target_audio)).mean()

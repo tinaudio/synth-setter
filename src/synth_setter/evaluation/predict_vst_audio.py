@@ -179,7 +179,7 @@ def params_to_csv(
                 continue
             flattened.update(
                 zip(
-                    parameter.encoded_names(),
+                    parameter.native_names(),
                     (float(item) for item in value.reshape(-1)),
                     strict=True,
                 )
