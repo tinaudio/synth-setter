@@ -29,6 +29,31 @@ does not load a language model. Reuse the same finalizer work directory to deriv
 another supported dimension without re-encoding. Do not modify a completed run's
 spec to retrofit embeddings: create a new opted-in dataset run.
 
+## Training consumers
+
+Use a finalized, locally hydrated dataset containing `param_language.npz`:
+
+```bash
+uv run synth-setter-train experiment=surge/flow_simple model/projection=language \
+  datamodule.dataset_root=/path/to/dataset datamodule.download_dataset_root_uri=null
+uv run synth-setter-train experiment=surge/slap_language \
+  datamodule.dataset_root=/path/to/dataset datamodule.download_dataset_root_uri=null
+```
+
+The synth selector must match the artifact's identity. These examples retain each
+experiment's default synth; supply `synth=...` when the finalized dataset differs.
+Flow's dimension knob is `model.vector_field.projection.embedding_dim`; SLAP's is
+`model.param_encoder.encoder.projection.embedding_dim`. Both default to 128 and
+must match the selected artifact. Each projection also exposes `embedding_path`.
+
+The opt-in configurations install a Lightning callback that initializes the
+vectors after checkpoint restoration and before fit, validation, test, or predict.
+Numeric forward calls never open files. A standalone projection caller must call
+`initialize_embeddings()` before the first fresh forward. Checkpoints carry vectors,
+initialization state, field identity, and encoder revision; restoring one does not
+require its original metadata file or text model. Use the same projection selector
+when restoring. Assignment-matrix visualization remains unsupported.
+
 ## Verification
 
 ```bash

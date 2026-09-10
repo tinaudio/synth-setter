@@ -12,6 +12,7 @@ from jaxtyping import jaxtyped
 
 from synth_setter.models.components.transformer import (
     ASTWithProjectionHead,
+    GroupedParameterProjection,
     LearntProjection,
     ParamTokenEmbed,
 )
@@ -23,7 +24,7 @@ class VSTFeedForwardParamEncoder(ASTWithProjectionHead):
     @jaxtyped(typechecker=beartype)
     def __init__(
         self,
-        projection: LearntProjection,
+        projection: LearntProjection | GroupedParameterProjection,
         d_model: int = 768,
         d_out: int = 512,
         n_heads: int = 16,
@@ -31,7 +32,7 @@ class VSTFeedForwardParamEncoder(ASTWithProjectionHead):
     ) -> None:
         """Use the projection's encoder half and freeze its unused decoder.
 
-        :param projection: Parameter-to-token assignment producing ``d_model``-wide tokens.
+        :param projection: Numeric projection producing ``d_model``-wide parameter tokens.
         :param d_model: Shared token, transformer, and hidden head width.
         :param d_out: Output embedding width.
         :param n_heads: Attention heads per layer; must divide ``d_model``.
