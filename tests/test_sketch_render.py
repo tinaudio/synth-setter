@@ -428,6 +428,7 @@ def test_load_model_matching_checkpoint_returns_evaluation_model(
             "conditioning": "mel",
             "sketch_controls": SketchControlSpec(num_frames=32),
             "param_spec": "surge_simple",
+            "note_timing_parameterization": "onset_duration",
             "num_params": 92,
         }
         device: torch.device | None = None
@@ -490,6 +491,36 @@ def test_load_model_matching_width_wrong_param_spec_raises(
     )
 
     with pytest.raises(ValueError, match="surge_4.*surge_simple"):
+        sketch_render._load_model(checkpoint, render, torch.device("cpu"))
+
+
+def test_load_model_matching_width_wrong_note_timing_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Equal-width checkpoint and render timing semantics cannot be exchanged.
+
+    :param tmp_path: Temporary checkpoint path.
+    :param monkeypatch: Lightning checkpoint loader patch fixture.
+    """
+    checkpoint = tmp_path / "model.ckpt"
+    checkpoint.write_bytes(b"checkpoint")
+    render = sketch_render._load_settings().render
+    model = SimpleNamespace(
+        hparams={
+            "conditioning": "mel",
+            "sketch_controls": SketchControlSpec(num_frames=32),
+            "param_spec": "surge_simple",
+            "note_timing_parameterization": "legacy_endpoints",
+            "num_params": 92,
+        }
+    )
+    monkeypatch.setattr(
+        sketch_render.VSTFlowMatchingModule,
+        "load_from_checkpoint",
+        lambda *args, **kwargs: model,
+    )
+
+    with pytest.raises(ValueError, match="checkpoint note timing"):
         sketch_render._load_model(checkpoint, render, torch.device("cpu"))
 
 

@@ -422,4 +422,14 @@ def validate_synth_identity(cfg: DictConfig) -> SynthSpec | None:
             f"datamodule.param_spec_name={datamodule_spec!r} disagrees with "
             f"synth={spec.name!r} (param_spec_name={spec.param_spec_name!r})"
         )
+    for node_name in ("datamodule", "model"):
+        node = cfg.get(node_name)
+        node_timing = None if node is None else node.get("note_timing_parameterization")
+        if node_timing is not None and str(node_timing) != spec.note_timing_parameterization:
+            raise ValueError(
+                f"{node_name}.note_timing_parameterization={node_timing!r} disagrees "
+                f"with synth={spec.name!r} "
+                "(note_timing_parameterization="
+                f"{spec.note_timing_parameterization!r})"
+            )
     return spec

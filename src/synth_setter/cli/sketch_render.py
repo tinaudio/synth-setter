@@ -42,6 +42,7 @@ from synth_setter.evaluation.predict_vst_audio import params_to_csv
 from synth_setter.features.sketch_controls import extract_sketch_controls
 from synth_setter.model_cache import synth_setter_cache_dir
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.param_spec_name import LEGACY_NOTE_TIMING
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import anchor_render_preset
@@ -437,6 +438,12 @@ def _load_model(
         raise ValueError(
             f"checkpoint parameter spec {checkpoint_spec!r} does not match "
             f"render parameter spec {render.param_spec_name!r}"
+        )
+    checkpoint_timing = model.hparams.get("note_timing_parameterization", LEGACY_NOTE_TIMING)
+    if checkpoint_timing != render.note_timing_parameterization:
+        raise ValueError(
+            f"checkpoint note timing {checkpoint_timing!r} does not match "
+            f"render note timing {render.note_timing_parameterization!r}"
         )
     expected_width = len(
         resolve_param_spec(

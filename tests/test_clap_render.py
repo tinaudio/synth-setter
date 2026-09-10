@@ -6,6 +6,7 @@ import csv
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import numpy as np
@@ -156,6 +157,29 @@ def test_write_summary_csv_persists_named_statistics(tmp_path: Path) -> None:
 
     with output.open(newline="", encoding="utf-8") as stream:
         assert list(csv.DictReader(stream)) == [{"count": "2", "mean": "0.25"}]
+
+
+def test_validate_inverse_model_matching_width_wrong_note_timing_raises() -> None:
+    """Equal-width checkpoint and render timing semantics cannot be exchanged."""
+    legacy_render = clap_render._load_settings().render
+    render = legacy_render.model_copy(
+        update={
+            "synth": legacy_render.synth.model_copy(
+                update={"note_timing_parameterization": "onset_duration"}
+            )
+        }
+    )
+    model = SimpleNamespace(
+        hparams={
+            "conditioning": {"column": "clap", "input_shape": [512]},
+            "sketch_controls": None,
+            "note_timing_parameterization": "legacy_endpoints",
+            "num_params": 92,
+        }
+    )
+
+    with pytest.raises(ValueError, match="checkpoint note timing"):
+        clap_render._validate_inverse_model(model, render)  # pyright: ignore[reportArgumentType]
 
 
 def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorted(

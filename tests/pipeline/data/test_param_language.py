@@ -29,6 +29,15 @@ def test_describe_fields_surge_matches_encoded_field_order() -> None:
     ]
 
 
+def test_describe_fields_uses_persisted_note_timing_semantics() -> None:
+    """Timing metadata changes descriptions without changing the registry identity."""
+    legacy = describe_fields("surge_4", "surge_4")
+    current = describe_fields("surge_4", "surge_4", "onset_duration")
+
+    assert json.loads(legacy[-1])["type"] == "LegacyEndpointNoteDurationParameter"
+    assert json.loads(current[-1])["type"] == "NoteDurationParameter"
+
+
 def test_matryoshka_truncation_renormalizes_prefix() -> None:
     """Ensure truncation renormalizes each embedding prefix."""
     full = np.ones((2, 768), dtype=np.float32)

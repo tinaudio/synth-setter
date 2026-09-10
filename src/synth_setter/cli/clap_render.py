@@ -35,6 +35,7 @@ from synth_setter.data.vst.param_spec import (
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.model_cache import synth_setter_cache_dir
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.param_spec_name import LEGACY_NOTE_TIMING
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import anchor_render_preset, make_audio_renderer
@@ -467,6 +468,12 @@ def _validate_inverse_model(model: VSTFlowMatchingModule, render: RenderConfig) 
         )
     if model.hparams["sketch_controls"] is not None:
         raise ValueError("text-only rendering does not support sketch-conditioned checkpoints")
+    checkpoint_timing = model.hparams.get("note_timing_parameterization", LEGACY_NOTE_TIMING)
+    if checkpoint_timing != render.note_timing_parameterization:
+        raise ValueError(
+            f"checkpoint note timing {checkpoint_timing!r} does not match "
+            f"render note timing {render.note_timing_parameterization!r}"
+        )
     expected_width = len(
         resolve_param_spec(
             render.param_spec_name,

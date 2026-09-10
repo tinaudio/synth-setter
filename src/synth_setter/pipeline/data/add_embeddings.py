@@ -1916,7 +1916,15 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     :param config: Validated dataset, embedding, checkpoint, and write settings.
     """
     from synth_setter.pipeline.data.lance_shard import read_shard_metadata
+    from synth_setter.pipeline.dataset_lineage import validate_dataset_note_timing
 
+    if "param_shift" in config.embeddings and config.render is not None:
+        dataset_root = config.lance_uri.rsplit("/", maxsplit=1)[0]
+        validate_dataset_note_timing(
+            dataset_root,
+            None,
+            config.render.note_timing_parameterization,
+        )
     specs = [EMBEDDING_REGISTRY[name] for name in config.embeddings]
     dataset = _open_lance_dataset(config.lance_uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
