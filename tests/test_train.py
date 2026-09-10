@@ -208,7 +208,9 @@ def test_train_string_estimate_normalization_stats_raises_before_instantiation(
 @pytest.mark.slow
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
-def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
+def test_train_fast_dev_run_tiny_model_tiny_data(
+    cfg_train: DictConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Run 1 train, val, and test step on CPU with `fast_dev_run`.
 
     Dataset/batch size constraints come from the shared `cfg_train` fixture
@@ -216,12 +218,19 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     exercise spawn integration while ``fast_dev_run`` caps each loop.
 
     :param cfg_train: A DictConfig containing a valid training configuration.
+    :param monkeypatch: Isolates the process environment modified by the endpoint.
     """
+    feature_flag_name = "SYNTH_SETTER_FF_3160_CORRECT_AST_PATCH_PADDING"
+    monkeypatch.delenv(feature_flag_name, raising=False)
     HydraConfig().set_config(cfg_train)
     with open_dict(cfg_train):
         cfg_train.datamodule.num_workers = 2
+        cfg_train.feature_flags = [3160]
         cfg_train.trainer.fast_dev_run = True
+
     train(cfg_train)
+
+    assert os.environ[feature_flag_name] == "1"
 
 
 def test_train_grouped_projection_writes_strictly_loadable_checkpoint(tmp_path: Path) -> None:

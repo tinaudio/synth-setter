@@ -26,6 +26,8 @@ defaults:
 task_name: "eval"
 
 tags: ["dev"]
+# Integer IDs resolved through the runtime feature-flag registry.
+feature_flags: []
 mode: test
 
 # Predict-mode post-processing; gated off so `mode: test`/`validate` stay unchanged.

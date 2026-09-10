@@ -41,6 +41,7 @@ from lightning import Trainer, seed_everything
 from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationResolutionError, MissingMandatoryValue
 from pedalboard.io import AudioFile
+from pydantic import ValidationError
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
@@ -369,6 +370,21 @@ def test_evaluate_pyfdn_derived_feedback_checkpoint_preserves_parameter_metrics(
     assert torch.isfinite(metrics[f"test/per_param_mse_best_swap/{control}"])
     assert torch.isfinite(metrics[f"test/per_param_mse_number_group_swap/{control}"])
     assert torch.isfinite(metrics[f"test/per_param_mse_spec_quantized/{control}"])
+
+
+def test_evaluate_unknown_feature_flag_raises_before_checkpoint_resolution() -> None:
+    """Feature-flag validation precedes evaluation setup and checkpoint access."""
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/eval_flow_sketch_nsynth", "feature_flags=[9999]"],
+        )
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(ValidationError, match="unknown feature flag number: 9999"):
+        evaluate(cfg)
 
 
 def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -> None:
