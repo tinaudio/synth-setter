@@ -10,7 +10,12 @@ import lance
 import numpy as np
 import pytest
 
-from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    MEL_SPEC_FIELD,
+    PARAM_ARRAY_FIELD,
+    make_spectrogram,
+)
 from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.evaluation.compute_audio_metrics import (
     compute_mss,
@@ -26,6 +31,9 @@ type FaustBackend = Literal["dawdreamer", "faustwasm"]
 pytestmark = pytest.mark.slow
 
 _BACKENDS: tuple[FaustBackend, ...] = ("dawdreamer", "faustwasm")
+_COMPARISON_DURATION_SECONDS = 0.5
+_COMPARISON_SAMPLES = 22_050
+_RENDER_SAMPLES = 176_400
 _BACKEND_VERSIONS: dict[FaustBackend, str] = {
     "dawdreamer": "0.8.3",
     "faustwasm": "0.18.3",
@@ -75,7 +83,7 @@ def _config(backend: FaustBackend) -> RenderConfig:
         sample_rate=44_100,
         channels=2,
         velocity=100,
-        signal_duration_seconds=0.5,
+        signal_duration_seconds=4.0,
         min_loudness=-100.0,
         samples_per_render_batch=1,
         samples_per_shard=3,
@@ -134,15 +142,19 @@ def _metrics(reference: _HostResult, candidate: _HostResult, sample: int) -> dic
     :param reference: DawDreamer result consumed from Lance.
     :param candidate: FaustWasm result consumed from Lance.
     :param sample: Matched row index.
-    :returns: Named audio and persisted-mel parity metrics.
+    :returns: Named metrics over the calibrated comparison window.
     """
-    mel_delta = reference.mel[sample] - candidate.mel[sample]
+    reference_audio = reference.audio[sample, :, :_COMPARISON_SAMPLES]
+    candidate_audio = candidate.audio[sample, :, :_COMPARISON_SAMPLES]
+    mel_delta = make_spectrogram(reference_audio, 44_100) - make_spectrogram(
+        candidate_audio, 44_100
+    )
     return {
         "mel_rmse": float(np.sqrt(np.mean(np.square(mel_delta)))),
-        "mss": float(compute_mss(reference.audio[sample], candidate.audio[sample])),
-        "rms": float(compute_rms(reference.audio[sample], candidate.audio[sample])),
-        "sot": float(compute_sot(reference.audio[sample], candidate.audio[sample])),
-        "wmfcc": float(compute_wmfcc(reference.audio[sample], candidate.audio[sample])),
+        "mss": float(compute_mss(reference_audio, candidate_audio)),
+        "rms": float(compute_rms(reference_audio, candidate_audio)),
+        "sot": float(compute_sot(reference_audio, candidate_audio)),
+        "wmfcc": float(compute_wmfcc(reference_audio, candidate_audio)),
     }
 
 
@@ -157,7 +169,7 @@ def test_faust_host_dataset_persists_valid_audio_and_mel(
     :param backend: Host whose persisted tensors are checked.
     """
     result = host_results[backend]
-    assert result.audio.shape == (3, 2, 22_050)
+    assert result.audio.shape == (3, 2, _RENDER_SAMPLES)
     assert result.audio.dtype == np.float32
     assert np.isfinite(result.audio).all()
     assert np.isfinite(result.mel).all()
