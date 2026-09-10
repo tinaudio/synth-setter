@@ -457,6 +457,12 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             "its editor call blocks the main thread without a close-event API."
         ),
     )
+    v1_gui_toggle_cadence_omitted: bool = Field(
+        default=False,
+        exclude=True,
+        repr=False,
+        description="Worker-transport provenance for the omitted V1 cadence default.",
+    )
     param_sample_cadence: _ParamSampleCadence = Field(
         default="sample",
         description=(
@@ -895,14 +901,17 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     def _serialize_preserving_v1_defaults(
         self, handler: SerializerFunctionWrapHandler
     ) -> dict[str, object]:
-        """Keep omitted V1 cadence fields omitted across worker transport.
+        """Transport an omitted V1 cadence without discarding its effective value.
 
         :param handler: Pydantic's standard serializer for this model.
-        :returns: Serialized config retaining the caller's V1 omission.
+        :returns: Serialized config carrying V1 omission provenance when needed.
         """
         serialized: dict[str, object] = handler(self)
-        if self.render_contract_version == 1 and "gui_toggle_cadence" not in self.model_fields_set:
-            serialized.pop("gui_toggle_cadence", None)
+        cadence_was_omitted = (
+            self.v1_gui_toggle_cadence_omitted or "gui_toggle_cadence" not in self.model_fields_set
+        )
+        if self.render_contract_version == 1 and cadence_was_omitted:
+            serialized["v1_gui_toggle_cadence_omitted"] = True
         return serialized
 
     def shard_metadata(self) -> ShardMetadata:
@@ -918,11 +927,15 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             exclude={"base_seed", "retain_local_shards", "sample_offset"},
             exclude_none=True,
         )
+        contract.pop("v1_gui_toggle_cadence_omitted", None)
         if self.render_contract_version == 1:
             contract.pop("backend_version", None)
             contract.pop("render_contract_version")
-            # Canonicalize an omitted V1 cadence to its legacy render value.
-            if "gui_toggle_cadence" not in self.model_fields_set:
+            cadence_was_omitted = (
+                self.v1_gui_toggle_cadence_omitted
+                or "gui_toggle_cadence" not in self.model_fields_set
+            )
+            if cadence_was_omitted:
                 contract["gui_toggle_cadence"] = "render"
             synth = contract["synth"]
             synth.pop("format")

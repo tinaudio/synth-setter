@@ -394,9 +394,9 @@ def test_from_hydra_historical_digest_survives_darwin_worker_serialization(
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin")
     monkeypatch.setattr("synth_setter.cli.generate_dataset.generate", _write_worker_spec)
     from_hydra(cfg_dataset_default_cadence)
-    restored = DatasetSpec.model_validate_json(serialized_spec.read_text())
 
     monkeypatch.setattr("synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux")
+    restored = DatasetSpec.model_validate_json(serialized_spec.read_text())
     historical = spec_from_cfg(cfg_dataset_default_cadence)
 
     assert restored.render.gui_toggle_cadence == "never"
