@@ -99,6 +99,9 @@ jobs:
           - name: pipeline-finalize
             patterns:
               - synth_setter.pipeline.data.finalize_progress.*
+          - name: pipeline-param-language
+            patterns:
+              - synth_setter.pipeline.data.param_language.*
           - name: pipeline-param-shift
             patterns:
               - synth_setter.pipeline.data.param_shift.*
