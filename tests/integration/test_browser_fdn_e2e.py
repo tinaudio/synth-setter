@@ -132,8 +132,60 @@ def test_browser_fdn_site_matches_python_inference_render_and_metrics(tmp_path: 
     scale = np.abs(pyfdn_pred).max()
     assert np.abs(pyfdn_pred - browser_pred).max() <= 1e-3 * scale
 
+    _assert_onnx_replay_parity(Path(str(_MODEL_BUNDLE)), record, browser_target, expected_sketch)
     if _CHECKPOINT and _STATS:
         _assert_sampling_parity(_CHECKPOINT, _STATS, record, browser_target, expected_sketch)
+
+
+def _assert_onnx_replay_parity(
+    bundle: Path, record: dict[str, Any], target: np.ndarray, sketch: np.ndarray
+) -> None:
+    """Replay the browser's noise and weights through the same graphs on onnxruntime.
+
+    :param bundle: Exported model bundle directory.
+    :param record: The page's run record with noise, branch weights, and parameters.
+    :param target: Mono target the page decoded.
+    :param sketch: Reverb sketch of that target.
+    """
+    import onnxruntime as ort
+
+    frontend, conditioning, velocity = (
+        ort.InferenceSession(str(bundle / name), providers=["CPUExecutionProvider"])
+        for name in ("frontend.onnx", "conditioning.onnx", "velocity.onnx")
+    )
+    mel = frontend.run(None, {"waveform": target.astype(np.float32)[None]})[0]
+    content, controls, null_controls = conditioning.run(
+        None, {"mel": mel, "sketch_ctrl": sketch[None]}
+    )
+    weights = np.asarray(record["weights"], dtype=np.float32)
+
+    def field(x: np.ndarray, t: float) -> np.ndarray:
+        output = velocity.run(
+            None,
+            {
+                "x": x[None],
+                "t": np.asarray([[t]], dtype=np.float32),
+                "conditioning": content,
+                "controls": controls,
+                "null_controls": null_controls,
+                "branch_weights": weights,
+            },
+        )[0]
+        return np.asarray(output, dtype=np.float32)[0]
+
+    x = np.asarray(record["noise"], dtype=np.float32)
+    dt = np.float32(1.0 / _STEPS)
+    t = np.float32(0.0)
+    for _ in range(_STEPS):
+        k1 = field(x, t)
+        k2 = field(x + dt / 2 * k1, t + dt / 2)
+        k3 = field(x + dt / 2 * k2, t + dt / 2)
+        k4 = field(x + dt * k3, t + dt)
+        x = (x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)).astype(np.float32)
+        t = np.float32(t + dt)
+    np.testing.assert_allclose(
+        np.asarray(record["params"], dtype=np.float32), x, rtol=2e-4, atol=2e-4
+    )
 
 
 def _assert_sampling_parity(

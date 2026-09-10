@@ -21,6 +21,8 @@ const results = document.querySelector("#results");
 const field = (name) => form.elements[name];
 
 let bundles;
+// Object URLs from the previous run are released when results are replaced.
+let objectUrls = [];
 
 function setStatus(text) {
   status.textContent = text;
@@ -58,6 +60,7 @@ function renderAudio(container, title, samples, sampleRate, filename) {
   const heading = document.createElement("h2");
   heading.textContent = title;
   const url = URL.createObjectURL(new Blob([encodeWav(samples, sampleRate)], { type: "audio/wav" }));
+  objectUrls.push(url);
   const audio = document.createElement("audio");
   audio.controls = true;
   audio.src = url;
@@ -110,6 +113,8 @@ async function run(event) {
   event.preventDefault();
   runButton.disabled = true;
   results.replaceChildren();
+  objectUrls.forEach((url) => URL.revokeObjectURL(url));
+  objectUrls = [];
   window.fdnEval = { state: "running" };
   try {
     const { manifest } = bundles.model;
