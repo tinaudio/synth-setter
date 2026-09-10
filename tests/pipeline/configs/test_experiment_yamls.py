@@ -92,6 +92,18 @@ def test_experiment_yaml_json_round_trips(experiment: str) -> None:
     assert restored == spec
 
 
+def test_param_language_spec_round_trip_preserves_dimension() -> None:
+    """A generated parameter-language field remains valid for its consumer."""
+    spec = _compose_dataset_spec("generate_dataset/smoke-shard-lance")
+    payload = spec.model_dump(mode="json")
+    payload["param_language_dimension"] = 128
+
+    produced = DatasetSpec.model_validate(payload).model_dump_json()
+    consumed = DatasetSpec.model_validate_json(produced)
+
+    assert consumed.param_language_dimension == 128
+
+
 def test_dataset_experiments_use_independent_split_seed_streams() -> None:
     """Newly composed datasets opt into size-stable split streams."""
     spec = _compose_dataset_spec("generate_dataset/smoke-shard-lance")

@@ -474,7 +474,7 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
           CLUSTER_NAME: ${{ steps.cluster.outputs.name }}
-          WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          WORKER_GIT_REF: ${{ github.sha }}
           PYTHONPATH: ${{ github.workspace }}
           INPUT_LOCAL: ${{ inputs.local }}
           INPUT_TAIL: ${{ inputs.tail }}
@@ -595,7 +595,7 @@ jobs:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
-          WORKER_GIT_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          WORKER_GIT_REF: ${{ github.sha }}
           NUM_WORKERS_OVERRIDE: ${{ inputs.num_workers != '' && format('skypilot_launch.num_workers={0}', inputs.num_workers) || '' }}
           TAIL_OVERRIDE: ${{ inputs.tail && 'skypilot_launch.tail=true' || '' }}
           LOCAL_OVERRIDE: ${{ inputs.local && 'skypilot_launch.local=true' || '' }}
@@ -770,8 +770,8 @@ jobs:
   # the reusable's own level so every caller — cron, PR-presubmit, manual
   # dispatch — gets finalize for free without opt-in plumbing. Output format
   # is informational here (drives only artifact naming); the CLI re-reads it
-  # from the composed `DatasetSpec`. `env_ref` is the SHA the runner already
-  # checked out for generate, so finalize sees the same code.
+  # from the composed `DatasetSpec`. Default checkout resolves `github.sha`,
+  # including the synthetic PR merge, so every stage uses that same revision.
   finalize:
     name: Run finalize_dataset (${{ inputs.provider }})
     needs: generate
@@ -780,6 +780,6 @@ jobs:
       provider: ${{ inputs.provider }}
       dataset_root_uri: ${{ needs.generate.outputs.dataset_root_uri }}
       run_id: ${{ needs.generate.outputs.run_id }}
-      env_ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      env_ref: ${{ github.sha }}
       wandb_project: ${{ inputs.wandb_project }}
     secrets: inherit
