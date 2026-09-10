@@ -2077,6 +2077,57 @@ def test_pyfdn_rir_eval_experiment_pins_statistics_and_parameterless_prediction(
     assert cfg.datamodule.signal_duration_seconds == cfg.render.signal_duration_seconds
 
 
+@pytest.mark.parametrize(
+    ("experiment", "corpus", "publication_suite"),
+    [
+        pytest.param(
+            "eval_flow_sketch_rir_mit_ir_survey",
+            "MITIRSurvey",
+            "mit-ir-survey",
+            id="mit",
+        ),
+        pytest.param("eval_flow_sketch_rir_echothief", "EchoThief", "echothief", id="echothief"),
+        pytest.param("eval_flow_sketch_rir_ashir", "ASHIR", "ashir", id="ashir"),
+    ],
+)
+def test_flow_sketch_rir_eval_experiment_pins_runnable_suite(
+    experiment: str, corpus: str, publication_suite: str
+) -> None:
+    """Each flow-sketch RIR suite pins its corpus, checkpoint, and publication root.
+
+    :param experiment: Experiment config leaf under ``experiment/pyfdn``.
+    :param corpus: Published corpus prefix selected by the leaf.
+    :param publication_suite: Distinct suite suffix below the checkpoint lineage.
+    """
+    cfg = _compose("eval.yaml", [f"experiment=pyfdn/{experiment}"])
+
+    assert cfg.mode == "predict"
+    assert cfg.seed is None
+    assert cfg.model.seeded_evaluation is False
+    assert cfg.ckpt_path == (
+        "s3://experiments/checkpoints/pyfdn-flow_sketch__sketch-pyfdn_reverb__"
+        "conditioning-mel__ot-true/flow_sketch-20260908T170724945Z/model.ckpt"
+    )
+    assert cfg.ckpt_sha256 == "9a17f57e32e318b6f057cd308d28cc7600d5f0fda62183f548947ac1e73e8bcf"
+    assert cfg.consumed_train_config_id == "flow_sketch"
+    assert cfg.consumed_train_artifact_alias == "v0"
+    assert cfg.source_train_artifact == "model-flow_sketch:v0"
+    assert cfg.source_train_git_sha == "487568b24b58063ba907c4406cf0a0083400c645"
+    assert cfg.source_train_run_id == "flow_sketch-20260908T170724945Z"
+    assert cfg.datamodule.dataset_uri == f"r2://experiments/third_party/{corpus}/all.lance"
+    assert cfg.datamodule.row_limit == 5
+    assert "audio_decodable = true" in cfg.datamodule.row_filter
+    assert cfg.model.encoder.use_fixed_ast_padding is False
+    assert cfg.model.sketch_controls.profile == "pyfdn_reverb"
+    assert cfg.render.renderer_backend == "pyfdn"
+    assert cfg.evaluation.compute_metrics is True
+    assert cfg.evaluation.render_vst is True
+    assert cfg.evaluation.upload_output_dir_uri == (
+        "r2://experiments/evaluations/flow_sketch/"
+        f"flow_sketch-20260908T170724945Z/rir/{publication_suite}"
+    )
+
+
 def test_nsynth_sketch_eval_config_pins_corpus_controls_and_training_statistics() -> None:
     """The dedicated NSynth config composes the held-out corpus onto the sketch contract."""
     cfg = _compose(
