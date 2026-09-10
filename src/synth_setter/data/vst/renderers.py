@@ -41,7 +41,6 @@ from synth_setter.data.vst.torchsynth_param_spec import (
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.renderer_backend import (
     DAWDREAMER_FLUSH_BLOCKS,
-    FAUST_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     FlushBlocks,
 )
@@ -733,6 +732,10 @@ class DawDreamerFaustRenderer(AudioRenderer):
 
        Shared source and exact-address parameter-spec identity.
 
+    .. attribute :: source_sha256
+
+       Expected digest of the checked-in source.
+
     .. attribute :: block_size
 
        DawDreamer engine block size.
@@ -751,6 +754,7 @@ class DawDreamerFaustRenderer(AudioRenderer):
     """
 
     param_spec_name: ParamSpecName = field(kw_only=True)
+    source_sha256: str = field(kw_only=True)
     block_size: int = DAWDREAMER_BLOCK_SIZE
     reload_processor_each_render: bool = True
     engine: _DawDreamerEngine = field(init=False, repr=False)
@@ -769,11 +773,13 @@ class DawDreamerFaustRenderer(AudioRenderer):
         from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
         from synth_setter.data.vst.faust_sources import resolve_faust_dsp
 
-        if self.plugin_path != FAUST_PLUGIN_NAME:
-            raise ValueError('Faust renderer requires plugin_path="faust"')
+        if self.plugin_path:
+            raise ValueError("Faust renderer does not accept plugin_path")
         if self.plugin_state_path:
             raise ValueError("Faust renderer does not accept plugin_state_path")
         dsp = resolve_faust_dsp(self.param_spec_name)
+        if hashlib.sha256(dsp.source.encode()).hexdigest() != self.source_sha256:
+            raise ValueError("registered Faust source does not match source_sha256")
         spec = resolve_faust_param_spec(self.param_spec_name)
         self._dsp_source = dsp.source
         self._num_voices = dsp.num_voices

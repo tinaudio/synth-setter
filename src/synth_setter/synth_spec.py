@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, NewType
+from typing import TYPE_CHECKING, Any, Literal, NewType
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -26,6 +26,25 @@ if TYPE_CHECKING:
     from omegaconf import DictConfig
 
 SynthName = NewType("SynthName", str)
+type SynthFormat = Literal["faust", "pyfdn", "surgepy", "torchsynth", "vst3"]
+
+_FAUST_SOURCE_SHA256 = {
+    "faust_bright_organ": "a1bf9f6e45ebbf78dd11fc18603cda048a91a778af1ad79683339b1951813465",
+    "faust_bubble": "731727e725ac0336a897c18df4e8b73f1e75c3d8add40a978efb1d95f88db23c",
+    "faust_church_organ": "c753731f4053210d42757acb179010185e91d37fb56a8b45e093222be688b512",
+    "faust_filter_osc": "6ad65d28d787f08a3fa66eb4de7d4091be8d2267ad1e9edc200618effbbe588c",
+}
+
+
+def _legacy_synth_format(plugin_path: str) -> SynthFormat:
+    """Infer a non-Faust representation recorded before ``format`` was persisted.
+
+    :param plugin_path: Historical plugin path or in-process backend sentinel.
+    :returns: Representation implied by the historical path.
+    """
+    if plugin_path in {"pyfdn", "surgepy", "torchsynth"}:
+        return plugin_path  # type: ignore[return-value]
+    return "vst3"
 
 
 class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics documented below.
@@ -53,16 +72,42 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 
     .. attribute :: synth_version
 
-        Version of the plugin, package, or runtime artifact implementing the synth.
+        Version of the synth source, plugin, or package.
+
+    .. attribute :: source_sha256
+
+        Checked-in source digest for Faust identities; absent for other formats.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
     name: SynthName
     param_spec_name: ValidatedParamSpecName
-    plugin_path: str
+    format: SynthFormat = "vst3"
+    plugin_path: str = ""
     plugin_state_path: str
     synth_version: str
+    source_sha256: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_identity(cls, data: Any) -> Any:
+        """Promote non-Faust identities authored before ``format`` was persisted.
+
+        :param data: Raw identity input.
+        :returns: Input with its legacy non-Faust format filled when applicable.
+        :raises ValueError: A Faust sentinel appears outside the exact legacy render pair.
+        """
+        if not isinstance(data, dict) or "format" in data:
+            return data
+        normalized = data.copy()
+        plugin_path = normalized.get("plugin_path")
+        if plugin_path == "faust":
+            raise ValueError("plugin_path='faust' requires the legacy DawDreamer Faust contract")
+        if not isinstance(plugin_path, str):
+            return normalized
+        normalized["format"] = _legacy_synth_format(plugin_path)
+        return normalized
 
     @model_validator(mode="after")
     def _version_must_not_be_blank(self) -> SynthSpec:
@@ -73,6 +118,30 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
         """
         if not self.synth_version.strip():
             raise ValueError("synth_version must not be blank")
+        return self
+
+    @model_validator(mode="after")
+    def _faust_identity_is_checked_in_source(self) -> SynthSpec:
+        """Require pathless Faust source with its exact checked-in digest.
+
+        :returns: This identity when its source provenance is coherent.
+        :raises ValueError: Source provenance is present on another format or Faust provenance does
+            not match a registered checked-in source.
+        """
+        if self.format != "faust":
+            if self.source_sha256 is not None:
+                raise ValueError("source_sha256 is supported only for format='faust'")
+            return self
+        if self.plugin_path:
+            raise ValueError("format='faust' does not accept plugin_path")
+        if self.plugin_state_path:
+            raise ValueError("format='faust' does not accept plugin_state_path")
+        expected = _FAUST_SOURCE_SHA256.get(self.param_spec_name)
+        if expected is None or self.source_sha256 != expected:
+            raise ValueError(
+                f"format='faust' requires the registered source_sha256 for "
+                f"param_spec_name={self.param_spec_name!r}"
+            )
         return self
 
     @model_validator(mode="after")
@@ -100,10 +169,10 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "presets/cardinal-base.vstpreset",
         "0.26.2",
     ),
-    "faust_bright_organ": ("faust_bright_organ", "faust", "", "0.8.3"),
-    "faust_bubble": ("faust_bubble", "faust", "", "0.8.3"),
-    "faust_church_organ": ("faust_church_organ", "faust", "", "0.8.3"),
-    "faust_filter_osc": ("faust_filter_osc", "faust", "", "0.8.3"),
+    "faust_bright_organ": ("faust_bright_organ", "", "", "1"),
+    "faust_bubble": ("faust_bubble", "", "", "1"),
+    "faust_church_organ": ("faust_church_organ", "", "", "1"),
+    "faust_filter_osc": ("faust_filter_osc", "", "", "1"),
     "surge_xt": ("surge_xt", "plugins/Surge XT.vst3", "presets/surge-base.vstpreset", "1.3.4"),
     "surge_simple": (
         "surge_simple",
@@ -203,9 +272,13 @@ SYNTHS: Mapping[SynthName, SynthSpec] = MappingProxyType(
         SynthName(name): SynthSpec(
             name=SynthName(name),
             param_spec_name=ParamSpecName(param_spec_name),
+            format=(
+                "faust" if name in _FAUST_SOURCE_SHA256 else _legacy_synth_format(plugin_path)
+            ),
             plugin_path=plugin_path,
             plugin_state_path=preset,
             synth_version=synth_version,
+            source_sha256=_FAUST_SOURCE_SHA256.get(name),
         )
         for name, (param_spec_name, plugin_path, preset, synth_version) in _synth_rows.items()
     }

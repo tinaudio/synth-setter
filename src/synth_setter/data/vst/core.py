@@ -45,6 +45,18 @@ class RenderWorkerLeaked(RuntimeError):
     """
 
 
+def extract_backend_version(renderer_backend: str) -> str:
+    """Return the installed version of a separately versioned rendering host.
+
+    :param renderer_backend: Rendering host whose distribution version is required.
+    :returns: Installed host distribution version.
+    :raises ValueError: The backend has no separate version contract.
+    """
+    if renderer_backend == "dawdreamer":
+        return importlib.metadata.version("dawdreamer")
+    raise ValueError(f"renderer backend has no separate version contract: {renderer_backend!r}")
+
+
 def extract_renderer_version(plugin_path: Path) -> str:
     """Extract the version string from a VST3 plugin bundle or Python backend.
 
@@ -63,7 +75,7 @@ def extract_renderer_version(plugin_path: Path) -> str:
     :raises FileNotFoundError: The bundle path or required managed-integrity record is absent.
     """
     if str(plugin_path) == FAUST_PLUGIN_NAME:
-        return importlib.metadata.version("dawdreamer")
+        return extract_backend_version("dawdreamer")
     if str(plugin_path) == TORCHSYNTH_PLUGIN_NAME:
         return importlib.metadata.version(TORCHSYNTH_PLUGIN_NAME)
     if str(plugin_path) == PYFDN_PLUGIN_NAME:

@@ -251,8 +251,10 @@ def test_render_faust_composes_into_valid_render_config(
     spec = _spec_from_dataset_overrides([f"synth={name}", f"render={render_group}"])
 
     assert spec.render.param_spec_name == name
-    assert spec.render.renderer_backend == "dawdreamer_faust"
-    assert spec.render.plugin_path == "faust"
+    assert spec.render.renderer_backend == "dawdreamer"
+    assert spec.render.backend_version == "0.8.3"
+    assert spec.render.plugin_path == ""
+    assert spec.render.synth.format == "faust"
     assert spec.render.plugin_state_path == ""
     assert spec.render.gui_toggle_cadence == "never"
     assert spec.render.plugin_reload_cadence == "render"

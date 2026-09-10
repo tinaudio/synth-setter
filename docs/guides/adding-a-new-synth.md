@@ -33,9 +33,9 @@ several existing `surge*` keys use shorter legacy names (e.g. `surge_xt` →
 `presets/surge-base.vstpreset`) that the registry maps explicitly.
 
 This workflow is specifically for VST3 plugins. Checked-in Faust programs use a
-registered source/spec pair instead: their `plugin_state_paths` entry is empty,
-they render through the `dawdreamer_faust` backend (`render=faust`), and parameter names preserve the
-exact addresses reported by Faust compilation.
+registered source/spec pair instead: `format: faust`, no plugin or state path,
+and the `dawdreamer` backend (`render=faust`). Parameter names preserve the exact
+addresses reported by Faust compilation.
 
 The one genuinely hard part is the `ParamSpec`: pedalboard can enumerate a
 plugin's parameters, but raw names and 0–1 ranges carry **no semantics** — which
@@ -251,6 +251,7 @@ models, and callbacks resolve it through `${synth.param_spec_name}`:
 # src/synth_setter/configs/synth/mysynth.yaml
 name: "mysynth"
 param_spec_name: "mysynth"
+format: "vst3"
 plugin_path: "plugins/MySynth.vst3"
 plugin_state_path: "presets/mysynth-base.vstpreset"
 synth_version: "1.2.3"
@@ -265,9 +266,9 @@ rendering, so pin the exact version you onboarded against.
 
 `--register` writes the output files and rewrites the registry module, so run
 `make format` and commit before generating — the smoke run reads the committed
-checkout. Faust source identities are registered manually with an empty state
-entry and rendered via `render=faust` (the `dawdreamer_faust` backend group);
-the VST3 introspection command does not generate them.
+checkout. Faust source identities are registered manually with `format: faust`,
+a checked-in `source_sha256`, and no plugin or state path. They render via
+`render=faust`; the VST3 introspection command does not generate them.
 
 ## Step 4 — Generate a smoke dataset
 

@@ -7,7 +7,7 @@ evaluation before calling ``renderer.render(...)``.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import assert_never
+from typing import Never, assert_never, cast
 
 from synth_setter.data.vst.renderers import (
     AudioRenderer,
@@ -41,8 +41,10 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
 
     :param render_config: Backend identity and host lifecycle shared across pipeline stages.
     :returns: Renderer whose native-host lifetime follows the configured reload cadence.
+    :raises NotImplementedError: The reserved FaustWasm backend is requested.
     """
     backend = render_config.renderer_backend
+    synth_format = render_config.synth.format
     if backend == "pyfdn":
         from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 
@@ -56,10 +58,10 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
             signal_duration_seconds=render_config.signal_duration_seconds,
             plugin_state_path=render_config.plugin_state_path,
         )
-    if backend == "dawdreamer_faust":
+    if (backend, synth_format) == ("dawdreamer", "faust"):
         from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 
-        ensure_dawdreamer_runtime(backend, renderer_version=render_config.synth.synth_version)
+        ensure_dawdreamer_runtime(backend, backend_version=render_config.backend_version)
         return DawDreamerFaustRenderer(
             plugin_path=render_config.plugin_path,
             sample_rate=render_config.sample_rate,
@@ -67,9 +69,10 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
             signal_duration_seconds=render_config.signal_duration_seconds,
             plugin_state_path=render_config.plugin_state_path,
             param_spec_name=render_config.param_spec_name,
+            source_sha256=render_config.synth.source_sha256 or "",
             reload_processor_each_render=render_config.plugin_reload_cadence == "render",
         )
-    if backend == "dawdreamer":
+    if (backend, synth_format) == ("dawdreamer", "vst3"):
         from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
         from synth_setter.data.vst.param_map import load_param_map
         from synth_setter.resources import as_file, param_map
@@ -111,6 +114,9 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
             signal_duration_seconds=render_config.signal_duration_seconds,
         )
 
+    if backend == "faustwasm":
+        raise NotImplementedError("faustwasm rendering is reserved for a future implementation")
+
     if backend == "pedalboard":
         plugin = None
         if render_config.plugin_reload_cadence == "once":
@@ -127,4 +133,5 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
             plugin=plugin,
             flush_blocks=render_config.flush_blocks,
         )
-    assert_never(backend)
+    # Pydantic's format/backend validator makes unmatched DawDreamer tuples unreachable.
+    assert_never(cast(Never, backend))

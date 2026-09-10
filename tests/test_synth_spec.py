@@ -46,6 +46,17 @@ class TestSynthSpecValidation:
                 synth_version="1.0.2",
             )
 
+    def test_legacy_faust_sentinel_without_legacy_backend_is_rejected(self) -> None:
+        """The Faust sentinel is migrated only as part of the exact legacy render pair."""
+        with pytest.raises(ValidationError, match="format"):
+            SynthSpec(
+                name=SynthName("faust_bubble"),
+                param_spec_name=ParamSpecName("faust_bubble"),
+                plugin_path="faust",
+                plugin_state_path="",
+                synth_version="0.8.3",
+            )
+
     def test_a_vst_plugin_accepts_a_preset_path(self) -> None:
         """A plugin-hosted synth carries the baseline preset it was mapped against."""
         spec = SynthSpec(
@@ -108,6 +119,31 @@ class TestSynthSpecValidation:
 
 class TestSynthsTable:
     """Cross-registry invariants that previously had no enforcement."""
+
+    def test_faust_identity_declares_source_without_plugin_sentinel(self) -> None:
+        """Faust source identity is independent from any host implementation."""
+        synth = SYNTHS[SynthName("faust_bright_organ")]
+
+        assert synth.format == "faust"
+        assert synth.plugin_path == ""
+        assert synth.synth_version == "1"
+        assert synth.source_sha256 == (
+            "a1bf9f6e45ebbf78dd11fc18603cda048a91a778af1ad79683339b1951813465"
+        )
+
+    @pytest.mark.parametrize("name", _ALL_SYNTHS)
+    def test_every_identity_declares_its_supported_format(self, name: str) -> None:
+        """Every registered synth identifies the representation consumed by its backend.
+
+        :param name: Registry key under test.
+        """
+        assert SYNTHS[SynthName(name)].format in {
+            "faust",
+            "pyfdn",
+            "surgepy",
+            "torchsynth",
+            "vst3",
+        }
 
     @pytest.mark.parametrize("name", _ALL_SYNTHS)
     def test_every_entry_names_a_registered_param_spec(self, name: str) -> None:
@@ -201,7 +237,10 @@ class TestSynthConfigGroup:
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             group = compose(config_name=f"synth/{name}").synth
 
-        assert OmegaConf.to_container(group) == SYNTHS[SynthName(name)].model_dump()
+        expected = SYNTHS[SynthName(name)].model_dump(exclude_none=True)
+        if not expected["plugin_path"]:
+            expected.pop("plugin_path")
+        assert OmegaConf.to_container(group) == expected
 
     def test_ultramaster_onehot_selector_resolves_configured_width(self) -> None:
         """The opt-in Hydra selector and width resolver agree on 250 columns."""

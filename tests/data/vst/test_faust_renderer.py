@@ -19,7 +19,7 @@ from synth_setter.data.vst.renderers import DawDreamerFaustRenderer
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
-from synth_setter.synth_spec import SynthName, SynthSpec
+from synth_setter.synth_spec import SYNTHS, SynthName
 
 _SAMPLE_RATE = 44100
 _RENDER_SECONDS = 0.5
@@ -48,14 +48,9 @@ def _render_config(
     :returns: Validated Faust render configuration.
     """
     return RenderConfig(
-        synth=SynthSpec(
-            name=SynthName(param_spec_name),
-            param_spec_name=ParamSpecName(param_spec_name),
-            plugin_path="faust",
-            plugin_state_path="",
-            synth_version="0.8.3",
-        ),
-        renderer_backend="dawdreamer_faust",
+        synth=SYNTHS[SynthName(param_spec_name)],
+        renderer_backend="dawdreamer",
+        backend_version="0.8.3",
         sample_rate=_SAMPLE_RATE,
         channels=channels,
         velocity=_MIDI_VELOCITY,
@@ -123,14 +118,21 @@ def test_factory_renders_real_checked_in_faust_source(
     assert float(np.max(np.abs(audio))) > _MIN_AUDIBLE_PEAK
 
 
-def test_factory_rejects_mismatched_faust_synth_version() -> None:
-    """Faust provenance must match the pinned DawDreamer runtime."""
-    config = _render_config()
-    config = config.model_copy(
-        update={"synth": config.synth.model_copy(update={"synth_version": "9.9.9"})}
-    )
+def test_factory_rejects_mismatched_faust_backend_version() -> None:
+    """DawDreamer provenance is independent from the checked-in source."""
+    config = _render_config().model_copy(update={"backend_version": "9.9.9"})
 
-    with pytest.raises(ValueError, match="DawDreamer renderer version"):
+    with pytest.raises(ValueError, match="DawDreamer backend version"):
+        make_audio_renderer(config)
+
+
+def test_factory_rejects_mismatched_faust_source_digest() -> None:
+    """A source identity cannot silently select different checked-in bytes."""
+    config = _render_config()
+    synth = config.synth.model_copy(update={"source_sha256": "0" * 64})
+    config = config.model_copy(update={"synth": synth})
+
+    with pytest.raises(ValueError, match="source does not match"):
         make_audio_renderer(config)
 
 

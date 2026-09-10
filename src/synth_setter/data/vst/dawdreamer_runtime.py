@@ -53,7 +53,7 @@ def settle_dawdreamer_preset(
 
 def ensure_dawdreamer_runtime(
     renderer_backend: RendererBackend,
-    renderer_version: str | None = None,
+    backend_version: str | None = None,
 ) -> None:
     """Fail early when a DawDreamer worker cannot load the pinned package.
 
@@ -61,11 +61,11 @@ def ensure_dawdreamer_runtime(
     dispatching to a compatible worker interpreter.
 
     :param renderer_backend: Backend selected for the current render process.
-    :param renderer_version: Optional required DawDreamer distribution version.
+    :param backend_version: Optional required DawDreamer distribution version.
     :raises RuntimeError: DawDreamer is unsupported or unavailable on this worker.
     :raises ValueError: The required renderer version differs from the installed package.
     """
-    if renderer_backend not in ("dawdreamer", "dawdreamer_faust"):
+    if renderer_backend != "dawdreamer":
         return
 
     python_minor = sys.version_info[:2]
@@ -93,10 +93,10 @@ def ensure_dawdreamer_runtime(
             "under CPython 3.12 and verify the worker matches a supported wheel target."
         ) from exc
 
-    if renderer_version is not None:
+    if backend_version is not None:
         installed_version = distribution_version("dawdreamer")
-        if installed_version != renderer_version:
+        if installed_version != backend_version:
             raise ValueError(
-                f"DawDreamer renderer version {renderer_version!r} does not match "
+                f"DawDreamer backend version {backend_version!r} does not match "
                 f"installed version {installed_version!r}"
             )

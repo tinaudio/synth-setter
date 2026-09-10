@@ -11,9 +11,8 @@ import pytest
 
 from synth_setter.cli.generate_dataset import build_generate_args
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
-from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, RenderConfig
-from synth_setter.synth_spec import SynthName, SynthSpec
+from synth_setter.synth_spec import SYNTHS, SynthName
 from tests._vst import VST_SUBPROCESS_TIMEOUT_SECONDS
 
 
@@ -24,14 +23,9 @@ def test_faust_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
     :param tmp_path: Isolated Lance shard destination.
     """
     config = RenderConfig(
-        synth=SynthSpec(
-            name=SynthName("faust_bright_organ"),
-            param_spec_name=ParamSpecName("faust_bright_organ"),
-            plugin_path="faust",
-            plugin_state_path="",
-            synth_version="0.8.3",
-        ),
-        renderer_backend="dawdreamer_faust",
+        synth=SYNTHS[SynthName("faust_bright_organ")],
+        renderer_backend="dawdreamer",
+        backend_version="0.8.3",
         sample_rate=44100,
         channels=2,
         velocity=100,

@@ -312,18 +312,23 @@ def identity_group_yaml(spec: SynthSpec) -> str:
     :param spec: The identity row to project; its ``name`` names the group file.
     :returns: YAML text for ``configs/synth/<spec.name>.yaml``.
     """
-    return "\n".join(
+    fields = [
+        "# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.",
+        f"name: {json.dumps(spec.name)}",
+        f"param_spec_name: {json.dumps(spec.param_spec_name)}",
+        f"format: {json.dumps(spec.format)}",
+    ]
+    if spec.plugin_path:
+        fields.append(f"plugin_path: {json.dumps(spec.plugin_path)}")
+    fields.extend(
         [
-            "# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; "
-            "edit the table, not this file.",
-            f"name: {json.dumps(spec.name)}",
-            f"param_spec_name: {json.dumps(spec.param_spec_name)}",
-            f"plugin_path: {json.dumps(spec.plugin_path)}",
             f"plugin_state_path: {json.dumps(spec.plugin_state_path)}",
             f"synth_version: {json.dumps(spec.synth_version)}",
-            "",
         ]
     )
+    if spec.source_sha256 is not None:
+        fields.append(f"source_sha256: {json.dumps(spec.source_sha256)}")
+    return "\n".join([*fields, ""])
 
 
 def _import_insert_index(lines: list[str], module: str) -> int:
