@@ -193,6 +193,8 @@ class AddEmbeddingsConfig(BaseModel):
             raise ValueError(
                 f"checkpoints keys {unknown} must each be one of {sorted(EMBEDDING_REGISTRY)}"
             )
+        if "cqt" in value:
+            raise ValueError("cqt is checkpoint-free and rejects checkpoint overrides")
         if "m2l" in value:
             raise ValueError("music2latent does not support checkpoint overrides")
         if "pyfdn_sketch" in value:

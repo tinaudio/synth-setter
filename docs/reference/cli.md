@@ -81,6 +81,19 @@ synth-setter-add-embeddings \
   'embeddings=[clap,m2l]'
 ```
 
+GPU CQT example:
+
+```bash
+SPLIT_LANCE_URI='r2://BUCKET/data/TASK_NAME/RUN_ID/train.lance'
+synth-setter-add-embeddings \
+  "lance_uri=${SPLIT_LANCE_URI}" \
+  'embeddings=[cqt]' \
+  device=cuda
+```
+
+This writes 256-channel log-magnitude CQT sequences on the canonical 100 Hz time grid and a
+mean-pooled `cqt_vec` search column. Use `conditioning=cqt` to train from four-second CQT rows.
+
 pyFDN temporal-sketch example:
 
 ```bash

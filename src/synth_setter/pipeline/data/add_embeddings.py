@@ -40,6 +40,7 @@ from synth_setter.conditioning import (
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
+    CQT_FIELD,
     DEFAULT_PESTO_CHECKPOINT,
     M2L_FIELD,
     MATPAC_PLUS_FIELD,
@@ -60,6 +61,13 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.model_cache import checkpoint_tree_sha256
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.cqt import (
+    CQT_EMBEDDING_DIM,
+    CQTEncodeFn,
+    cqt_artifact_digest,
+    cqt_num_frames,
+    load_cqt_audio_encoder,
+)
 from synth_setter.pipeline.data.matpac_plus import (
     DEFAULT_MATPAC_PLUS_CHECKPOINT,
     MATPAC_PLUS_FRONTEND,
@@ -163,6 +171,7 @@ type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
 type Encoder = (
     M2LEncodeFn
     | ClapEncodeFn
+    | CQTEncodeFn
     | SameEncodeFn
     | SSONDOEncodeFn
     | PupuJepaEncodeFn
@@ -319,6 +328,15 @@ def _clap_artifact_identity(checkpoint: str) -> str:
     """
     checkpoint_dir = Path(_resolve_clap_checkpoint(checkpoint))
     return _versioned_artifact_identity("clap", checkpoint_tree_sha256(checkpoint_dir))
+
+
+def _cqt_artifact_identity(checkpoint: str) -> str:
+    """Return the checkpoint-free CQT source and preprocessing identity.
+
+    :param checkpoint: Empty placeholder; CQT has no learned checkpoint.
+    :returns: Versioned source and feature-policy identity.
+    """
+    return _versioned_artifact_identity("cqt", cqt_artifact_digest(checkpoint))
 
 
 def _same_artifact_identity(checkpoint: str) -> str:
@@ -529,6 +547,34 @@ def _encode_clap_column(
     return _fixed_size_list(vectors, CLAP_EMBEDDING_DIM)
 
 
+def _encode_cqt_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+) -> pa.Array:
+    """Encode one audio batch as a fixed-shape CQT tensor column.
+
+    :param sources: Decoded source columns carrying the ``(B, C, T)`` audio batch.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: CQT encoder over source audio.
+    :returns: Fixed-shape tensor array.
+    :raises ValueError: The encoder returns the wrong shape or non-finite values.
+    """
+    from synth_setter.pipeline.data.lance_shard import tensor_array
+
+    audio = sources[AUDIO_FIELD]
+    encode = cast("CQTEncodeFn", encoder)
+    features = _finite_embedding(CQT_FIELD, encode(audio, sample_rate))
+    expected_shape = (
+        len(audio),
+        CQT_EMBEDDING_DIM,
+        cqt_num_frames(audio.shape[-1], sample_rate),
+    )
+    if features.shape != expected_shape:
+        raise ValueError(
+            f"{CQT_FIELD} encoder produced shape {features.shape}, expected {expected_shape}"
+        )
+    return tensor_array(features, np.dtype("float32"), expected_shape[1:])
+
+
 def same_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     """Prepare ``(B, C, T)`` audio as float32 stereo at 44.1 kHz.
 
@@ -648,6 +694,17 @@ def _load_clap_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enc
     :returns: CLAP encoder.
     """
     return load_clap_audio_encoder(checkpoint, config.device)
+
+
+def _load_cqt_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load the checkpoint-free CQT transform on the selected Torch device.
+
+    :param checkpoint: Empty registry placeholder.
+    :param config: Run config supplying the device.
+    :returns: CQT encoder over source audio.
+    """
+    cqt_artifact_digest(checkpoint)
+    return load_cqt_audio_encoder(_resolve_torch_device(config.device))
 
 
 def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -1031,6 +1088,20 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_clap_spec_encoder,
         encode_column=_encode_clap_column,
         resolve_artifact_identity=_clap_artifact_identity,
+    ),
+    "cqt": EmbeddingSpec(
+        name="cqt",
+        column=CQT_FIELD,
+        default_checkpoint="",
+        co_resident=False,
+        index=IndexSpec(
+            pool="mean",
+            vector_column=f"{CQT_FIELD}_vec",
+            vector_dim=CQT_EMBEDDING_DIM,
+        ),
+        load_encoder=_load_cqt_spec_encoder,
+        encode_column=_encode_cqt_column,
+        resolve_artifact_identity=_cqt_artifact_identity,
     ),
     "m2l": EmbeddingSpec(
         name="m2l",

@@ -8,10 +8,14 @@ from typing import TypedDict, cast
 
 import pytest
 
+from synth_setter.pipeline.data.cqt import CQT_PACKAGE_COMMIT
 from synth_setter.pipeline.data.matpac_plus import TINYMU_PACKAGE_COMMIT, TINYMU_TIMM_VERSION
 from synth_setter.pipeline.data.meanaudio import MEANAUDIO_PACKAGE_COMMIT
 from synth_setter.pupujepa import PUPUJEPA_TIMM_VERSION
 
+_CQT_REQUIREMENT = (
+    f"cqt-nsgt-pytorch @ git+https://github.com/eloimoliner/CQT_pytorch@{CQT_PACKAGE_COMMIT}"
+)
 _TINYMU_REQUIREMENT = f"tinymu @ git+https://github.com/ktinubu/TinyMU@{TINYMU_PACKAGE_COMMIT}"
 _MEANAUDIO_REQUIREMENT = (
     f"meanaudio @ git+https://github.com/xiquan-li/MeanAudio.git@{MEANAUDIO_PACKAGE_COMMIT}"
@@ -101,6 +105,28 @@ def pyproject(project_root: Path) -> _Pyproject:
     """
     with (project_root / "pyproject.toml").open("rb") as file:
         return cast("_Pyproject", tomllib.load(file))
+
+
+def test_cqt_package_is_pinned_in_normal_torch_runtime(
+    project_root: Path, pyproject: _Pyproject
+) -> None:
+    """CQT installs from one immutable source commit in the standard runtime.
+
+    :param project_root: Repository root containing ``uv.lock``.
+    :param pyproject: Parsed project metadata.
+    """
+    assert _CQT_REQUIREMENT in pyproject["dependency-groups"]["torch"]
+    assert _CQT_REQUIREMENT not in pyproject["project"]["dependencies"]
+    assert all(
+        _CQT_REQUIREMENT not in requirements
+        for requirements in pyproject["project"]["optional-dependencies"].values()
+    )
+    lock_text = (project_root / "uv.lock").read_text()
+    assert (
+        'source = { git = "https://github.com/eloimoliner/CQT_pytorch?rev='
+        f"{CQT_PACKAGE_COMMIT}#{CQT_PACKAGE_COMMIT}"
+        '" }'
+    ) in lock_text
 
 
 def test_sa3_requirement_is_in_torch_group_not_project_or_extras(
