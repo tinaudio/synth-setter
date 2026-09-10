@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from synth_setter.data.vst.param_spec import (
         CategoricalParameter,
         DiscreteLiteralParameter,
+        Parameter,
         ParamSpec,
     )
 
@@ -281,16 +282,20 @@ def _validate_semantic_metric_inputs(
         raise ValueError("predicted and target parameters must contain only finite values")
 
 
+def _model_rows_as_numpy(values: torch.Tensor) -> np.ndarray:
+    cpu_values = values.detach().cpu()
+    if cpu_values.dtype == torch.bfloat16:
+        cpu_values = cpu_values.float()
+    return cpu_values.numpy()
+
+
 def _categorical_identities(
     values: torch.Tensor,
     param_spec: "ParamSpec",
 ) -> dict[str, np.ndarray]:
     from synth_setter.data.vst.param_spec import CategoricalParameter
 
-    cpu_values = values.detach().cpu()
-    if cpu_values.dtype == torch.bfloat16:
-        cpu_values = cpu_values.float()
-    model_rows = cpu_values.numpy()
+    model_rows = _model_rows_as_numpy(values)
     identities = {}
     for parameter, span in param_spec.encoded_slices():
         if not isinstance(parameter, CategoricalParameter):
@@ -302,6 +307,96 @@ def _categorical_identities(
             raw_values = np.asarray(parameter.raw_values)
             identities[parameter.name] = np.abs(encoded_field - raw_values).argmin(axis=1)
     return identities
+
+
+def _renderer_native_rows(parameter: "Parameter", model_rows: np.ndarray) -> np.ndarray:
+    effective_rows = parameter.model_to_encoded(model_rows)
+    return np.stack([parameter.decode(row) for row in effective_rows])
+
+
+def semantic_parameter_distances(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> dict[str, torch.Tensor]:
+    """Return renderer-effective distances for specialized parameter types.
+
+    :param predicted: Model-space parameter vectors shaped ``(batch, num_params)``.
+    :param target: Ground-truth model-space vectors with the same shape.
+    :param param_spec: Spec defining parameter spans and renderer decoding behavior.
+    :returns: ``<metric namespace>/<parameter name>`` keys mapped to scalar means.
+    """
+    _validate_semantic_metric_inputs(predicted, target, param_spec)
+
+    from synth_setter.data.vst.param_spec import (
+        AngleArrayParameter,
+        DirectionArrayParameter,
+        DiscreteArrayParameter,
+        DiscreteLiteralParameter,
+        NoteDurationParameter,
+    )
+
+    predicted_rows = _model_rows_as_numpy(predicted)
+    target_rows = _model_rows_as_numpy(target)
+    metrics = {}
+    for parameter, span in param_spec.encoded_slices():
+        if not isinstance(
+            parameter,
+            (
+                AngleArrayParameter,
+                DirectionArrayParameter,
+                DiscreteArrayParameter,
+                DiscreteLiteralParameter,
+                NoteDurationParameter,
+            ),
+        ):
+            continue
+        predicted_native = _renderer_native_rows(parameter, predicted_rows[:, span])
+        target_native = _renderer_native_rows(parameter, target_rows[:, span])
+        difference = predicted_native - target_native
+
+        if isinstance(parameter, AngleArrayParameter):
+            values = np.abs(np.arctan2(np.sin(difference), np.cos(difference)))
+            namespaces = {"angular_mae_radians": values.mean()}
+        elif isinstance(parameter, DirectionArrayParameter):
+            predicted_unit = predicted_native.reshape(predicted.shape[0], -1)
+            target_unit = target_native.reshape(target.shape[0], -1)
+            dot = np.sum(predicted_unit * target_unit, axis=1)
+            namespaces = {
+                "axis_angular_error_radians": np.arccos(np.clip(np.abs(dot), 0, 1)).mean()
+            }
+        elif isinstance(parameter, (DiscreteArrayParameter, DiscreteLiteralParameter)):
+            namespaces = {
+                "discrete_mae": np.abs(difference).mean(),
+                "discrete_mismatch_rate": np.not_equal(predicted_native, target_native).mean(),
+            }
+        else:
+            namespaces = {"note_timing_mae_seconds": np.abs(difference).mean()}
+
+        metrics.update(
+            {
+                f"{namespace}/{parameter.name}": torch.tensor(
+                    value, device=predicted.device, dtype=torch.float32
+                )
+                for namespace, value in namespaces.items()
+            }
+        )
+    return metrics
+
+
+def _categorical_mismatch_rates_from_ids(
+    predicted_ids: dict[str, np.ndarray],
+    target_ids: dict[str, np.ndarray],
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    return {
+        name: torch.tensor(
+            np.not_equal(identities, target_ids[name]).mean(),
+            device=device,
+            dtype=torch.float32,
+        )
+        for name, identities in predicted_ids.items()
+    }
 
 
 def categorical_mismatch_rates(
@@ -319,14 +414,7 @@ def categorical_mismatch_rates(
     _validate_semantic_metric_inputs(predicted, target, param_spec)
     predicted_ids = _categorical_identities(predicted, param_spec)
     target_ids = _categorical_identities(target, param_spec)
-    return {
-        name: torch.tensor(
-            np.not_equal(identities, target_ids[name]).mean(),
-            device=predicted.device,
-            dtype=torch.float32,
-        )
-        for name, identities in predicted_ids.items()
-    }
+    return _categorical_mismatch_rates_from_ids(predicted_ids, target_ids, predicted.device)
 
 
 def _categorical_number_groups(
@@ -368,6 +456,30 @@ def _categorical_number_groups(
     )
 
 
+def _grouped_categorical_mismatch_rates_from_ids(
+    predicted_ids: dict[str, np.ndarray],
+    target_ids: dict[str, np.ndarray],
+    batch_size: int,
+    device: torch.device,
+    param_spec: "ParamSpec",
+) -> dict[str, torch.Tensor]:
+    rates = {}
+    for label, parameters in _categorical_number_groups(param_spec):
+        predicted_group = np.stack([predicted_ids[param.name] for param in parameters], axis=1)
+        target_group = np.stack([target_ids[param.name] for param in parameters], axis=1)
+        categories = np.arange(len(parameters[0].raw_values))
+        predicted_counts = (predicted_group[:, :, None] == categories).sum(axis=1)
+        target_counts = (target_group[:, :, None] == categories).sum(axis=1)
+        match_count = np.minimum(predicted_counts, target_counts).sum()
+        decision_count = batch_size * len(parameters)
+        rates[label] = torch.tensor(
+            1 - match_count / decision_count,
+            device=device,
+            dtype=torch.float32,
+        )
+    return rates
+
+
 def number_group_optimal_assignment_categorical_mismatch_rates(
     predicted: torch.Tensor,
     target: torch.Tensor,
@@ -383,21 +495,36 @@ def number_group_optimal_assignment_categorical_mismatch_rates(
     _validate_semantic_metric_inputs(predicted, target, param_spec)
     predicted_ids = _categorical_identities(predicted, param_spec)
     target_ids = _categorical_identities(target, param_spec)
-    rates = {}
-    for label, parameters in _categorical_number_groups(param_spec):
-        predicted_group = np.stack([predicted_ids[param.name] for param in parameters], axis=1)
-        target_group = np.stack([target_ids[param.name] for param in parameters], axis=1)
-        categories = np.arange(len(parameters[0].raw_values))
-        predicted_counts = (predicted_group[:, :, None] == categories).sum(axis=1)
-        target_counts = (target_group[:, :, None] == categories).sum(axis=1)
-        match_count = np.minimum(predicted_counts, target_counts).sum()
-        decision_count = predicted.shape[0] * len(parameters)
-        rates[label] = torch.tensor(
-            1 - match_count / decision_count,
-            device=predicted.device,
-            dtype=torch.float32,
-        )
-    return rates
+    return _grouped_categorical_mismatch_rates_from_ids(
+        predicted_ids, target_ids, predicted.shape[0], predicted.device, param_spec
+    )
+
+
+def categorical_mismatch_metric_families(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> dict[str, dict[str, torch.Tensor]]:
+    """Decode categorical identities once and return both mismatch families.
+
+    :param predicted: Model-space parameter vectors shaped ``(batch, num_params)``.
+    :param target: Ground-truth model-space vectors with the same shape.
+    :param param_spec: Spec defining compatible categorical fields and families.
+    :returns: Metric namespaces mapped to parameter or family mismatch rates.
+    """
+    _validate_semantic_metric_inputs(predicted, target, param_spec)
+    predicted_ids = _categorical_identities(predicted, param_spec)
+    target_ids = _categorical_identities(target, param_spec)
+    return {
+        "categorical_mismatch_rate": _categorical_mismatch_rates_from_ids(
+            predicted_ids, target_ids, predicted.device
+        ),
+        "number_group_optimal_assignment_categorical_mismatch_rate": (
+            _grouped_categorical_mismatch_rates_from_ids(
+                predicted_ids, target_ids, predicted.shape[0], predicted.device, param_spec
+            )
+        ),
+    }
 
 
 def number_group_optimal_assignment_mse_groups(

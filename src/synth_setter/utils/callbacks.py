@@ -29,9 +29,9 @@ from matplotlib.figure import Figure
 
 from synth_setter.data.vst import param_specs
 from synth_setter.metrics import (
-    categorical_mismatch_rates,
-    number_group_optimal_assignment_categorical_mismatch_rates,
+    categorical_mismatch_metric_families,
     number_group_optimal_assignment_mse_groups,
+    semantic_parameter_distances,
     spec_per_param_abs_cosine_distance,
     spec_quantized_per_param_mse,
 )
@@ -999,16 +999,17 @@ class LogPerParamMSE(Callback):
                     predictions, params, self.param_spec
                 ).items()
             )
-            categorical_metrics = {
-                "categorical_mismatch_rate": categorical_mismatch_rates(
-                    predictions, params, self.param_spec
-                ),
-                "number_group_optimal_assignment_categorical_mismatch_rate": (
-                    number_group_optimal_assignment_categorical_mismatch_rates(
-                        predictions, params, self.param_spec
-                    )
-                ),
-            }
+            semantic_predictions = predictions.detach().cpu()
+            semantic_targets = params.detach().cpu()
+            batch_metrics.extend(
+                (name, value, weight)
+                for name, value in semantic_parameter_distances(
+                    semantic_predictions, semantic_targets, self.param_spec
+                ).items()
+            )
+            categorical_metrics = categorical_mismatch_metric_families(
+                semantic_predictions, semantic_targets, self.param_spec
+            )
             for namespace, values in categorical_metrics.items():
                 totals = self.categorical_totals.setdefault(namespace, {})
                 for name, value in values.items():
@@ -1033,7 +1034,7 @@ class LogPerParamMSE(Callback):
                 self.metric_counts[metric_name],
                 pl_module.device,
             )
-            if metric_name.startswith("per_param_abs_cosine_distance/"):
+            if "/" in metric_name:
                 metrics[f"{stage}/{metric_name}"] = mean.item()
                 continue
             if metric_name == _NUMBER_GROUP_OPTIMAL_ASSIGNMENT_OUTPUT:
