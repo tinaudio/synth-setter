@@ -332,7 +332,7 @@ elif [[ $1 == pr && $2 == view ]]; then
   if [[ ${FAIL_GH_COMMAND:-} == pr ]]; then
     exit 66
   fi
-  if [[ $* != *baseRefName* || $* == *baseRefOid* ]]; then
+  if [[ $* != *"--repo tinaudio/synth-setter"* || $* != *baseRefName* || $* == *baseRefOid* ]]; then
     printf '%s\\n' "unsupported PR metadata arguments: $*" >&2
     exit 65
   fi
