@@ -147,15 +147,21 @@ def _assert_sampling_parity(
     :param target: Mono target the page decoded.
     :param sketch: Reverb sketch of that target.
     """
-    from synth_setter.tools.export_browser_fdn_bundle import prepare_browser_batch
-
+    from synth_setter.models.mel_frontend import NormalizedMelFrontend
     from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
     model = VSTFlowMatchingModule.load_from_checkpoint(
         checkpoint, map_location="cpu", weights_only=False
     ).eval()
-    batch = prepare_browser_batch(model, target, sketch, _MODEL_BUNDLE)
+    with np.load(stats) as archive:
+        frontend = NormalizedMelFrontend(
+            sample_rate=_SAMPLE_RATE, mean=archive["mean"], std=archive["std"]
+        ).eval()
     with torch.no_grad():
+        batch = {
+            "mel": frontend(torch.from_numpy(target.astype(np.float32))[None]),
+            "sketch_ctrl": torch.from_numpy(sketch)[None],
+        }
         expected = model.sample_batch(
             batch,
             noise=torch.tensor(record["noise"], dtype=torch.float32)[None],

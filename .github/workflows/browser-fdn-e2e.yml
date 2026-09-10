@@ -1,0 +1,111 @@
+name: Browser pyFDN sketch E2E
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/browser-fdn-e2e.yml"
+      - "src/synth_setter/web/**"
+      - "src/synth_setter/faustwasm/**"
+      - "src/synth_setter/data/vst/faust_sources.py"
+      - "src/synth_setter/data/vst/faustwasm_*.py"
+      - "src/synth_setter/models/flow_onnx.py"
+      - "src/synth_setter/models/mel_frontend.py"
+      - "tests/integration/test_browser_fdn_e2e.py"
+      - "pyproject.toml"
+      - "uv.lock"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/browser-fdn-e2e.yml"
+      - "src/synth_setter/web/**"
+      - "tests/integration/test_browser_fdn_e2e.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-fdn-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Content-addressed export of the flow_sketch checkpoint; see docs/guides/browser-fdn-evaluation.md.
+  BUNDLE_SHA256: "b86aa3474cb86311615c5c01ede0a35e6445982052979dbe11649f6717f98f2d"
+
+jobs:
+  browser-fdn:
+    name: Real browser ONNX, FaustWasm render, and metrics
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - name: Install CPU dependencies
+        run: uv sync --frozen --python 3.12.13 --extra cpu --no-default-groups --group dev
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/synth_setter/web/package-lock.json
+      - name: Install browser dependencies
+        run: |
+          npm ci --prefix src/synth_setter/web
+          cd src/synth_setter/web
+          npx playwright install --with-deps chromium
+      - name: Configure real R2 artifacts
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: "true"
+      # The model bundle is content-addressed by the SHA-256 of its manifest.
+      - name: Fetch the exported model bundle
+        run: |
+          mkdir -p logs
+          rclone copy --checksum "r2:experiments/browser-fdn/${BUNDLE_SHA256}" logs/fdn-bundle
+          echo "${BUNDLE_SHA256}  logs/fdn-bundle/manifest.json" | sha256sum --check
+      - name: Export the Faust FDN artifact
+        run: uv run --extra cpu python -m synth_setter.tools.export_faustwasm --synth faust_fdn_n8_mono_householder --output logs/fdn-faust
+      - name: Run browser unit contracts
+        run: npm test --prefix src/synth_setter/web
+      - name: Run the real browser evaluation
+        env:
+          BROWSER_FDN_MODEL_BUNDLE: ${{ github.workspace }}/logs/fdn-bundle
+          BROWSER_FDN_FAUST_ARTIFACT: ${{ github.workspace }}/logs/fdn-faust
+        run: |
+          uv run --extra cpu pytest tests/integration/test_browser_fdn_e2e.py -v \
+            --basetemp=logs/browser-fdn-e2e --junitxml=logs/browser-fdn-e2e.xml
+      - name: Require an executed E2E test
+        run: |
+          uv run --extra cpu python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          cases = [
+              case for case in ET.parse("logs/browser-fdn-e2e.xml").findall(".//testcase")
+              if case.get("classname") == "tests.integration.test_browser_fdn_e2e"
+          ]
+          assert len(cases) == 1, "Expected the real browser FDN E2E test"
+          assert cases[0].find("skipped") is None, "Browser FDN E2E must execute, not skip"
+          PY
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: browser-fdn-e2e-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            logs/browser-fdn-e2e.xml
+            logs/browser-fdn-e2e/**/run.json
+            logs/browser-fdn-e2e/**/run.json.png
+            logs/browser-fdn-e2e/**/target.wav

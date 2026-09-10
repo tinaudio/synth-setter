@@ -33,7 +33,10 @@ try {
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto(url);
+  page.on("console", (message) => { if (message.type() === "error") pageErrors.push(message.text()); });
   await page.waitForFunction(() => document.querySelector("#run").disabled === false || document.querySelector("#status").textContent.startsWith("Error:"), null, { timeout: 120000 });
+  const loadStatus = await page.locator("#status").textContent();
+  if (loadStatus.startsWith("Error:")) throw new Error(`bundle load failed: ${loadStatus}; ${pageErrors.join("; ")}`);
   await page.locator("#target").setInputFiles(path.resolve(wavPath));
   await page.locator("#mode").selectOption(mode);
   await page.locator("#content").fill(contentCfg);

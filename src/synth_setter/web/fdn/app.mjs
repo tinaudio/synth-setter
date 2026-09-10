@@ -28,8 +28,8 @@ function setStatus(text) {
 
 async function loadBundles() {
   setStatus("Loading model bundle and Faust artifact");
-  const model = await loadModelBundle("model");
-  const faust = await loadFaustBundle("faust");
+  const model = await loadModelBundle(new URL("../model", import.meta.url).href);
+  const faust = await loadFaustBundle(new URL("../faust", import.meta.url).href);
   const graphs = await loadGraphs(ort, model.graphs);
   const { sampling, paramSpecName, frames, sampleRate } = model.manifest;
   field("content").value = sampling.contentCfg;
