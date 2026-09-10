@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import fsspec
 import lightning
 import pytest
 import torch
@@ -849,6 +850,52 @@ def test_load_checkpoint_from_file_object_restores_module(tmp_path: Path) -> Non
         )
 
     assert loaded.hparams["endpoint_time_weighting"] == "uniform"
+
+
+def test_load_checkpoint_from_memory_filesystem_restores_module(tmp_path: Path) -> None:
+    """Remote fsspec checkpoint paths retain Lightning loading behavior.
+
+    :param tmp_path: Checkpoint staging directory.
+    """
+    source = _module(row=torch.linspace(0.0, 1.0, _WIDTH))
+    path = _save_checkpoint(source, tmp_path / "checkpoint.ckpt")
+    checkpoint_uri = "memory://flowmol3-review/checkpoint.ckpt"
+    fsspec.filesystem("memory").pipe(checkpoint_uri, path.read_bytes())
+
+    loaded = VSTFlowMatchingModule.load_from_checkpoint(
+        checkpoint_uri,
+        encoder=_WaveformEncoder(),
+        weights_only=False,
+    )
+
+    assert loaded.hparams["endpoint_time_weighting"] == "uniform"
+    torch.testing.assert_close(loaded.state_dict(), source.state_dict())
+
+
+@pytest.mark.parametrize("error_type", [FileNotFoundError, PermissionError])
+def test_load_checkpoint_permanent_path_error_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[OSError],
+) -> None:
+    """Permanent path failures propagate after one open attempt.
+
+    :param monkeypatch: Patches the fsspec boundary.
+    :param error_type: Permanent path exception under test.
+    """
+    open_attempts = 0
+
+    def fail_open(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        nonlocal open_attempts
+        open_attempts += 1
+        raise error_type("permanent checkpoint read failure")
+
+    monkeypatch.setattr(fsspec, "open", fail_open)
+
+    with pytest.raises(error_type, match="permanent checkpoint read failure"):
+        VSTFlowMatchingModule.load_from_checkpoint("memory://missing.ckpt")
+
+    assert open_attempts == 1
 
 
 def test_load_legacy_checkpoint_without_endpoint_time_weighting_counts_as_uniform(

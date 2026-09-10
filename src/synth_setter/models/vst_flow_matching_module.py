@@ -68,7 +68,7 @@ _VSTFlowMatchingModuleT = TypeVar(
 )
 
 
-@retry_external_io(retry_exceptions=(OSError,))
+@retry_external_io(retry_exceptions=(ConnectionError, TimeoutError))
 @jaxtyped(typechecker=beartype)
 def _copy_checkpoint_path(checkpoint_path: str | Path, destination: IO[bytes]) -> None:
     """Copy a checkpoint into a seekable buffer with bounded I/O retries.
@@ -547,6 +547,7 @@ class VSTFlowMatchingModule(LightningModule):
                         f"checkpoint trained endpoint_time_weighting={stored_time_weighting!r}, "
                         f"load override requested {requested_time_weighting!r}"
                     )
+            del checkpoint
             staged_checkpoint.seek(0)
             return cast(
                 _VSTFlowMatchingModuleT,
