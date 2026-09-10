@@ -391,6 +391,9 @@ namespaces = true
   "configs/**/*.sh",
   "scripts/*.sh",
   "data/vst/*_param_map.json",
+  "web/*.html",
+  "web/*.mjs",
+  "web/package*.json",
 ]
 
 
