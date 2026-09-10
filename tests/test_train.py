@@ -636,6 +636,9 @@ def test_train_torchsynth_flow_endpoint_one_step_writes_stamped_checkpoint(
         values = [value for name, value in metric_dict.items() if name.startswith(key)]
         assert values, f"no {key} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
+    assert any(
+        name.startswith("train/per_param_weighted_endpoint_mse/") for name in metric_dict
+    ), sorted(metric_dict)
     assert any(name.startswith("train/per_param_endpoint_mse/") for name in metric_dict), sorted(
         metric_dict
     )
@@ -655,6 +658,10 @@ def test_train_torchsynth_flow_endpoint_one_step_writes_stamped_checkpoint(
 
     assert eval_object_dict["model"].hparams["parameterization"] == "endpoint"
     assert torch.isfinite(eval_metric_dict["val/param_mse"])
+    assert torch.isfinite(eval_metric_dict["val/endpoint_mse/equal_bin_mean"])
+    assert all(
+        f"val/endpoint_mse/t_{index:02d}" in eval_metric_dict for index in range(5, 100, 10)
+    )
 
 
 @pytest.mark.dataloader_multiprocess

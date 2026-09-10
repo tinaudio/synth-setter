@@ -181,6 +181,7 @@ def _module(
     endpoint_time_weighting: str = "uniform",
     parameterization: str = "endpoint",
     param_spec: str | None = "cardinal",
+    rectified_sigma_min: float = 0.0,
     row: torch.Tensor | None = None,
     audio_loss: torch.nn.Module | None = None,
     vector_field: torch.nn.Module | None = None,
@@ -191,6 +192,7 @@ def _module(
     :param endpoint_time_weighting: Endpoint time-weighting selection.
     :param parameterization: Field output parameterization.
     :param param_spec: Registered ParamSpec name, or ``None``.
+    :param rectified_sigma_min: Residual source-noise scale.
     :param row: Constant field output when no explicit field is supplied.
     :param audio_loss: Optional recording audio loss.
     :param vector_field: Explicit field override.
@@ -211,6 +213,7 @@ def _module(
         endpoint_loss=endpoint_loss,  # pyright: ignore[reportArgumentType]
         endpoint_time_weighting=endpoint_time_weighting,  # pyright: ignore[reportArgumentType]
         parameterization=parameterization,  # pyright: ignore[reportArgumentType]
+        rectified_sigma_min=rectified_sigma_min,
     )
 
 
@@ -323,6 +326,16 @@ def test_flowmol3_endpoint_time_weights_match_pinned_paper_bounds() -> None:
     assert torch.isfinite(weights).all()
 
 
+@pytest.mark.parametrize("sigma", [-0.01, 1.0, 4.0])
+def test_module_invalid_rectified_sigma_min_raises(sigma: float) -> None:
+    """Residual source-noise scales outside ``[0, 1)`` are rejected.
+
+    :param sigma: Invalid residual noise scale.
+    """
+    with pytest.raises(ValueError, match="rectified_sigma_min"):
+        _module(rectified_sigma_min=sigma)
+
+
 def test_mixed_endpoint_row_loss_averages_each_logical_parameter_once() -> None:
     """A two-column category and scalar numerical span each contribute one term."""
     spec = ParamSpec(
@@ -382,7 +395,8 @@ def test_train_step_mixed_loss_keeps_row_weights_paired_with_rows() -> None:
     expected_first = (1.0 + math.log(2.0)) / 11.0
     expected_second = (4.0 + math.log(2.0)) / 11.0
     assert outputs.loss.item() == pytest.approx((expected_first + 3.0 * expected_second) / 2.0)
-    torch.testing.assert_close(outputs.per_param_flow_mse[8:10], torch.ones(2))
+    torch.testing.assert_close(outputs.per_param_flow_mse[8:10], torch.full((2,), 2.0))
+    torch.testing.assert_close(outputs.per_param_endpoint_mse[8:10], torch.ones(2))
     outputs.loss.backward()
     assert field.row.grad is not None
     assert torch.count_nonzero(field.row.grad[8:10]).item() == 2
@@ -399,6 +413,62 @@ def test_train_step_mse_keeps_row_weights_paired_with_rows() -> None:
     outputs = module._train_step(_batch(target))  # noqa: SLF001
 
     assert outputs.loss.item() == pytest.approx(6.5)
+    torch.testing.assert_close(outputs.per_param_flow_mse, torch.full((_WIDTH,), 6.5))
+    torch.testing.assert_close(outputs.per_param_endpoint_mse, torch.full((_WIDTH,), 2.5))
+
+
+def test_velocity_endpoint_diagnostic_nonzero_sigma_is_exact_for_perfect_field() -> None:
+    """A perfect velocity has zero endpoint error on a sigma-bearing path."""
+    module = _module(parameterization="velocity", param_spec=None, row=torch.full((_WIDTH,), 2.0))
+    module.hparams["rectified_sigma_min"] = 0.25
+    target = torch.ones(_BATCH, _WIDTH)
+    batch = _batch(target)
+    batch["noise"] = torch.full_like(target, -1.0)
+
+    outputs = module._train_step(batch)  # noqa: SLF001
+
+    torch.testing.assert_close(outputs.per_param_endpoint_mse, torch.zeros(_WIDTH))
+
+
+def test_train_step_mse_and_mixed_share_unweighted_endpoint_diagnostic() -> None:
+    """Endpoint diagnostics compare typed model-space predictions under both objectives."""
+    target = _target()
+    mse = _module(endpoint_loss="mse")._train_step(_batch(target))  # noqa: SLF001
+    mixed = _module(endpoint_loss="mixed")._train_step(_batch(target))  # noqa: SLF001
+
+    torch.testing.assert_close(mse.per_param_endpoint_mse, mixed.per_param_endpoint_mse)
+
+
+def test_fixed_time_velocity_endpoint_mse_reports_ten_bins_and_equal_bin_mean() -> None:
+    """Held-out diagnostics score fixed centers and average bins equally."""
+    module = _module(parameterization="velocity", param_spec=None)
+    target = torch.ones(_BATCH, _WIDTH)
+
+    metrics = module._fixed_time_endpoint_mse(_batch(target))  # noqa: SLF001
+
+    expected = torch.tensor(
+        [0.9025, 0.7225, 0.5625, 0.4225, 0.3025, 0.2025, 0.1225, 0.0625, 0.0225, 0.0025]
+    )
+    actual = torch.stack(
+        [metrics[f"velocity_endpoint_mse/t_{index:02d}"] for index in range(5, 100, 10)]
+    )
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(
+        metrics["velocity_endpoint_mse/equal_bin_mean"], torch.tensor(0.3325)
+    )
+
+
+def test_fixed_time_endpoint_mse_uses_direct_endpoint_namespace() -> None:
+    """Direct endpoint diagnostics report exact bins without a velocity prefix."""
+    module = _module(parameterization="endpoint", param_spec=None)
+
+    metrics = module._fixed_time_endpoint_mse(_batch(torch.ones(_BATCH, _WIDTH)))  # noqa: SLF001
+
+    assert metrics.keys() == {
+        *(f"endpoint_mse/t_{index:02d}" for index in range(5, 100, 10)),
+        "endpoint_mse/equal_bin_mean",
+    }
+    torch.testing.assert_close(metrics["endpoint_mse/equal_bin_mean"], torch.tensor(1.0))
 
 
 def test_train_step_flowmol3_mse_weights_objective_not_diagnostic() -> None:
