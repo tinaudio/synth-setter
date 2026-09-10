@@ -46,6 +46,10 @@ EndpointLoss = Literal["mse", "mixed"]
 Parameterization = Literal["velocity", "endpoint"]
 _ENDPOINT_LOSSES: frozenset[str] = frozenset(("mixed", "mse"))
 _PARAMETERIZATIONS: frozenset[str] = frozenset(("endpoint", "velocity"))
+_EVAL_BATCH_SEED_STRIDE = 2**16
+_EVAL_SEED_MODULUS = 2**63 - 1
+_EVAL_TEST_SEED_OFFSET = 1_000_003
+_FIXED_TIME_PERCENT_CENTERS = tuple(range(5, 100, 10))
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import (
@@ -125,7 +129,11 @@ class TrainStepOutputs:
 
     .. attribute :: per_param_flow_mse
 
-       Weighted model-space MSE diagnostic for each encoded parameter column.
+       Weighted model-space objective MSE for each encoded parameter column.
+
+    .. attribute :: per_param_endpoint_mse
+
+       Unweighted one-step endpoint MSE for each encoded parameter column.
 
     .. attribute :: audio_term
 
@@ -150,6 +158,7 @@ class TrainStepOutputs:
 
     loss: torch.Tensor
     per_param_flow_mse: Float[torch.Tensor, _PARAM_SHAPE]
+    per_param_endpoint_mse: Float[torch.Tensor, _PARAM_SHAPE]
     audio_term: torch.Tensor | None
     penalty: torch.Tensor | None
     grad_balance: GradientBalance | None
@@ -482,6 +491,8 @@ class VSTFlowMatchingModule(LightningModule):
             raise ValueError(
                 f"endpoint_loss must be one of {sorted(_ENDPOINT_LOSSES)}, got {endpoint_loss!r}"
             )
+        if not 0.0 <= rectified_sigma_min < 1.0:
+            raise ValueError(f"rectified_sigma_min must be in [0, 1), got {rectified_sigma_min}")
         if endpoint_loss == "mixed" and parameterization != "endpoint":
             raise ValueError("endpoint_loss='mixed' requires parameterization='endpoint'")
         if endpoint_loss == "mixed" and param_spec is None:
@@ -523,6 +534,7 @@ class VSTFlowMatchingModule(LightningModule):
             # trainer in on_train_start. Must fail before setup() compiles (#2585).
             validate_audio_feedback_runtime(compiled=True, world_size=1)
         self._conditioning_key = conditioning_batch_key(conditioning)
+        self._evaluation_seed = torch.initial_seed()
 
         self.val_param_mse_best_swap = BestSwapParamMSE()
         self.test_param_mse_best_swap = BestSwapParamMSE()
@@ -823,6 +835,8 @@ class VSTFlowMatchingModule(LightningModule):
         endpoint_prediction = self._endpoint_prediction_to_model(prediction)
         squared_flow_error = (endpoint_prediction - target).square()
         per_param_flow_mse = (squared_flow_error * w).mean(dim=0)
+        endpoint_estimate = self._one_step_estimate(x_t, t, prediction)
+        per_param_endpoint_mse = (endpoint_estimate - x1).square().mean(dim=0)
         if self.hparams.endpoint_loss == "mixed":
             assert self._metric_param_spec is not None
             row_loss = mixed_endpoint_row_loss(prediction, target, self._metric_param_spec)
@@ -835,7 +849,7 @@ class VSTFlowMatchingModule(LightningModule):
         if self.audio_loss is not None:
             # One-step estimate of x1 from the current field; rendering it keeps
             # autograd connected so latent audio error reaches the field's weights.
-            theta_hat = self._one_step_estimate(x_t, t, prediction)
+            theta_hat = endpoint_estimate
             # Fully unconditional rows estimate the marginal, so their row-specific
             # target-audio residual is high-variance noise rather than identity signal.
             audio_term = self.audio_loss(
@@ -858,6 +872,7 @@ class VSTFlowMatchingModule(LightningModule):
         return TrainStepOutputs(
             loss=loss,
             per_param_flow_mse=per_param_flow_mse,
+            per_param_endpoint_mse=per_param_endpoint_mse,
             audio_term=audio_term,
             penalty=penalty,
             grad_balance=grad_balance,
@@ -868,25 +883,30 @@ class VSTFlowMatchingModule(LightningModule):
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
         outputs = self._train_step(batch)
         self.log("train/loss", outputs.loss, on_step=True, on_epoch=True, prog_bar=True)
+        parameterization = self.hparams.parameterization
+        objective_name = f"weighted_{parameterization}_mse"
+        endpoint_name = (
+            "endpoint_mse" if parameterization == "endpoint" else "velocity_endpoint_mse"
+        )
+        metrics = {
+            f"train/{objective_name}": outputs.per_param_flow_mse.mean(),
+            f"train/{endpoint_name}": outputs.per_param_endpoint_mse.mean(),
+        }
         if self._metric_param_spec is not None:
-            # Velocity and endpoint errors are not comparable; the endpoint run logs under
-            # its own prefix so shared dashboards never overlay the two.
-            prefix = (
-                "train/per_param_endpoint_mse"
-                if self.hparams.parameterization == "endpoint"
-                else "train/per_param_flow_mse"
-            )
-            metrics = {
-                f"{prefix}/{param.name}": outputs.per_param_flow_mse[span].mean()
-                for param, span in self._metric_param_spec.encoded_slices()
-            }
-            self.log_dict(
-                metrics,
-                on_step=False,
-                on_epoch=True,
-                batch_size=batch["params"].shape[0],
-                sync_dist=True,
-            )
+            for param, span in self._metric_param_spec.encoded_slices():
+                metrics[f"train/per_param_{objective_name}/{param.name}"] = (
+                    outputs.per_param_flow_mse[span].mean()
+                )
+                metrics[f"train/per_param_{endpoint_name}/{param.name}"] = (
+                    outputs.per_param_endpoint_mse[span].mean()
+                )
+        self.log_dict(
+            metrics,
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch["params"].shape[0],
+            sync_dist=True,
+        )
 
         total = outputs.loss
         if outputs.audio_term is not None:
@@ -983,7 +1003,9 @@ class VSTFlowMatchingModule(LightningModule):
         """
         if self.hparams.parameterization == "endpoint":
             return self._endpoint_prediction_to_model(prediction)
-        return x_t + (1 - t) * prediction
+        sigma = self.hparams.rectified_sigma_min
+        remaining = 1 - t
+        return (x_t + (1 - sigma) * remaining * prediction) / (1 - sigma * remaining)
 
     def _sample(
         self,
@@ -1098,6 +1120,92 @@ class VSTFlowMatchingModule(LightningModule):
             )
 
     @jaxtyped(typechecker=beartype)
+    def _evaluation_noise(
+        self,
+        params: Float[torch.Tensor, "batch params"],
+        batch_idx: int,
+        stage: Literal["test", "val"],
+    ) -> Float[torch.Tensor, "batch params"]:
+        """Generate stage-local sampling noise without advancing global RNG state.
+
+        :param params: Target rows defining output shape, dtype, and device.
+        :param batch_idx: Stable loader batch position within the current rank.
+        :param stage: Evaluation split namespace.
+        :returns: Deterministic noise for a fixed seed and loader topology.
+        """
+        rank = 0 if self._trainer is None else self.trainer.global_rank
+        stage_offset = 0 if stage == "val" else _EVAL_TEST_SEED_OFFSET
+        seed = (
+            self._evaluation_seed + stage_offset + batch_idx * _EVAL_BATCH_SEED_STRIDE + rank
+        ) % _EVAL_SEED_MODULUS
+        generator = torch.Generator(device="cpu").manual_seed(seed)
+        noise = torch.randn(params.shape, dtype=torch.float32, generator=generator)
+        return noise.to(params.device)
+
+    @torch.inference_mode()
+    @jaxtyped(typechecker=beartype)
+    def _fixed_time_endpoint_mse(
+        self,
+        batch: dict[str, Shaped[torch.Tensor, ...]],
+        noise: Float[torch.Tensor, "batch params"] | None = None,
+    ) -> dict[str, Shaped[torch.Tensor, ""]]:
+        """Score one-step endpoints at fixed time centers with conditional inference.
+
+        :param batch: Held-out batch carrying targets and conditioning.
+        :param noise: Fixed initial state reused at every center; defaults to batch noise.
+        :returns: Per-center unweighted MSE and their equal-bin mean.
+        """
+        x1 = batch["params"]
+        x0 = batch["noise"] if noise is None else noise
+        conditioning = self.encoder(self._get_conditioning_from_batch(batch))
+        control_branches = self._control_token_branches_from_batch(batch)
+        control_tokens = None if control_branches is None else control_branches.conditional
+        prefix = (
+            "endpoint_mse"
+            if self.hparams.parameterization == "endpoint"
+            else "velocity_endpoint_mse"
+        )
+        metrics: dict[str, Shaped[torch.Tensor, ""]] = {}
+        bin_values: list[Shaped[torch.Tensor, ""]] = []
+        for index in _FIXED_TIME_PERCENT_CENTERS:
+            t = torch.full((x1.shape[0], 1), index / 100, dtype=x1.dtype, device=x1.device)
+            x_t = self._sample_probability_path(x0, x1, t)
+            if control_tokens is None:
+                prediction = self.vector_field(x_t, t, conditioning)
+            else:
+                prediction = self.vector_field(x_t, t, conditioning, control_tokens=control_tokens)
+            mse = (self._one_step_estimate(x_t, t, prediction) - x1).square().mean()
+            metrics[f"{prefix}/t_{index:02d}"] = mse
+            bin_values.append(mse)
+        metrics[f"{prefix}/equal_bin_mean"] = torch.stack(bin_values).mean()
+        return metrics
+
+    @jaxtyped(typechecker=beartype)
+    def _log_fixed_time_endpoint_mse(
+        self,
+        stage: Literal["test", "val"],
+        batch: dict[str, Shaped[torch.Tensor, ...]],
+        noise: Float[torch.Tensor, "batch params"],
+    ) -> None:
+        """Accumulate fixed-time endpoint diagnostics with row-aware DDP reduction.
+
+        :param stage: Evaluation split namespace.
+        :param batch: Held-out batch.
+        :param noise: Fixed initial state shared across all time centers.
+        """
+        metrics = {
+            f"{stage}/{name}": value
+            for name, value in self._fixed_time_endpoint_mse(batch, noise).items()
+        }
+        self.log_dict(
+            metrics,
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch["params"].shape[0],
+            sync_dist=True,
+        )
+
+    @jaxtyped(typechecker=beartype)
     def _per_param_mse_outputs(
         self,
         predicted: Float[torch.Tensor, "batch params"],
@@ -1127,16 +1235,20 @@ class VSTFlowMatchingModule(LightningModule):
         return outputs
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        conditioning = self._get_conditioning_from_batch(batch)
-        pred_params = self._sample(
-            conditioning,
-            torch.randn_like(batch["params"]),
-            self.hparams.validation_sample_steps,
-            self.hparams.validation_cfg_strength,
-            sketch_cfg_strength=self.hparams.validation_sketch_cfg_strength,
-            control_tokens=self._control_token_branches_from_batch(batch),
+        noise = self._evaluation_noise(batch["params"], batch_idx, "val")
+        pred_params = self.sample_batch(
+            batch,
+            noise=noise,
+            content_cfg_strength=self.hparams.validation_cfg_strength,
+            sketch_cfg_strength=(
+                self.hparams.validation_cfg_strength
+                if self.hparams.validation_sketch_cfg_strength is None
+                else self.hparams.validation_sketch_cfg_strength
+            ),
+            sample_steps=self.hparams.validation_sample_steps,
         )
 
+        self._log_fixed_time_endpoint_mse("val", batch, noise)
         self._log_validation_pitch_residuals(pred_params, batch["params"])
         outputs = self._per_param_mse_outputs(
             pred_params,
@@ -1168,16 +1280,20 @@ class VSTFlowMatchingModule(LightningModule):
         pass
 
     def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        conditioning = self._get_conditioning_from_batch(batch)
-        pred_params = self._sample(
-            conditioning,
-            torch.randn_like(batch["params"]),
-            self.hparams.test_sample_steps,
-            self.hparams.test_cfg_strength,
-            sketch_cfg_strength=self.hparams.test_sketch_cfg_strength,
-            control_tokens=self._control_token_branches_from_batch(batch),
+        noise = self._evaluation_noise(batch["params"], batch_idx, "test")
+        pred_params = self.sample_batch(
+            batch,
+            noise=noise,
+            content_cfg_strength=self.hparams.test_cfg_strength,
+            sketch_cfg_strength=(
+                self.hparams.test_cfg_strength
+                if self.hparams.test_sketch_cfg_strength is None
+                else self.hparams.test_sketch_cfg_strength
+            ),
+            sample_steps=self.hparams.test_sample_steps,
         )
 
+        self._log_fixed_time_endpoint_mse("test", batch, noise)
         outputs = self._per_param_mse_outputs(
             pred_params,
             batch["params"],

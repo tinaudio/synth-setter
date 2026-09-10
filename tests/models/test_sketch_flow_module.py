@@ -417,6 +417,30 @@ def test_sample_batch_guidance_and_sketch_controls_change_fixed_noise_output() -
     assert not torch.equal(sketch_guided, changed_controls)
 
 
+def test_fixed_time_diagnostics_use_conditional_sketch_tokens() -> None:
+    """Held-out endpoint diagnostics respond to conditional sketch controls."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    model.vector_field = _BranchField()
+    assert model.sketch_tokens is not None
+    with torch.no_grad():
+        for projection in model.sketch_tokens.projections.children():
+            assert isinstance(projection, torch.nn.Linear)
+            projection.weight.fill_(1.0)
+    batch = _batch(with_sketch=True)
+    changed_batch = dict(batch)
+    changed_batch["sketch_ctrl"] = torch.zeros_like(batch["sketch_ctrl"])
+
+    original = model._fixed_time_endpoint_mse(batch, batch["noise"])  # noqa: SLF001
+    changed = model._fixed_time_endpoint_mse(  # noqa: SLF001
+        changed_batch, batch["noise"]
+    )
+
+    assert not torch.equal(
+        original["velocity_endpoint_mse/equal_bin_mean"],
+        changed["velocity_endpoint_mse/equal_bin_mean"],
+    )
+
+
 def test_sample_batch_wrong_noise_shape_raises() -> None:
     """Explicit noise must provide one parameter vector per input row."""
     model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))

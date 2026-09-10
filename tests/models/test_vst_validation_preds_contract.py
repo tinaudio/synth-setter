@@ -277,17 +277,77 @@ def test_validation_step_preds_depend_on_input() -> None:
     assert not torch.allclose(preds_a, preds_b)
 
 
-def test_flow_matching_validation_preds_vary_with_sampling_noise() -> None:
-    """The default validation sampler draws fresh noise for every call."""
+def test_flow_matching_validation_preds_repeat_with_fixed_batch_index() -> None:
+    """Validation sampling is stable across epochs without resetting global RNG."""
     torch.manual_seed(0)
     module = _flow_matching_module()
     batch = _batch()
 
-    preds_a = module.validation_step(batch, batch_idx=0)["preds"]
-    preds_b = module.validation_step(batch, batch_idx=0)["preds"]
+    preds_a = module.validation_step(batch, batch_idx=3)["preds"]
+    torch.randn(100)
+    preds_b = module.validation_step(batch, batch_idx=3)["preds"]
 
     assert preds_a.shape == preds_b.shape == batch["params"].shape
-    assert torch.isfinite(preds_a).all() and torch.isfinite(preds_b).all()
+    torch.testing.assert_close(preds_a, preds_b, rtol=0.0, atol=0.0)
+
+
+def test_flow_matching_validation_does_not_advance_global_rng() -> None:
+    """Local evaluation noise leaves unrelated sampling streams unchanged."""
+    module = _flow_matching_module()
+    batch = _batch()
+    state = torch.random.get_rng_state()
+
+    module.validation_step(batch, batch_idx=0)
+
+    assert torch.equal(torch.random.get_rng_state(), state)
+
+
+def test_flow_matching_evaluation_noise_changes_with_seed() -> None:
+    """Otherwise-identical modules derive different noise from different seeds."""
+    params = _batch()["params"]
+    torch.manual_seed(11)
+    first = _flow_matching_module()._evaluation_noise(params, 0, "val")  # noqa: SLF001
+    torch.manual_seed(12)
+    second = _flow_matching_module()._evaluation_noise(params, 0, "val")  # noqa: SLF001
+
+    assert not torch.equal(first, second)
+
+
+def test_flow_matching_evaluation_noise_separates_stage_and_batch() -> None:
+    """Stage and batch coordinates select different deterministic initial states."""
+    module = _flow_matching_module()
+    params = _batch()["params"]
+
+    val_first = module._evaluation_noise(params, 0, "val")  # noqa: SLF001
+    val_second = module._evaluation_noise(params, 1, "val")  # noqa: SLF001
+    test_first = module._evaluation_noise(params, 0, "test")  # noqa: SLF001
+
+    assert not torch.equal(val_first, val_second)
+    assert not torch.equal(val_first, test_first)
+
+
+def test_flow_matching_sample_batch_changed_explicit_noise_changes_prediction() -> None:
+    """The public sampler remains sensitive to its explicit initial state."""
+    module = _flow_matching_module()
+    batch = _batch()
+    zeros = torch.zeros_like(batch["params"])
+    ones = torch.ones_like(batch["params"])
+
+    preds_a = module.sample_batch(
+        batch,
+        noise=zeros,
+        content_cfg_strength=1.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+    preds_b = module.sample_batch(
+        batch,
+        noise=ones,
+        content_cfg_strength=1.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+
     assert not torch.equal(preds_a, preds_b)
 
 

@@ -1429,9 +1429,21 @@ def test_evaluate_loads_mixed_endpoint_checkpoint_and_samples(tmp_path: Path) ->
     trainer.save_checkpoint(checkpoint_path)
 
     HydraConfig().set_config(cfg)
+    seed_everything(999, workers=True)
     metric_dict, object_dict = evaluate(cfg)
+    repeated_metric_dict, _ = evaluate(cfg)
+    with open_dict(cfg):
+        cfg.seed += 1
+    seed_everything(999, workers=True)
+    changed_seed_metric_dict, _ = evaluate(cfg)
 
     assert torch.isfinite(metric_dict["test/param_mse"])
+    torch.testing.assert_close(
+        metric_dict["test/param_mse"], repeated_metric_dict["test/param_mse"], rtol=0.0, atol=0.0
+    )
+    assert not torch.equal(
+        metric_dict["test/param_mse"], changed_seed_metric_dict["test/param_mse"]
+    )
     assert object_dict["model"].hparams.endpoint_loss == "mixed"
 
 

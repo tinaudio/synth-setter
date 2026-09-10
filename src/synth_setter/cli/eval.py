@@ -15,7 +15,7 @@ from typing import Any, cast
 import hydra
 import pandas as pd
 import wandb
-from lightning import Callback, LightningDataModule, LightningModule, Trainer
+from lightning import Callback, LightningDataModule, LightningModule, Trainer, seed_everything
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from omegaconf import DictConfig, OmegaConf
@@ -473,6 +473,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         metrics from :func:`_run_predict_postprocessing` (Python ``float``),
         so callers iterating values must handle both.
     """
+    seed_everything(cfg.seed, workers=True)
     checkpoint_path = _localize_eval_checkpoint(cfg.ckpt_path, cfg.get("ckpt_sha256"))
 
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
