@@ -34,6 +34,43 @@ _FAUST_SOURCE_SHA256 = {
     "faust_church_organ": "c753731f4053210d42757acb179010185e91d37fb56a8b45e093222be688b512",
     "faust_filter_osc": "6ad65d28d787f08a3fa66eb4de7d4091be8d2267ad1e9edc200618effbbe588c",
 }
+_FAUST_REGISTRY_PREFIX = "registry://faust/"
+
+
+def validate_faust_registry_reference(reference: str, param_spec_name: str) -> ParamSpecName:
+    """Validate and resolve an in-process Faust source reference.
+
+    :param reference: Canonical ``registry://faust/<registered-source-name>`` URI.
+    :param param_spec_name: Selected parameter-spec and source identity.
+    :returns: Registered Faust source identity named by the reference.
+    :raises ValueError: The URI is malformed, unknown, or mismatches ``param_spec_name``.
+    """
+    if not reference.startswith(_FAUST_REGISTRY_PREFIX):
+        raise ValueError(
+            "Faust registry reference must be registry://faust/<registered-source-name>"
+        )
+    identity = reference.removeprefix(_FAUST_REGISTRY_PREFIX)
+    if not identity or any(character in identity for character in "/?#"):
+        raise ValueError(
+            "Faust registry reference must be registry://faust/<registered-source-name>"
+        )
+    if identity not in _FAUST_SOURCE_SHA256:
+        raise ValueError(f"Faust source {identity!r} is not registered")
+    if identity != param_spec_name:
+        raise ValueError(
+            f"Faust registry reference selects {identity!r} but "
+            f"param_spec_name is {param_spec_name!r}"
+        )
+    return ParamSpecName(identity)
+
+
+def _is_registry_reference(reference: object) -> bool:
+    """Return whether an input declares the registry URI scheme.
+
+    :param reference: Candidate synth artifact reference.
+    :returns: Whether the value begins with the registry scheme, case-insensitively.
+    """
+    return isinstance(reference, str) and reference.casefold().startswith("registry:")
 
 
 def _legacy_synth_format(plugin_path: str) -> SynthFormat:
@@ -63,7 +100,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 
     .. attribute :: plugin_path
 
-        VST3 bundle path, or the bare backend name for the in-process renderer.
+        VST3 bundle path, in-process backend sentinel, or registered Faust source URI.
 
     .. attribute :: plugin_state_path
 
@@ -92,10 +129,10 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
     @model_validator(mode="before")
     @classmethod
     def _normalize_legacy_identity(cls, data: object) -> object:
-        """Promote non-Faust identities authored before ``format`` was persisted.
+        """Derive omitted formats from legacy sentinels or a Faust registry URI.
 
         :param data: Raw identity input.
-        :returns: Input with its legacy non-Faust format filled when applicable.
+        :returns: Input with its representation format filled when derivable.
         :raises ValueError: A Faust sentinel appears outside the exact legacy render pair.
         """
         if not isinstance(data, dict) or "format" in data:
@@ -105,6 +142,13 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
         if plugin_path == "faust":
             raise ValueError("plugin_path='faust' requires the legacy DawDreamer Faust contract")
         if not isinstance(plugin_path, str):
+            return normalized
+        if _is_registry_reference(plugin_path):
+            param_spec_name = normalized.get("param_spec_name")
+            if not isinstance(param_spec_name, str):
+                return normalized
+            validate_faust_registry_reference(plugin_path, param_spec_name)
+            normalized["format"] = "faust"
             return normalized
         normalized["format"] = _legacy_synth_format(plugin_path)
         return normalized
@@ -122,18 +166,21 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 
     @model_validator(mode="after")
     def _faust_identity_is_checked_in_source(self) -> SynthSpec:
-        """Require pathless Faust source with its exact checked-in digest.
+        """Require a registered or legacy-pathless Faust source with its exact digest.
 
         :returns: This identity when its source provenance is coherent.
         :raises ValueError: Source provenance is present on another format or Faust provenance does
             not match a registered checked-in source.
         """
         if self.format != "faust":
+            if _is_registry_reference(self.plugin_path):
+                validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
+                raise ValueError("a Faust registry reference requires format='faust'")
             if self.source_sha256 is not None:
                 raise ValueError("source_sha256 is supported only for format='faust'")
             return self
         if self.plugin_path:
-            raise ValueError("format='faust' does not accept plugin_path")
+            validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
         if self.plugin_state_path:
             raise ValueError("format='faust' does not accept plugin_state_path")
         expected = _FAUST_SOURCE_SHA256.get(self.param_spec_name)
@@ -169,10 +216,25 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "presets/cardinal-base.vstpreset",
         "0.26.2",
     ),
-    "faust_bright_organ": ("faust_bright_organ", "", "", "1"),
-    "faust_bubble": ("faust_bubble", "", "", "1"),
-    "faust_church_organ": ("faust_church_organ", "", "", "1"),
-    "faust_filter_osc": ("faust_filter_osc", "", "", "1"),
+    "faust_bright_organ": (
+        "faust_bright_organ",
+        "registry://faust/faust_bright_organ",
+        "",
+        "1",
+    ),
+    "faust_bubble": ("faust_bubble", "registry://faust/faust_bubble", "", "1"),
+    "faust_church_organ": (
+        "faust_church_organ",
+        "registry://faust/faust_church_organ",
+        "",
+        "1",
+    ),
+    "faust_filter_osc": (
+        "faust_filter_osc",
+        "registry://faust/faust_filter_osc",
+        "",
+        "1",
+    ),
     "surge_xt": ("surge_xt", "plugins/Surge XT.vst3", "presets/surge-base.vstpreset", "1.3.4"),
     "surge_simple": (
         "surge_simple",

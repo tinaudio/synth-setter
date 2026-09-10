@@ -258,7 +258,7 @@ class AudioRenderer(ABC):
 
     .. attribute :: plugin_path
 
-       Plugin path or interpreter-resolved backend sentinel.
+       Plugin path, interpreter-resolved backend sentinel, or registry URI.
 
     .. attribute :: sample_rate
 
@@ -768,19 +768,23 @@ class DawDreamerFaustRenderer(AudioRenderer):
     def __post_init__(self) -> None:
         """Resolve checked-in identities and compile the first native graph.
 
-        :raises ValueError: The direct renderer configuration accepts an external resource.
+        :raises ValueError: The source reference, state path, or source digest is invalid.
         """
         from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
         from synth_setter.data.vst.faust_sources import resolve_faust_dsp
+        from synth_setter.synth_spec import validate_faust_registry_reference
 
-        if self.plugin_path:
-            raise ValueError("Faust renderer does not accept plugin_path")
+        source_identity = (
+            self.param_spec_name
+            if not self.plugin_path
+            else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
+        )
         if self.plugin_state_path:
             raise ValueError("Faust renderer does not accept plugin_state_path")
-        dsp = resolve_faust_dsp(self.param_spec_name)
+        dsp = resolve_faust_dsp(source_identity)
         if hashlib.sha256(dsp.source.encode()).hexdigest() != self.source_sha256:
             raise ValueError("registered Faust source does not match source_sha256")
-        spec = resolve_faust_param_spec(self.param_spec_name)
+        spec = resolve_faust_param_spec(source_identity)
         self._dsp_source = dsp.source
         self._num_voices = dsp.num_voices
         self._parameter_addresses = tuple(spec.synth_param_names)

@@ -241,7 +241,7 @@ def test_render_faust_composes_into_valid_render_config(
     channels: int,
     render_group: str,
 ) -> None:
-    """Each Faust identity resolves checked-in source/spec identity without paths.
+    """Each Faust identity resolves a checked-in source through its registry URI.
 
     :param name: Synth group and Faust registry identity.
     :param num_params: Expected encoded synth-and-note width.
@@ -253,7 +253,7 @@ def test_render_faust_composes_into_valid_render_config(
     assert spec.render.param_spec_name == name
     assert spec.render.renderer_backend == "dawdreamer"
     assert spec.render.backend_version == "0.8.3"
-    assert spec.render.plugin_path == ""
+    assert spec.render.plugin_path == f"registry://faust/{name}"
     assert spec.render.synth.format == "faust"
     assert spec.render.plugin_state_path == ""
     assert spec.render.gui_toggle_cadence == "never"

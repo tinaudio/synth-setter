@@ -33,8 +33,8 @@ several existing `surge*` keys use shorter legacy names (e.g. `surge_xt` →
 `presets/surge-base.vstpreset`) that the registry maps explicitly.
 
 This workflow is specifically for VST3 plugins. Checked-in Faust programs use a
-registered source/spec pair instead: `format: faust`, no plugin or state path,
-and the `dawdreamer` backend (`render=faust`). Parameter names preserve the exact
+`registry://faust/<registered-source-name>` plugin path, no state path, and the
+`dawdreamer` backend (`render=faust`); the URI derives `format: faust`. Parameter names preserve the exact
 addresses reported by Faust compilation.
 
 The one genuinely hard part is the `ParamSpec`: pedalboard can enumerate a
@@ -266,9 +266,11 @@ rendering, so pin the exact version you onboarded against.
 
 `--register` writes the output files and rewrites the registry module, so run
 `make format` and commit before generating — the smoke run reads the committed
-checkout. Faust source identities are registered manually with `format: faust`,
-a checked-in `source_sha256`, and no plugin or state path. They render via
-`render=faust`; the VST3 introspection command does not generate them.
+checkout. Faust source identities are registered manually with a
+`registry://faust/<registered-source-name>` plugin path, checked-in
+`source_sha256`, and no state path. The URI derives `format: faust`; these
+identities render via `render=faust`, and the VST3 introspection command does not
+generate them.
 
 ## Step 4 — Generate a smoke dataset
 

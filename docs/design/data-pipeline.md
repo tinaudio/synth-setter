@@ -1341,13 +1341,14 @@ class DatasetSpec(BaseModel):
 All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) use Pydantic strict mode at the trust boundary. JSON-mode coercions (`list→tuple` for `train_val_test_sizes` / `train_val_test_seeds`, `str→datetime` for `created_at`) are handled by explicit per-field validators on `DatasetSpec`; `extra="forbid"` plus those validators keep the boundary tight without relaxing strict. `frozen=True` makes specs immutable at the type level.
 
 `RendererBackend` and `SynthSpec.format` are the source of truth for renderer
-dispatch. The `dawdreamer` + `faust` tuple accepts no plugin or state path; the
-worker resolves checked-in source by `param_spec_name`, verifies `source_sha256`,
-compiles it, and dispatches renderer-native values by exact compiled address.
-`render.backend_version` independently pins the DawDreamer host. Faust render
-groups recompile per row so DSP and voice
-state cannot cross sample boundaries. External Faust files and URIs are not
-supported. `pyfdn` uses the same `AudioRenderer` and accepted-sample path with
+dispatch. The `dawdreamer` + `faust` tuple accepts a
+`registry://faust/<registered-source-name>` plugin path and no state path. The
+URI must match `param_spec_name`; the worker resolves that checked-in source,
+verifies `source_sha256`, compiles it, and dispatches renderer-native values by
+exact compiled address. `render.backend_version` independently pins the
+DawDreamer host. Faust render groups recompile per row so DSP and voice state
+cannot cross sample boundaries. Existing v2 specs with a blank Faust plugin path
+remain accepted; external files and other URIs are not supported. `pyfdn` uses the same `AudioRenderer` and accepted-sample path with
 fixed zero-valued MIDI compatibility inputs. It samples complete 91-coordinate
 patches and renders native four-second, 44.1 kHz mono impulse responses by
 default. `pyfdn_excitation: chirp` opts into the canonical chirp, whose byte

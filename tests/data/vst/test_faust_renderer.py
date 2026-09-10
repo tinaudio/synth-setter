@@ -118,6 +118,38 @@ def test_factory_renders_real_checked_in_faust_source(
     assert float(np.max(np.abs(audio))) > _MIN_AUDIBLE_PEAK
 
 
+def test_renderer_rejects_registry_reference_for_another_source() -> None:
+    """Direct renderer construction cannot make URI and source selection disagree."""
+    synth = SYNTHS[SynthName("faust_bright_organ")]
+
+    with pytest.raises(ValueError, match="faust_bubble.*faust_bright_organ"):
+        DawDreamerFaustRenderer(
+            plugin_path="registry://faust/faust_bubble",
+            sample_rate=_SAMPLE_RATE,
+            channels=2,
+            signal_duration_seconds=_RENDER_SECONDS,
+            plugin_state_path="",
+            param_spec_name=ParamSpecName("faust_bright_organ"),
+            source_sha256=synth.source_sha256 or "",
+        )
+
+
+def test_factory_accepts_legacy_pathless_faust_v2_identity() -> None:
+    """A persisted v2 identity with a blank source reference remains renderable."""
+    config = _render_config()
+    pathless_synth = config.synth.model_copy(update={"plugin_path": ""})
+
+    renderer = make_audio_renderer(config.model_copy(update={"synth": pathless_synth}))
+    audio = renderer.render(
+        _midpoint_params("faust_bright_organ"),
+        _MIDI_NOTE,
+        _MIDI_VELOCITY,
+        _NOTE_WINDOW,
+    )
+
+    assert float(np.max(np.abs(audio))) > _MIN_AUDIBLE_PEAK
+
+
 def test_factory_rejects_mismatched_faust_backend_version() -> None:
     """DawDreamer provenance is independent from the checked-in source."""
     config = _render_config().model_copy(update={"backend_version": "9.9.9"})

@@ -54,7 +54,12 @@ from synth_setter.renderer_backend import (
     RendererBackend,
     default_flush_blocks,
 )
-from synth_setter.synth_spec import SYNTHS, SynthName, SynthSpec
+from synth_setter.synth_spec import (
+    SYNTHS,
+    SynthName,
+    SynthSpec,
+    validate_faust_registry_reference,
+)
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -474,7 +479,16 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         is_explicit_contract = (
             "render_contract_version" in normalized
             or isinstance(synth, SynthSpec)
-            or (isinstance(synth, dict) and "format" in synth)
+            or (
+                isinstance(synth, dict)
+                and (
+                    "format" in synth
+                    or (
+                        isinstance(synth.get("plugin_path"), str)
+                        and synth["plugin_path"].casefold().startswith("registry:")
+                    )
+                )
+            )
         )
         if not is_explicit_contract:
             normalized["render_contract_version"] = 1
@@ -725,7 +739,12 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
                 raise ValueError(_FAUST_V1_PROVENANCE_ERROR)
         from synth_setter.data.vst.faust_sources import resolve_faust_dsp
 
-        source = resolve_faust_dsp(self.param_spec_name).source
+        source_identity = (
+            self.param_spec_name
+            if not self.plugin_path
+            else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
+        )
+        source = resolve_faust_dsp(source_identity).source
         actual_digest = hashlib.sha256(source.encode()).hexdigest()
         if actual_digest != self.synth.source_sha256:
             raise ValueError("registered Faust source does not match synth.source_sha256")
