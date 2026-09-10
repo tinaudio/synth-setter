@@ -43,6 +43,10 @@ from synth_setter.utils import (
     watch_gradients,
 )
 from synth_setter.utils.callbacks import CheckpointUploader, ValAudioProbe
+from synth_setter.utils.normalization_stats import (
+    DEFAULT_NORMALIZATION_ESTIMATION_SEED,
+    NormalizationStatsCallback,
+)
 from synth_setter.utils.resume import (
     apply_wandb_resume_continuity,
     discover_resume_checkpoint,
@@ -125,6 +129,28 @@ def _checkpoint_prefix_uri(cfg: DictConfig, launch_namespace: str) -> str:
     if not prefix.startswith("r2://") or prefix == "r2://":
         raise ValueError(f"upload_checkpoints_uri needs an r2://bucket/key form; got {uri!r}")
     return f"{prefix}/{launch_namespace}"
+
+
+def _normalization_stats_callback(cfg: DictConfig) -> NormalizationStatsCallback | None:
+    """Build the opt-in calibration callback after strict runtime validation.
+
+    :param cfg: Training config carrying the top-level calibration flag and seed.
+    :returns: Configured callback, or ``None`` when calibration is disabled.
+    :raises ValueError: If the flag is not boolean or its enabled seed is invalid.
+    """
+    enabled = cfg.get("estimate_normalization_stats", False)
+    if not isinstance(enabled, bool):
+        raise ValueError(f"estimate_normalization_stats must be a boolean, got {enabled!r}")
+    if not enabled:
+        return None
+    seed = cfg.get("seed")
+    if seed is None:
+        seed = DEFAULT_NORMALIZATION_ESTIMATION_SEED
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError(
+            f"normalization estimation seed must be a non-negative integer, got {seed!r}"
+        )
+    return NormalizationStatsCallback(cfg.paths.output_dir, seed=seed)
 
 
 def _configure_checkpoint_durability(
@@ -476,6 +502,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     """
     if cfg.get("evaluation_only", False):
         raise ValueError("evaluation-only experiment cannot run through training entrypoint")
+    normalization_callback = _normalization_stats_callback(cfg)
 
     # set seed for random number generators in pytorch, numpy and python.random
     if cfg.get("seed"):
@@ -495,6 +522,8 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     model: LightningModule = hydra.utils.instantiate(cfg.model)
     log.info("Instantiating callbacks...")
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
+    if normalization_callback is not None:
+        callbacks.append(normalization_callback)
     _configure_checkpoint_durability(cfg, callbacks, launch_namespace)
     _configure_val_audio_probe(cfg, callbacks, launch_namespace)
 
