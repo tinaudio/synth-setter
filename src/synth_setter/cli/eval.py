@@ -29,6 +29,7 @@ from synth_setter.evaluation.audio_probe import (
     RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
 )
 from synth_setter.evaluation.compute_audio_metrics import load_aggregated_metrics
+from synth_setter.feature_flags import apply_feature_flags
 from synth_setter.model_cache import synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
@@ -474,6 +475,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         so callers iterating values must handle both.
     """
     seed_everything(cfg.seed, workers=True)
+    apply_feature_flags(cfg)
     checkpoint_path = _localize_eval_checkpoint(cfg.ckpt_path, cfg.get("ckpt_sha256"))
 
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")

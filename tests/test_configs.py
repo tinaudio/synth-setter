@@ -43,6 +43,7 @@ def test_train_config(cfg_train: DictConfig) -> None:
     """
     assert cfg_train
     assert cfg_train.datamodule
+    assert cfg_train.feature_flags == []
     assert cfg_train.model
     assert cfg_train.trainer
 
@@ -60,6 +61,7 @@ def test_eval_config(cfg_eval: DictConfig) -> None:
     """
     assert cfg_eval
     assert cfg_eval.datamodule
+    assert cfg_eval.feature_flags == []
     assert cfg_eval.model
     assert cfg_eval.trainer
 

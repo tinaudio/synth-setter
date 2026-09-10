@@ -1,0 +1,21 @@
+# @package _global_
+
+defaults:
+  - override /datamodule: vst
+  - override /synth: ultramaster_kr106_single_note
+  - override /render: vst
+  - _self_
+
+task_name: ultramaster-kr106-single-note-lance-smoke
+output_format: lance
+train_val_test_sizes: [20, 0, 0]
+mask_degenerate_bins: true
+finalize_inline: true
+
+render:
+  renderer_backend: dawdreamer
+  samples_per_render_batch: 1
+  samples_per_shard: 20
+  max_retries: 20
+  plugin_reload_cadence: render
+  gui_toggle_cadence: never
