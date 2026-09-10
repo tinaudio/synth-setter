@@ -77,6 +77,33 @@ def test_chroma_to_tiv_amplitude_scaled_profile_is_unchanged() -> None:
     torch.testing.assert_close(chroma_to_tiv(chroma), chroma_to_tiv(chroma * 17.0))
 
 
+def test_chroma_to_tiv_equal_c_g_profile_matches_reference_coordinates() -> None:
+    """An equal C/G profile uses total-energy rather than Euclidean normalization."""
+    chroma = torch.zeros(1, 12, 1)
+    chroma[:, 0] = 0.5
+    chroma[:, 7] = 0.5
+
+    tiv = chroma_to_tiv(chroma)
+
+    expected = torch.tensor(
+        [
+            0.200962,
+            0.75,
+            6.0,
+            -3.464102,
+            5.75,
+            5.75,
+            3.75,
+            -6.495191,
+            13.528685,
+            3.625,
+            0.0,
+            0.0,
+        ]
+    ).reshape(1, 12, 1)
+    torch.testing.assert_close(tiv, expected, atol=1e-6, rtol=0)
+
+
 def test_chroma_to_tiv_subnormal_energy_remains_l1_normalized() -> None:
     """Any nonzero finite chroma uses its L1 norm rather than an epsilon floor."""
     chroma = torch.zeros(1, 12, 1)
@@ -93,6 +120,32 @@ def test_chroma_to_tiv_silence_returns_finite_zeros() -> None:
 
     assert torch.isfinite(tiv).all()
     assert torch.count_nonzero(tiv) == 0
+
+
+@pytest.mark.parametrize("backend", ["torch", "essentia"])
+def test_extract_tiv_mixed_audio_stays_within_coordinate_weights(backend: TIVBackend) -> None:
+    """Mixed audio cannot exceed any real or imaginary TIV channel weight.
+
+    :param backend: Device-local STFT or CPU HPCP implementation.
+    """
+    if backend == "essentia":
+        pytest.importorskip("essentia")
+    samples = torch.arange(8192, dtype=torch.float32)
+    audio = (
+        0.5
+        * (
+            torch.sin(2.0 * torch.pi * 261.626 * samples / 44_100)
+            + torch.sin(2.0 * torch.pi * 391.995 * samples / 44_100)
+        )[None, None]
+    )
+
+    controls = extract_tiv_batch(audio, 44_100, backend=backend)
+
+    bounds = torch.tensor([3.0, 3.0, 8.0, 8.0, 11.5, 11.5, 15.0, 15.0, 14.5, 14.5, 7.5, 7.5])[
+        None, :, None
+    ]
+    assert torch.all(controls <= bounds + 1e-6)
+    assert torch.all(controls >= -bounds - 1e-6)
 
 
 @pytest.mark.parametrize(

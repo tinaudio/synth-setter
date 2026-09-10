@@ -37,6 +37,13 @@ _DependencyMetadata = TypedDict(
 
 
 class _NamedPackage(TypedDict):
+    """Lockfile package identity used for membership checks.
+
+    .. attribute :: name
+
+        Distribution name recorded in the lockfile.
+    """
+
     name: str
 
 
@@ -44,6 +51,13 @@ _UvTable = TypedDict("_UvTable", {"dependency-metadata": list[_DependencyMetadat
 
 
 class _ToolTable(TypedDict):
+    """Resolver-specific metadata in the project's tool table.
+
+    .. attribute :: uv
+
+        UV resolver metadata overrides.
+    """
+
     uv: _UvTable
 
 
@@ -63,6 +77,17 @@ _Manifest = TypedDict("_Manifest", {"dependency-metadata": list[_DependencyMetad
 
 
 class _Lock(TypedDict):
+    """Lockfile metadata and package inventory under test.
+
+    .. attribute :: manifest
+
+        Declared dependency metadata overrides.
+
+    .. attribute :: package
+
+        Resolved distribution inventory.
+    """
+
     manifest: _Manifest
     package: list[_NamedPackage]
 
@@ -87,7 +112,10 @@ def test_sa3_requirement_is_in_torch_group_not_project_or_extras(
     """
     assert _SA3_REQUIREMENT in pyproject["dependency-groups"]["torch"]
     assert _SA3_REQUIREMENT not in pyproject["project"]["dependencies"]
-    assert set(pyproject["project"]["optional-dependencies"]) == {"cpu", "cu128"}
+    assert all(
+        _SA3_REQUIREMENT not in requirements
+        for requirements in pyproject["project"]["optional-dependencies"].values()
+    )
 
 
 def test_tinymu_package_is_pinned_in_normal_torch_runtime(

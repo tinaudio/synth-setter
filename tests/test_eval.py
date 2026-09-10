@@ -38,7 +38,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning import Trainer, seed_everything
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, OmegaConf, open_dict
 from omegaconf.errors import InterpolationResolutionError, MissingMandatoryValue
 from pedalboard.io import AudioFile
 
@@ -429,26 +429,31 @@ def test_evaluate_grouped_projection_checkpoint_writes_finite_predictions(
 def _compose_sketch_cfg_eval(
     cfg_train_sketch_lance: DictConfig,
     experiment: str = "surge/flow_sketch_prelim",
+    sketch_profile: str | None = None,
 ) -> DictConfig:
     """Compose the toy pooled-sketch evaluation configuration.
 
     :param cfg_train_sketch_lance: Fixture providing paths and pooled Lance splits.
     :param experiment: Experiment config group exercised by evaluation.
+    :param sketch_profile: Optional sketch config overriding the experiment default.
     :returns: Evaluation config with sketch guidance disabled initially.
     """
     GlobalHydra.instance().clear()
+    overrides = [
+        f"experiment={experiment}",
+        "datamodule=surge_lance",
+        "synth=surge_4",
+        "conditioning=m2l",
+        "trainer=cpu",
+        "callbacks=none",
+    ]
+    if sketch_profile is not None:
+        overrides.append(f"sketch={sketch_profile}")
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
-            overrides=[
-                f"experiment={experiment}",
-                "datamodule=surge_lance",
-                "synth=surge_4",
-                "conditioning=m2l",
-                "trainer=cpu",
-                "callbacks=none",
-            ],
+            overrides=overrides,
         )
     with open_dict(cfg):
         cfg.paths.root_dir = cfg_train_sketch_lance.paths.root_dir
@@ -475,6 +480,48 @@ def _compose_sketch_cfg_eval(
         cfg.trainer.fast_dev_run = True
         cfg.trainer.precision = "32-true"
     return cfg
+
+
+@pytest.mark.parametrize(
+    ("profile", "backend"),
+    [("tiv_online_gpu", "torch"), ("tiv_online_cpu", "essentia")],
+)
+def test_evaluate_tiv_online_checkpoint_extracts_audio_controls(
+    cfg_train_sketch_lance: DictConfig,
+    profile: str,
+    backend: str,
+) -> None:
+    """Train and evaluate both online TIV configs through real Lance audio.
+
+    :param cfg_train_sketch_lance: Tiny real Lance flow-training configuration.
+    :param profile: User-selectable online TIV sketch configuration.
+    :param backend: Audio frontend selected by the sketch configuration.
+    """
+    if backend == "essentia":
+        pytest.importorskip("essentia")
+    sketch_config = OmegaConf.load(
+        Path(__file__).parents[1] / "src/synth_setter/configs/sketch" / f"{profile}.yaml"
+    )
+    cfg_train_sketch_lance.model.sketch_controls = sketch_config.model.sketch_controls
+    HydraConfig().set_config(cfg_train_sketch_lance)
+    _, train_objects = train(cfg_train_sketch_lance)
+    checkpoint_path = Path(cfg_train_sketch_lance.paths.output_dir) / f"{profile}.ckpt"
+    train_objects["trainer"].save_checkpoint(checkpoint_path)
+
+    cfg = _compose_sketch_cfg_eval(cfg_train_sketch_lance, sketch_profile=profile)
+    cfg.ckpt_path = str(checkpoint_path)
+    HydraConfig().set_config(cfg)
+    try:
+        metrics, objects = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(metrics["test/param_mse"])
+    assert cfg.model.sketch_controls.tiv_backend == backend
+    assert objects["datamodule"].sketch_controls.tiv_backend == backend
+    assert "audio" in objects["datamodule"].projection["test"]
+    assert "sketch" not in objects["datamodule"].projection["test"]
+    assert torch.count_nonzero(objects["model"].sketch_tokens.projections["tiv"].weight) > 0
 
 
 def _save_nonzero_sketch_checkpoint(cfg: DictConfig, checkpoint_path: Path) -> None:

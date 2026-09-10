@@ -1855,6 +1855,8 @@ def test_train_fast_dev_run_tiv_online_extracts_audio_controls(
     metric_dict, object_dict = train(cfg_train_sketch_lance)
 
     datamodule = object_dict["datamodule"]
+    model = object_dict["model"]
+    trainer = object_dict["trainer"]
     assert datamodule.sketch_controls.profile == "tiv"
     assert "audio" in datamodule.projection["train"]
     assert "audio" in datamodule.projection["val"]
@@ -1862,8 +1864,19 @@ def test_train_fast_dev_run_tiv_online_extracts_audio_controls(
     assert "sketch" not in datamodule.projection["train"]
     assert "sketch" not in datamodule.projection["val"]
     assert "sketch" not in datamodule.projection["test"]
-    assert object_dict["model"].sketch_tokens.layout.num_controls == 12
+    assert model.sketch_tokens.layout.num_controls == 12
+    assert torch.count_nonzero(model.sketch_tokens.projections["tiv"].weight) > 0
     assert torch.isfinite(metric_dict["train/loss"])
+
+    datamodule.setup("fit")
+    try:
+        batch = next(iter(datamodule.train_dataloader()))
+        transferred = trainer.strategy.batch_to_device(batch)
+    finally:
+        datamodule.teardown("fit")
+    controls = transferred["sketch_ctrl"]
+    assert isinstance(controls, torch.Tensor)
+    assert torch.count_nonzero(controls) > 0
 
 
 def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(
