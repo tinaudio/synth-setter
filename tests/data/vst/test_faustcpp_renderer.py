@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -10,8 +11,8 @@ import pytest
 
 from synth_setter.data.vst.core import extract_backend_version
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
+from synth_setter.data.vst.faustcpp_renderer import FaustCppRenderer
 from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter
-from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
@@ -21,6 +22,12 @@ _HAS_TOOLCHAIN = shutil.which("faust") is not None and shutil.which("g++") is no
 
 
 def _config(identity: str = "faust_bright_organ", channels: int = 2) -> RenderConfig:
+    """Build a valid native renderer config for one Faust identity.
+
+    :param identity: Registered Faust synth identity.
+    :param channels: Expected source output channels.
+    :returns: Validated native render configuration.
+    """
     return RenderConfig(
         synth=SYNTHS[SynthName(identity)],
         renderer_backend="faustcpp",
@@ -40,6 +47,12 @@ def _config(identity: str = "faust_bright_organ", channels: int = 2) -> RenderCo
 
 
 def _midpoint_patch(identity: str) -> dict[str, float]:
+    """Build a complete midpoint patch for one Faust identity.
+
+    :param identity: Registered Faust synth identity.
+    :returns: Native parameter values keyed by canonical address.
+    :raises TypeError: The registered specification contains an unsupported domain.
+    """
     patch: dict[str, float] = {}
     for parameter in resolve_faust_param_spec(ParamSpecName(identity)).synth_params:
         if isinstance(parameter, ContinuousParameter):
@@ -87,15 +100,31 @@ def test_faustcpp_factory_renders_real_checked_in_source(
     assert float(np.max(np.abs(audio))) > 1e-4
 
 
-@pytest.fixture(scope="module")
-def bubble_renderer() -> AudioRenderer:
-    """Compile one renderer shared by malformed-patch cases.
+@pytest.fixture
+def bubble_renderer(monkeypatch: pytest.MonkeyPatch) -> FaustCppRenderer:
+    """Build a native bubble renderer without invoking the compiler.
 
-    :returns: Real native bubble renderer.
+    :param monkeypatch: Stubs toolchain provenance and compilation.
+    :returns: Renderer exercising native request validation.
     """
-    if not _HAS_TOOLCHAIN:
-        pytest.skip("install the Faust CLI and g++")
-    return make_audio_renderer(_config("faust_bubble", channels=2))
+    from synth_setter.data.vst import faustcpp_renderer
+
+    config = _config("faust_bubble", channels=2)
+    monkeypatch.setattr(
+        faustcpp_renderer,
+        "extract_backend_version",
+        lambda _backend: config.backend_version,
+    )
+    compile_method = faustcpp_renderer.FaustCppRenderer._compile
+    monkeypatch.setattr(
+        faustcpp_renderer.FaustCppRenderer,
+        "_compile",
+        lambda self, _source: Path(self._temporary_directory.name) / "renderer",
+    )
+    renderer = make_audio_renderer(config)
+    monkeypatch.setattr(faustcpp_renderer.FaustCppRenderer, "_compile", compile_method)
+    assert isinstance(renderer, FaustCppRenderer)
+    return renderer
 
 
 @pytest.mark.parametrize(
@@ -114,7 +143,7 @@ def bubble_renderer() -> AudioRenderer:
     ],
 )
 def test_faustcpp_render_rejects_malformed_patch(
-    bubble_renderer: AudioRenderer,
+    bubble_renderer: FaustCppRenderer,
     case: str,
     expected_exception: type[Exception],
     match: str,
@@ -142,6 +171,76 @@ def test_faustcpp_render_rejects_malformed_patch(
 
     with pytest.raises(expected_exception, match=match):
         bubble_renderer.render(patch, 60, 100, (0.05, 0.3))
+
+
+def test_faustcpp_render_writes_four_second_native_request_and_reads_audio(
+    bubble_renderer: FaustCppRenderer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A valid patch round-trips through the native executable protocol.
+
+    :param bubble_renderer: Renderer with compilation stubbed.
+    :param monkeypatch: Replaces native execution with deterministic file output.
+    """
+    from synth_setter.data.vst import faustcpp_renderer
+
+    def write_audio(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        output_path = Path(command[2])
+        np.full((2, 176_400), 0.25, dtype=np.float32).tofile(output_path)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(faustcpp_renderer.subprocess, "run", write_audio)
+    audio = bubble_renderer.render(_midpoint_patch("faust_bubble"), 60, 100, (0.1, 0.35))
+
+    assert audio.shape == (2, 176_400)
+    assert np.all(audio == 0.25)
+
+
+def test_faustcpp_render_rejects_incomplete_native_output(
+    bubble_renderer: FaustCppRenderer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A truncated native output fails before entering the dataset.
+
+    :param bubble_renderer: Renderer with compilation stubbed.
+    :param monkeypatch: Replaces native execution with truncated output.
+    """
+    from synth_setter.data.vst import faustcpp_renderer
+
+    def write_audio(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        np.zeros(1, dtype=np.float32).tofile(Path(command[2]))
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(faustcpp_renderer.subprocess, "run", write_audio)
+
+    with pytest.raises(RuntimeError, match="wrote 1 samples; expected 352800"):
+        bubble_renderer.render(_midpoint_patch("faust_bubble"), 60, 100, (0.1, 0.35))
+
+
+def test_faustcpp_compile_invokes_faust_and_cpp_toolchain(
+    bubble_renderer: FaustCppRenderer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compilation resolves Faust headers, generates C++, and links the runner.
+
+    :param bubble_renderer: Renderer providing an isolated compilation directory.
+    :param monkeypatch: Captures native toolchain invocations.
+    """
+    from synth_setter.data.vst import faustcpp_renderer
+
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        stdout = "/tmp/faust-include\n" if command == ["faust", "-includedir"] else ""
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(faustcpp_renderer.subprocess, "run", run)
+    executable = bubble_renderer._compile("process = _;")
+
+    assert executable.name == "renderer"
+    assert [command[0] for command in commands] == ["faust", "faust", "g++"]
+    assert "/tmp/faust-include" in commands[2]
 
 
 @pytest.mark.skipif(not _HAS_TOOLCHAIN, reason="install the Faust CLI and g++")
