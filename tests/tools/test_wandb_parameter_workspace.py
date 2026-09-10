@@ -40,6 +40,12 @@ def test_parameter_workspace_serializes_dynamic_metric_regexes() -> None:
         "^val[/_]per_param_mse_best_swap/.+$",
         "^val/number_group_optimal_assignment_mse/.+$",
         "^val/per_param_mse_spec_quantized/.+$",
+        "^val/categorical_mismatch_rate/.+$",
+        "^val/number_group_optimal_assignment_categorical_mismatch_rate/.+$",
+        "^val/angular_mae_radians/.+$",
+        "^val/axis_angular_error_radians/.+$",
+        "^val/discrete_(mae|mismatch_rate)/.+$",
+        "^val/note_timing_mae_seconds/.+$",
     ]
     assert all(config["useMetricRegex"] is True for config in panel_configs)
     assert spec["runSets"][0]["search"]["query"] == ""
