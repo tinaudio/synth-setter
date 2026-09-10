@@ -121,7 +121,7 @@ def _composed_synth(group: str) -> tuple[str, str]:
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         synth = compose(config_name=f"synth/{group}").synth
-    return synth.plugin_path, synth.synth_version
+    return synth.get("plugin_path", ""), synth.synth_version
 
 
 def test_test_synth_version_matches_the_selected_synth_group() -> None:

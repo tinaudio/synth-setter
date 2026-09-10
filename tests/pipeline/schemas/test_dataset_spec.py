@@ -272,19 +272,159 @@ class TestRenderConfig:
         )
         assert cfg.gui_toggle_cadence == "never"
 
-    def test_faust_backend_accepts_registered_source_identity(self) -> None:
-        """Faust selects checked-in source resolution without plugin or preset paths."""
+    def test_non_faust_format_rejects_unverified_backend_version(self) -> None:
+        """Host provenance cannot be persisted where no runtime verifier exists."""
+        with pytest.raises(ValidationError, match="backend_version is supported only"):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "renderer_backend": "dawdreamer",
+                    "backend_version": "9.9.9",
+                    "gui_toggle_cadence": "never",
+                }
+            )
+
+    def test_faust_format_dispatches_registry_source_through_dawdreamer(self) -> None:
+        """Faust selects a checked-in registry source independently from its host."""
         cfg = RenderConfig(
             **{
                 **_valid_render_kwargs(plugin_path="faust"),
-                "renderer_backend": "dawdreamer_faust",
+                "synth": SYNTHS[SynthName("faust_bright_organ")],
+                "renderer_backend": "dawdreamer",
+                "backend_version": "0.8.3",
                 "gui_toggle_cadence": "never",
             }
         )
 
-        assert cfg.renderer_backend == "dawdreamer_faust"
-        assert cfg.plugin_path == "faust"
+        assert cfg.renderer_backend == "dawdreamer"
+        assert cfg.backend_version == "0.8.3"
+        assert cfg.synth.format == "faust"
+        assert cfg.plugin_path == "registry://faust/faust_bright_organ"
         assert cfg.plugin_state_path == ""
+
+    def test_legacy_faust_backend_rejects_non_faust_registry_identity(self) -> None:
+        """The legacy sentinel cannot promote a registered VST identity."""
+        with pytest.raises(ValidationError, match="legacy Faust identity"):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "synth": {
+                        **SYNTHS[SynthName("surge_xt")].model_dump(exclude={"format"}),
+                        "plugin_path": "faust",
+                    },
+                    "renderer_backend": "dawdreamer_faust",
+                    "gui_toggle_cadence": "never",
+                }
+            )
+
+    def test_faust_format_rejects_blank_backend_version(self) -> None:
+        """Faust requires a concrete rendering-host version."""
+        with pytest.raises(ValidationError, match="non-blank backend_version"):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "synth": SYNTHS[SynthName("faust_bright_organ")],
+                    "renderer_backend": "dawdreamer",
+                    "backend_version": " ",
+                    "gui_toggle_cadence": "never",
+                }
+            )
+
+    @pytest.mark.parametrize("param_spec_name", [None, "faust_unknown"])
+    def test_faust_v1_invalid_source_identity_requires_v2(self, param_spec_name: object) -> None:
+        """Legacy provenance cannot project an invalid source identity.
+
+        :param param_spec_name: Non-string or unknown checked-in source identity.
+        """
+        synth = SYNTHS[SynthName("faust_bright_organ")].model_dump()
+        synth["param_spec_name"] = param_spec_name
+
+        with pytest.raises(ValidationError, match="render_contract_version=2"):
+            RenderConfig.model_validate(
+                {
+                    **_valid_render_kwargs(),
+                    "synth": synth,
+                    "renderer_backend": "dawdreamer",
+                    "backend_version": "0.8.3",
+                    "render_contract_version": 1,
+                    "gui_toggle_cadence": "never",
+                }
+            )
+
+    def test_registry_uri_without_authored_format_is_modern_v2(self) -> None:
+        """A canonical generated identity is not mistaken for historical Faust input."""
+        synth = SYNTHS[SynthName("faust_bright_organ")].model_dump(exclude={"format"})
+        cfg = RenderConfig.model_validate(
+            {
+                "synth": synth,
+                "renderer_backend": "dawdreamer",
+                "backend_version": "0.8.3",
+                "gui_toggle_cadence": "never",
+                "sample_rate": 44100,
+                "channels": 2,
+                "velocity": 100,
+                "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "samples_per_shard": 1,
+            }
+        )
+
+        assert cfg.render_contract_version == 2
+        assert cfg.synth.format == "faust"
+        assert cfg.plugin_path == "registry://faust/faust_bright_organ"
+
+    def test_pathless_faust_v2_round_trip_preserves_historical_digest(self) -> None:
+        """Existing explicit v2 pathless specs retain their serialized identity."""
+        synth = SYNTHS[SynthName("faust_bright_organ")].model_dump()
+        synth["plugin_path"] = ""
+        cfg = RenderConfig.model_validate(
+            {
+                "synth": synth,
+                "renderer_backend": "dawdreamer",
+                "backend_version": "0.8.3",
+                "render_contract_version": 2,
+                "gui_toggle_cadence": "never",
+                "sample_rate": 44100,
+                "channels": 2,
+                "velocity": 100,
+                "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "samples_per_shard": 1,
+            }
+        )
+
+        restored = RenderConfig.model_validate_json(cfg.model_dump_json())
+
+        assert restored.plugin_path == ""
+        assert restored == cfg
+        assert (
+            restored.shard_metadata().render_contract_digest
+            == "301df39954fe95e9a1661a54fe8e03c62afc6ccd5caeffd3574023070ac52aa8"
+        )
+
+    def test_explicit_synth_object_and_dict_use_same_render_contract(self) -> None:
+        """Canonical synth input shapes retain identical provenance in shard identity."""
+        synth = SYNTHS[SynthName("faust_bright_organ")]
+        values: dict[str, Any] = {
+            "renderer_backend": "dawdreamer",
+            "backend_version": "0.8.3",
+            "gui_toggle_cadence": "never",
+            "sample_rate": 44100,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "samples_per_shard": 1,
+        }
+
+        from_object = RenderConfig(synth=synth, **values)
+        from_dict = RenderConfig.model_validate({"synth": synth.model_dump(), **values})
+
+        assert from_object.render_contract_version == from_dict.render_contract_version == 2
+        assert (
+            from_object.shard_metadata().render_contract_digest
+            == from_dict.shard_metadata().render_contract_digest
+        )
 
     @pytest.mark.parametrize(
         ("overrides", "message"),
@@ -323,10 +463,66 @@ class TestRenderConfig:
         with pytest.raises(ValidationError, match=message):
             RenderConfig(**values)
 
-    def test_faust_plugin_sentinel_requires_faust_backend(self) -> None:
-        """The bare Faust sentinel cannot dispatch through a VST backend."""
-        with pytest.raises(ValidationError, match='plugin_path="faust" requires renderer_backend'):
-            RenderConfig(**_valid_render_kwargs(plugin_path="faust"))
+    def test_faust_format_rejects_pedalboard_backend(self) -> None:
+        """A source program cannot be passed to a VST3-only host."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values["synth"] = SYNTHS[SynthName("faust_bright_organ")]
+        values["backend_version"] = "0.8.3"
+        values["gui_toggle_cadence"] = "never"
+
+        with pytest.raises(ValidationError, match="format='faust'.*renderer_backend"):
+            RenderConfig(**values)
+
+    @pytest.mark.parametrize(
+        ("synth_updates", "backend_version"),
+        [
+            ({"synth_version": "2"}, "0.8.3"),
+            ({"source_sha256": "0" * 64}, "0.8.3"),
+            ({}, "0.9.0"),
+        ],
+    )
+    def test_faust_v1_unrepresentable_provenance_requires_v2(
+        self, synth_updates: dict[str, str], backend_version: str
+    ) -> None:
+        """Version 1 rejects Faust provenance absent from its historical projection.
+
+        :param synth_updates: Faust source provenance variation.
+        :param backend_version: DawDreamer host version under test.
+        """
+        synth = SYNTHS[SynthName("faust_bright_organ")].model_dump()
+        values = {
+            **_valid_render_kwargs(plugin_path="faust"),
+            "synth": {**synth, **synth_updates},
+            "renderer_backend": "dawdreamer",
+            "backend_version": backend_version,
+            "render_contract_version": 1,
+            "gui_toggle_cadence": "never",
+        }
+
+        with pytest.raises(ValidationError, match="render_contract_version=2"):
+            RenderConfig(**values)
+
+    def test_legacy_faust_json_round_trip_preserves_historical_digest(self) -> None:
+        """Legacy dispatch survives worker serialization without changing shard identity."""
+        legacy = {
+            **_valid_render_kwargs(plugin_path="faust"),
+            "renderer_backend": "dawdreamer_faust",
+            "plugin_reload_cadence": "render",
+            "gui_toggle_cadence": "never",
+        }
+
+        parsed = RenderConfig.model_validate(legacy)
+        restored = RenderConfig.model_validate_json(parsed.model_dump_json())
+
+        assert restored.renderer_backend == "dawdreamer"
+        assert restored.backend_version == "0.8.3"
+        assert restored.synth.format == "faust"
+        assert restored.plugin_path == ""
+        assert restored.render_contract_version == 1
+        assert (
+            restored.shard_metadata().render_contract_digest
+            == "681472d3f127340d164d6fe2961f916ab292d9f45017378c0251d72ca4bbe52c"
+        )
 
     @pytest.mark.parametrize("cadence", ["once", "render", "always_on"])
     def test_torchsynth_gui_toggle_rejects_editor_cadences(self, cadence: str) -> None:

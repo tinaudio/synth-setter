@@ -44,7 +44,7 @@ from omegaconf import DictConfig, OmegaConf
 from pydantic import ValidationError
 
 from synth_setter.cli.finalize_dataset import finalize_tracked
-from synth_setter.data.vst.core import extract_renderer_version
+from synth_setter.data.vst.core import extract_backend_version, extract_renderer_version
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.evaluation.oracle_probe import (
     OracleProbeProvenance,
@@ -174,6 +174,11 @@ def _run_oracle_eval_subprocess(
             f"predict_file {predict_file} not found; "
             f"ensure the Lance split exists in {dataset_root} before shelling out."
         )
+    backend_version_override = (
+        []
+        if render.backend_version is None
+        else [f"++render.backend_version={render.backend_version}"]
+    )
     argv = [
         sys.executable,
         "-m",
@@ -188,10 +193,14 @@ def _run_oracle_eval_subprocess(
         "render=vst",
         f"synth={render.synth.name}",
         *(
-            f"synth.{field}={value}"
-            for field, value in render.synth.model_dump(exclude={"name"}).items()
+            f"++synth.{field}={value}"
+            for field, value in render.synth.model_dump(
+                exclude={"name"}, exclude_none=True
+            ).items()
         ),
         f"render.renderer_backend={render.renderer_backend}",
+        *backend_version_override,
+        f"++render.render_contract_version={render.render_contract_version}",
         f"render.plugin_reload_cadence={render.plugin_reload_cadence}",
         f"render.gui_toggle_cadence={render.gui_toggle_cadence}",
         f"render.sample_rate={render.sample_rate}",
@@ -303,8 +312,8 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
     into a re-render.
 
     The launcher builds the spec interpreter-only (no pedalboard / X11) trusting
-    ``configs/render/<spec>.yaml``; the worker — which has pedalboard — verifies
-    the plugin and pinned ``synth_version`` agree.
+    ``configs/render/<spec>.yaml``; the worker verifies plugin ``synth_version``
+    or, for Faust, the separately pinned rendering-host version.
 
     The spec is pushed to every logger as hyperparameters and, when a
     ``WandbLogger`` is present in ``loggers``, uploaded as a
@@ -314,15 +323,14 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
     both success and failure.
 
     :param spec: Validated dataset spec; rank/world env partitions ``spec.shards``
-        across worker pods, and ``spec.render.synth.synth_version`` is cross-checked
-        against the loaded plugin.
+        across worker pods, and worker provenance is checked before rendering.
     :param work_dir: Hydra per-run output dir supplied by the caller; created
         if missing. Shards are staged from here and optionally deleted afterward.
     :param loggers: Lightning loggers instantiated by ``instantiate_loggers`` —
         typically a single ``WandbLogger`` whose ``id`` was pinned to
         ``spec.run_id`` by the caller. May be empty (logger group disabled).
-    :raises RuntimeError: If DawDreamer is unavailable on this worker or the
-        plugin version disagrees with ``spec.render.synth.synth_version``.
+    :raises RuntimeError: If DawDreamer is unavailable or pinned plugin/backend
+        provenance disagrees with the worker environment.
     """
     ensure_dawdreamer_runtime(spec.render.renderer_backend)
     status = "success"
@@ -339,19 +347,31 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
             log_wandb_provenance()
         _log_spec_artifact(loggers, spec)
         render = spec.render
-        actual_synth_version = extract_renderer_version(Path(render.plugin_path))
-        if actual_synth_version != render.synth.synth_version:
-            raise RuntimeError(
-                f"Synth version mismatch: spec pins {render.synth.synth_version!r} but "
-                f"plugin at {render.plugin_path} reports {actual_synth_version!r}. "
-                "Rebuild the image against the matching SURGE_GIT_REF, or bump "
-                "synth_version in the synth config that produced this spec."
+        if render.synth.format == "faust":
+            actual_backend_version = extract_backend_version(render.renderer_backend)
+            if actual_backend_version != render.backend_version:
+                raise RuntimeError(
+                    f"Backend version mismatch: spec pins {render.backend_version!r} but "
+                    f"{render.renderer_backend} reports {actual_backend_version!r}."
+                )
+            logger.bind(
+                backend_version=render.backend_version,
+                renderer_backend=render.renderer_backend,
+            ).info("backend_version_ok")
+        else:
+            actual_synth_version = extract_renderer_version(Path(render.plugin_path))
+            if actual_synth_version != render.synth.synth_version:
+                raise RuntimeError(
+                    f"Synth version mismatch: spec pins {render.synth.synth_version!r} but "
+                    f"plugin at {render.plugin_path} reports {actual_synth_version!r}. "
+                    "Rebuild the image against the matching SURGE_GIT_REF, or bump "
+                    "synth_version in the synth config that produced this spec."
+                )
+            logger.info(
+                "synth_version OK: plugin at {} == {}",
+                render.plugin_path,
+                render.synth.synth_version,
             )
-        logger.info(
-            "synth_version OK: plugin at {} == {}",
-            render.plugin_path,
-            render.synth.synth_version,
-        )
 
         work_dir.mkdir(parents=True, exist_ok=True)
 

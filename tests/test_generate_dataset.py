@@ -256,8 +256,10 @@ def test_cfg_dataset_faust_resolves_production_renderer_contract(
     """
     spec = spec_from_cfg(cfg_dataset_faust)
 
-    assert spec.render.renderer_backend == "dawdreamer_faust"
-    assert spec.render.plugin_path == "faust"
+    assert spec.render.renderer_backend == "dawdreamer"
+    assert spec.render.backend_version == "0.8.3"
+    assert spec.render.plugin_path == "registry://faust/faust_bright_organ"
+    assert spec.render.synth.format == "faust"
     assert spec.render.plugin_reload_cadence == "render"
     assert spec.render.gui_toggle_cadence == "never"
     assert spec.num_params == 13
@@ -1124,6 +1126,8 @@ def test_from_hydra_surgepy_experiment_writes_consumable_shard(
     with open_dict(cfg_dataset_dawdreamer):
         cfg_dataset_dawdreamer.output_format = "lance"
         cfg_dataset_dawdreamer.train_val_test_sizes = [1, 0, 0]
+        cfg_dataset_dawdreamer.synth.name = "surge_xt_surgepy"
+        cfg_dataset_dawdreamer.synth.format = "surgepy"
         cfg_dataset_dawdreamer.synth.plugin_path = "surgepy"
         cfg_dataset_dawdreamer.synth.plugin_state_path = "presets/surge-base.fxp"
         cfg_dataset_dawdreamer.render.renderer_backend = "surgepy"
@@ -1177,6 +1181,7 @@ def test_from_hydra_pyfdn_identity_writes_shard_at_spec_width(
         cfg_dataset.train_val_test_sizes = [1, 0, 0]
         cfg_dataset.synth.name = identity
         cfg_dataset.synth.param_spec_name = identity
+        cfg_dataset.synth.format = "pyfdn"
         cfg_dataset.synth.plugin_path = "pyfdn"
         cfg_dataset.synth.plugin_state_path = ""
         cfg_dataset.synth.synth_version = "0.4.2"
@@ -1232,6 +1237,7 @@ def test_from_hydra_pyfdn_diffvox_writes_stereo_82_coordinate_shard(
         cfg_dataset.train_val_test_sizes = [1, 0, 0]
         cfg_dataset.synth.name = identity
         cfg_dataset.synth.param_spec_name = identity
+        cfg_dataset.synth.format = "pyfdn"
         cfg_dataset.synth.plugin_path = "pyfdn"
         cfg_dataset.synth.plugin_state_path = ""
         cfg_dataset.synth.synth_version = "0.4.2"
@@ -1302,6 +1308,7 @@ def test_from_hydra_pyfdn_derived_feedback_writes_widened_shard(
         cfg_dataset.train_val_test_sizes = [1, 0, 0]
         cfg_dataset.synth.name = identity
         cfg_dataset.synth.param_spec_name = identity
+        cfg_dataset.synth.format = "pyfdn"
         cfg_dataset.synth.plugin_path = "pyfdn"
         cfg_dataset.synth.plugin_state_path = ""
         cfg_dataset.synth.synth_version = "0.4.2"

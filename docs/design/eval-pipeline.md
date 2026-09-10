@@ -287,17 +287,17 @@ When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_m
 | **Requires** | Display server (Xvfb on headless Linux, native on macOS) — pedalboard backend only                      |
 
 The render stage loads each predicted parameter tensor, canonicalizes it through the ParamSpec, and uses `make_audio_renderer` for both predicted and target audio. The `params.csv` `pred_effective` column records those clipped and quantized values, including the final note window. Pedalboard and
-DawDreamer VST load a plugin; `torchsynth` renders in-process; and
-`dawdreamer_faust` compiles the checked-in source registered by
+DawDreamer VST load a plugin; `torchsynth` renders in-process; and the
+`dawdreamer` + `format: faust` tuple compiles the checked-in source registered by
 `param_spec_name`, then sets renderer-native values under exact compiled
-addresses. Faust accepts no source path or preset path. The render process
+addresses. Faust accepts no plugin or preset path. The render process
 is isolated and receives the complete `RenderConfig` for every backend.
 
 **Key behaviors:**
 
 - When `plugin_path` is the `torchsynth` sentinel, rendering happens in-process via `TorchSynthRenderer`; no plugin bundle is loaded
 
-- When `plugin_path` is the Faust sentinel, `DawDreamerFaustRenderer` resolves only checked-in source/spec identities, validates the compiled address sequence, and applies a complete native-value patch by exact address
+- When `synth.format` is `faust`, `DawDreamerFaustRenderer` verifies the registered source digest, validates the compiled address sequence, and applies a complete native-value patch by exact address
 
 - `renderscript.sh` wraps `predict_vst_audio.py` with display server management
 

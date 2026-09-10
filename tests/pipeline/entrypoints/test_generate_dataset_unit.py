@@ -1487,6 +1487,38 @@ class TestRun(RenderSeamFixtures):
         patched_subprocess.assert_not_called()
         assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
 
+    def test_faust_backend_version_mismatch_raises_before_rendering(
+        self,
+        patched_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Fail before rendering when the Faust host version disagrees with the spec.
+
+        :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
+        :param tmp_path: Pytest temporary directory used for worker output.
+        """
+        kwargs = _base_spec_kwargs(tmp_path)
+        kwargs["render"] = {
+            **kwargs["render"],  # type: ignore[dict-item]
+            "synth": SYNTHS[SynthName("faust_bright_organ")],
+            "renderer_backend": "dawdreamer",
+            "backend_version": "0.8.3",
+            "gui_toggle_cadence": "never",
+        }
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+        with (
+            patch("synth_setter.cli.generate_dataset.ensure_dawdreamer_runtime"),
+            patch(
+                "synth_setter.cli.generate_dataset.extract_backend_version",
+                return_value="0.9.0",
+            ),
+            pytest.raises(RuntimeError, match="Backend version mismatch"),
+        ):
+            generate(spec, tmp_path, [])
+
+        patched_subprocess.assert_not_called()
+
     def test_run_defaults_to_single_worker_when_skypilot_env_absent(
         self,
         patched_subprocess: MagicMock,
@@ -3509,11 +3541,14 @@ class TestMainDispatchBranches:
         # the structure while synth identity comes from the generation RenderConfig.
         assert "render=vst" in called_argv
         assert "synth=surge_xt" in called_argv
-        assert "synth.param_spec_name=surge_xt" in called_argv
-        assert "synth.plugin_state_path=presets/surge-base.vstpreset" in called_argv
-        assert "synth.plugin_path=plugins/Surge XT.vst3" in called_argv
-        assert f"synth.synth_version={render.synth.synth_version}" in called_argv
+        assert "++synth.param_spec_name=surge_xt" in called_argv
+        assert "++synth.plugin_state_path=presets/surge-base.vstpreset" in called_argv
+        assert "++synth.plugin_path=plugins/Surge XT.vst3" in called_argv
+        assert f"++synth.synth_version={render.synth.synth_version}" in called_argv
+        assert not any("synth.source_sha256=" in argument for argument in called_argv)
         assert f"render.renderer_backend={render.renderer_backend}" in called_argv
+        assert not any("render.backend_version=" in argument for argument in called_argv)
+        assert f"++render.render_contract_version={render.render_contract_version}" in called_argv
         assert f"render.plugin_reload_cadence={render.plugin_reload_cadence}" in called_argv
         assert f"render.gui_toggle_cadence={render.gui_toggle_cadence}" in called_argv
         assert f"render.sample_rate={render.sample_rate}" in called_argv
@@ -3531,6 +3566,74 @@ class TestMainDispatchBranches:
         # Default (test split) carries no prefix override: its keys stay bare
         # ``audio/*`` so existing sweeps/dashboards keep working.
         assert not any(a.startswith("+evaluation.metric_prefix=") for a in called_argv)
+
+    @pytest.mark.parametrize(
+        ("synth_name", "renderer_backend", "backend_version", "contract_version"),
+        [
+            ("faust_bright_organ", "dawdreamer", "0.8.3", 2),
+            ("surge_xt", "pedalboard", None, 2),
+            ("surge_xt", "pedalboard", None, 1),
+        ],
+    )
+    def test_run_oracle_eval_subprocess_argv_composes_real_eval_config(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        spec: DatasetSpec,
+        synth_name: str,
+        renderer_backend: str,
+        backend_version: str | None,
+        contract_version: int,
+    ) -> None:
+        """Production oracle argv composes Faust, VST, and legacy render identities.
+
+        :param monkeypatch: Captures the subprocess boundary after production builds argv.
+        :param tmp_path: Roots the finalized dataset fixture and eval run directory.
+        :param spec: Source of a valid baseline render configuration.
+        :param synth_name: Registry identity transported to the eval process.
+        :param renderer_backend: Renderer backend transported to the eval process.
+        :param backend_version: Optional backend version transported to the eval process.
+        :param contract_version: Render contract version transported to the eval process.
+        """
+        from hydra import compose, initialize_config_module
+
+        import synth_setter.cli.generate_dataset as gd
+
+        streamed_call_mock = MagicMock()
+        monkeypatch.setattr(gd, "_check_call_streamed", streamed_call_mock)
+
+        dataset_root = tmp_path / "data"
+        dataset_root.mkdir()
+        for name in ("train.lance", "val.lance", "stats.npz"):
+            (dataset_root / name).touch()
+        predict_file = dataset_root / "test.lance"
+        _write_lance_split(predict_file, 1)
+        render = spec.render.model_copy(
+            update={
+                "synth": SYNTHS[SynthName(synth_name)],
+                "renderer_backend": renderer_backend,
+                "backend_version": backend_version,
+                "render_contract_version": contract_version,
+            }
+        )
+
+        gd._run_oracle_eval_subprocess(
+            dataset_root,
+            tmp_path / "oracle_eval" / synth_name,
+            "some-run-id",
+            render=render,
+            num_workers=0,
+            predict_file=predict_file,
+        )
+        argv = streamed_call_mock.call_args.args[0]
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            composed = compose(config_name="eval", overrides=argv[3:])
+
+        assert composed.synth.format == render.synth.format
+        assert composed.synth.plugin_path == render.synth.plugin_path
+        assert composed.render.renderer_backend == renderer_backend
+        assert composed.render.get("backend_version") == backend_version
+        assert composed.render.render_contract_version == contract_version
 
     def test_run_oracle_eval_subprocess_metric_prefix_adds_override(
         self,

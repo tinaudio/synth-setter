@@ -41,8 +41,10 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
 
     :param render_config: Backend identity and host lifecycle shared across pipeline stages.
     :returns: Renderer whose native-host lifetime follows the configured reload cadence.
+    :raises AssertionError: A DawDreamer config bypassed format/backend validation.
     """
     backend = render_config.renderer_backend
+    synth_format = render_config.synth.format
     if backend == "pyfdn":
         from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 
@@ -56,37 +58,39 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
             signal_duration_seconds=render_config.signal_duration_seconds,
             plugin_state_path=render_config.plugin_state_path,
         )
-    if backend == "dawdreamer_faust":
-        from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
-
-        ensure_dawdreamer_runtime(backend, renderer_version=render_config.synth.synth_version)
-        return DawDreamerFaustRenderer(
-            plugin_path=render_config.plugin_path,
-            sample_rate=render_config.sample_rate,
-            channels=render_config.channels,
-            signal_duration_seconds=render_config.signal_duration_seconds,
-            plugin_state_path=render_config.plugin_state_path,
-            param_spec_name=render_config.param_spec_name,
-            reload_processor_each_render=render_config.plugin_reload_cadence == "render",
-        )
     if backend == "dawdreamer":
         from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
-        from synth_setter.data.vst.param_map import load_param_map
-        from synth_setter.resources import as_file, param_map
 
-        ensure_dawdreamer_runtime(backend)
-        with as_file(param_map(render_config.param_spec_name)) as path:
-            joint_map = load_param_map(path)
-        return DawDreamerRenderer(
-            plugin_path=render_config.plugin_path,
-            sample_rate=render_config.sample_rate,
-            channels=render_config.channels,
-            signal_duration_seconds=render_config.signal_duration_seconds,
-            plugin_state_path=render_config.plugin_state_path,
-            parameter_map=joint_map,
-            reload_plugin_each_render=render_config.plugin_reload_cadence == "render",
-            flush_blocks=render_config.flush_blocks,
-        )
+        if synth_format == "faust":
+            ensure_dawdreamer_runtime(backend, backend_version=render_config.backend_version)
+            return DawDreamerFaustRenderer(
+                plugin_path=render_config.plugin_path,
+                sample_rate=render_config.sample_rate,
+                channels=render_config.channels,
+                signal_duration_seconds=render_config.signal_duration_seconds,
+                plugin_state_path=render_config.plugin_state_path,
+                param_spec_name=render_config.param_spec_name,
+                source_sha256=render_config.synth.source_sha256 or "",
+                reload_processor_each_render=render_config.plugin_reload_cadence == "render",
+            )
+        if synth_format == "vst3":
+            from synth_setter.data.vst.param_map import load_param_map
+            from synth_setter.resources import as_file, param_map
+
+            ensure_dawdreamer_runtime(backend)
+            with as_file(param_map(render_config.param_spec_name)) as path:
+                joint_map = load_param_map(path)
+            return DawDreamerRenderer(
+                plugin_path=render_config.plugin_path,
+                sample_rate=render_config.sample_rate,
+                channels=render_config.channels,
+                signal_duration_seconds=render_config.signal_duration_seconds,
+                plugin_state_path=render_config.plugin_state_path,
+                parameter_map=joint_map,
+                reload_plugin_each_render=render_config.plugin_reload_cadence == "render",
+                flush_blocks=render_config.flush_blocks,
+            )
+        raise AssertionError(f"unsupported DawDreamer synth format {synth_format!r}")
     if backend == "surgepy":
         from synth_setter.data.vst.param_map import load_param_map
         from synth_setter.data.vst.surgepy_runtime import ensure_surgepy_runtime

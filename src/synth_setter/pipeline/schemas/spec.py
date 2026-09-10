@@ -54,7 +54,12 @@ from synth_setter.renderer_backend import (
     RendererBackend,
     default_flush_blocks,
 )
-from synth_setter.synth_spec import SYNTHS, SynthSpec
+from synth_setter.synth_spec import (
+    SYNTHS,
+    SynthName,
+    SynthSpec,
+    validate_faust_registry_reference,
+)
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -75,6 +80,48 @@ _PYFDN_SYNTH_NAMES = frozenset(
 _PYFDN_PARAM_SPEC_NAMES = frozenset(
     synth.param_spec_name for synth in SYNTHS.values() if synth.plugin_path == PYFDN_PLUGIN_NAME
 )
+
+# The v1 snapshot must not follow upgrades to the current Faust source registry.
+_FAUST_V1_BACKEND_VERSION = "0.8.3"
+_FAUST_V1_PROVENANCE_ERROR = (
+    "render_contract_version=1 can represent only the historical Faust source and "
+    "DawDreamer 0.8.3 provenance; use render_contract_version=2"
+)
+_FAUST_V1_SOURCE_IDENTITIES = {
+    "faust_bright_organ": (
+        "1",
+        "a1bf9f6e45ebbf78dd11fc18603cda048a91a778af1ad79683339b1951813465",
+    ),
+    "faust_bubble": (
+        "1",
+        "731727e725ac0336a897c18df4e8b73f1e75c3d8add40a978efb1d95f88db23c",
+    ),
+    "faust_church_organ": (
+        "1",
+        "c753731f4053210d42757acb179010185e91d37fb56a8b45e093222be688b512",
+    ),
+    "faust_filter_osc": (
+        "1",
+        "6ad65d28d787f08a3fa66eb4de7d4091be8d2267ad1e9edc200618effbbe588c",
+    ),
+}
+
+
+def _historical_faust_v1_provenance(
+    param_spec_name: object,
+) -> tuple[str, str, str, str] | None:
+    """Return the complete provenance representable by the legacy Faust projection.
+
+    :param param_spec_name: Candidate checked-in source identity.
+    :returns: Historical backend and source provenance, or ``None`` for another identity.
+    """
+    if not isinstance(param_spec_name, str):
+        return None
+    source = _FAUST_V1_SOURCE_IDENTITIES.get(param_spec_name)
+    if source is None:
+        return None
+    return ("dawdreamer", _FAUST_V1_BACKEND_VERSION, *source)
+
 
 # Flat-form keys promoted into the nested ``r2`` dict by the back-compat shim.
 # Maps the legacy top-level key → the nested ``R2Location`` field. Anchored
@@ -265,10 +312,16 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     )
     renderer_backend: RendererBackend = Field(
         default="pedalboard",
-        description=(
-            "Audio host used to render each sample; Faust compiles checked-in source "
-            "through DawDreamer and torchsynth renders in-process."
-        ),
+        description="Audio host used to render each sample.",
+    )
+    backend_version: str | None = Field(
+        default=None,
+        description="Pinned host runtime version; required when DawDreamer compiles Faust.",
+    )
+    # CliApp.serialize omits literal defaults; a factory preserves v2 during worker transport.
+    render_contract_version: Literal[1, 2] = Field(
+        default_factory=lambda: 2,
+        description="Canonical digest projection version; 1 preserves persisted legacy specs.",
     )
     pyfdn_excitation: PyFDNExcitation | None = Field(
         default=None,
@@ -411,16 +464,80 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
     @model_validator(mode="before")
     @classmethod
-    def _ignore_removed_renderer_version(cls, data: Any) -> Any:
-        """Discard the removed render-level version without promoting it.
+    def _normalize_legacy_render_contract(cls, data: Any) -> Any:
+        """Promote persisted backend tokens while retaining their digest projection.
 
-        :param data: Raw render input.
-        :returns: A copy without ``renderer_version``, or a non-mapping input unchanged.
+        :param data: Raw render configuration.
+        :returns: Canonical configuration with a historical digest marker when needed.
+        :raises ValueError: A legacy token is malformed or version 1 would omit Faust provenance.
         """
         if not isinstance(data, dict):
             return data
         normalized = data.copy()
         normalized.pop("renderer_version", None)
+        synth = normalized.get("synth")
+        is_explicit_contract = (
+            "render_contract_version" in normalized
+            or isinstance(synth, SynthSpec)
+            or (
+                isinstance(synth, dict)
+                and (
+                    "format" in synth
+                    or (
+                        isinstance(synth.get("plugin_path"), str)
+                        and synth["plugin_path"].casefold().startswith("registry:")
+                    )
+                )
+            )
+        )
+        if not is_explicit_contract:
+            normalized["render_contract_version"] = 1
+        if (
+            normalized.get("render_contract_version") == 1
+            and isinstance(synth, dict)
+            and synth.get("format") == "faust"
+        ):
+            actual_provenance = (
+                normalized.get("renderer_backend"),
+                normalized.get("backend_version"),
+                synth.get("synth_version"),
+                synth.get("source_sha256"),
+            )
+            historical_provenance = _historical_faust_v1_provenance(synth.get("param_spec_name"))
+            if actual_provenance != historical_provenance:
+                raise ValueError(_FAUST_V1_PROVENANCE_ERROR)
+        if normalized.get("renderer_backend") != "dawdreamer_faust":
+            return normalized
+        if (
+            not isinstance(synth, dict)
+            or synth.get("plugin_path") != FAUST_PLUGIN_NAME
+            or "format" in synth
+        ):
+            raise ValueError(
+                'legacy renderer_backend="dawdreamer_faust" requires plugin_path="faust" '
+                "and no explicit synth format"
+            )
+        synth_name = synth.get("name")
+        registered = SYNTHS.get(SynthName(synth_name)) if isinstance(synth_name, str) else None
+        historical_source = (
+            None
+            if registered is None
+            else _FAUST_V1_SOURCE_IDENTITIES.get(registered.param_spec_name)
+        )
+        if registered is None or registered.format != "faust" or historical_source is None:
+            raise ValueError("legacy Faust identity must name a registered Faust source")
+        source_version, source_sha256 = historical_source
+        normalized["renderer_backend"] = "dawdreamer"
+        normalized["backend_version"] = synth.get("synth_version")
+        normalized["render_contract_version"] = 1
+        promoted_synth = synth.copy()
+        promoted_synth.update(
+            format="faust",
+            plugin_path="",
+            synth_version=source_version,
+            source_sha256=source_sha256,
+        )
+        normalized["synth"] = promoted_synth
         return normalized
 
     @classmethod
@@ -598,21 +715,41 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
     @model_validator(mode="after")
     def _validate_faust_backend(self) -> RenderConfig:
-        """Require registry-only Faust source resolution without external resources.
+        """Restrict host provenance to checked-in Faust source rendering.
 
-        :return: ``self`` unchanged for other backends or valid Faust configuration.
-        :raises ValueError: Faust uses a path/state/editor or its sentinel selects another backend.
+        :returns: This config when Faust provenance and lifecycle settings are valid.
+        :raises ValueError: Host provenance is set for another format, the backend version is
+            blank, editor use is enabled, or checked-in source differs from the identity digest.
         """
-        if self.plugin_path == FAUST_PLUGIN_NAME and self.renderer_backend != "dawdreamer_faust":
-            raise ValueError('plugin_path="faust" requires renderer_backend="dawdreamer_faust"')
-        if self.renderer_backend != "dawdreamer_faust":
+        if self.synth.format != "faust":
+            if self.backend_version is not None:
+                raise ValueError("backend_version is supported only for format='faust'")
             return self
-        if self.plugin_path != FAUST_PLUGIN_NAME:
-            raise ValueError('dawdreamer_faust requires plugin_path="faust"')
-        if self.plugin_state_path:
-            raise ValueError("dawdreamer_faust does not accept plugin_state_path")
+        if self.backend_version is None or not self.backend_version.strip():
+            raise ValueError("format='faust' requires a non-blank backend_version")
         if self.gui_toggle_cadence != "never":
-            raise ValueError('dawdreamer_faust requires gui_toggle_cadence="never"')
+            raise ValueError('format="faust" requires gui_toggle_cadence="never"')
+        if self.render_contract_version == 1:
+            actual_provenance = (
+                self.renderer_backend,
+                self.backend_version,
+                self.synth.synth_version,
+                self.synth.source_sha256,
+            )
+            historical_provenance = _historical_faust_v1_provenance(self.param_spec_name)
+            if actual_provenance != historical_provenance:
+                raise ValueError(_FAUST_V1_PROVENANCE_ERROR)
+        from synth_setter.data.vst.faust_sources import resolve_faust_dsp
+
+        source_identity = (
+            self.param_spec_name
+            if not self.plugin_path
+            else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
+        )
+        source = resolve_faust_dsp(source_identity).source
+        actual_digest = hashlib.sha256(source.encode()).hexdigest()
+        if actual_digest != self.synth.source_sha256:
+            raise ValueError("registered Faust source does not match synth.source_sha256")
         return self
 
     @model_validator(mode="after")
@@ -658,6 +795,28 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             raise ValueError(
                 'torchsynth requires gui_toggle_cadence="never": it renders in-process '
                 "and has no plugin editor to toggle"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_format_backend_pair(self) -> RenderConfig:
+        """Reject hosts that cannot consume the selected synth representation.
+
+        :returns: This config when its backend consumes the selected format.
+        :raises ValueError: The backend and synth format are incompatible.
+        """
+        allowed = {
+            "faust": {"dawdreamer"},
+            "pyfdn": {"pyfdn"},
+            "surgepy": {"surgepy"},
+            "torchsynth": {"torchsynth"},
+            "vst3": {"dawdreamer", "pedalboard"},
+        }
+        if self.renderer_backend not in allowed[self.synth.format]:
+            expected = ", ".join(repr(value) for value in sorted(allowed[self.synth.format]))
+            raise ValueError(
+                f"format={self.synth.format!r} requires renderer_backend in {{{expected}}}; "
+                f"got {self.renderer_backend!r}"
             )
         return self
 
@@ -712,6 +871,16 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             exclude={"base_seed", "retain_local_shards", "sample_offset"},
             exclude_none=True,
         )
+        if self.render_contract_version == 1:
+            contract.pop("backend_version", None)
+            contract.pop("render_contract_version")
+            synth = contract["synth"]
+            synth.pop("format")
+            synth.pop("source_sha256", None)
+            if self.synth.format == "faust":
+                contract["renderer_backend"] = "dawdreamer_faust"
+                synth["plugin_path"] = FAUST_PLUGIN_NAME
+                synth["synth_version"] = self.backend_version
         if self.renderer_backend == "pyfdn":
             excitation = self.pyfdn_excitation or "impulse"
             contract["pyfdn_excitation"] = excitation

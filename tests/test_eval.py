@@ -739,8 +739,10 @@ def test_eval_faust_render_group_resolves_production_renderer_contract() -> None
     finally:
         GlobalHydra.instance().clear()
 
-    assert render.renderer_backend == "dawdreamer_faust"
-    assert render.plugin_path == "faust"
+    assert render.renderer_backend == "dawdreamer"
+    assert render.backend_version == "0.8.3"
+    assert render.plugin_path == "registry://faust/faust_bright_organ"
+    assert render.synth.format == "faust"
     assert render.plugin_reload_cadence == "render"
     assert render.gui_toggle_cadence == "never"
     assert render.param_spec_name == "faust_bright_organ"
