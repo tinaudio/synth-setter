@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from hydra import compose, initialize_config_module
 
 from synth_setter.data.vst import faustwasm_artifacts
 from synth_setter.data.vst.faustwasm_artifacts import (
@@ -24,7 +25,22 @@ _ROOT = Path(__file__).parents[3]
 _NODE_MODULE = _ROOT / "node_modules/@grame/faustwasm/package.json"
 
 
+def _configured_backend_version() -> str:
+    """Return the FaustWasm version pinned by the render configuration.
+
+    :returns: Configured backend version.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        return str(compose(config_name="render/faustwasm").render.backend_version)
+
+
 def _set_fake_checkout(monkeypatch: pytest.MonkeyPatch, root: Path) -> Path:
+    """Relocate repository asset discovery beneath ``root``.
+
+    :param monkeypatch: Replaces module-root discovery.
+    :param root: Temporary checkout root.
+    :returns: Expected script path in the relocated checkout.
+    """
     module_path = root / "src/synth_setter/data/vst/faustwasm_artifacts.py"
     monkeypatch.setattr(faustwasm_artifacts, "__file__", str(module_path))
     return root / "scripts/faustwasm/export-artifacts.mjs"
@@ -83,29 +99,6 @@ def test_repository_script_missing_node_executable_reports_path_requirement(
         repository_faustwasm_script("export-artifacts.mjs")
 
 
-@pytest.mark.parametrize("expected_outputs", [0, -1, 1.5, True])
-def test_compile_artifact_invalid_output_count_fails_before_filesystem_write(
-    tmp_path: Path,
-    expected_outputs: object,
-) -> None:
-    """Non-positive and non-integral output counts cannot start compilation.
-
-    :param tmp_path: Absent output directory used to detect premature writes.
-    :param expected_outputs: Invalid channel-count pin under test.
-    """
-    synth = SYNTHS[SynthName("faust_filter_osc")]
-    output = tmp_path / "artifact"
-
-    with pytest.raises(ValueError, match="expected_outputs must be a positive integer"):
-        compile_faustwasm_artifact(
-            synth,
-            output,
-            expected_outputs=expected_outputs,  # type: ignore[arg-type]
-        )
-
-    assert not output.exists()
-
-
 def test_compile_artifact_rejects_non_faust_identity_before_filesystem_write(
     tmp_path: Path,
 ) -> None:
@@ -116,7 +109,11 @@ def test_compile_artifact_rejects_non_faust_identity_before_filesystem_write(
     output = tmp_path / "artifact"
 
     with pytest.raises(ValueError, match="registered Faust source"):
-        compile_faustwasm_artifact(SYNTHS[SynthName("surge_xt")], output)
+        compile_faustwasm_artifact(
+            SYNTHS[SynthName("surge_xt")],
+            output,
+            backend_version=_configured_backend_version(),
+        )
 
     assert not output.exists()
 
@@ -149,7 +146,8 @@ def test_compile_artifact_rejects_manifest_provenance_drift(
     """
     synth = SYNTHS[SynthName("faust_filter_osc")]
     baseline = tmp_path / "baseline"
-    compile_faustwasm_artifact(synth, baseline, expected_outputs=1)
+    backend_version = _configured_backend_version()
+    compile_faustwasm_artifact(synth, baseline, backend_version=backend_version)
     payload = json.loads((baseline / "manifest.json").read_text())
     payload[field] = replacement
 
@@ -163,7 +161,7 @@ def test_compile_artifact_rejects_manifest_provenance_drift(
         compile_faustwasm_artifact(
             synth,
             tmp_path / "candidate",
-            expected_outputs=1,
+            backend_version=backend_version,
         )
 
 
@@ -180,7 +178,7 @@ def test_export_cleanup_failure_does_not_mask_successful_publication(
     """
     manifest = object()
 
-    def _compile(_synth: object, staging: Path) -> object:
+    def _compile(_synth: object, staging: Path, **_kwargs: str) -> object:
         (staging / "manifest.json").write_text("{}")
         return manifest
 
@@ -195,6 +193,7 @@ def test_export_cleanup_failure_does_not_mask_successful_publication(
         result = export_faustwasm_artifact(
             SynthName("faust_filter_osc"),
             tmp_path / "published",
+            backend_version=_configured_backend_version(),
         )
 
     assert result is manifest
@@ -234,6 +233,13 @@ def test_rename_without_replace_darwin_uses_exclusive_rename(
 
     class _Libc:
         def renamex_np(self, source: bytes, destination: bytes, flag: int) -> int:
+            """Record the exclusive rename invocation.
+
+            :param source: Encoded source path.
+            :param destination: Encoded destination path.
+            :param flag: Native rename flag.
+            :returns: Native success status.
+            """
             calls.append((source, destination, flag))
             return 0
 
@@ -265,7 +271,23 @@ def test_rename_without_replace_translates_native_failure(
     :param error_type: Public exception expected from the errno.
     """
     class _Libc:
-        def renameat2(self, *_args: object) -> int:
+        def renameat2(
+            self,
+            old_dir_fd: int,
+            old_path: bytes,
+            new_dir_fd: int,
+            new_path: bytes,
+            flags: int,
+        ) -> int:
+            """Return the injected native failure.
+
+            :param old_dir_fd: Source directory descriptor.
+            :param old_path: Encoded source path.
+            :param new_dir_fd: Destination directory descriptor.
+            :param new_path: Encoded destination path.
+            :param flags: Native rename flags.
+            :returns: Native failure status.
+            """
             ctypes.set_errno(error_number)
             return -1
 
