@@ -65,8 +65,22 @@ namespace {
            request.velocity <= 127 && parameter_count >= 0;
   }
 
+  std::string normalized_address(std::string address) {
+    std::replace(address.begin(), address.end(), '_', ' ');
+    return address;
+  }
+
   bool set_parameter(MapUI & ui, const std::string& address, FAUSTFLOAT value) {
     FAUSTFLOAT* zone = ui.getParamZone(address);
+    if (zone == nullptr) {
+      const std::string normalized_request = normalized_address(address);
+      for (int index = 0; index < ui.getParamsCount(); ++index) {
+        if (normalized_request == normalized_address(ui.getParamAddress(index))) {
+          zone = ui.getParamZone(index);
+          break;
+        }
+      }
+    }
     if (zone == nullptr) {
       std::cerr << "unknown Faust parameter address: " << address << '\n';
       return false;
