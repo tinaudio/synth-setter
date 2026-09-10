@@ -1,6 +1,6 @@
 # Docker Reference
 
-> **Last verified:** 2026-06-12
+> **Last verified:** 2026-09-09
 
 How to build, run, and debug Docker images for the synth-setter training
 pipeline. Intended for developers working locally or in CI environments.
@@ -142,7 +142,7 @@ run with `VIRTUAL_ENV` and `UV_PYTHON_INSTALL_DIR` unset (`env -u`), so its uv
 doesn't write into the root-owned `/opt/uv` tree that `/venv/main` reads (the
 #1923 bug class); the Google Antigravity (`agy`) CLI installed by its upstream
 `install.sh` into `~/.local/bin` (also on PATH), the zellij terminal
-multiplexer (pinned upstream musl binary, SHA256-verified, in `/usr/local/bin`),
+multiplexer (latest upstream musl binary at image build time, verified against its published SHA256, in `/usr/local/bin`),
 a non-root
 `dev` user, chowns the baked uv venv at `/venv/main` to `dev` so
 `uv pip install` and editable installs work without sudo (the `dev`-owned tools

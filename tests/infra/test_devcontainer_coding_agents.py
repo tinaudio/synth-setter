@@ -58,6 +58,31 @@ def test_devcontainer_tools_declares_pinned_infisical_cli(project_root: Path) ->
 
 
 @pytest.mark.infra
+def test_devcontainer_tools_installs_latest_zellij_release(project_root: Path) -> None:
+    """Verify image builds resolve Zellij through GitHub's latest-release URL.
+
+    :param project_root: Root path of the repository under test.
+    """
+    dockerfile = (project_root / "docker" / "ubuntu22_04" / "Dockerfile").read_text()
+
+    assert 'base_url="https://github.com/zellij-org/zellij/releases/latest/download"' in dockerfile
+    assert '"${base_url}/zellij-${zellij_arch}-unknown-linux-musl.tar.gz"' in dockerfile
+    assert "ARG ZELLIJ_VERSION=" not in dockerfile
+
+
+@pytest.mark.infra
+def test_devcontainer_tools_verifies_latest_zellij_release(project_root: Path) -> None:
+    """Verify image builds check Zellij against its published release checksum.
+
+    :param project_root: Root path of the repository under test.
+    """
+    dockerfile = (project_root / "docker" / "ubuntu22_04" / "Dockerfile").read_text()
+
+    assert '"${base_url}/zellij-${zellij_arch}-unknown-linux-musl.sha256sum"' in dockerfile
+    assert 'echo "${zellij_sha}  /usr/local/bin/zellij" | sha256sum -c -' in dockerfile
+
+
+@pytest.mark.infra
 def test_hermes_installer_does_not_inherit_the_root_owned_uv_python_dir(
     project_root: Path,
 ) -> None:
