@@ -289,18 +289,71 @@ def test_pr_review_skills_fetch_base_sha_with_supported_gh_metadata() -> None:
         assert "printf 'base_sha=%s\\n' \"$base_sha\"" in skills[path]
 
 
-@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
-@pytest.mark.parametrize(
-    ("skill_path", "metadata_marker"),
+_PR_METADATA_COMMANDS = (
+    ("agent/skills/_shared/repo-review-full-analysis.md", "Fetch metadata once:"),
     (
-        ("agent/skills/_shared/repo-review-full-analysis.md", "Fetch metadata once:"),
-        (
-            "agent/skills/repo-review-full-no-comments/SKILL.md",
-            "never run the command with the literal `<N>` placeholder:",
-        ),
-        ("agent/skills/repo-review/SKILL.md", "remember it:"),
+        "agent/skills/repo-review-full-no-comments/SKILL.md",
+        "never run the command with the literal `<N>` placeholder:",
     ),
+    ("agent/skills/repo-review/SKILL.md", "remember it:"),
 )
+
+
+def _extract_pr_metadata_command(skill_path: str, metadata_marker: str) -> str:
+    """Extract an executable PR metadata command from a runbook.
+
+    :param skill_path: Runbook containing a PR metadata command.
+    :param metadata_marker: Text immediately preceding the command's Bash fence.
+    :returns: Bash command with block-quote prefixes removed.
+    """
+    skill = (REPO_ROOT / skill_path).read_text()
+    assert metadata_marker in skill, f"missing metadata marker in {skill_path}: {metadata_marker}"
+    metadata_section = skill.split(metadata_marker, maxsplit=1)[1]
+    unquoted_section = "\n".join(line.removeprefix("> ") for line in metadata_section.splitlines())
+    return unquoted_section.split("```bash\n", maxsplit=1)[1].split("\n```", maxsplit=1)[0]
+
+
+def _fake_gh_environment(tmp_path: Path) -> dict[str, str]:
+    """Install a controlled gh executable for metadata command tests.
+
+    :param tmp_path: Temporary directory in which to install the executable.
+    :returns: Process environment preferring the controlled executable.
+    """
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ $1 == repo && $2 == view ]]; then
+  printf '%s\\n' 'tinaudio/synth-setter'
+elif [[ $1 == pr && $2 == view ]]; then
+  if [[ ${FAIL_GH_COMMAND:-} == pr ]]; then
+    exit 66
+  fi
+  if [[ $* != *baseRefName* || $* == *baseRefOid* ]]; then
+    printf '%s\\n' "unsupported PR metadata arguments: $*" >&2
+    exit 65
+  fi
+  printf '%s\\n' '{"headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}'
+elif [[ $1 == api && $2 == repos/tinaudio/synth-setter/pulls/123 ]]; then
+  if [[ ${FAIL_GH_COMMAND:-} == api ]]; then
+    exit 67
+  fi
+  if [[ $* != *"--jq .base.sha"* ]]; then
+    printf '%s\\n' "incorrect base SHA query: $*" >&2
+    exit 68
+  fi
+  printf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+else
+  exit 64
+fi
+"""
+    )
+    fake_gh.chmod(0o755)
+    return os.environ | {"PATH": f"{tmp_path}:{os.environ['PATH']}"}
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+@pytest.mark.parametrize(("skill_path", "metadata_marker"), _PR_METADATA_COMMANDS)
 def test_pr_review_metadata_command_returns_base_sha_with_supported_gh_fields(
     tmp_path: Path,
     skill_path: str,
@@ -312,45 +365,48 @@ def test_pr_review_metadata_command_returns_base_sha_with_supported_gh_fields(
     :param skill_path: Runbook containing a PR metadata command.
     :param metadata_marker: Text immediately preceding the command's Bash fence.
     """
-    skill = (REPO_ROOT / skill_path).read_text()
-    metadata_section = skill.split(metadata_marker, maxsplit=1)[1]
-    unquoted_section = "\n".join(line.removeprefix("> ") for line in metadata_section.splitlines())
-    command = unquoted_section.split("```bash\n", maxsplit=1)[1].split("\n```", maxsplit=1)[0]
-
-    fake_gh = tmp_path / "gh"
-    fake_gh.write_text(
-        """#!/usr/bin/env bash
-set -euo pipefail
-if [[ $1 == repo && $2 == view ]]; then
-  printf '%s\\n' 'tinaudio/synth-setter'
-elif [[ $1 == pr && $2 == view ]]; then
-  if [[ $* != *baseRefName* || $* == *baseRefOid* ]]; then
-    printf '%s\\n' "unsupported PR metadata arguments: $*" >&2
-    exit 65
-  fi
-  printf '%s\\n' '{"headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}'
-elif [[ $1 == api && $2 == repos/tinaudio/synth-setter/pulls/123 ]]; then
-  printf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-else
-  exit 64
-fi
-"""
-    )
-    fake_gh.chmod(0o755)
-    env = os.environ | {"PATH": f"{tmp_path}:{os.environ['PATH']}"}
-
+    command = _extract_pr_metadata_command(skill_path, metadata_marker)
     sh = importlib.import_module("sh")
+
     result = sh.bash(
         "-c",
         command.replace("<N>", "123"),
         _cwd=REPO_ROOT,
-        _env=env,
+        _env=_fake_gh_environment(tmp_path),
     )
 
     assert str(result).splitlines() == [
         '{"headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}',
         "base_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     ]
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+@pytest.mark.parametrize(("failed_command", "expected_status"), (("pr", 66), ("api", 67)))
+def test_pr_review_metadata_command_failure_preserves_status(
+    tmp_path: Path,
+    failed_command: str,
+    expected_status: int,
+) -> None:
+    """Stop the canonical metadata command when either gh lookup fails.
+
+    :param tmp_path: Temporary directory containing the controlled ``gh`` executable.
+    :param failed_command: gh command that must return a failure.
+    :param expected_status: Exit status that Bash must preserve.
+    """
+    command = _extract_pr_metadata_command(*_PR_METADATA_COMMANDS[0])
+    environment = _fake_gh_environment(tmp_path) | {"FAIL_GH_COMMAND": failed_command}
+    sh = importlib.import_module("sh")
+
+    with pytest.raises(sh.ErrorReturnCode) as exc_info:
+        sh.bash(
+            "-c",
+            command.replace("<N>", "123"),
+            _cwd=REPO_ROOT,
+            _env=environment,
+        )
+
+    assert exc_info.value.exit_code == expected_status
 
 
 def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
