@@ -370,7 +370,7 @@ def test_evaluate_pyfdn_derived_feedback_checkpoint_preserves_parameter_metrics(
     assert 0.0 <= metrics[f"test/per_param_abs_cosine_distance/{control}"].item() <= 1.0
     assert 0.0 <= metrics["test/per_param_abs_cosine_distance/delays"].item() <= 1.0
     assert torch.isfinite(metrics[f"test/per_param_mse/{control}"])
-    assert torch.isfinite(metrics[f"test/per_param_mse_best_swap/{control}"])
+    assert torch.isfinite(metrics[f"test_per_param_mse_best_swap/{control}"])
     assert torch.isfinite(metrics[f"test/per_param_mse_number_group_swap/{control}"])
     assert torch.isfinite(metrics[f"test/per_param_mse_spec_quantized/{control}"])
 
