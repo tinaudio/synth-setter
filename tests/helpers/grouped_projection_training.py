@@ -47,11 +47,14 @@ def write_grouped_projection_lance_dataset(dataset_root: Path) -> None:
     (dataset_root / "dataset.complete").touch()
 
 
-def build_grouped_projection_config(tmp_path: Path, *, config_name: str) -> DictConfig:
+def build_grouped_projection_config(
+    tmp_path: Path, *, config_name: str, projection_name: str = "grouped"
+) -> DictConfig:
     """Compose a tiny grouped-projection train or evaluation configuration.
 
     :param tmp_path: Isolated dataset, checkpoint, and log root.
     :param config_name: Hydra entrypoint config, either ``train.yaml`` or ``eval.yaml``.
+    :param projection_name: Shipped projection selector.
     :returns: CPU config using the real grouped model and Lance datamodule.
     :raises ValueError: If ``config_name`` is not a supported entrypoint config.
     """
@@ -70,7 +73,7 @@ def build_grouped_projection_config(tmp_path: Path, *, config_name: str) -> Dict
                 "experiment=surge/flow_simple",
                 "datamodule=surge_lance",
                 "synth=surge_4",
-                "model/projection=grouped",
+                f"model/projection={projection_name}",
                 "trainer=cpu",
             ],
         )
@@ -118,6 +121,7 @@ def build_grouped_projection_config(tmp_path: Path, *, config_name: str) -> Dict
         else:
             cfg.mode = "predict"
             cfg.trainer.enable_progress_bar = False
+            language_initializer = cfg.callbacks.get("parameter_language")
             cfg.callbacks = {
                 "prediction_writer": {
                     "_target_": "synth_setter.utils.callbacks.PredictionWriter",
@@ -125,6 +129,8 @@ def build_grouped_projection_config(tmp_path: Path, *, config_name: str) -> Dict
                     "write_interval": "batch",
                 }
             }
+            if language_initializer is not None:
+                cfg.callbacks["parameter_language"] = language_initializer
             cfg.datamodule.predict_file = str(dataset_root / "test.lance")
             cfg.evaluation.render_vst = False
             cfg.evaluation.compute_metrics = False
