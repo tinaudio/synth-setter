@@ -95,6 +95,26 @@ def test_chroma_to_tiv_silence_returns_finite_zeros() -> None:
     assert torch.count_nonzero(tiv) == 0
 
 
+@pytest.mark.parametrize(
+    ("frequency", "expected"),
+    [(440.0, [0.0, 3.0]), (523.251, [3.0, 0.0]), (659.255, [-1.5, -2.598076])],
+)
+def test_extract_tiv_torch_known_tone_preserves_pitch_class_phase(
+    frequency: float, expected: list[float]
+) -> None:
+    """A4, C5, and E5 retain their C-rooted first-DFT-bin phase despite leakage.
+
+    :param frequency: Equal-tempered tone frequency in Hz.
+    :param expected: First-bin real/imaginary coordinates of an ideal pitch class.
+    """
+    samples = torch.arange(8192, dtype=torch.float32)
+    audio = torch.sin(2.0 * torch.pi * frequency * samples / 44_100)[None, None]
+
+    controls = extract_tiv_batch(audio, 44_100, backend="torch")
+
+    torch.testing.assert_close(controls[0, :2, 3], torch.tensor(expected), atol=0.2, rtol=0)
+
+
 def test_extract_tiv_batch_audio_returns_temporal_float32_controls() -> None:
     """The audio front end emits one 12-channel TIV sequence per waveform."""
     samples = torch.arange(4096, dtype=torch.float32)

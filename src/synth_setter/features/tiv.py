@@ -19,6 +19,7 @@ _CHROMA_N_FFT = 2048
 _CHROMA_HOP_LENGTH = 512
 _MIDI_A4 = 69.0
 _A4_HZ = 440.0
+_HPCP_MAX_FREQUENCY = 8000
 
 
 @jaxtyped(typechecker=beartype)
@@ -103,9 +104,11 @@ def _audio_hpcp(
         magnitudeThreshold=0.001,
         maxPeaks=5,
         minFrequency=20,
-        maxFrequency=8000,
+        maxFrequency=_HPCP_MAX_FREQUENCY,
     )
-    hpcp = standard.HPCP(sampleRate=sample_rate, maxFrequency=8000, normalized="none")
+    hpcp = standard.HPCP(
+        sampleRate=sample_rate, maxFrequency=_HPCP_MAX_FREQUENCY, normalized="none"
+    )
     profiles = [
         np.stack(
             [
