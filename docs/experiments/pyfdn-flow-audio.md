@@ -77,10 +77,10 @@ amplitude follows pyFDN without clipping. The renderer produces complete impulse
 responses, not arbitrary input-audio convolutions. The registered factory uses the
 canonical pyFDN dataset rate; directly supplied builds may use another rate.
 
-Device-only `.to(device)`, `.float()`, and `.double()` are exercised. Avoid
-same-dtype `.to(dtype=torch.float32)` with the pinned FLAMO version: it can corrupt
-complex recursion buffers (tracked in #3380). Compiled and distributed feedback
-retain the existing runtime guards.
+Device-only `.to(device)`, `.float()`, `.double()`, and same-dtype
+`.to(dtype=torch.float32)` are exercised. The adapter rebuilds FLAMO's recursion
+buffers after recursive tensor conversions to contain the pinned dependency defect
+tracked in #3380. Compiled and distributed feedback retain the existing runtime guards.
 
 Importing pinned `torchsynth.util` mutates global `torch.pi` to a float32
 approximation (#3402). This makes subsequent float64 FLAMO construction lose
