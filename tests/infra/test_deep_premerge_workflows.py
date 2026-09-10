@@ -267,6 +267,31 @@ def test_cpu_slow_pr_lane_runs_only_targeted_live_r2_e2e(workflows: WorkflowSet)
     assert _string(e2e_step, "run") == "make test-ci-slow-pr-r2-e2e"
 
 
+def test_cpu_slow_lane_runs_real_faustwasm_browser_e2e(workflows: WorkflowSet) -> None:
+    """Slow CPU validation exports both artifacts and drives the browser player.
+
+    :param workflows: Four parsed workflow documents keyed by filename.
+    """
+    workflow = workflows["cpu-slow.yml"]
+    install = _named_step(workflow, "run_slow_tests", "Install FaustWasm browser dependencies")
+    export = _named_step(workflow, "run_slow_tests", "Export FaustWasm browser test artifacts")
+    browser = _named_step(workflow, "run_slow_tests", "Run FaustWasm browser E2E")
+
+    assert _string(install, "run") == (
+        "npm --prefix scripts/faustwasm/browser ci\n"
+        "npm --prefix scripts/faustwasm/browser exec playwright install --with-deps chromium\n"
+    )
+    assert _string(export, "run") == (
+        'uv run python -m synth_setter.tools.export_faustwasm --synth faust_bright_organ --output "${RUNNER_TEMP}/faust-bright-organ"\n'
+        'uv run python -m synth_setter.tools.export_faustwasm --synth faust_filter_osc --output "${RUNNER_TEMP}/faust-filter-osc"\n'
+    )
+    assert browser["env"] == {
+        "FAUSTWASM_E2E_ARTIFACT": "${{ runner.temp }}/faust-bright-organ",
+        "FAUSTWASM_MONO_E2E_ARTIFACT": "${{ runner.temp }}/faust-filter-osc",
+    }
+    assert _string(browser, "run") == "npm --prefix scripts/faustwasm/browser run test:e2e"
+
+
 def test_cpu_slow_non_pr_lane_preserves_live_r2_target(workflows: WorkflowSet) -> None:
     """Push and dispatch runs retain the live-R2 slow target.
 
