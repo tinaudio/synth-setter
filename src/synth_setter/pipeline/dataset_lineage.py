@@ -13,6 +13,10 @@ from typing import Annotated
 import structlog
 from pydantic import BaseModel, StringConstraints
 
+from synth_setter.param_spec_name import (
+    LEGACY_NOTE_TIMING,
+    NoteTimingParameterization,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.spec_io import join_uri, read_spec_text
@@ -20,6 +24,18 @@ from synth_setter.pipeline.spec_io import join_uri, read_spec_text
 log = structlog.get_logger(__name__)
 
 type _LineageId = Annotated[str, StringConstraints(min_length=1, pattern=r"\S")]
+
+
+class _DatasetTimingSynth(BaseModel, extra="ignore", strict=True):
+    note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING
+
+
+class _DatasetTimingRender(BaseModel, extra="ignore", strict=True):
+    synth: _DatasetTimingSynth
+
+
+class _DatasetTimingIdentity(BaseModel, extra="ignore", strict=True):
+    render: _DatasetTimingRender
 
 
 class _DatasetLineageIdentity(BaseModel, extra="ignore", strict=True):
@@ -69,6 +85,48 @@ def dataset_artifact_ref(
         if remote_ref is not None:
             return remote_ref
     return _artifact_ref_from_root(dataset_root)
+
+
+def dataset_note_timing_parameterization(
+    dataset_root: str | Path | None,
+    download_dataset_root_uri: str | None = None,
+) -> NoteTimingParameterization | None:
+    """Read persisted timing semantics from a finalized dataset spec.
+
+    :param dataset_root: Optional local finalized dataset directory.
+    :param download_dataset_root_uri: Optional remote source, preferred over the local root.
+    :returns: Persisted timing semantics, legacy for untagged specs, or ``None`` if unreadable.
+    """
+    for root in (download_dataset_root_uri, dataset_root):
+        if root is None:
+            continue
+        try:
+            spec_uri = join_uri(str(root), INPUT_SPEC_FILENAME)
+            identity = _DatasetTimingIdentity.model_validate_json(read_spec_text(spec_uri))
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        return identity.render.synth.note_timing_parameterization
+    return None
+
+
+def validate_dataset_note_timing(
+    dataset_root: str | Path | None,
+    download_dataset_root_uri: str | None,
+    configured_timing: NoteTimingParameterization,
+) -> None:
+    """Reject readable dataset metadata that conflicts with run timing semantics.
+
+    :param dataset_root: Optional local finalized dataset directory.
+    :param download_dataset_root_uri: Optional remote source, preferred over the local root.
+    :param configured_timing: Timing coordinates selected by the run.
+    :raises ValueError: Dataset and run timing parameterizations differ.
+    """
+    dataset_timing = dataset_note_timing_parameterization(dataset_root, download_dataset_root_uri)
+    if dataset_timing is not None and dataset_timing != configured_timing:
+        raise ValueError(
+            f"dataset note_timing_parameterization={dataset_timing!r}, "
+            f"run requested {configured_timing!r}"
+        )
 
 
 def describe_unresolved_dataset_root(

@@ -22,7 +22,7 @@ from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME as TORCHSYNTH_P
 from synth_setter.data.vst.param_spec import (
     ContinuousParameter,
     DiscreteLiteralParameter,
-    LegacyEndpointNoteDurationParameter,
+    NoteDurationParameter,
     Parameter,
     ParamSpec,
 )
@@ -368,7 +368,7 @@ def _note_params() -> list[Parameter]:
     """
     return [
         DiscreteLiteralParameter(name="pitch", min=48, max=72),
-        LegacyEndpointNoteDurationParameter(
+        NoteDurationParameter(
             name="note_start_and_end", max_note_duration_seconds=4.0
         ),
     ]

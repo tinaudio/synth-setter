@@ -900,9 +900,11 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
         assert values, f"no {prefix} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
-    assert torch.isfinite(
-        metric_dict["val/number_group_optimal_assignment_mse/adsr_1.attack"]
-    ).all()
+    assignment_metric = "val/number_group_optimal_assignment_mse/adsr_N.attack"
+    assert assignment_metric in metric_dict, sorted(
+        key for key in metric_dict if "assignment" in key
+    )
+    assert torch.isfinite(metric_dict[assignment_metric]).all()
 
     checkpoint = tmp_path / "checkpoints" / "last.ckpt"
     assert checkpoint.is_file()
@@ -1290,17 +1292,15 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
 
 @pytest.mark.slow
 def test_train_fake_mode_onset_duration_sizes_batches_from_registry(tmp_path: Path) -> None:
-    """Fake-mode training consumes the onset-duration parameter-spec identity.
+    """Fake-mode training consumes onset-duration rows under the base spec identity.
 
-    Drives the real ``train(cfg)`` entrypoint with ``datamodule.fake=true`` and the
-    ``surge_simple_onset_duration`` spec: no dataset on disk, so the run exercises the
-    registry-derived fake width end-to-end. The width-agnostic ``surge/fake_oracle``
-    experiment (oracle returns ``batch["params"]``) tolerates the registry-width batches,
-    and the datamodule the entrypoint built carries that registry-derived width.
+    Drives the real ``train(cfg)`` entrypoint with ``datamodule.fake=true``. The
+    width-agnostic ``surge/fake_oracle`` experiment tolerates registry-width batches,
+    and the datamodule and model receive the same persisted timing discriminator.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
     """
-    identity = "surge_simple_onset_duration"
+    identity = "surge_simple"
     expected_width = len(param_specs[identity])
     cfg = build_fake_train_cfg(tmp_path, param_spec_name=identity)
 
@@ -1313,6 +1313,7 @@ def test_train_fake_mode_onset_duration_sizes_batches_from_registry(tmp_path: Pa
     assert_log_per_param_mse_wired(trainer, identity)
 
     datamodule = object_dict["datamodule"]
+    assert datamodule.note_timing_parameterization == "onset_duration"
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     assert batch["params"].shape == (2, expected_width)

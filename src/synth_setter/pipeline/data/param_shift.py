@@ -364,7 +364,10 @@ def load_param_shifter(config: AddEmbeddingsConfig) -> ParamShifter:
     )
     return ParamShifter(
         renderer=make_audio_renderer(render),
-        spec=resolve_param_spec(render.param_spec_name),
+        spec=resolve_param_spec(
+            render.param_spec_name,
+            render.note_timing_parameterization,
+        ),
         velocity=render.velocity,
         seed=config.param_shift_seed,
     )

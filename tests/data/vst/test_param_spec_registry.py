@@ -109,18 +109,22 @@ def test_param_spec_widths_match_known_values() -> None:
     assert param_specs["pyfdn_n8_mono_householder_vector"].encoded_width == 35
 
 
-def test_onset_duration_spec_uses_versioned_timing_without_changing_width() -> None:
-    """Versioned names preserve legacy artifacts while selecting new timing semantics."""
-    legacy = param_specs["surge_4"]
-    onset_duration = param_specs["surge_4_onset_duration"]
+def test_timing_parameterization_selects_semantics_without_aliasing_identity() -> None:
+    """One spec identity resolves new or legacy timing from persisted metadata."""
+    onset_duration = resolve_param_spec(ParamSpecName("surge_4"), "onset_duration")
+    legacy = resolve_param_spec(ParamSpecName("surge_4"), "legacy_endpoints")
 
-    assert isinstance(legacy.note_params[-1], LegacyEndpointNoteDurationParameter)
     assert isinstance(onset_duration.note_params[-1], NoteDurationParameter)
+    assert isinstance(legacy.note_params[-1], LegacyEndpointNoteDurationParameter)
     assert onset_duration.encoded_width == legacy.encoded_width
-    assert onset_duration.encoded_names[-2:] == [
-        "note_start_and_end.onset",
-        "note_start_and_end.duration_fraction",
-    ]
+    assert "surge_4_onset_duration" not in param_specs
+
+
+def test_resolve_param_spec_missing_timing_metadata_defaults_legacy() -> None:
+    """Untagged artifact lookups retain endpoint decoding compatibility."""
+    spec = resolve_param_spec(ParamSpecName("surge_4"))
+
+    assert isinstance(spec.note_params[-1], LegacyEndpointNoteDurationParameter)
 
 
 def test_resolve_param_spec_width_returns_encoded_width() -> None:

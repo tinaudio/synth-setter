@@ -35,7 +35,7 @@ from synth_setter.data.vst.param_spec import (
     require_note_params,
     require_scalar_synth_params,
 )
-from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.shapes import make_spectrogram
 from synth_setter.evaluation.compute_audio_metrics import compute_metrics_on_dir
 from synth_setter.evaluation.predict_vst_audio import params_to_csv
@@ -438,7 +438,12 @@ def _load_model(
             f"checkpoint parameter spec {checkpoint_spec!r} does not match "
             f"render parameter spec {render.param_spec_name!r}"
         )
-    expected_width = len(param_specs[render.param_spec_name])
+    expected_width = len(
+        resolve_param_spec(
+            render.param_spec_name,
+            render.note_timing_parameterization,
+        )
+    )
     if model.hparams["num_params"] != expected_width:
         raise ValueError(
             f"checkpoint output width {model.hparams['num_params']} does not match "
@@ -692,7 +697,10 @@ def main(
         dtype=torch.float32,
     ).to(selected_device)
 
-    spec = param_specs[render.param_spec_name]
+    spec = resolve_param_spec(
+        render.param_spec_name,
+        render.note_timing_parameterization,
+    )
     target_params_path = content_wav.with_suffix(".params.npy")
     target_params = np.load(target_params_path) if target_params_path.is_file() else None
     for content_strength, sketch_strength in grid:

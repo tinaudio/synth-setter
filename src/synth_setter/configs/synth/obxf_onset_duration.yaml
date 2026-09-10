@@ -1,6 +1,0 @@
-# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
-name: "obxf_onset_duration"
-param_spec_name: "obxf_onset_duration"
-plugin_path: "plugins/OB-Xf.vst3"
-plugin_state_path: "presets/obxf-base.vstpreset"
-synth_version: "1.0.3"

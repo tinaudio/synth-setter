@@ -34,9 +34,9 @@ from synth_setter.data.vst.cardinal_param_spec import CARDINAL_PARAM_SPEC
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.obxf_param_spec import OBXF_PARAM_SPEC
 from synth_setter.data.vst.param_spec import (
-    LegacyEndpointNoteDurationParameter,
+    NoteDurationParameter,
     ParamSpec,
-    onset_duration_variant,
+    legacy_endpoint_variant,
 )
 from synth_setter.data.vst.surge_xt_param_spec import (
     SURGE_4_PARAM_SPEC,
@@ -54,9 +54,9 @@ from synth_setter.data.vst.ultramaster_kr106_param_spec import (
     ULTRAMASTER_KR106_SINGLE_NOTE_PARAM_SPEC,
 )
 from synth_setter.param_spec_name import (
-    LEGACY_ENDPOINT_PARAM_SPEC_NAMES,
+    LEGACY_NOTE_TIMING,
+    NoteTimingParameterization,
     ParamSpecName,
-    onset_duration_param_spec_name,
 )
 from synth_setter.synth_spec import SYNTHS
 
@@ -98,17 +98,11 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("ultramaster_kr106_onehot"): ULTRAMASTER_KR106_ONEHOT_PARAM_SPEC,
     ParamSpecName("ultramaster_kr106_single_note"): ULTRAMASTER_KR106_SINGLE_NOTE_PARAM_SPEC,
 }
-_param_specs.update(
-    {
-        onset_duration_param_spec_name(name): onset_duration_variant(spec)
-        for name, spec in tuple(_param_specs.items())
-        if name in LEGACY_ENDPOINT_PARAM_SPEC_NAMES
-        and any(
-            isinstance(parameter, LegacyEndpointNoteDurationParameter)
-            for parameter in spec.note_params
-        )
-    }
-)
+_legacy_param_specs = {
+    name: legacy_endpoint_variant(spec)
+    for name, spec in _param_specs.items()
+    if any(isinstance(parameter, NoteDurationParameter) for parameter in spec.note_params)
+}
 param_specs = cast(Mapping[str, ParamSpec], MappingProxyType(_param_specs))
 
 # Projection of the identity table, not a second source: keeping it derived is what
@@ -118,26 +112,39 @@ plugin_state_paths: Mapping[str, str] = MappingProxyType(
 )
 
 
-def resolve_param_spec(param_spec_name: ParamSpecName) -> ParamSpec:
-    """Resolve a domain-typed name against the runtime-extensible registry.
+def resolve_param_spec(
+    param_spec_name: ParamSpecName,
+    note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING,
+) -> ParamSpec:
+    """Resolve a name and persisted timing discriminator against the registry.
 
     :param param_spec_name: Runtime registry key; dynamically registered names are valid.
-    :returns: The exact registered specification object, without copying it.
+    :param note_timing_parameterization: Timing coordinates stored with the artifact.
+    :returns: The selected specification; timing-free specs are invariant to the discriminator.
     :raises KeyError: If the name is not registered.
     """
     try:
-        return _param_specs[param_spec_name]
+        spec = _param_specs[param_spec_name]
     except KeyError:
         raise KeyError(param_spec_name) from None
+    if note_timing_parameterization == LEGACY_NOTE_TIMING:
+        return _legacy_param_specs.get(param_spec_name, spec)
+    return spec
 
 
-def resolve_param_spec_width(param_spec_name: str) -> int:
-    """Resolve a registry name to its complete encoded vector width.
+def resolve_param_spec_width(
+    param_spec_name: str,
+    note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING,
+) -> int:
+    """Resolve a registry name and timing discriminator to its encoded width.
 
     :param param_spec_name: Runtime registry key.
+    :param note_timing_parameterization: Timing coordinates stored with the artifact.
     :returns: Encoded synth-and-note width of the registered specification.
     """
-    return resolve_param_spec(ParamSpecName(param_spec_name)).encoded_width
+    return resolve_param_spec(
+        ParamSpecName(param_spec_name), note_timing_parameterization
+    ).encoded_width
 
 
 def default_plugin_path() -> str:

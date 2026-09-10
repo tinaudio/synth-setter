@@ -35,6 +35,11 @@ from synth_setter.metrics import (
 from synth_setter.model_cache import retry_external_io
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 from synth_setter.models.components.sketch_tokens import CONTROL_GROUPS, SketchControlTokens
+from synth_setter.param_spec_name import (
+    LEGACY_NOTE_TIMING,
+    NoteTimingParameterization,
+    ParamSpecName,
+)
 
 _BATCH_SHAPE = "batch"
 _BATCH_ANY_SHAPE = "batch ..."
@@ -51,6 +56,7 @@ _LEGACY_ENDPOINT_TIME_WEIGHTING = "uniform"
 _PARAMETERIZATION_KEY = "parameterization"
 _LEGACY_PARAMETERIZATION = "velocity"
 _PARAM_SPEC_IDENTITY_KEY = "param_spec_identity"
+_NOTE_TIMING_PARAMETERIZATION_KEY = "note_timing_parameterization"
 
 EndpointLoss = Literal["mse", "mixed"]
 EndpointTimeWeighting = Literal["uniform", "flowmol3"]
@@ -112,6 +118,22 @@ def _checkpoint_param_spec(checkpoint: Mapping[str, object]) -> object:
     if isinstance(hyperparameters, Mapping):
         return hyperparameters.get("param_spec")
     return None
+
+
+@jaxtyped(typechecker=beartype)
+def _checkpoint_note_timing(checkpoint: Mapping[str, object]) -> object:
+    """Return persisted timing semantics, defaulting untagged checkpoints to legacy.
+
+    :param checkpoint: Lightning checkpoint payload.
+    :returns: Stored timing parameterization or the legacy compatibility default.
+    """
+    stored = checkpoint.get(_NOTE_TIMING_PARAMETERIZATION_KEY)
+    if stored is not None:
+        return stored
+    hyperparameters = checkpoint.get("hyper_parameters")
+    if isinstance(hyperparameters, Mapping):
+        return hyperparameters.get(_NOTE_TIMING_PARAMETERIZATION_KEY, LEGACY_NOTE_TIMING)
+    return LEGACY_NOTE_TIMING
 
 
 if TYPE_CHECKING:
@@ -555,6 +577,16 @@ class VSTFlowMatchingModule(LightningModule):
                     f"checkpoint trained param_spec={stored_param_spec!r}, "
                     f"load override requested {requested_param_spec!r}"
                 )
+            stored_note_timing = _checkpoint_note_timing(checkpoint)
+            requested_note_timing = kwargs.get(
+                _NOTE_TIMING_PARAMETERIZATION_KEY, stored_note_timing
+            )
+            if requested_note_timing != stored_note_timing:
+                raise ValueError(
+                    "checkpoint trained note_timing_parameterization="
+                    f"{stored_note_timing!r}, load override requested "
+                    f"{requested_note_timing!r}"
+                )
             if _ENDPOINT_TIME_WEIGHTING_KEY not in checkpoint:
                 stored_time_weighting = _checkpoint_endpoint_time_weighting(checkpoint)
                 if hparams_file is not None:
@@ -595,6 +627,7 @@ class VSTFlowMatchingModule(LightningModule):
         *,
         num_params: int,
         param_spec: str | None = None,
+        note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING,
         conditioning: Conditioning = "mel",
         sketch_controls: SketchControls = None,
         sketch_dropout_rate: float = 0.1,
@@ -626,6 +659,7 @@ class VSTFlowMatchingModule(LightningModule):
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param num_params: Parameter-vector width the field operates on.
         :param param_spec: Registered parameter spec enabling grouped assignment metrics.
+        :param note_timing_parameterization: Timing coordinates stored with model rows.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
         :param sketch_controls: Optional sketch-control spec enabling concat
             control-token injection into the vector field (#2612).
@@ -729,9 +763,11 @@ class VSTFlowMatchingModule(LightningModule):
         self.test_param_mse_best_swap = BestSwapParamMSE()
         metric_spec = None
         if param_spec is not None:
-            from synth_setter.data.vst import param_specs
+            from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 
-            metric_spec = param_specs[param_spec]
+            metric_spec = resolve_param_spec(
+                ParamSpecName(param_spec), note_timing_parameterization
+            )
             if metric_spec.encoded_width != num_params:
                 raise ValueError(
                     f"ParamSpec {param_spec!r} encoded width {metric_spec.encoded_width} "
@@ -774,6 +810,7 @@ class VSTFlowMatchingModule(LightningModule):
         checkpoint[_ENDPOINT_TIME_WEIGHTING_KEY] = self.hparams.endpoint_time_weighting
         checkpoint[_PARAMETERIZATION_KEY] = self.hparams.parameterization
         checkpoint[_PARAM_SPEC_IDENTITY_KEY] = self.hparams.param_spec
+        checkpoint[_NOTE_TIMING_PARAMETERIZATION_KEY] = self.hparams.note_timing_parameterization
         if not isinstance(self.encoder, PretrainedConditioningEncoder):
             return
         state = checkpoint.get("state_dict")
@@ -801,6 +838,13 @@ class VSTFlowMatchingModule(LightningModule):
             raise ValueError(
                 f"checkpoint trained param_spec={stored_param_spec!r}, "
                 f"module expects {self.hparams.param_spec!r}"
+            )
+        stored_note_timing = _checkpoint_note_timing(checkpoint)
+        if stored_note_timing != self.hparams.note_timing_parameterization:
+            raise ValueError(
+                "checkpoint trained note_timing_parameterization="
+                f"{stored_note_timing!r}, module expects "
+                f"{self.hparams.note_timing_parameterization!r}"
             )
         stored_parameterization = checkpoint.get(_PARAMETERIZATION_KEY, _LEGACY_PARAMETERIZATION)
         if stored_parameterization != self.hparams.parameterization:

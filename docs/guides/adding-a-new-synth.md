@@ -170,14 +170,14 @@ model configs resolve this width from the root `synth` group's
 `param_spec_name`; experiments must not repeat it as a `num_params`, `d_out`,
 or `latent_dim` literal.
 
-Existing endpoint-encoded artifacts retain their original synth names. Select
-an `_onset_duration` synth group (for example,
-`synth=torchsynth_full_onset_duration`) for new datasets and checkpoints. The
-versioned groups have the same width but different coordinate semantics, so
-checkpoints and rows must not be exchanged based on shape alone. Renderers
-continue to receive endpoint seconds; TorchSynth converts those endpoints to
-its keyboard duration after decoding, so note timing remains parameter-loss-only
-rather than part of differentiable audio feedback.
+The persisted `note_timing_parameterization` field distinguishes
+`legacy_endpoints` from `onset_duration` without changing synth or parameter-spec
+identity. Missing metadata means `legacy_endpoints` for old artifacts; newly
+composed synth configs select `onset_duration`. The representations have the same
+width, so checkpoint loading validates this field rather than relying on shape.
+Renderers continue to receive endpoint seconds; TorchSynth converts those
+endpoints to its keyboard duration after decoding, so note timing remains
+parameter-loss-only rather than part of differentiable audio feedback.
 
 See [`surge_xt_param_spec.py`](../../src/synth_setter/data/vst/surge_xt_param_spec.py)
 and [`obxf_param_spec.py`](../../src/synth_setter/data/vst/obxf_param_spec.py)

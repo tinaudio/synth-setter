@@ -955,15 +955,17 @@ def test_from_hydra_onset_duration_real_vst_stages_then_resume_skips(
     with open_dict(cfg_dataset):
         cfg_dataset.output_format = "lance"
         cfg_dataset.train_val_test_sizes = [1, 1, 1]
-        cfg_dataset.synth.name = "surge_simple_onset_duration"
-        cfg_dataset.synth.param_spec_name = "surge_simple_onset_duration"
+        cfg_dataset.synth.name = "surge_simple"
+        cfg_dataset.synth.param_spec_name = "surge_simple"
+        cfg_dataset.synth.note_timing_parameterization = "onset_duration"
         cfg_dataset.synth.plugin_path = str(_REAL_PLUGIN_VST3)
         cfg_dataset.render.samples_per_render_batch = 1
         cfg_dataset.render.samples_per_shard = 1
         cfg_dataset.r2.prefix = "fake-r2/real-vst-lance-run/"
         cfg_dataset.logger = None
     spec = spec_from_cfg(cfg_dataset)
-    assert spec.render.param_spec_name == "surge_simple_onset_duration"
+    assert spec.render.param_spec_name == "surge_simple"
+    assert spec.render.note_timing_parameterization == "onset_duration"
 
     from_hydra(cfg_dataset)
 

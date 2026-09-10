@@ -1,6 +1,0 @@
-# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
-name: "surge_simple_surgepy_onset_duration"
-param_spec_name: "surge_simple_onset_duration"
-plugin_path: "surgepy"
-plugin_state_path: "presets/surge-simple.fxp"
-synth_version: "1.3.master.f7b97c68"

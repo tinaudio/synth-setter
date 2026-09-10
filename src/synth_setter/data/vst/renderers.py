@@ -708,9 +708,13 @@ class TorchSynthRenderer(AudioRenderer):
         unknown = sorted(params.keys() - DEFAULT_NORMALIZED_PATCH.keys())
         if unknown:
             raise KeyError(f"unknown torchsynth parameter key(s): {', '.join(unknown)}")
+        start, end = note_start_and_end
+        if end - start < 0.001:
+            end = min(4.0, start + 0.001)
+            start = end - 0.001
         row = TORCHSYNTH_FULL_PARAM_SPEC.encode(
             {**DEFAULT_NORMALIZED_PATCH, **params},
-            {"pitch": midi_note, "note_start_and_end": note_start_and_end},
+            {"pitch": midi_note, "note_start_and_end": (start, end)},
         )
         samples = self._signal_length()
         audio = render_torchsynth(

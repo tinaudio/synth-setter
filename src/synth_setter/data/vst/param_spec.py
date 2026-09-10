@@ -1002,27 +1002,27 @@ class ParamSpec:
         return names
 
 
-def onset_duration_variant(spec: ParamSpec) -> ParamSpec:
-    """Return a copied spec whose legacy note window uses onset-duration encoding.
+def legacy_endpoint_variant(spec: ParamSpec) -> ParamSpec:
+    """Return a copied spec whose onset-duration note window uses legacy endpoints.
 
-    :param spec: Legacy specification containing exactly one endpoint timing parameter.
+    :param spec: Current specification containing exactly one onset-duration parameter.
     :returns: Independent specification with identical native values and encoded width.
-    :raises ValueError: The spec does not contain exactly one legacy timing parameter.
+    :raises ValueError: The spec does not contain exactly one onset-duration parameter.
     """
     timing_parameters = [
         parameter
         for parameter in spec.note_params
-        if isinstance(parameter, LegacyEndpointNoteDurationParameter)
+        if isinstance(parameter, NoteDurationParameter)
     ]
     if len(timing_parameters) != 1:
-        raise ValueError("expected exactly one legacy note timing parameter")
-    legacy_timing = timing_parameters[0]
+        raise ValueError("expected exactly one onset-duration timing parameter")
+    timing = timing_parameters[0]
     note_params = [
-        NoteDurationParameter(
+        LegacyEndpointNoteDurationParameter(
             name=parameter.name,
             max_note_duration_seconds=parameter.max_note_duration_seconds,
         )
-        if parameter is legacy_timing
+        if parameter is timing
         else deepcopy(parameter)
         for parameter in spec.note_params
     ]

@@ -2,3 +2,4 @@
 log_per_param_mse:
   _target_: synth_setter.utils.callbacks.LogPerParamMSE
   param_spec: ${synth.param_spec_name}
+  note_timing_parameterization: ${synth.note_timing_parameterization}

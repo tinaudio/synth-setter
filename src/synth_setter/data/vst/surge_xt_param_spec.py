@@ -2,7 +2,7 @@ from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
     DiscreteLiteralParameter,
-    LegacyEndpointNoteDurationParameter,
+    NoteDurationParameter,
     ParamSpec,
 )
 
@@ -922,7 +922,7 @@ SURGE_XT_PARAM_SPEC = ParamSpec(
             min=48,
             max=72,
         ),
-        LegacyEndpointNoteDurationParameter(
+        NoteDurationParameter(
             name="note_start_and_end", max_note_duration_seconds=4.0
         ),
     ],
@@ -1054,7 +1054,7 @@ SURGE_SIMPLE_PARAM_SPEC = ParamSpec(
             min=48,
             max=72,
         ),
-        LegacyEndpointNoteDurationParameter(
+        NoteDurationParameter(
             name="note_start_and_end", max_note_duration_seconds=4.0
         ),
     ],
@@ -1079,7 +1079,7 @@ SURGE_4_PARAM_SPEC = ParamSpec(
             min=48,
             max=72,
         ),
-        LegacyEndpointNoteDurationParameter(
+        NoteDurationParameter(
             name="note_start_and_end", max_note_duration_seconds=4.0
         ),
     ],

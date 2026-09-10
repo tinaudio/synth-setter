@@ -8,7 +8,7 @@ from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
     DiscreteLiteralParameter,
-    LegacyEndpointNoteDurationParameter,
+    NoteDurationParameter,
     ParamSpec,
 )
 
@@ -272,7 +272,7 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
     ],
     [
         DiscreteLiteralParameter(name="pitch", min=48, max=72),
-        LegacyEndpointNoteDurationParameter(
+        NoteDurationParameter(
             name="note_start_and_end", max_note_duration_seconds=4.0
         ),
     ],

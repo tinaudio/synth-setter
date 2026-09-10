@@ -20,11 +20,11 @@ from typing import TYPE_CHECKING, Literal, NewType
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from synth_setter.param_spec_name import (
-    LEGACY_ENDPOINT_PARAM_SPEC_NAMES,
+    CURRENT_NOTE_TIMING,
+    LEGACY_NOTE_TIMING,
+    NoteTimingParameterization,
     ParamSpecName,
     ValidatedParamSpecName,
-    legacy_endpoint_param_spec_name,
-    onset_duration_param_spec_name,
 )
 from synth_setter.renderer_backend import FAUST_REGISTRY_PREFIX, TORCHSYNTH_PLUGIN_NAME
 
@@ -61,8 +61,7 @@ def validate_faust_registry_reference(reference: str, param_spec_name: str) -> P
         )
     if identity not in _FAUST_SOURCE_SHA256:
         raise ValueError(f"Faust source {identity!r} is not registered")
-    source_param_spec_name = legacy_endpoint_param_spec_name(ParamSpecName(param_spec_name))
-    if identity != source_param_spec_name:
+    if identity != param_spec_name:
         raise ValueError(
             f"Faust registry reference selects {identity!r} but "
             f"param_spec_name is {param_spec_name!r}"
@@ -104,6 +103,10 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 
         Key into the ``ParamSpec`` registry; several synths may share one.
 
+    .. attribute :: note_timing_parameterization
+
+        Timing coordinates used by newly composed datasets and checkpoints.
+
     .. attribute :: plugin_path
 
         VST3 bundle path, in-process backend sentinel, or registered Faust source URI.
@@ -126,6 +129,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 
     name: SynthName
     param_spec_name: ValidatedParamSpecName
+    note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING
     format: SynthFormat = "vst3"
     plugin_path: str
     plugin_state_path: str
@@ -191,8 +195,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
             validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
         if self.plugin_state_path:
             raise ValueError("format='faust' does not accept plugin_state_path")
-        source_param_spec_name = legacy_endpoint_param_spec_name(self.param_spec_name)
-        expected = _FAUST_SOURCE_SHA256.get(source_param_spec_name)
+        expected = _FAUST_SOURCE_SHA256.get(self.param_spec_name)
         if expected is None or self.source_sha256 != expected:
             raise ValueError(
                 f"format='faust' requires the registered source_sha256 for "
@@ -337,37 +340,19 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "2.5.13",
     ),
 }
-_synth_rows.update(
-    {
-        f"{name}_onset_duration": (
-            onset_duration_param_spec_name(ParamSpecName(param_spec_name)),
-            plugin_path,
-            preset,
-            synth_version,
-        )
-        for name, (param_spec_name, plugin_path, preset, synth_version) in tuple(
-            _synth_rows.items()
-        )
-        if ParamSpecName(param_spec_name) in LEGACY_ENDPOINT_PARAM_SPEC_NAMES
-    }
-)
-
 SYNTHS: Mapping[SynthName, SynthSpec] = MappingProxyType(
     {
         SynthName(name): SynthSpec(
             name=SynthName(name),
             param_spec_name=ParamSpecName(param_spec_name),
+            note_timing_parameterization=CURRENT_NOTE_TIMING,
             format=(
-                "faust"
-                if legacy_endpoint_param_spec_name(ParamSpecName(name)) in _FAUST_SOURCE_SHA256
-                else _legacy_synth_format(plugin_path)
+                "faust" if name in _FAUST_SOURCE_SHA256 else _legacy_synth_format(plugin_path)
             ),
             plugin_path=plugin_path,
             plugin_state_path=preset,
             synth_version=synth_version,
-            source_sha256=_FAUST_SOURCE_SHA256.get(
-                legacy_endpoint_param_spec_name(ParamSpecName(name))
-            ),
+            source_sha256=_FAUST_SOURCE_SHA256.get(name),
         )
         for name, (param_spec_name, plugin_path, preset, synth_version) in _synth_rows.items()
     }

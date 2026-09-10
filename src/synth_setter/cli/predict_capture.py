@@ -37,9 +37,10 @@ from synth_setter.data.vst.param_spec import (
     decode_model_output,
     require_scalar_synth_params,
 )
-from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.param_spec_name import LEGACY_NOTE_TIMING, ParamSpecName
 from synth_setter.resources import as_file, param_map
 
 # SET ME: deployment checkpoint — use an absolute path (this placeholder is
@@ -360,8 +361,6 @@ def _run(
     else:
         with as_file(param_map(param_spec_name)) as packaged:
             format_map = load_param_map(packaged).clap_projection()
-    spec = param_specs[param_spec_name]
-
     if model_class is None:
         model_class = detect_model_class(checkpoint)
         _say(logger, f"detected model class {model_class} from the checkpoint")
@@ -371,6 +370,8 @@ def _run(
     model = _MODEL_CLASSES[model_class].load_from_checkpoint(
         checkpoint, map_location=device, weights_only=False
     )
+    note_timing = model.hparams.get("note_timing_parameterization", LEGACY_NOTE_TIMING)
+    spec = resolve_param_spec(ParamSpecName(param_spec_name), note_timing)
     # map_location only remaps storages; move the module so model.device (and
     # the batch _predict_raw_params sends) actually follow --device.
     model.to(device)

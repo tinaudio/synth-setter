@@ -168,7 +168,10 @@ def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorte
     :param monkeypatch: Renderer-boundary replacement fixture.
     """
     render_config = clap_render._load_settings().render
-    spec = clap_render.param_specs[render_config.param_spec_name]
+    spec = clap_render.resolve_param_spec(
+        render_config.param_spec_name,
+        render_config.note_timing_parameterization,
+    )
     synth_params, _ = spec.sample(np.random.default_rng(0))
     encoded = spec.encode(
         synth_params,

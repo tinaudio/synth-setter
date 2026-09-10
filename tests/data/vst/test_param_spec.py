@@ -20,7 +20,7 @@ from synth_setter.data.vst.param_spec import (
     NoteDurationParameter,
     ParamSpec,
     decode_model_output,
-    onset_duration_variant,
+    legacy_endpoint_variant,
     require_note_params,
     require_scalar_synth_params,
 )
@@ -1007,14 +1007,14 @@ def test_note_duration_samples_always_satisfy_renderer_window() -> None:
     assert np.all(samples[:, 1] - samples[:, 0] >= 0.001)
 
 
-def test_onset_duration_variant_rejects_missing_or_ambiguous_timing() -> None:
-    """A compatibility variant requires one unambiguous legacy timing field."""
-    timing = LegacyEndpointNoteDurationParameter("window", 4.0)
+def test_legacy_endpoint_variant_rejects_missing_or_ambiguous_timing() -> None:
+    """A compatibility variant requires one unambiguous current timing field."""
+    timing = NoteDurationParameter("window", 4.0)
 
     with pytest.raises(ValueError, match="exactly one"):
-        onset_duration_variant(ParamSpec([], []))
+        legacy_endpoint_variant(ParamSpec([], []))
     with pytest.raises(ValueError, match="exactly one"):
-        onset_duration_variant(ParamSpec([], [timing, timing]))
+        legacy_endpoint_variant(ParamSpec([], [timing, timing]))
 
 
 def test_note_duration_final_onset_encodes_canonical_duration_fraction() -> None:

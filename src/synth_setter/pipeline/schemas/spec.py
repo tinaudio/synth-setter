@@ -31,7 +31,11 @@ from pydantic import (
 )
 
 import synth_setter.renderer_backend as renderer_backend_contract
-from synth_setter.param_spec_name import ValidatedParamSpecName
+from synth_setter.param_spec_name import (
+    LEGACY_NOTE_TIMING,
+    NoteTimingParameterization,
+    ValidatedParamSpecName,
+)
 from synth_setter.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
@@ -481,6 +485,10 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         normalized = data.copy()
         normalized.pop("renderer_version", None)
         synth = normalized.get("synth")
+        if isinstance(synth, dict) and "note_timing_parameterization" not in synth:
+            synth = synth.copy()
+            synth["note_timing_parameterization"] = LEGACY_NOTE_TIMING
+            normalized["synth"] = synth
         is_explicit_contract = (
             "render_contract_version" in normalized
             or isinstance(synth, SynthSpec)
@@ -583,6 +591,14 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         :returns: The spec name this render's synth identity points at.
         """
         return self.synth.param_spec_name
+
+    @property
+    def note_timing_parameterization(self) -> NoteTimingParameterization:
+        """Return the timing coordinates persisted with this render contract.
+
+        :returns: Legacy endpoint or onset-duration parameterization.
+        """
+        return self.synth.note_timing_parameterization
 
     @property
     def plugin_path(self) -> str:
@@ -902,6 +918,8 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             exclude={"base_seed", "retain_local_shards", "sample_offset"},
             exclude_none=True,
         )
+        if self.note_timing_parameterization == LEGACY_NOTE_TIMING:
+            contract["synth"].pop("note_timing_parameterization")
         if self.render_contract_version == 1:
             contract.pop("backend_version", None)
             contract.pop("render_contract_version")
@@ -1534,4 +1552,7 @@ class DatasetSpec(BaseModel):
         """
         from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 
-        return resolve_param_spec(self.render.param_spec_name).encoded_width
+        return resolve_param_spec(
+            self.render.param_spec_name,
+            self.render.note_timing_parameterization,
+        ).encoded_width

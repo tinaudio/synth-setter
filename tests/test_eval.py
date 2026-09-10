@@ -2575,7 +2575,7 @@ def test_evaluate_validate_mode_onset_duration_runs_oracle(
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
     :param fake_surge_smoke_datasets: Natively-generated Lance smoke dataset.
     """
-    identity = "surge_4_onset_duration"
+    identity = "surge_4"
     cfg = _compose_fake_oracle_eval_cfg(
         tmp_path,
         fake_surge_smoke_datasets,
@@ -2591,6 +2591,7 @@ def test_evaluate_validate_mode_onset_duration_runs_oracle(
         GlobalHydra.instance().clear()
 
     assert_log_per_param_mse_wired(object_dict["trainer"], identity)
+    assert object_dict["datamodule"].note_timing_parameterization == "onset_duration"
     assert object_dict["datamodule"].val_num_workers == 0
 
     param_mse = metric_dict["val/param_mse"]

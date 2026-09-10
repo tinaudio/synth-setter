@@ -15,7 +15,7 @@ from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
     DiscreteLiteralParameter,
-    LegacyEndpointNoteDurationParameter,
+    NoteDurationParameter,
     Parameter,
     ParamSpec,
 )
@@ -38,7 +38,7 @@ def _note_params() -> list[Parameter]:
             min=_FAUST_MIDI_PITCH_MIN,
             max=_FAUST_MIDI_PITCH_MAX,
         ),
-        LegacyEndpointNoteDurationParameter(
+        NoteDurationParameter(
             name="note_start_and_end",
             max_note_duration_seconds=FAUST_NOTE_DURATION_SECONDS,
         ),

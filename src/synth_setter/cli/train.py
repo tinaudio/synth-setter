@@ -23,6 +23,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
     dataset_artifact_ref,
     describe_unresolved_dataset_root,
+    validate_dataset_note_timing,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_backend import missing_render_artifacts
@@ -520,6 +521,11 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if cfg.get("evaluation_only", False):
         raise ValueError("evaluation-only experiment cannot run through training entrypoint")
     normalization_callback = _normalization_stats_callback(cfg)
+    validate_dataset_note_timing(
+        cfg.datamodule.get("dataset_root"),
+        cfg.datamodule.get("download_dataset_root_uri"),
+        cfg.synth.note_timing_parameterization,
+    )
 
     # set seed for random number generators in pytorch, numpy and python.random
     if cfg.get("seed"):
