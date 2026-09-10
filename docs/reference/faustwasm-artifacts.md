@@ -39,7 +39,7 @@ Faust identity resolves the same spec object, so a pyFDN row decodes to identica
 both backends. Array-valued fields expand to one compiled slider per element, named by the spec's
 native coordinate labels (`delays.0` … `delays.7`, `input_matrix.3.0`, `output_matrix.0.7`,
 `direct_matrix.0.0`); the spec-derived `feedback_matrix` is compiled into the source as the fixed
-Householder reflection of the all-ones vector and must match when supplied. The decay shelves are
+Householder reflection of the all-ones vector, so a patch must carry it and it must match. The decay shelves are
 designed inside the DSP from `post_delay.rt_dc_seconds` and `post_delay.rt_nyquist_seconds` with
 pyFDN's 6 kHz crossover. Only FaustWasm flattens these fields; selecting `render=faust` or the
 Faust C++ backend with this identity fails validation. The impulse is generated in-DSP at the first

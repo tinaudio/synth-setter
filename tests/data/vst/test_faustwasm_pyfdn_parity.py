@@ -15,11 +15,13 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     householder_feedback_matrix,
 )
+from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.faustwasm_renderer import FaustWasmRenderer
 from synth_setter.data.vst.faustwasm_contract import (
     faustwasm_parameter_contract,
     flatten_canonical_patch,
 )
+from synth_setter.data.vst.param_spec import require_note_params
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
@@ -60,9 +62,28 @@ def _faustwasm_config() -> RenderConfig:
 
 
 def test_fdn_synth_shares_the_pyfdn_householder_param_spec() -> None:
-    """The Faust identity decodes rows with the pyFDN spec object, not a copy."""
-    assert resolve_param_spec(_FDN) is PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
+    """The Faust identity decodes rows exactly as pyFDN does, from its own spec instance."""
+    faust_spec = resolve_param_spec(_FDN)
+    row = np.linspace(0.05, 0.95, faust_spec.encoded_width)
+
+    faust_params, faust_notes = faust_spec.decode(row)
+    pyfdn_params, pyfdn_notes = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.decode(row)
+
+    assert faust_spec is not PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
+    assert faust_spec.encoded_width == 27
+    assert faust_notes == pyfdn_notes
+    assert faust_params.keys() == pyfdn_params.keys()
+    for name in faust_params:
+        np.testing.assert_array_equal(faust_params[name], pyfdn_params[name])
     assert SYNTHS[SynthName(_FDN)].format == "faust"
+
+
+def test_fdn_synth_resolves_a_fresh_spec_per_call() -> None:
+    """Mutating one resolved spec cannot leak into the next resolution."""
+    changed = resolve_faust_param_spec(_FDN)
+    changed.synth_params[0].name = "changed"
+
+    assert resolve_faust_param_spec(_FDN).synth_params[0].name == "delays"
 
 
 def test_fdn_identity_rejects_hosts_that_cannot_flatten_array_fields() -> None:
@@ -155,6 +176,26 @@ def test_faustwasm_fdn_matches_pyfdn_impulse_response(
     assert audio.shape == reference.shape == (1, _RENDER_SAMPLES)
     assert float(np.max(np.abs(reference))) > 0.1
     np.testing.assert_allclose(audio, reference, rtol=0.0, atol=_PARITY_ATOL)
+
+
+@pytest.mark.slow
+def test_faustwasm_fdn_renders_the_pyfdn_note_stub_window(
+    faustwasm_fdn_renderer: FaustWasmRenderer,
+) -> None:
+    """The zero-length note window pyFDN rows carry does not gate a mono impulse render.
+
+    :param faustwasm_fdn_renderer: Module-scoped compiled FaustWasm renderer.
+    """
+    synth_params, note_params = resolve_param_spec(_FDN).sample(np.random.default_rng(7))
+    notes = require_note_params(note_params)
+
+    audio = faustwasm_fdn_renderer.render(
+        synth_params, notes["pitch"], 0, notes["note_start_and_end"]
+    )
+
+    assert notes["note_start_and_end"] == (0.0, 0.0)
+    assert audio.shape == (1, _RENDER_SAMPLES)
+    assert float(np.max(np.abs(audio))) > 0.1
 
 
 @pytest.mark.slow

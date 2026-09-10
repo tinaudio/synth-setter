@@ -11,7 +11,7 @@ Usage::
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 
-from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
+from synth_setter.data.pyfdn_param_spec import build_pyfdn_n8_mono_householder_param_spec
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
@@ -169,11 +169,12 @@ def _filter_osc_param_spec() -> ParamSpec:
 
 
 def _fdn_householder_param_spec() -> ParamSpec:
-    """Return the pyFDN householder specification the Faust FDN renders verbatim.
+    """Build the pyFDN householder specification the Faust FDN renders verbatim.
 
-    :returns: The shared pyFDN spec object, so both backends decode identical rows.
+    :returns: Fresh spec identical to ``pyfdn_n8_mono_householder``, so both backends decode
+        identical rows without sharing one mutable registry object.
     """
-    return PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
+    return build_pyfdn_n8_mono_householder_param_spec()
 
 
 _faust_param_spec_builders: Mapping[ParamSpecName, Callable[[], ParamSpec]] = MappingProxyType(
