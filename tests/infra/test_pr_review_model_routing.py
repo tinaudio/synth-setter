@@ -285,7 +285,7 @@ def test_pr_review_skills_fetch_base_sha_with_supported_gh_metadata() -> None:
     for path in metadata_paths:
         assert "number,headRefOid,baseRefName,files,title,headRefName" in skills[path]
         assert 'gh api "repos/${repo}/pulls/<N>" --jq .base.sha' in skills[path]
-        assert skills[path].count("|| exit $?") >= 2
+        assert skills[path].count("|| exit $?") >= 3
         assert "printf 'base_sha=%s\\n' \"$base_sha\"" in skills[path]
 
 
@@ -324,6 +324,9 @@ def _fake_gh_environment(tmp_path: Path) -> dict[str, str]:
         """#!/usr/bin/env bash
 set -euo pipefail
 if [[ $1 == repo && $2 == view ]]; then
+  if [[ ${FAIL_GH_COMMAND:-} == repo ]]; then
+    exit 69
+  fi
   printf '%s\\n' 'tinaudio/synth-setter'
 elif [[ $1 == pr && $2 == view ]]; then
   if [[ ${FAIL_GH_COMMAND:-} == pr ]]; then
@@ -382,19 +385,26 @@ def test_pr_review_metadata_command_returns_base_sha_with_supported_gh_fields(
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
-@pytest.mark.parametrize(("failed_command", "expected_status"), (("pr", 66), ("api", 67)))
+@pytest.mark.parametrize(("skill_path", "metadata_marker"), _PR_METADATA_COMMANDS)
+@pytest.mark.parametrize(
+    ("failed_command", "expected_status"), (("repo", 69), ("pr", 66), ("api", 67))
+)
 def test_pr_review_metadata_command_failure_preserves_status(
     tmp_path: Path,
+    skill_path: str,
+    metadata_marker: str,
     failed_command: str,
     expected_status: int,
 ) -> None:
     """Stop the canonical metadata command when either gh lookup fails.
 
     :param tmp_path: Temporary directory containing the controlled ``gh`` executable.
+    :param skill_path: Runbook containing a PR metadata command.
+    :param metadata_marker: Text immediately preceding the command's Bash fence.
     :param failed_command: gh command that must return a failure.
     :param expected_status: Exit status that Bash must preserve.
     """
-    command = _extract_pr_metadata_command(*_PR_METADATA_COMMANDS[0])
+    command = _extract_pr_metadata_command(skill_path, metadata_marker)
     environment = _fake_gh_environment(tmp_path) | {"FAIL_GH_COMMAND": failed_command}
     sh = importlib.import_module("sh")
 

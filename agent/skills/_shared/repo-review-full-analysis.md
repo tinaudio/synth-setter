@@ -82,7 +82,7 @@ Determine the PR number:
 Fetch metadata once:
 
 ```bash
-repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)" || exit $?
 gh pr view <N> --repo "$repo" \
   --json number,headRefOid,baseRefName,files,title,headRefName,author,mergeable,mergeStateStatus,statusCheckRollup \
   || exit $?

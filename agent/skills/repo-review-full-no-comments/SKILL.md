@@ -66,7 +66,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > appears below — never run the command with the literal `<N>` placeholder:
 >
 > ```bash
-> repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+> repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)" || exit $?
 > gh pr view <N> --repo "$repo" \
 >   --json number,headRefOid,baseRefName,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup \
 >   || exit $?
