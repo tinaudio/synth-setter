@@ -25,6 +25,7 @@ on:
       - "package*.json"
       - "pyproject.toml"
       - "scripts/ci/**"
+      - "scripts/faustwasm/**"
       - "src/synth_setter/**"
       - "tests/**"
       - "uv.lock"
