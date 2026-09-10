@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
+from huggingface_hub import get_token
 
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.models.components.language_projection import LanguageParameterProjection
@@ -205,6 +206,8 @@ def test_real_language_projection_checkpoint_reload_preserves_trained_tokens(
 
     :param tmp_path: Isolated embedding and checkpoint directory.
     """
+    if get_token() is None:
+        pytest.skip("requires google/embeddinggemma-300m license/HF_TOKEN")
     path = tmp_path / "language.npz"
     embeddings = matryoshka_vectors(encode_param_language("surge_4", "surge_4"), 128)
     save_param_language(path, embeddings, "surge_4", "surge_4")
