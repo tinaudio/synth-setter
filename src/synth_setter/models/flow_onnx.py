@@ -8,7 +8,6 @@ Typical usage::
 import os
 import tempfile
 from pathlib import Path
-from typing import Literal
 
 import torch
 from beartype import beartype
@@ -19,7 +18,6 @@ from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
 _OPSET_VERSION = 18
 # Velocity-graph branch order: unconditional, sketch-only, content-only, full.
-type ConditioningMode = Literal["both", "mel_only", "sketch_only", "unconditional"]
 _MODES: frozenset[str] = frozenset({"both", "mel_only", "sketch_only", "unconditional"})
 
 
