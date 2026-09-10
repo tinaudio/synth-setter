@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789083884785,
+  "lastUpdate": 1789083889131,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -28492,6 +28492,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 10.995493416700015,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3d0540cc68d8ad9554057e2855e67dc937166c52",
+          "message": "internal-feat(data-pipeline): add native Faust C++ dataset backend (#3478)\n\n* internal-feat(data-pipeline): add native Faust C++ renderer\n\n* internal-feat(data-pipeline): benchmark Faust rendering backends\n\n* test(data-pipeline): close Faust backend review gaps\n\n* internal-fix(data-pipeline): validate native Faust boundaries\n\n* internal-fix(data-pipeline): preserve native benchmark provenance\n\n* internal-fix(ci-automation): tolerate Faust version details\n\n* test(data-pipeline): cover native Faust fast paths",
+          "timestamp": "2026-09-10T17:27:32-04:00",
+          "tree_id": "5fa9f9cb04a0174a717db6f0b436bf3417d42dad",
+          "url": "https://github.com/tinaudio/synth-setter/commit/3d0540cc68d8ad9554057e2855e67dc937166c52"
+        },
+        "date": 1789083888318,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 7.75884485244751,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 15.23817963913083,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.0877610594034195,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0017157793045043945,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.12532114982605,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.561250137000025,
             "unit": "seconds"
           }
         ]
