@@ -1,7 +1,10 @@
 """Real offline/FLAMO parity for the canonical basic FDN boundary."""
 
+import os
+import selectors
 import subprocess
 import sys
+import time
 from dataclasses import replace
 from textwrap import dedent
 from typing import cast
@@ -13,38 +16,107 @@ from pyFDN import FDNBuild
 
 from synth_setter.data.basic_fdn import BasicFDN
 
-_TORCHSYNTH_IMPORT_TIMEOUT_SECONDS = 30
+_TORCHSYNTH_BEHAVIOR_TIMEOUT_SECONDS = 30
+_TORCHSYNTH_PROBE_PROGRESS = "torchsynth-probe-progress"
+_TORCHSYNTH_PROBE_READY = "torchsynth-probe-ready"
+_TORCHSYNTH_STARTUP_STALL_TIMEOUT_SECONDS = 30
+_TORCHSYNTH_XDIST_GROUP = "torchsynth-compatibility-probe"
 
 
+def _wait_for_torchsynth_probe_ready(
+    process: subprocess.Popen[bytes], command: list[str]
+) -> None:
+    """Wait while bounded import stages report progress.
+
+    :param process: Running fresh-process probe.
+    :param command: Probe command for raised subprocess errors.
+    :raises subprocess.CalledProcessError: If the child exits before readiness.
+    :raises subprocess.TimeoutExpired: If one startup stage stops progressing.
+    """
+    assert process.stdout is not None
+    buffered = bytearray()
+    deadline = time.monotonic() + _TORCHSYNTH_STARTUP_STALL_TIMEOUT_SECONDS
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        while True:
+            newline_index = buffered.find(b"\n")
+            if newline_index >= 0:
+                status = bytes(buffered[:newline_index]).decode(errors="replace").strip()
+                del buffered[: newline_index + 1]
+                if status == _TORCHSYNTH_PROBE_READY:
+                    return
+                if status == _TORCHSYNTH_PROBE_PROGRESS:
+                    deadline = time.monotonic() + _TORCHSYNTH_STARTUP_STALL_TIMEOUT_SECONDS
+                continue
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                process.kill()
+                process.wait()
+                raise subprocess.TimeoutExpired(
+                    command, _TORCHSYNTH_STARTUP_STALL_TIMEOUT_SECONDS
+                )
+            chunk = os.read(process.stdout.fileno(), 4096)
+            if not chunk:
+                raise subprocess.CalledProcessError(process.wait(), command)
+            buffered.extend(chunk)
+
+
+def _run_torchsynth_probe(probe: str) -> None:
+    """Bound startup stalls and probe behavior separately.
+
+    :param probe: Fresh-process Python source that reports import progress and readiness.
+    :raises subprocess.CalledProcessError: If startup or probe behavior fails.
+    :raises subprocess.TimeoutExpired: If startup stops progressing or probe behavior hangs.
+    """
+    command = [sys.executable, "-c", dedent(probe)]
+    with subprocess.Popen(command, stdout=subprocess.PIPE) as process:
+        _wait_for_torchsynth_probe_ready(process, command)
+        try:
+            process.wait(timeout=_TORCHSYNTH_BEHAVIOR_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command)
+
+
+@pytest.mark.xdist_group(name=_TORCHSYNTH_XDIST_GROUP)
 def test_torchsynth_loader_preserves_canonical_pi_in_fresh_process() -> None:
     """The compatibility boundary repairs TorchSynth's process-global constant mutation."""
-    probe = """
+    probe = f"""
         import math
+        print({_TORCHSYNTH_PROBE_PROGRESS!r}, flush=True)
         import torch
+        print({_TORCHSYNTH_PROBE_PROGRESS!r}, flush=True)
         import torchsynth.util
+        print({_TORCHSYNTH_PROBE_PROGRESS!r}, flush=True)
         from synth_setter.data.torchsynth_datamodule import _torchsynth_types
 
+        print({_TORCHSYNTH_PROBE_READY!r}, flush=True)
         assert torch.pi != math.pi
         _torchsynth_types()
         assert torch.pi == math.pi
     """
 
-    subprocess.run(
-        [sys.executable, "-c", dedent(probe)],
-        check=True,
-        timeout=_TORCHSYNTH_IMPORT_TIMEOUT_SECONDS,
-    )
+    _run_torchsynth_probe(probe)
 
 
+@pytest.mark.xdist_group(name=_TORCHSYNTH_XDIST_GROUP)
 def test_torchsynth_loader_import_failure_preserves_canonical_pi_in_fresh_process() -> None:
     """A failed compatibility import still repairs TorchSynth's constant mutation."""
-    probe = """
+    probe = f"""
         import builtins
         import math
+        print({_TORCHSYNTH_PROBE_PROGRESS!r}, flush=True)
         import torch
+        print({_TORCHSYNTH_PROBE_PROGRESS!r}, flush=True)
         import torchsynth.util
+        print({_TORCHSYNTH_PROBE_PROGRESS!r}, flush=True)
         from synth_setter.data.torchsynth_datamodule import _torchsynth_types
 
+        print({_TORCHSYNTH_PROBE_READY!r}, flush=True)
         original_import = builtins.__import__
         def fail_synth_import(name: str, *args: object, **kwargs: object) -> object:
             if name == "torchsynth.synth":
@@ -61,23 +133,24 @@ def test_torchsynth_loader_import_failure_preserves_canonical_pi_in_fresh_proces
         assert torch.pi == math.pi
     """
 
-    subprocess.run(
-        [sys.executable, "-c", dedent(probe)],
-        check=True,
-        timeout=_TORCHSYNTH_IMPORT_TIMEOUT_SECONDS,
-    )
+    _run_torchsynth_probe(probe)
 
 
+@pytest.mark.xdist_group(name=_TORCHSYNTH_XDIST_GROUP)
 def test_torchsynth_loader_preserves_flamo_float64_parity_in_fresh_process() -> None:
     """A TorchSynth-first import leaves the real FLAMO response on its float64 baseline."""
-    probe = """
+    probe = f"""
         import numpy as np
+        print({_TORCHSYNTH_PROBE_PROGRESS!r}, flush=True)
         import torch
+        print({_TORCHSYNTH_PROBE_PROGRESS!r}, flush=True)
         import torchsynth.util
+        print({_TORCHSYNTH_PROBE_PROGRESS!r}, flush=True)
         from pyFDN import FDNBuild
         from synth_setter.data.basic_fdn import BasicFDN
         from synth_setter.data.torchsynth_datamodule import _torchsynth_types
 
+        print({_TORCHSYNTH_PROBE_READY!r}, flush=True)
         _torchsynth_types()
         build = FDNBuild(
             A=np.array([[0.2, 0.1], [-0.1, 0.2]]),
@@ -97,11 +170,7 @@ def test_torchsynth_loader_preserves_flamo_float64_parity_in_fresh_process() -> 
         np.testing.assert_allclose(actual, expected, atol=1e-9, rtol=1e-7)
     """
 
-    subprocess.run(
-        [sys.executable, "-c", dedent(probe)],
-        check=True,
-        timeout=_TORCHSYNTH_IMPORT_TIMEOUT_SECONDS,
-    )
+    _run_torchsynth_probe(probe)
 
 
 @pytest.fixture
