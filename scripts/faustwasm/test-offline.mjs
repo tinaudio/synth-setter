@@ -18,6 +18,48 @@ gain = hslider("gain", 0.5, 0, 1, 0.01);
 process = os.osc(440) * gain;
 `;
 
+test('offline boundaries reject non-positive and fractional loop sizes', async () => {
+    const artifact = { manifest: { mode: 'mono' } };
+    for (const blockSize of [0, -1, 1.5, true]) {
+        await assert.rejects(
+            createOfflineSynth(artifact, { sampleRate: 44_100, blockSize }),
+            /blockSize must be a positive integer/,
+        );
+    }
+    for (const frames of [-1, 1.5, true]) {
+        assert.throws(
+            () => renderNote(
+                { processor: {}, blockSize: 128, manifest: { outputs: 1 } },
+                { frames, note: 60, velocity: 100, startFrame: 0, endFrame: 1 },
+            ),
+            /frames must be a non-negative integer/,
+        );
+    }
+});
+
+test('canonical discrete domains reject fractions and accept listed values', () => {
+    const written = [];
+    const synth = { processor: { setParamValue: (address, value) => written.push([address, value]) } };
+    const manifest = {
+        parameters: [{
+            canonicalAddress: '/canonical/gate',
+            wasmAddress: '/native/gate',
+            min: 0,
+            max: 1,
+            kind: 'discrete',
+            values: [0, 1],
+        }],
+    };
+
+    assert.throws(
+        () => applyCanonicalPatch(synth, manifest, { '/canonical/gate': 0.5 }),
+        /parameter outside discrete native domain/,
+    );
+    applyCanonicalPatch(synth, manifest, { '/canonical/gate': 0 });
+    applyCanonicalPatch(synth, manifest, { '/canonical/gate': 1 });
+    assert.deepEqual(written, [['/native/gate', 0], ['/native/gate', 1]]);
+});
+
 test('compiled artifact loads and canonical patch changes real audio', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'faustwasm-contract-'));
     try {
@@ -35,6 +77,7 @@ test('compiled artifact loads and canonical patch changes real audio', async () 
                     min: 0,
                     max: 1,
                     kind: 'continuous',
+                    values: null,
                 },
             ],
         };

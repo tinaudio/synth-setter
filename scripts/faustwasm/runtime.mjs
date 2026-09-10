@@ -46,6 +46,12 @@ export const loadFaustArtifact = async (manifest, loadBytes) => {
 };
 
 export const createOfflineSynth = async (artifact, { sampleRate, blockSize }) => {
+    if (!Number.isFinite(sampleRate) || sampleRate <= 0) {
+        throw new Error('sampleRate must be finite and positive');
+    }
+    if (!Number.isInteger(blockSize) || blockSize < 1) {
+        throw new Error('blockSize must be a positive integer');
+    }
     const { manifest } = artifact;
     if (manifest.mode === 'poly') {
         const generator = new FaustPolyDspGenerator();
@@ -80,15 +86,33 @@ export const applyCanonicalPatch = (synth, manifest, params) => {
         if (!Number.isFinite(value) || value < parameter.min || value > parameter.max) {
             throw new Error(`parameter outside native domain: ${parameter.canonicalAddress}`);
         }
+        if (
+            parameter.kind === 'discrete'
+            && (!Array.isArray(parameter.values) || !parameter.values.includes(value))
+        ) {
+            throw new Error(`parameter outside discrete native domain: ${parameter.canonicalAddress}`);
+        }
         synth.processor.setParamValue(parameter.wasmAddress, value);
     }
 };
 
 export const renderNote = (synth, { frames, note, velocity, startFrame, endFrame }) => {
+    if (!Number.isInteger(frames) || frames < 0) {
+        throw new Error('frames must be a non-negative integer');
+    }
+    if (!Number.isInteger(startFrame) || !Number.isInteger(endFrame)) {
+        throw new Error('note frames must be integers');
+    }
     if (!(0 <= startFrame && startFrame < endFrame && endFrame <= frames)) {
         throw new Error('note frames must satisfy 0 <= start < end <= frames');
     }
     const { processor, blockSize, manifest } = synth;
+    if (!Number.isInteger(blockSize) || blockSize < 1) {
+        throw new Error('blockSize must be a positive integer');
+    }
+    if (!Number.isInteger(manifest.outputs) || manifest.outputs < 1) {
+        throw new Error('manifest outputs must be a positive integer');
+    }
     const output = Array.from({ length: manifest.outputs }, () => new Float32Array(frames));
     processor.start();
     for (let blockStart = 0; blockStart < frames; blockStart += blockSize) {

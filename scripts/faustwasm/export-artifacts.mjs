@@ -50,6 +50,18 @@ export const compileFaustArtifact = async (request, outputDir) => {
     if (!dspFactory?.code) throw new Error('Faust compiler returned no DSP bytecode');
     const dspMeta = JSON.parse(dspFactory.json);
     const compiledMeta = generator.getMeta();
+    const nativeOutputs = compiledMeta.outputs;
+    if (!Number.isInteger(nativeOutputs) || nativeOutputs < 1) {
+        throw new Error('compiled output count must be a positive integer');
+    }
+    if (request.expectedOutputs !== null && request.expectedOutputs !== undefined) {
+        if (!Number.isInteger(request.expectedOutputs) || request.expectedOutputs < 1) {
+            throw new Error('expectedOutputs must be a positive integer');
+        }
+        if (nativeOutputs !== request.expectedOutputs) {
+            throw new Error('compiled output count differs');
+        }
+    }
     const descriptors = new Map(flattenInputs(compiledMeta.ui).map((item) => [item.address, item]));
     for (const parameter of request.parameters) {
         const descriptor = descriptors.get(parameter.wasmAddress);
@@ -60,6 +72,18 @@ export const compileFaustArtifact = async (request, outputDir) => {
         const kind = discrete ? 'discrete' : 'continuous';
         if (minimum !== parameter.min || maximum !== parameter.max || kind !== parameter.kind) {
             throw new Error(`compiled domain differs for ${parameter.wasmAddress}`);
+        }
+        if (discrete) {
+            if (
+                !Array.isArray(parameter.values)
+                || parameter.values.length !== 2
+                || parameter.values[0] !== 0
+                || parameter.values[1] !== 1
+            ) {
+                throw new Error(`compiled discrete values differ for ${parameter.wasmAddress}`);
+            }
+        } else if (parameter.values !== null) {
+            throw new Error(`continuous parameter has discrete values: ${parameter.wasmAddress}`);
         }
     }
     const expectedWasm = new Set([
@@ -90,15 +114,12 @@ export const compileFaustArtifact = async (request, outputDir) => {
         sourceSha256: sha256(request.source),
         mode: request.mode,
         voices: request.voices,
-        outputs: request.outputs,
+        outputs: nativeOutputs,
         parameters: request.parameters,
         files,
         dspMeta,
         ...(effectMeta ? { effectMeta } : {}),
     };
-    if (generator.getMeta().outputs !== request.outputs) {
-        throw new Error('compiled output count differs');
-    }
     await writeFile(join(outputDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
     return manifest;
 };
