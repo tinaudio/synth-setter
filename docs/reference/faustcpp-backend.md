@@ -51,7 +51,8 @@ patches and MIDI events to every host. Five rotated forward/reverse trials reduc
 bias. Each timing covers renderer construction and compilation, 16 four-second 44.1 kHz stereo
 renders, mel/MP3 transforms, and the Lance commit. The runner consumes every Lance dataset,
 requires byte-identical normalized parameter rows across all 15 runs, and writes raw timings,
-provenance, corpus digest, medians, and interquartile ranges to `results.json`.
+backend versions, the Git revision and dirty state, host details, corpus digest, medians, and
+interquartile ranges to `results.json`.
 
 A local run on an Intel Core i9-14900KF running Linux 6.17 produced:
 

@@ -11,6 +11,7 @@ import pytest
 from synth_setter.data.vst.core import extract_backend_version
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter
+from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
@@ -84,6 +85,63 @@ def test_faustcpp_factory_renders_real_checked_in_source(
     assert audio.dtype == np.float32
     assert np.isfinite(audio).all()
     assert float(np.max(np.abs(audio))) > 1e-4
+
+
+@pytest.fixture(scope="module")
+def bubble_renderer() -> AudioRenderer:
+    """Compile one renderer shared by malformed-patch cases.
+
+    :returns: Real native bubble renderer.
+    """
+    if not _HAS_TOOLCHAIN:
+        pytest.skip("install the Faust CLI and g++")
+    return make_audio_renderer(_config("faust_bubble", channels=2))
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_exception", "match"),
+    [
+        pytest.param("missing", ValueError, "missing Faust parameter", id="missing-address"),
+        pytest.param("unknown", KeyError, "unknown Faust parameter", id="unknown-address"),
+        pytest.param("nonfinite", ValueError, "outside native domain", id="nonfinite-value"),
+        pytest.param("continuous", ValueError, "outside native domain", id="continuous-domain"),
+        pytest.param(
+            "categorical",
+            ValueError,
+            "outside discrete native domain",
+            id="categorical-domain",
+        ),
+    ],
+)
+def test_faustcpp_render_rejects_malformed_patch(
+    bubble_renderer: AudioRenderer,
+    case: str,
+    expected_exception: type[Exception],
+    match: str,
+) -> None:
+    """Malformed patches fail before native process execution.
+
+    :param bubble_renderer: Module-scoped real native renderer.
+    :param case: Invalid patch transformation under test.
+    :param expected_exception: Required validation exception type.
+    :param match: Required diagnostic fragment.
+    """
+    patch = _midpoint_patch("faust_bubble")
+    continuous_address = "/bubble/bubble/freq"
+    categorical_address = "/bubble/drop"
+    if case == "missing":
+        del patch[continuous_address]
+    elif case == "unknown":
+        patch["/unknown"] = 0.5
+    elif case == "nonfinite":
+        patch[continuous_address] = float("nan")
+    elif case == "continuous":
+        patch[continuous_address] = 2_001.0
+    elif case == "categorical":
+        patch[categorical_address] = 0.5
+
+    with pytest.raises(expected_exception, match=match):
+        bubble_renderer.render(patch, 60, 100, (0.05, 0.3))
 
 
 @pytest.mark.skipif(not _HAS_TOOLCHAIN, reason="install the Faust CLI and g++")

@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+from pathlib import Path
+
+import pytest
+
 from synth_setter.tools.benchmark_faust_backends import (
     BenchmarkSample,
     balanced_backend_order,
+    main,
     summarize_samples,
 )
 
@@ -35,3 +42,26 @@ def test_summarize_samples_reports_median_and_interquartile_range() -> None:
         "median_rows_per_second": 1.0,
         "rows_per_second_iqr": 1.5,
     }
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    shutil.which("faust") is None or shutil.which("g++") is None,
+    reason="install the Faust CLI and g++",
+)
+def test_benchmark_cli_generates_and_consumes_each_backend_dataset(tmp_path: Path) -> None:
+    """The public CLI writes a complete report from three real production datasets.
+
+    :param tmp_path: Isolated benchmark artifact root.
+    """
+    output = tmp_path / "benchmark"
+    main(["--output", str(output), "--rows", "1", "--trials", "1", "--block-size", "64"])
+
+    report = json.loads((output / "results.json").read_text())
+    assert report["settings"]["rows_per_trial"] == 1
+    assert report["settings"]["trials_per_backend"] == 1
+    assert set(report["versions"]) == {"dawdreamer", "faustcpp", "faustwasm"}
+    assert len(report["source"]["commit"]) == 40
+    assert isinstance(report["source"]["dirty"], bool)
+    assert len(report["samples"]) == 3
+    assert set(report["summary"]) == {"dawdreamer", "faustcpp", "faustwasm"}

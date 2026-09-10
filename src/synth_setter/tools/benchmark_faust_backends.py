@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import platform
+import subprocess
 import sys
 import time
 from collections.abc import Sequence
@@ -216,6 +217,33 @@ def _run_dataset(
     )
 
 
+def _git_provenance() -> dict[str, str | bool]:
+    """Resolve the measured source revision and worktree state.
+
+    :returns: Full Git commit and whether tracked or untracked changes exist.
+    :raises RuntimeError: If the source checkout revision cannot be inspected.
+    """
+    repository = Path(__file__).resolve().parents[3]
+    try:
+        commit = subprocess.run(  # noqa: S603
+            ["git", "rev-parse", "HEAD"],  # noqa: S607
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        status = subprocess.run(  # noqa: S603
+            ["git", "status", "--short"],  # noqa: S607
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except (FileNotFoundError, subprocess.CalledProcessError) as error:
+        raise RuntimeError("benchmark requires a readable Git source checkout") from error
+    return {"commit": commit, "dirty": bool(status.strip())}
+
+
 def run_benchmark(output: Path, *, rows: int, trials: int, seed: int, block_size: int) -> Path:
     """Run the balanced three-backend production benchmark.
 
@@ -273,6 +301,7 @@ def run_benchmark(output: Path, *, rows: int, trials: int, seed: int, block_size
         },
         "versions": versions,
         "host": {"platform": platform.platform(), "python": sys.version},
+        "source": _git_provenance(),
         "parameter_rows_sha256": hashlib.sha256(reference_params.tobytes()).hexdigest(),
         "samples": [asdict(sample) for sample in samples],
         "summary": {

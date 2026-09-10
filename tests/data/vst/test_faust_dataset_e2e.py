@@ -155,7 +155,9 @@ def test_faustcpp_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
     assert np.isfinite(audio).all()
     assert np.isfinite(mel_spec).all()
     assert np.isfinite(params).all()
+    assert np.all((params >= 0.0) & (params <= 1.0))
     assert float(np.max(np.abs(audio))) > 1e-4
+    assert float(np.max(np.abs(audio))) <= 1.0
 
 
 @pytest.mark.slow
