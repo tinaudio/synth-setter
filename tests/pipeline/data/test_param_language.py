@@ -5,9 +5,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from huggingface_hub import get_token
 
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.data import param_language
 from synth_setter.pipeline.data.param_language import (
     describe_fields,
     encode_param_language,
@@ -42,6 +44,8 @@ def test_real_encoder_artifact_load_preserves_supported_dimensions(tmp_path: Pat
 
     :param tmp_path: Temporary directory for the artifact.
     """
+    if get_token() is None:
+        pytest.skip("requires google/embeddinggemma-300m license/HF_TOKEN")
     full = encode_param_language("surge_simple", "surge_xt", device="cpu")
     descriptions = describe_fields("surge_simple", "surge_xt")
     assert full.shape == (len(descriptions), 768)
@@ -58,7 +62,9 @@ def test_artifact_round_trip_preserves_vectors(tmp_path: Path) -> None:
     :param tmp_path: Temporary directory for the artifact.
     """
     descriptions = describe_fields("surge_simple", "surge_xt")
-    embeddings = np.random.default_rng(7).normal(size=(len(descriptions), 768)).astype(np.float32)
+    embeddings = matryoshka_vectors(
+        np.random.default_rng(7).normal(size=(len(descriptions), 768)).astype(np.float32), 768
+    )
     path = tmp_path / "language.npz"
     save_param_language(path, embeddings, "surge_simple", "surge_xt")
     actual, metadata = load_param_language(path, "surge_simple", "surge_xt")
@@ -73,11 +79,22 @@ def test_artifact_wrong_spec_rejected(tmp_path: Path) -> None:
     """
     descriptions = describe_fields("surge_simple", "surge_xt")
     path = tmp_path / "language.npz"
-    save_param_language(
-        path, np.ones((len(descriptions), 768), dtype=np.float32), "surge_simple", "surge_xt"
-    )
+    embeddings = np.full((len(descriptions), 768), 1 / np.sqrt(768), dtype=np.float32)
+    save_param_language(path, embeddings, "surge_simple", "surge_xt")
     with pytest.raises(ValueError, match="spec"):
         load_param_language(path, "surge_4", "surge_xt")
+
+
+def test_artifact_non_unit_vectors_rejected_on_save(tmp_path: Path) -> None:
+    """An artifact cannot publish vectors with non-unit row norms.
+
+    :param tmp_path: Isolated artifact directory.
+    """
+    count = len(describe_fields("surge_simple", "surge_xt"))
+    embeddings = np.ones((count, 768), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="unit norm"):
+        save_param_language(tmp_path / "language.npz", embeddings, "surge_simple", "surge_xt")
 
 
 def test_artifact_nonfinite_vectors_rejected(tmp_path: Path) -> None:
@@ -98,7 +115,9 @@ def test_prepare_cached_full_vectors_selects_requested_width(tmp_path: Path) -> 
     :param tmp_path: Finalizer work directory with a native-width cache.
     """
     count = len(describe_fields("surge_4", "surge_4"))
-    full = np.random.default_rng(4).normal(size=(count, 768)).astype(np.float32)
+    full = matryoshka_vectors(
+        np.random.default_rng(4).normal(size=(count, 768)).astype(np.float32), 768
+    )
     save_param_language(tmp_path / "param_language_full.npz", full, "surge_4", "surge_4")
     path = prepare_param_language(tmp_path, "surge_4", "surge_4", dimension=128)
     vectors, _ = load_param_language(path, "surge_4", "surge_4")
@@ -112,11 +131,11 @@ def test_artifact_modified_vector_checksum_rejected(tmp_path: Path) -> None:
     """
     count = len(describe_fields("surge_4", "surge_4"))
     path = tmp_path / "language.npz"
-    vectors = np.ones((count, 128), dtype=np.float32)
+    vectors = np.full((count, 128), 1 / np.sqrt(128), dtype=np.float32)
     save_param_language(path, vectors, "surge_4", "surge_4")
     with np.load(path) as archive:
         metadata = archive["metadata"]
-    vectors[0, 0] = 2
+    vectors[0, 0] *= -1
     np.savez(path, embeddings=vectors, metadata=metadata)
     with pytest.raises(ValueError, match="checksum"):
         load_param_language(path, "surge_4", "surge_4")
@@ -144,11 +163,79 @@ def test_matryoshka_nonmatrix_rejected() -> None:
         matryoshka_vectors(np.ones(768, dtype=np.float32), 128)
 
 
+def test_artifact_non_unit_vectors_rejected_on_load(tmp_path: Path) -> None:
+    """An artifact with changed row magnitude cannot be consumed.
+
+    :param tmp_path: Isolated artifact directory.
+    """
+    count = len(describe_fields("surge_4", "surge_4"))
+    path = tmp_path / "language.npz"
+    vectors = np.full((count, 128), 1 / np.sqrt(128), dtype=np.float32)
+    save_param_language(path, vectors, "surge_4", "surge_4")
+    with np.load(path) as archive:
+        metadata = archive["metadata"]
+    vectors[0] *= 2
+    np.savez(path, embeddings=vectors, metadata=metadata)
+
+    with pytest.raises(ValueError, match="unit norm"):
+        load_param_language(path, "surge_4", "surge_4")
+
+
+def test_save_failure_preserves_existing_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed temporary write leaves the complete destination unchanged.
+
+    :param tmp_path: Isolated artifact directory.
+    :param monkeypatch: Pytest monkeypatch fixture.
+    """
+    count = len(describe_fields("surge_4", "surge_4"))
+    path = tmp_path / "language.npz"
+    vectors = np.full((count, 128), 1 / np.sqrt(128), dtype=np.float32)
+    save_param_language(path, vectors, "surge_4", "surge_4")
+    original = path.read_bytes()
+
+    def fail_save(*args, **kwargs) -> None:
+        raise OSError("disk full")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(param_language.np, "savez", fail_save)
+        with pytest.raises(OSError, match="disk full"):
+            save_param_language(path, vectors, "surge_4", "surge_4")
+
+    assert path.read_bytes() == original
+    restored, _ = load_param_language(path, "surge_4", "surge_4")
+    np.testing.assert_array_equal(restored, vectors)
+
+
+def test_prepare_truncated_cache_regenerates_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A truncated native cache is regenerated and remains loadable.
+
+    :param tmp_path: Isolated artifact directory.
+    :param monkeypatch: Pytest monkeypatch fixture.
+    """
+    cache_path = tmp_path / "param_language_full.npz"
+    cache_path.write_bytes(b"truncated")
+    count = len(describe_fields("surge_4", "surge_4"))
+    full = np.full((count, 768), 1 / np.sqrt(768), dtype=np.float32)
+    monkeypatch.setattr(param_language, "encode_param_language", lambda *args, **kwargs: full)
+
+    output = prepare_param_language(tmp_path, "surge_4", "surge_4", dimension=128)
+
+    cached, _ = load_param_language(cache_path, "surge_4", "surge_4")
+    selected, _ = load_param_language(output, "surge_4", "surge_4")
+    np.testing.assert_array_equal(cached, full)
+    np.testing.assert_allclose(selected, matryoshka_vectors(full, 128))
+
+
 def test_artifact_wrong_field_count_rejected(tmp_path: Path) -> None:
     """Partial field coverage cannot be published as a complete spec.
 
     :param tmp_path: Isolated artifact directory.
     """
     with pytest.raises(ValueError, match="aligned"):
-        save_param_language(tmp_path / "language.npz", np.ones((1, 128), dtype=np.float32),
-                            "surge_4", "surge_4")
+        save_param_language(
+            tmp_path / "language.npz", np.ones((1, 128), dtype=np.float32), "surge_4", "surge_4"
+        )
