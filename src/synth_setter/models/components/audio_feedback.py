@@ -281,7 +281,8 @@ class AudioFeedbackLoss(nn.Module):
         :param theta_hat: One-step parameter estimate in model space ``[-1, 1]``.
         :param t: Flow time shaped ``(batch, 1)``.
         :param target_audio: Observed audio shaped ``(batch, signal_length)`` or
-            ``(batch, channels, signal_length)``; channelized audio is downmixed.
+            ``(batch, channels, signal_length)``; corresponding channels are scored
+            independently and their scalar distances are averaged.
         :param keep: Optional CFG keep mask shaped ``(batch,)``; rows at ``False`` are
             zero-weighted because their estimate is drawn from the marginal, making the
             residual against that row's own audio near-arbitrary.
