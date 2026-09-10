@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789014155589,
+  "lastUpdate": 1789018410051,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -15870,6 +15870,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.06398767232894897,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e403fe0e0314b9a46d0bc0667f3026ed786318a6",
+          "message": "internal-feat(training): separate flow objective and endpoint metrics (#3400)\n\n* internal-feat(training): make flow evaluation reproducible\n\nSeparate weighted objective metrics from unweighted endpoint diagnostics.\nStabilize held-out sampling with local deterministic noise.\n\n* internal-fix(training): keep reproducibility PR seed-focused\n\n* internal-fix(training): evaluate conditional fixed-time fields\n\n* test(training): cover evaluation endpoint diagnostics\n\n* test(training): cover rank-local evaluation noise\n\n* internal-fix(training): gate seeded evaluation behind opt-in\n\n* test(training): opt training validation into seeded evaluation\n\n* internal-fix(training): stabilize endpoint reconstruction\n\n* test(training): verify repeatable endpoint diagnostics",
+          "timestamp": "2026-09-10T00:21:27-04:00",
+          "tree_id": "14b2e3e3408a109501eef54f38a2e6501ea3eb6c",
+          "url": "https://github.com/tinaudio/synth-setter/commit/e403fe0e0314b9a46d0bc0667f3026ed786318a6"
+        },
+        "date": 1789018407128,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.005030155181885,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.846780297780643,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02879679761826992,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.029854953289031982,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 4.079649448394775,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 9.365257685666657,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.26756477355957,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.891161140501499,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.032056499272584915,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03533577919006348,
             "unit": "1-cos"
           },
           {
