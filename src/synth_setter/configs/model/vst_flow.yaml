@@ -59,6 +59,8 @@ rectified_sigma_min: 0.0
 parameterization: velocity
 # Mixed applies per-parameter CE only to one-hot endpoint spans.
 endpoint_loss: mse
+# FlowMol3 applies clipped odds weighting only to endpoint objective rows.
+endpoint_time_weighting: uniform
 
 # sampling
 seeded_evaluation: false

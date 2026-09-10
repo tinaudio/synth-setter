@@ -29,9 +29,8 @@ tags: ["dev"]
 # Integer IDs resolved through the runtime feature-flag registry.
 feature_flags: []
 mode: test
-# Opt in to repeatable flow sampling; 42 is used when enabled and seed is null/absent.
-seeded_evaluation: false
-seed: 42
+# Required explicitly when model.seeded_evaluation=true; ignored otherwise.
+seed: null
 
 # Predict-mode post-processing; gated off so `mode: test`/`validate` stay unchanged.
 evaluation:

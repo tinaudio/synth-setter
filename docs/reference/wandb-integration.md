@@ -123,12 +123,13 @@ the primary final sampled parameter-space comparison.
 
 ### Seeded flow evaluation
 
-Set `seeded_evaluation=true` on the evaluation CLI, or `model.seeded_evaluation=true` during
-training, to derive validation and test noise from the seed, stage, loader batch index, and
-distributed rank without advancing the global RNG stream. Standalone evaluation seeds model and
-datamodule construction only in this mode; it uses seed 42 when an enabled legacy config omits or
-nulls `seed`. The default `false` preserves fresh `torch.randn_like` sampling and does not seed the
-evaluation entrypoint.
+Set `model.seeded_evaluation=true seed=<integer>` for standalone evaluation or training to derive
+validation and test noise from the seed, stage, loader batch index, and distributed rank without
+advancing the global RNG stream. Standalone evaluation accepts explicit seeds from 0 through
+4294967295 and seeds model and datamodule construction only in this mode. Enabling the flag without
+a seed is a configuration error; the `seed: null` eval slot allows Hydra CLI `seed=...` overrides
+without supplying an arbitrary default. The default `false` preserves fresh `torch.randn_like`
+sampling and does not require, validate, or use the evaluation seed.
 
 The ten fixed-time diagnostics reuse the sampling noise at centers 0.05 through 0.95, run fully
 conditional (no CFG dropout), report unweighted endpoint-space MSE per bin, and average the bins
