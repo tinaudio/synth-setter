@@ -1459,6 +1459,9 @@ def test_evaluate_loads_weighted_mixed_endpoint_checkpoint_and_samples(tmp_path:
     changed_seed_metric_dict, _ = evaluate(cfg)
 
     assert torch.isfinite(metric_dict["test/param_mse"])
+    for index in range(5, 100, 10):
+        assert torch.isfinite(metric_dict[f"test/endpoint_mse/t_{index:02d}"])
+    assert torch.isfinite(metric_dict["test/endpoint_mse/equal_bin_mean"])
     torch.testing.assert_close(
         metric_dict["test/param_mse"], repeated_metric_dict["test/param_mse"], rtol=0.0, atol=0.0
     )
