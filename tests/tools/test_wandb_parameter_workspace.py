@@ -38,7 +38,7 @@ def test_parameter_workspace_serializes_dynamic_metric_regexes() -> None:
         "^train/per_param_(flow|endpoint)_mse/.+$",
         "^val/per_param_mse/.+$",
         "^val[/_]per_param_mse_best_swap/.+$",
-        "^val/per_param_mse_number_group_swap/.+$",
+        "^val/number_group_optimal_assignment_mse/.+$",
         "^val/per_param_mse_spec_quantized/.+$",
     ]
     assert all(config["useMetricRegex"] is True for config in panel_configs)

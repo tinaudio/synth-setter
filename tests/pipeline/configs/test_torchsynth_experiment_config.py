@@ -221,7 +221,7 @@ def test_torchsynth_flow_experiment_composes_the_synth_identity_for_the_probe() 
 
 
 def test_torchsynth_flow_experiment_logs_grouped_per_param_metrics_by_default() -> None:
-    """Validation publishes grouped-swap errors under TorchSynth parameter names."""
+    """Validation publishes grouped assignment errors under TorchSynth parameter names."""
     cfg = _flow_cfg()
 
     assert cfg.model.param_spec == "torchsynth_full"

@@ -46,8 +46,8 @@ def build_parameter_workspace(entity: str, project: str) -> ws.Workspace:
                         metric_regex=r"^val[/_]per_param_mse_best_swap/.+$",
                     ),
                     wr.LinePlot(
-                        title="Number-group-swap MSE by parameter",
-                        metric_regex=r"^val/per_param_mse_number_group_swap/.+$",
+                        title="Number-group optimal-assignment MSE",
+                        metric_regex=r"^val/number_group_optimal_assignment_mse/.+$",
                     ),
                     wr.LinePlot(
                         title="Spec-quantized MSE by parameter",

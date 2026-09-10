@@ -13,9 +13,10 @@ import torch
 from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter, ParamSpec
 from synth_setter.metrics import (
     BestSwapParamMSE,
-    NumberGroupSwapParamMSE,
+    NumberGroupOptimalAssignmentParamMSE,
     best_swap_per_param_mse,
-    number_group_swap_per_param_mse,
+    number_group_optimal_assignment_mse_groups,
+    number_group_optimal_assignment_per_param_mse,
 )
 
 
@@ -55,7 +56,7 @@ def test_best_swap_per_param_mse_invalid_shapes_raise_value_error() -> None:
         best_swap_per_param_mse(torch.zeros(2, 4), torch.zeros(2, 5))
 
 
-def test_number_group_swap_per_param_mse_swaps_collapsed_name_group() -> None:
+def test_number_group_optimal_assignment_per_param_mse_matches_collapsed_name_group() -> None:
     """Names differing only by number values can exchange their predictions."""
     spec = ParamSpec(
         synth_params=[
@@ -68,28 +69,50 @@ def test_number_group_swap_per_param_mse_swaps_collapsed_name_group() -> None:
     predicted = torch.tensor([[0.0, 1.0, 0.5]])
     target = torch.tensor([[1.0, 0.0, 1.0]])
 
-    result = number_group_swap_per_param_mse(predicted, target, spec)
+    result = number_group_optimal_assignment_per_param_mse(predicted, target, spec)
 
     assert torch.equal(result, torch.tensor([0.0, 0.0, 0.25]))
 
 
-def test_number_group_swap_per_param_mse_non_2d_input_raises_value_error() -> None:
+def test_number_group_optimal_assignment_mse_groups_preserves_labels_and_widths() -> None:
+    """Group labels retain separators, and unequal encoded widths remain separate."""
+    spec = ParamSpec(
+        synth_params=[
+            ContinuousParameter("osc 1 gain"),
+            ContinuousParameter("osc2 gain"),
+            ContinuousParameter("voice_1"),
+            CategoricalParameter("voice_2", values=["a", "b"], encoding="onehot"),
+        ],
+        note_params=[],
+    )
+
+    result = number_group_optimal_assignment_mse_groups(
+        torch.tensor([1.0, 3.0, 5.0, 7.0, 9.0]), spec
+    )
+
+    assert result.keys() == {"osc N gain", "voice_1", "voice_2"}
+    assert result["osc N gain"].item() == 2.0
+    assert result["voice_1"].item() == 5.0
+    assert result["voice_2"].item() == 8.0
+
+
+def test_number_group_optimal_assignment_per_param_mse_non_2d_input_raises_value_error() -> None:
     """Parameter matching rejects rows without a batch dimension."""
     spec = ParamSpec(synth_params=[ContinuousParameter("osc_1")], note_params=[])
 
     with pytest.raises(ValueError, match="matching 2-D shapes"):
-        number_group_swap_per_param_mse(torch.zeros(1), torch.zeros(1), spec)
+        number_group_optimal_assignment_per_param_mse(torch.zeros(1), torch.zeros(1), spec)
 
 
-def test_number_group_swap_per_param_mse_wrong_spec_width_raises_value_error() -> None:
+def test_number_group_optimal_assignment_wrong_spec_width_raises_value_error() -> None:
     """A spec that cannot label every encoded column is rejected."""
     spec = ParamSpec(synth_params=[ContinuousParameter("osc_1")], note_params=[])
 
     with pytest.raises(ValueError, match="ParamSpec width 1, got 2"):
-        number_group_swap_per_param_mse(torch.zeros(1, 2), torch.zeros(1, 2), spec)
+        number_group_optimal_assignment_per_param_mse(torch.zeros(1, 2), torch.zeros(1, 2), spec)
 
 
-def test_number_group_swap_per_param_mse_matches_multi_column_params_as_units() -> None:
+def test_number_group_optimal_assignment_per_param_mse_matches_multi_column_units() -> None:
     """A multi-column parameter uses one coherent assignment for all columns."""
     spec = ParamSpec(
         synth_params=[
@@ -101,12 +124,12 @@ def test_number_group_swap_per_param_mse_matches_multi_column_params_as_units() 
     predicted = torch.tensor([[0.0, 0.0, 1.0, 1.0]])
     target = torch.tensor([[0.0, 1.0, 1.0, 0.0]])
 
-    result = number_group_swap_per_param_mse(predicted, target, spec)
+    result = number_group_optimal_assignment_per_param_mse(predicted, target, spec)
 
     assert torch.equal(result, torch.tensor([0.0, 1.0, 0.0, 1.0]))
 
 
-def test_number_group_swap_per_param_mse_multi_column_assignment_minimizes_difference() -> None:
+def test_number_group_optimal_assignment_multi_column_minimizes_difference() -> None:
     """Multi-column matching uses squared differences rather than independent columns."""
     spec = ParamSpec(
         synth_params=[
@@ -118,33 +141,33 @@ def test_number_group_swap_per_param_mse_multi_column_assignment_minimizes_diffe
     predicted = torch.tensor([[0.0, 0.0, 1.0, 1.0]])
     target = torch.tensor([[1.0, 1.0, 0.0, 0.0]])
 
-    result = number_group_swap_per_param_mse(predicted, target, spec)
+    result = number_group_optimal_assignment_per_param_mse(predicted, target, spec)
 
     assert torch.equal(result, torch.zeros(4))
 
 
-def test_number_group_swap_per_param_mse_repeated_targets_use_stable_identity() -> None:
+def test_number_group_optimal_assignment_repeated_targets_use_stable_identity() -> None:
     """Equal scalar targets retain deterministic target attribution."""
     spec = ParamSpec(
         synth_params=[ContinuousParameter("osc_1"), ContinuousParameter("osc_2")],
         note_params=[],
     )
 
-    result = number_group_swap_per_param_mse(
+    result = number_group_optimal_assignment_per_param_mse(
         torch.tensor([[0.0, 3.0]]), torch.tensor([[2.0, 2.0]]), spec
     )
 
     assert torch.equal(result, torch.tensor([4.0, 1.0]))
 
 
-def test_number_group_swap_per_param_mse_bf16_returns_float32() -> None:
+def test_number_group_optimal_assignment_bf16_returns_float32() -> None:
     """Low-precision inputs produce finite float32 errors."""
     spec = ParamSpec(
         synth_params=[ContinuousParameter("osc_1"), ContinuousParameter("osc_2")],
         note_params=[],
     )
 
-    result = number_group_swap_per_param_mse(
+    result = number_group_optimal_assignment_per_param_mse(
         torch.tensor([[0.0, 1.0]], dtype=torch.bfloat16),
         torch.tensor([[1.0, 0.0]], dtype=torch.bfloat16),
         spec,
@@ -154,7 +177,7 @@ def test_number_group_swap_per_param_mse_bf16_returns_float32() -> None:
     assert torch.isfinite(result).all()
 
 
-def test_number_group_swap_per_param_mse_does_not_swap_across_groups() -> None:
+def test_number_group_optimal_assignment_does_not_match_across_groups() -> None:
     """A low-cost cross-family permutation remains penalized."""
     spec = ParamSpec(
         synth_params=[
@@ -168,13 +191,13 @@ def test_number_group_swap_per_param_mse_does_not_swap_across_groups() -> None:
     predicted = torch.tensor([[0.0, 1.0, 10.0, 11.0]])
     target = torch.tensor([[10.0, 11.0, 0.0, 1.0]])
 
-    result = number_group_swap_per_param_mse(predicted, target, spec)
+    result = number_group_optimal_assignment_per_param_mse(predicted, target, spec)
 
     assert torch.equal(result, torch.full((4,), 100.0))
 
 
-class TestNumberGroupSwapParamMSE:
-    """Contract: swaps are limited to number-collapsed parameter-name groups."""
+class TestNumberGroupOptimalAssignmentParamMSE:
+    """Contract: assignments are limited to number-collapsed parameter-name groups."""
 
     def test_accumulates_element_mean_over_updates(self) -> None:
         """Compute returns the element mean across batches of different sizes."""
@@ -182,7 +205,7 @@ class TestNumberGroupSwapParamMSE:
             synth_params=[ContinuousParameter("osc_1"), ContinuousParameter("osc_2")],
             note_params=[],
         )
-        metric = NumberGroupSwapParamMSE(spec)
+        metric = NumberGroupOptimalAssignmentParamMSE(spec)
         metric.update(torch.tensor([[0.0, 1.0]]), torch.tensor([[1.0, 0.0]]))
         metric.update(
             torch.tensor([[0.0, 0.0], [0.0, 0.0]]),

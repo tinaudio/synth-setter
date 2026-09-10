@@ -13,7 +13,8 @@ from torchmetrics import Metric
 if TYPE_CHECKING:
     from synth_setter.data.vst.param_spec import DiscreteLiteralParameter, ParamSpec
 
-_NUMBER_VALUE_PATTERN = re.compile(r"[\s_.-]*\d+[\s_.-]*")
+_NUMBER_GROUP_PATTERN = re.compile(r"[\s_.-]*\d+[\s_.-]*")
+_DIGIT_RUN_PATTERN = re.compile(r"\d+")
 
 
 def _scalar_midi_pitch_field(
@@ -237,27 +238,64 @@ class SpectralDistance(Metric):
         return self.sd / self.count
 
 
-def _number_group_indices(
+def _number_groups(
     param_spec: "ParamSpec",
-) -> tuple[tuple[tuple[int, ...], ...], ...]:
-    grouped_spans: defaultdict[tuple[str, int], list[tuple[int, ...]]] = defaultdict(list)
+) -> tuple[tuple[str, tuple[tuple[int, ...], ...]], ...]:
+    groups: defaultdict[tuple[str, int], list[tuple[str, tuple[int, ...]]]] = defaultdict(list)
     for param, span in param_spec.encoded_slices():
-        number_group_name = _NUMBER_VALUE_PATTERN.sub("#", param.name)
-        grouped_spans[(number_group_name, len(param))].append(tuple(range(span.start, span.stop)))
-    return tuple(tuple(spans) for spans in grouped_spans.values())
+        group_key = (_NUMBER_GROUP_PATTERN.sub("#", param.name), len(param))
+        groups[group_key].append((param.name, tuple(range(span.start, span.stop))))
+
+    return tuple(
+        (
+            names_and_spans[0][0]
+            if len(names_and_spans) == 1
+            else _DIGIT_RUN_PATTERN.sub("N", names_and_spans[0][0]),
+            tuple(span for _, span in names_and_spans),
+        )
+        for names_and_spans in groups.values()
+    )
 
 
-def number_group_swap_per_param_mse(
+def number_group_optimal_assignment_mse_groups(
+    per_param_mse: torch.Tensor,
+    param_spec: "ParamSpec",
+) -> dict[str, torch.Tensor]:
+    """Collapse assigned coordinate errors into one mean per numbered family.
+
+    :param per_param_mse: Assigned MSE for each encoded coordinate.
+    :param param_spec: Parameter names and encoded spans defining numbered families.
+    :returns: Display label to mean assigned squared error.
+    :raises ValueError: If the metric width does not match the ParamSpec.
+    """
+    if per_param_mse.ndim != 1 or per_param_mse.shape[0] != param_spec.encoded_width:
+        raise ValueError(
+            f"expected {param_spec.encoded_width} per-parameter errors, "
+            f"got shape {tuple(per_param_mse.shape)}"
+        )
+
+    return {
+        label: per_param_mse[
+            torch.tensor(
+                [index for span in spans for index in span],
+                device=per_param_mse.device,
+            )
+        ].mean()
+        for label, spans in _number_groups(param_spec)
+    }
+
+
+def number_group_optimal_assignment_per_param_mse(
     predicted: torch.Tensor,
     target: torch.Tensor,
     param_spec: "ParamSpec",
 ) -> torch.Tensor:
-    """Return per-parameter MSE after swaps within number-collapsed name groups.
+    """Return per-coordinate MSE after optimal assignment within numbered families.
 
     :param predicted: Parameter vectors, shape ``(batch, num_params)``.
     :param target: Ground-truth vectors, same shape as ``predicted``.
-    :param param_spec: Parameter names and encoded spans defining eligible swaps.
-    :returns: Per-target-dimension mean squared error, shape ``(num_params,)``.
+    :param param_spec: Parameter names and encoded spans defining eligible assignments.
+    :returns: Per-coordinate mean squared error, shape ``(num_params,)``.
     :raises ValueError: If tensor shapes or the ParamSpec width do not match.
     """
     if predicted.ndim != 2 or predicted.shape != target.shape:
@@ -270,7 +308,7 @@ def number_group_swap_per_param_mse(
         )
 
     per_target_errors = torch.empty_like(predicted, dtype=torch.float32)
-    for group in _number_group_indices(param_spec):
+    for _, group in _number_groups(param_spec):
         block_indices = [torch.tensor(block, device=predicted.device) for block in group]
         predicted_blocks = torch.stack([predicted[:, block] for block in block_indices], dim=1)
         target_blocks = torch.stack([target[:, block] for block in block_indices], dim=1)
@@ -323,13 +361,13 @@ def best_swap_per_param_mse(predicted: torch.Tensor, target: torch.Tensor) -> to
     return per_target_errors.mean(dim=0)
 
 
-class NumberGroupSwapParamMSE(Metric):
-    """MSE after optimal swaps within number-collapsed parameter-name groups."""
+class NumberGroupOptimalAssignmentParamMSE(Metric):
+    """MSE after optimal assignment within number-collapsed parameter-name groups."""
 
     def __init__(self, param_spec: "ParamSpec") -> None:
-        """Register accumulators and the ParamSpec defining eligible swaps.
+        """Register accumulators and the ParamSpec defining eligible assignments.
 
-        :param param_spec: Parameter names and encoded spans defining eligible swaps.
+        :param param_spec: Parameter names and encoded spans defining eligible assignments.
         """
         super().__init__()
         self.param_spec = param_spec
@@ -337,17 +375,19 @@ class NumberGroupSwapParamMSE(Metric):
         self.add_state("element_count", default=torch.tensor(0), dist_reduce_fx="sum")
 
     def update(self, predicted: torch.Tensor, target: torch.Tensor) -> None:
-        """Accumulate number-group-constrained squared errors.
+        """Accumulate number-group optimal-assignment squared errors.
 
         :param predicted: Parameter vectors, shape ``(batch, num_params)``.
         :param target: Ground-truth vectors, same shape as ``predicted``.
         """
-        per_param_mse = number_group_swap_per_param_mse(predicted, target, self.param_spec)
+        per_param_mse = number_group_optimal_assignment_per_param_mse(
+            predicted, target, self.param_spec
+        )
         self.sum_squared_error = self.sum_squared_error + per_param_mse.sum() * predicted.shape[0]
         self.element_count = self.element_count + predicted.numel()
 
     def compute(self) -> torch.Tensor:
-        """Return the accumulated mean constrained-swap squared error.
+        """Return the accumulated mean constrained-assignment squared error.
 
         :returns: Scalar mean over every accumulated element.
         """
