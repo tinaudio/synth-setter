@@ -21,6 +21,7 @@ from synth_setter.pipeline.schemas.spec import (
     ShardSpec,
 )
 from synth_setter.renderer_backend import FlushBlocks
+from synth_setter.synth_spec import SYNTHS, SynthName
 
 FIXED_NOW = datetime(2026, 3, 28, 12, 0, 0, tzinfo=UTC)
 
@@ -213,6 +214,15 @@ class TestRenderConfig:
         cfg = RenderConfig(**{**_valid_render_kwargs(), "gui_toggle_cadence": "always_on"})
         assert cfg.plugin_reload_cadence == "once"
         assert cfg.gui_toggle_cadence == "always_on"
+
+    def test_kr106_single_note_accepts_shard_lifetime_plugin(self) -> None:
+        """The curated parameter space does not constrain plugin reload cadence."""
+        kwargs = _valid_render_kwargs()
+        kwargs["synth"] = SYNTHS[SynthName("ultramaster_kr106_single_note")]
+
+        config = RenderConfig(**kwargs)
+
+        assert config.plugin_reload_cadence == "once"
 
     def test_once_reload_with_never_warmup_accepted(self) -> None:
         """``("once", "never")`` — the "load once, skip warm-up" mode — constructs cleanly."""

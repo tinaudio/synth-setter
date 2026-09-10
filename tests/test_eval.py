@@ -41,6 +41,7 @@ from lightning import Trainer, seed_everything
 from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationResolutionError, MissingMandatoryValue
 from pedalboard.io import AudioFile
+from pydantic import ValidationError
 
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.migrate_checkpoint import main
@@ -369,6 +370,21 @@ def test_evaluate_pyfdn_derived_feedback_checkpoint_preserves_parameter_metrics(
     assert torch.isfinite(metrics[f"test/per_param_mse_best_swap/{control}"])
     assert torch.isfinite(metrics[f"test/per_param_mse_number_group_swap/{control}"])
     assert torch.isfinite(metrics[f"test/per_param_mse_spec_quantized/{control}"])
+
+
+def test_evaluate_unknown_feature_flag_raises_before_checkpoint_resolution() -> None:
+    """Feature-flag validation precedes evaluation setup and checkpoint access."""
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/eval_flow_sketch_nsynth", "feature_flags=[9999]"],
+        )
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(ValidationError, match="unknown feature flag number: 9999"):
+        evaluate(cfg)
 
 
 def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -> None:
@@ -1171,8 +1187,10 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     :param tmp_path: Pinned as Hydra ``paths.output_dir`` / ``paths.log_dir``.
     :param surge_xt_smoke_datasets: Holds ``{train,val,test}.lance`` + ``stats.npz``.
     :param dataset_spec_factory: Factory producing the frozen dataset provenance.
-    :param monkeypatch: Replaces the external W&B logger boundary.
+    :param monkeypatch: Isolates the process environment modified by the endpoint.
     """
+    feature_flag_name = "SYNTH_SETTER_FF_3160_CORRECT_AST_PATCH_PADDING"
+    monkeypatch.delenv(feature_flag_name, raising=False)
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
@@ -1195,6 +1213,7 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
         cfg.datamodule.batch_size = 1
         cfg.datamodule.num_workers = 0
         cfg.ckpt_path = None
+        cfg.feature_flags = [3160]
 
     write_spec_to_path(
         dataset_spec_factory(
@@ -1213,6 +1232,7 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     finally:
         GlobalHydra.instance().clear()
 
+    assert os.environ[feature_flag_name] == "1"
     param_mse = metric_dict["test/param_mse"]
     assert isinstance(param_mse, torch.Tensor)
     assert param_mse.numel() == 1
