@@ -14,7 +14,7 @@ from synth_setter.pipeline.data.param_language import (
     EMBEDDING_MODEL,
     EMBEDDING_REVISION,
     describe_fields,
-    load_param_language,
+    load_param_name_embeddings,
 )
 
 
@@ -124,7 +124,7 @@ class LanguageParameterProjection(GroupedParameterProjection):
             return
         if self.embedding_path is None:
             raise ValueError("fresh language projection requires a finalized embedding_path")
-        embeddings, metadata = load_param_language(
+        embeddings, metadata = load_param_name_embeddings(
             Path(self.embedding_path), self.param_spec_name, self.synth_name
         )
         if metadata.dimension != self.embedding_dim:

@@ -67,7 +67,10 @@ from synth_setter.evaluation.oracle_probe import OracleProbeProvenance
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt, split_for_shard
-from synth_setter.pipeline.data.param_language import load_param_language
+from synth_setter.pipeline.data.param_language import (
+    PARAM_NAME_DATASET,
+    load_param_name_embeddings,
+)
 from synth_setter.pipeline.schemas.render_metrics import (
     RenderRejectionMetrics,
     render_metrics_path,
@@ -2228,7 +2231,7 @@ def test_cfg_dataset_carries_ram_bounded_num_workers_for_oracle_eval(
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.timeout(300)
-def test_generate_dataset_cli_publishes_consumable_param_language(tmp_path: Path) -> None:
+def test_generate_dataset_cli_publishes_consumable_param_name_embeddings(tmp_path: Path) -> None:
     """The real generate CLI publishes normalized parameter-language embeddings.
 
     :param tmp_path: Holds Hydra output and downloaded final artifacts.
@@ -2244,7 +2247,8 @@ def test_generate_dataset_cli_publishes_consumable_param_language(tmp_path: Path
                 str(Path(sys.executable).parent / "synth-setter-generate-dataset"),
                 "experiment=generate_dataset/smoke-shard",
                 "synth=surge_simple",
-                "param_language_dimension=128",
+                "param_name_embedding=true",
+                "param_name_embedding_dimension=128",
                 "finalize_inline=true",
                 "train_val_test_sizes=[4,0,0]",
                 "render.samples_per_shard=4",
@@ -2268,10 +2272,10 @@ def test_generate_dataset_cli_publishes_consumable_param_language(tmp_path: Path
             f"--- STDERR ---\n{result.stderr}"
         )
 
-        uri = f"r2://{bucket}/{prefix}param_language.npz"
-        with r2_io.downloaded_to_tempfile(uri) as path:
-            embeddings, metadata = load_param_language(path, "surge_simple", "surge_simple")
-        assert embeddings.shape == (len(metadata.descriptions), 128)
+        uri = f"r2://{bucket}/{prefix}{PARAM_NAME_DATASET}"
+        embeddings, metadata = load_param_name_embeddings(uri, "surge_simple", "surge_simple")
+        assert embeddings.shape == (91, 128)
+        assert metadata.dimension == 128
         np.testing.assert_allclose(np.linalg.norm(embeddings, axis=1), 1, atol=1e-6)
         assert not np.allclose(embeddings[0], embeddings[1])
         assert r2_io.object_size(f"r2://{bucket}/{prefix}dataset.complete") is not None

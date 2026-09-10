@@ -23,7 +23,7 @@ from synth_setter.synth_spec import SynthSpec
 _REQUIRED_TOP_LEVEL_FIELDS: tuple[str, ...] = tuple(
     sorted(
         (set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields))
-        - {"param_language_dimension"}
+        - {"param_name_embedding", "param_name_embedding_dimension"}
     )
 )
 _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS = frozenset(

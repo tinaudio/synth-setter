@@ -1,8 +1,11 @@
 """Language fusion preserves the grouped numeric contract."""
 
+import shutil
 from pathlib import Path
 
+import lance
 import numpy as np
+import pyarrow as pa
 import pytest
 import torch
 
@@ -13,12 +16,42 @@ from synth_setter.models.components.transformer import (
     GroupedParameterProjection,
     ParamTokenEmbed,
 )
+from synth_setter.pipeline.data.add_embeddings import embedding_field_metadata
 from synth_setter.pipeline.data.param_language import (
+    PARAM_NAME_EMBEDDING_FIELD,
+    PARAM_NAME_EMBEDDING_REGISTRY_KEY,
     describe_fields,
-    encode_param_language,
-    matryoshka_vectors,
-    save_param_language,
+    prepare_param_name_embeddings,
+    write_param_name_dataset,
 )
+from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+
+def _write_artifact(path: Path, vectors: np.ndarray) -> None:
+    write_param_name_dataset(path, "surge_4", "surge_4", dimension=vectors.shape[1])
+    metadata = embedding_field_metadata(
+        PARAM_NAME_EMBEDDING_REGISTRY_KEY,
+        AddEmbeddingsConfig(
+            lance_uri=str(path),
+            embeddings=(PARAM_NAME_EMBEDDING_REGISTRY_KEY,),
+            build_index=False,
+            param_name_embedding_dimension=vectors.shape[1],
+        ),
+    )
+    field = pa.field(
+        PARAM_NAME_EMBEDDING_FIELD,
+        pa.list_(pa.float32(), vectors.shape[1]),
+        metadata=metadata,
+    )
+    table = (
+        lance.dataset(path)
+        .to_table()
+        .append_column(
+            field,
+            pa.FixedSizeListArray.from_arrays(pa.array(vectors.reshape(-1)), vectors.shape[1]),
+        )
+    )
+    lance.write_dataset(table, path, mode="overwrite")
 
 
 @pytest.fixture
@@ -31,8 +64,8 @@ def artifact(tmp_path: Path) -> Path:
     count = len(describe_fields("surge_4", "surge_4"))
     vectors = np.random.default_rng(7).normal(size=(count, 128)).astype(np.float32)
     vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
-    path = tmp_path / "language.npz"
-    save_param_language(path, vectors, "surge_4", "surge_4")
+    path = tmp_path / "params.lance"
+    _write_artifact(path, vectors)
     return path
 
 
@@ -64,7 +97,7 @@ def test_projection_checkpoint_without_artifact_preserves_tokens(artifact: Path)
     x = torch.randn(2, param_specs["surge_4"].encoded_width)
     expected = projection.param_to_token(x)
     state = projection.state_dict()
-    artifact.unlink()
+    shutil.rmtree(artifact)
     restored = LanguageParameterProjection(16, "surge_4", "surge_4")
     restored.load_state_dict(state)
     torch.testing.assert_close(restored.param_to_token(x), expected)
@@ -154,9 +187,9 @@ def test_projection_native_width_metadata_produces_model_width(tmp_path: Path) -
     :param tmp_path: Isolated artifact directory.
     """
     count = len(describe_fields("surge_4", "surge_4"))
-    path = tmp_path / "full.npz"
+    path = tmp_path / "params.lance"
     vectors = np.full((count, 768), 1 / np.sqrt(768), dtype=np.float32)
-    save_param_language(path, vectors, "surge_4", "surge_4")
+    _write_artifact(path, vectors)
     projection = LanguageParameterProjection(
         16, "surge_4", "surge_4", embedding_dim=768, embedding_path=str(path)
     )
@@ -205,9 +238,9 @@ def test_real_language_projection_checkpoint_reload_preserves_trained_tokens(
 
     :param tmp_path: Isolated embedding and checkpoint directory.
     """
-    path = tmp_path / "language.npz"
-    embeddings = matryoshka_vectors(encode_param_language("surge_4", "surge_4"), 128)
-    save_param_language(path, embeddings, "surge_4", "surge_4")
+    path = prepare_param_name_embeddings(
+        tmp_path, "surge_4", "surge_4", dimension=128, device="cpu"
+    )
     projection = LanguageParameterProjection(16, "surge_4", "surge_4", embedding_path=str(path))
     projection.initialize_embeddings()
     x = torch.randn(2, param_specs["surge_4"].encoded_width)
@@ -217,7 +250,7 @@ def test_real_language_projection_checkpoint_reload_preserves_trained_tokens(
     expected = projection.param_to_token(x).detach()
     checkpoint = tmp_path / "projection.pt"
     torch.save(projection.state_dict(), checkpoint)
-    path.unlink()
+    shutil.rmtree(path)
     restored = LanguageParameterProjection(16, "surge_4", "surge_4")
     restored.load_state_dict(torch.load(checkpoint, weights_only=True))
     torch.testing.assert_close(restored.param_to_token(x), expected)

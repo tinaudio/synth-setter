@@ -94,6 +94,10 @@ class AddEmbeddingsConfig(BaseModel):
 
         Strategy rendering param rows as conditioning text.
 
+    .. attribute :: param_name_embedding_dimension
+
+        Matryoshka width for parameter-description embeddings.
+
     .. attribute :: render
 
         Composed render and synth identity, or ``None`` when nothing re-renders.
@@ -147,6 +151,9 @@ class AddEmbeddingsConfig(BaseModel):
     param_text_normalizer: str = Field(
         default=DEFAULT_PARAM_TEXT_NORMALIZER,
         description="Strategy rendering param rows as conditioning text.",
+    )
+    param_name_embedding_dimension: int = Field(
+        default=128, description="Matryoshka width for parameter-description embeddings."
     )
     render: RenderConfig | None = Field(
         default=None,
@@ -234,6 +241,19 @@ class AddEmbeddingsConfig(BaseModel):
         """
         if value is not None and value not in param_specs:
             raise ValueError(f"param_spec_name {value!r} must be one of {sorted(param_specs)}")
+        return value
+
+    @field_validator("param_name_embedding_dimension")
+    @classmethod
+    def _param_name_embedding_dimension_is_supported(cls, value: int) -> int:
+        """Restrict parameter-description embeddings to trained Matryoshka widths.
+
+        :param value: Requested output width.
+        :returns: Supported width unchanged.
+        :raises ValueError: EmbeddingGemma does not support the width.
+        """
+        if value not in (128, 256, 512, 768):
+            raise ValueError("param_name_embedding_dimension must be 128, 256, 512, or 768")
         return value
 
     @field_validator("param_text_normalizer")

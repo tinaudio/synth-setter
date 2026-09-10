@@ -4,14 +4,19 @@ Tracking: #3369.
 
 ## Offline field metadata
 
-Dataset generation/finalization accepts `param_language_dimension=128` (also 256,
-512, or 768). The default `null` leaves existing datasets unchanged. Finalize runs
-frozen `google/embeddinggemma-300m` on CPU once per logical field, caches the full
-768-dimensional table in its work directory, and publishes `param_language.npz`
-before Lance finalization and `dataset.complete`. Nothing is repeated per dataset
-row. A replacement finalizer validates and reuses an already-published language
-artifact without loading the encoder. Published identity/dimension mismatches
-fail closed; corrupt or non-native-width local full-vector caches regenerate.
+Dataset generation exposes `param_name_embedding=false` as the opt-in. When true,
+finalization builds `params.lance` with one row per logical field and invokes the
+same registry-driven `add-embeddings` API used for other embeddings. The separate
+`param_name_embedding_dimension` selects 128 (default), 256, 512, or 768. Existing
+datasets remain unchanged unless opted in.
+
+The initial Lance schema contains only stable field index, field name, and canonical
+description—never per-example parameter values or audio. The `param_name` registry
+entry adds `param_name_embedding`. Finalize uploads this small dataset before Lance
+split finalization and writes `params.lance.complete` as its resumable boundary.
+A replacement finalizer validates and reuses the published dataset without loading
+the encoder. Nothing is repeated per training example, and no temporary value rows
+need post-processing or deletion.
 
 The model revision is pinned to
 `57c266a740f537b4dc058e1b0cda161fd15afa75`. Its Sentence Transformers document
@@ -19,22 +24,23 @@ pipeline supplies the prompt and pooling; retained prefixes are L2-normalized
 following the [model card](https://ai.google.dev/gemma/docs/embeddinggemma/model_card).
 EmbeddingGemma is distinct from the existing SA3 T5Gemma conditioner.
 
-The artifact contains float32 `embeddings` shaped `(logical_fields, dimension)`
-and strict JSON `metadata`. Descriptions record spec/synth identity, field class,
-encoded span, and available native bounds/category labels/shape. Native bounds
-are not labelled as physical units. Fingerprints cover ordered descriptions and
-tensor bytes. Consumers reject incompatible specs, changed metadata, malformed
-vectors, and checksum mismatches. Category vectors remain one logical field.
+The dataset retains explicit field index/name plus canonical JSON descriptions.
+Descriptions record spec/synth identity, field class, encoded span, and available
+native bounds/category labels/shape. Native bounds are not labelled as physical
+units. Strict schema metadata pins the spec, synth, model, revision, extraction
+policy, dimension, and ordered-description digest. Consumers sort by field index
+and reject missing/duplicate indices, incompatible descriptions, malformed vectors,
+and non-unit rows. Category vectors remain one logical field.
 
 Model access requires accepting the model license and configuring a Hugging Face
 token. Finalization needs network/model-cache access; subsequent artifact loading
-does not load a language model. Reuse the same finalizer work directory to derive
-another supported dimension without re-encoding. Do not modify a completed run's
-spec to retrofit embeddings: create a new opted-in dataset run.
+does not load a language model. Hugging Face's model cache avoids repeated checkpoint
+downloads. Do not modify a completed run's spec to retrofit embeddings: create a
+new opted-in dataset run.
 
 ## Training consumers
 
-Use a finalized, locally hydrated dataset containing `param_language.npz`:
+Use a finalized, locally hydrated dataset containing `params.lance`:
 
 ```bash
 uv run synth-setter-train experiment=surge/flow_simple model/projection=language \

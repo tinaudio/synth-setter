@@ -42,6 +42,8 @@ debug: false
 param_spec_name: null
 # Strategy rendering param rows as conditioning text for param-sourced embeddings.
 param_text_normalizer: param_names
+# Matryoshka width used by the param_name registry entry.
+param_name_embedding_dimension: 128
 # Master seed for param_shift's per-row replacement draws; row seeds derive from it.
 param_shift_seed: 0
 # hydra/default interpolates ${task_name}; run.dir is overridden below since

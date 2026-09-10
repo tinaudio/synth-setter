@@ -164,7 +164,8 @@ class TestValidateStructure:
     def test_required_top_level_fields_match_dataset_spec_model(self) -> None:
         """Only optional parameter-language metadata may be omitted at the top level."""
         expected = (set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields)) - {
-            "param_language_dimension"
+            "param_name_embedding",
+            "param_name_embedding_dimension",
         }
         assert set(_REQUIRED_TOP_LEVEL_FIELDS) == expected
 
