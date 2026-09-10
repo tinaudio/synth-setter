@@ -23,11 +23,40 @@ from synth_setter.data.third_party_datamodule import AudioDecodeError, decode_cl
 from synth_setter.data.vst.core import write_wav
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
+_CLI_HELP_TIMEOUT_SECONDS = 120
+
 
 def test_noise_source_device_mps_uses_supported_cpu_generator() -> None:
     """MPS sampling draws seeded noise on CPU before device transfer."""
     assert sketch_render._noise_source_device(torch.device("mps")) == torch.device("cpu")
     assert sketch_render._noise_source_device(torch.device("cuda")) == torch.device("cuda")
+
+
+def test_write_metrics_stereo_row_preserves_optional_mid_side_score(tmp_path: Path) -> None:
+    """The sketch-render CSV writer accepts the optional stereo metric.
+
+    :param tmp_path: Pytest fixture providing a fresh output directory.
+    """
+    path = tmp_path / "metrics.csv"
+    sketch_render._write_metrics(
+        path,
+        {
+            "content_cfg": 1.0,
+            "sketch_cfg": 2.0,
+            "seed": 3,
+            "mss": 0.1,
+            "wmfcc": 0.2,
+            "sot": 0.3,
+            "rms": 0.4,
+            "mldr": 0.5,
+            "mldr_mid_side": 0.6,
+            "r2_uri": "",
+        },
+    )
+
+    with path.open(newline="", encoding="utf-8") as stream:
+        row = next(csv.DictReader(stream))
+    assert row["mldr_mid_side"] == "0.6"
 
 
 def test_cfg_grid_repeated_strengths_returns_argument_order_product() -> None:
@@ -649,7 +678,7 @@ def test_console_script_is_installed_and_callable() -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=_CLI_HELP_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr

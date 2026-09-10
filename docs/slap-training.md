@@ -42,6 +42,36 @@ checkpoint state. EMA exports continue to consume the projector output, not the
 online predictor. Alias removal requires coordinating the export/checkpoint
 consumers tracked in #3204, #3207, and #3208.
 
+## Held-out retrieval
+
+The canonical experiment enables `model.retrieval_eval` and
+`datamodule.eval_sample_ids`. Validation and checkpoint-reloaded testing log
+`retrieval/{val,test}/` metrics over each loader's complete observed gallery:
+bidirectional Recall@1/5/10 and MRR, gallery size, normalized embedding variance,
+matched cosine, and cyclic mismatched cosine. `loss/{val,test}/` remains the
+optimization diagnostic. Retrieval uses **online predictor outputs**, not EMA
+projections or ANN exports.
+
+Predictions and IDs are detached to CPU during the existing loss forward, then
+gathered across ranks at epoch end. Score matrices are query-chunked. Equal
+cosine scores receive expected Recall/MRR under uniform tie-breaking; collapsed
+vectors therefore cannot obtain perfect retrieval from row-order ties. Sanity
+validation produces no retrieval metrics, and each evaluation loop clears its
+observations. Trainer limits restrict the observed gallery; use unrestricted
+validation/test loaders for full-split metrics.
+
+IDs are transient int64 row offsets within a pinned Lance split version, not
+new stored columns. Each loader has an independent ID namespace. Distributed
+sampler padding and repeat-first rows retain the first rank/batch observation.
+Repeated normalized predictions must be within L2 distance `0.01` (unit-vector
+cosine distance `5e-5`), allowing bf16 batch-shape roundoff; larger conflicts
+raise an error. Fake random datasets cannot provide these IDs, and OT-reordered
+batches reject them. Unrelated loader defaults are unchanged.
+
+Empty galleries have no retrieval scores; singleton galleries omit mismatched
+cosine. Learning quality and non-collapse still require representative held-out
+evaluation, not just successful integration tests.
+
 ## Verification scope
 
 The fixed-batch manual-optimizer test checks loss reduction with frozen target

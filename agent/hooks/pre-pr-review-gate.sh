@@ -37,7 +37,8 @@
 # Filename-SHA + ancestry + first-parent lag are the floor; beyond grepping for
 # unresolved `[comment-hygiene:warn|block]` tags and any `[<skill>:block]` tag
 # (the sub-gates below), the gate does not inspect file contents or mtime.
-# `[<skill>:nit]` is advisory by definition and is matched by neither sub-gate.
+# `[<skill>:nit]` and `[<skill>:low-confidence]` are body-only and matched by
+# neither sub-gate.
 #
 # CONTRACT — what the command line must carry
 #   REVIEW_FULL=<path>
@@ -53,7 +54,7 @@
 #       `REVIEW_COMMENT_GATE` is `warn`/`off` (default `block`).
 #     - The file lists no unresolved `[<skill>:block]` findings from any skill,
 #       unless `REVIEW_BLOCK_GATE` is `warn`/`off` (default `block`).
-#     - `[<skill>:nit]` findings never gate, at any setting.
+#     - `[<skill>:nit]` and `[<skill>:low-confidence]` findings never gate.
 #
 # INPUT (stdin)
 #   JSON with .tool_input.command — the Bash command the agent is about to run.
@@ -414,10 +415,12 @@ if [[ "$lag" -gt "$REVIEW_MAX_LAG" ]]; then
   block "review is ${lag} first-parent commits behind ${REVIEW_REF_LABEL} (max ${REVIEW_MAX_LAG}; set REVIEW_MAX_LAG=N to widen)"
 fi
 
-# Match the bracketed tag, not the bare skill name the PASS template uses; `nit`
-# stays outside the alternation because it is advisory. `|| true`: no-match is 1.
+# Match the bracketed tag, not the bare skill name the PASS template uses; body-only
+# NIT and LOW CONFIDENCE stay outside the alternation. `|| true`: no-match is 1.
 if [[ "$REVIEW_COMMENT_GATE" != "off" ]]; then
-  comment_findings=$(grep -oE '\[comment-hygiene:(warn|block)\]' "$REVIEW_PATH" || true)
+  comment_findings=$(grep -E \
+    '^- (\*\*L[0-9]+\*\* — )?\*\*\[comment-hygiene:(warn|block)\]( \[low confidence\])?\*\*' \
+    "$REVIEW_PATH" || true)
   comment_count=$(printf '%s' "$comment_findings" | grep -c . || true)
   if [[ "$comment_count" -gt 0 ]]; then
     remediation="run /fix-review-comments, then refresh the sentinel with /repo-review-full-no-comments (REVIEW_COMMENT_GATE=off bypasses for an intentional finding)"
@@ -437,8 +440,9 @@ fi
 # gates don't overlap and REVIEW_COMMENT_GATE=off fully owns comment-hygiene.
 # `|| true`: tolerate grep's no-match exit-1, like the comment sub-gate above.
 if [[ "$REVIEW_BLOCK_GATE" != "off" ]]; then
-  block_findings=$(grep -oE '\[[a-z][a-z0-9-]*:block\]' "$REVIEW_PATH" \
-    | grep -vF '[comment-hygiene:block]' || true)
+  block_findings=$(sed -nE \
+    's/^- (\*\*L[0-9]+\*\* — )?\*\*(\[[a-z][a-z0-9-]*:block\])( \[low confidence\])?\*\*.*/\2/p' \
+    "$REVIEW_PATH" | grep -vFx '[comment-hygiene:block]' || true)
   block_count=$(printf '%s' "$block_findings" | grep -c . || true)
   if [[ "$block_count" -gt 0 ]]; then
     block_remediation="resolve them or set REVIEW_BLOCK_GATE=off for an intentional override"

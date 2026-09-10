@@ -1,0 +1,19 @@
+# @package _global_
+
+# From-scratch PupuJEPA Tiny conditioning trains the teacher and pool jointly from waveforms.
+defaults:
+  - override /model/encoder: pupujepa_scratch
+
+model:
+  conditioning: audio
+  encoder:
+    backbone:
+      variant: tiny
+    head:
+      embed_dim: 1536
+  encoder_output_dim: ${model.encoder.out_dim}
+  vector_field:
+    conditioning_dim: ${model.encoder.out_dim}
+
+datamodule:
+  conditioning: audio

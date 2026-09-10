@@ -26,12 +26,13 @@ We compute the following metrics:
 7. MLDR: multi-scale loudness dynamic range (DiffVox, arXiv:2504.14735 eq. 14-15) —
     L1 distance of the log ratio between short- and long-window energy envelopes at
     (50ms, 1s) and (100ms, 2s) integration times.
-8. pyFDN only: octave-band RT60 natural-log RMSE.
-9. pyFDN only: octave-band energy-decay-curve RMSE in dB.
-10. pyFDN only (Götz et al., arXiv:2510.23158): octave-band T30 mean absolute
+8. Stereo only: MLDR after an energy-preserving mid/side transform.
+9. pyFDN only: octave-band RT60 natural-log RMSE.
+10. pyFDN only: octave-band energy-decay-curve RMSE in dB.
+11. pyFDN only (Götz et al., arXiv:2510.23158): octave-band T30 mean absolute
     percentage error and C50 mean absolute error in dB per sample, plus per-band
     Pearson correlation of both parameters across the dataset.
-11. ``--fad``: Fréchet Audio Distance between the target and predicted sets on
+12. ``--fad``: Fréchet Audio Distance between the target and predicted sets on
     CLAP embeddings (dataset-level, one row in the aggregate).
 """
 
@@ -54,10 +55,16 @@ from dtw import dtw
 from kymatio.numpy import Scattering1D
 from loguru import logger
 from pedalboard.io import AudioFile
-from pyFDN import MatchEnergyDecay, Response, estimate_rt_bands
+from pyFDN import estimate_rt_bands
 from scipy.signal import lfilter
 
 from synth_setter.evaluation import acoustic_parameters
+from synth_setter.evaluation.joint_transport import compute_joint_time_frequency_ot
+from synth_setter.evaluation.response_losses import (
+    compute_pyfdn_match_energy_decay,
+    compute_pyfdn_response_losses,
+    validate_mono_impulse_response_pair,
+)
 
 # Column headers load_aggregated_metrics requires of the aggregated-metrics CSVs;
 # the write sites below still spell them literally.
@@ -356,39 +363,6 @@ def compute_sot(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100
     return dists.mean()
 
 
-def _mono_impulse_response(audio: np.ndarray, name: str) -> np.ndarray:
-    """Return one finite mono impulse response as a time-major vector.
-
-    :param audio: Channel-first audio expected to have shape ``(1, samples)``.
-    :param name: Signal name used in validation errors.
-    :returns: The signal's one-dimensional sample vector.
-    :raises ValueError: The signal is not finite mono audio.
-    """
-    array = np.asarray(audio)
-    if array.ndim != 2 or array.shape[0] != 1:
-        raise ValueError(f"{name} impulse response must be mono with shape (1, samples)")
-    if not np.isfinite(array).all():
-        raise ValueError(f"{name} impulse response must contain only finite values")
-    return array[0]
-
-
-def _paired_mono_impulse_responses(
-    target: np.ndarray, pred: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    """Validate and return a target/prediction mono impulse-response pair.
-
-    :param target: Target channel-first impulse response.
-    :param pred: Predicted channel-first impulse response.
-    :returns: Time-major target and prediction vectors with equal lengths.
-    :raises ValueError: Either signal is invalid or their lengths differ.
-    """
-    target_ir = _mono_impulse_response(target, "target")
-    pred_ir = _mono_impulse_response(pred, "predicted")
-    if target_ir.shape != pred_ir.shape:
-        raise ValueError("target and predicted impulse responses must have the same sample count")
-    return target_ir, pred_ir
-
-
 def compute_octave_rt60_log_rmse(
     target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0
 ) -> float:
@@ -403,7 +377,7 @@ def compute_octave_rt60_log_rmse(
     :returns: Root mean squared natural-log RT60 ratio across valid octave bands.
     :raises ValueError: Shapes, centre frequencies, or fitted bands are invalid.
     """
-    target_ir, pred_ir = _paired_mono_impulse_responses(target, pred)
+    target_ir, pred_ir = validate_mono_impulse_response_pair(target, pred)
     target_rt, target_centres = estimate_rt_bands(target_ir, sample_rate)
     pred_rt, pred_centres = estimate_rt_bands(pred_ir, sample_rate)
     if not np.array_equal(target_centres, pred_centres):
@@ -416,27 +390,19 @@ def compute_octave_rt60_log_rmse(
     return float(np.sqrt(np.mean(log_error**2)))
 
 
-@torch.no_grad()
 def compute_octave_edc_rmse_db(
     target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0
 ) -> float:
     """Return pyFDN's octave-band energy-decay-curve RMSE in dB.
 
+    Invalid inputs and failed or non-finite upstream losses propagate ``ValueError``.
+
     :param target: Target mono impulse response, shape ``(1, samples)``.
     :param pred: Predicted mono impulse response, same shape as ``target``.
     :param sample_rate: Sample rate in Hz.
     :returns: RMS dB difference over target-valid octave-band decay frames.
-    :raises ValueError: Shapes are invalid or the resulting score is non-finite.
     """
-    target_ir, pred_ir = _paired_mono_impulse_responses(target, pred)
-    response = Response(
-        h=torch.as_tensor(pred_ir[:, np.newaxis, np.newaxis]),
-        fs=float(sample_rate),
-    )
-    value = float(MatchEnergyDecay(target_ir)(response).item())
-    if not np.isfinite(value):
-        raise ValueError("octave-band energy-decay RMSE must be finite")
-    return value
+    return compute_pyfdn_match_energy_decay(target, pred, sample_rate)
 
 
 def compute_acoustic_parameter_metrics(
@@ -451,7 +417,7 @@ def compute_acoustic_parameter_metrics(
         parameter, octave band and side; unfittable T30 bands read ``NaN``. Invalid
         shapes and a T30 that fits on no band on both sides raise ``ValueError``.
     """
-    target_ir, pred_ir = _paired_mono_impulse_responses(target, pred)
+    target_ir, pred_ir = validate_mono_impulse_response_pair(target, pred)
     target_t30, _ = acoustic_parameters.octave_band_t30(target_ir, sample_rate)
     pred_t30, _ = acoustic_parameters.octave_band_t30(pred_ir, sample_rate)
     target_c50, _ = acoustic_parameters.octave_band_c50(target_ir, sample_rate)
@@ -627,6 +593,56 @@ def compute_mldr(target: np.ndarray, pred: np.ndarray, sample_rate: float = 4410
     return dist
 
 
+def compute_mldr_mid_side(
+    target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0
+) -> float:
+    """Return MLDR after an energy-preserving stereo mid/side transform.
+
+    :param target: Target stereo audio with shape ``(2, T)``.
+    :param pred: Predicted stereo audio with the same shape as ``target``.
+    :param sample_rate: Sample rate in Hz; governs the MLDR envelope time constants.
+    :returns: Non-negative mid/side distance in natural-log units.
+    :raises ValueError: Inputs are not finite, matching, nonempty stereo arrays.
+    """
+    if (
+        target.ndim != 2
+        or target.shape[0] != 2
+        or target.shape[-1] == 0
+        or target.shape != pred.shape
+    ):
+        raise ValueError(
+            "target and pred must have matching nonempty stereo (2, T) shapes; "
+            f"got {target.shape} and {pred.shape}"
+        )
+    scale = math.sqrt(2.0)
+    target_float = np.asarray(target, dtype=np.float64)
+    pred_float = np.asarray(pred, dtype=np.float64)
+    if not np.isfinite(target_float).all() or not np.isfinite(pred_float).all():
+        raise ValueError("target and pred must contain only finite values")
+    with np.errstate(over="ignore"):
+        target_mid_side = np.stack(
+            (
+                (target_float[0] + target_float[1]) / scale,
+                (target_float[0] - target_float[1]) / scale,
+            )
+        )
+        pred_mid_side = np.stack(
+            (
+                (pred_float[0] + pred_float[1]) / scale,
+                (pred_float[0] - pred_float[1]) / scale,
+            )
+        )
+    if not np.isfinite(target_mid_side).all() or not np.isfinite(pred_mid_side).all():
+        raise ValueError("mid/side transformed audio must contain only finite values")
+    peak = max(float(np.abs(target_mid_side).max()), float(np.abs(pred_mid_side).max()))
+    longest_window = max(1, int(2.0 * sample_rate))
+    safe_energy_peak = math.sqrt(np.finfo(np.float64).max / longest_window)
+    if peak > safe_energy_peak:
+        target_mid_side /= peak
+        pred_mid_side /= peak
+    return compute_mldr(target_mid_side, pred_mid_side, sample_rate)
+
+
 def compute_metrics_on_dir(
     audio_dir: Path, renderer_backend: ReverbMetricBackend | None = None
 ) -> dict[str, float]:
@@ -634,7 +650,7 @@ def compute_metrics_on_dir(
 
     :param audio_dir: Directory containing ``target.wav`` and ``pred.wav``.
     :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
-    :returns: Dict mapping metric name to scalar score.
+    :returns: Metric scores, including ``mldr_mid_side`` only for stereo pairs.
     :raises ValueError: The target and predicted WAV files have different sample rates.
     """
     with AudioFile(str(audio_dir / "target.wav")) as target_file:
@@ -653,13 +669,20 @@ def compute_metrics_on_dir(
         "rms": compute_rms(target, pred, target_sample_rate),
         "mldr": compute_mldr(target, pred, target_sample_rate),
     }
+    if target.shape[0] == 2 and pred.shape[0] == 2:
+        metrics["mldr_mid_side"] = compute_mldr_mid_side(target, pred, target_sample_rate)
     if renderer_backend == "pyfdn":
+        response_losses = compute_pyfdn_response_losses(target, pred, target_sample_rate)
+        metrics.update(response_losses)
         metrics.update(
             {
+                "joint_time_frequency_ot": compute_joint_time_frequency_ot(
+                    target, pred, target_sample_rate
+                ),
+                "octave_edc_rmse_db": response_losses["pyfdn_match_energy_decay"],
                 "octave_rt60_log_rmse": compute_octave_rt60_log_rmse(
                     target, pred, target_sample_rate
                 ),
-                "octave_edc_rmse_db": compute_octave_edc_rmse_db(target, pred, target_sample_rate),
             }
         )
         metrics.update(compute_acoustic_parameter_metrics(target, pred, target_sample_rate))

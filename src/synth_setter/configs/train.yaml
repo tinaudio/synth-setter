@@ -62,7 +62,10 @@ test: True
 # simply provide checkpoint path to resume training
 ckpt_path: null
 
-# seed for random number generators in pytorch, numpy and python.random
+# Estimate online log-mel normalization from at most 10,000 training waveforms.
+estimate_normalization_stats: false
+
+# Seed for all training randomness. Calibration alone defaults to 1234 when null.
 seed: null
 
 training:
@@ -81,3 +84,7 @@ training:
   val_audio_probe: auto
   # Samples taken from the first val batch; each costs a plugin load plus a render.
   val_audio_probe_samples: 5
+  # Atomic local growing-snapshot record; null keeps the finalized baseline pinned.
+  growing_active_record: null
+  # Lightning rebuilds train loaders only at this epoch cadence; 0 disables reload.
+  growing_refresh_epoch_interval: 0

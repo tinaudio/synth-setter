@@ -147,6 +147,20 @@ TIVs before temporal pooling. The frontends produce different features; choose
 one consistently for training and evaluation. Both add extraction cost to every
 train, validation, and test batch; no precomputed sketch column is required.
 
+## Create a synth-parameter W&B workspace
+
+Create a shared workspace whose regex-backed panels discover each synth's parameter names:
+
+```bash
+synth-setter-create-wandb-parameter-workspace \
+  --entity WANDB_ENTITY \
+  --project synth-setter
+```
+
+The command prints the saved workspace URL. Its run set has no synth-name filter, so the same
+panels cover Surge, pyFDN, TorchSynth, OB-Xf, Faust, Cardinal, and KR-106 runs. It creates a new
+saved view each time; retain the printed URL instead of rerunning it for the same project.
+
 ## Launch with SkyPilot
 
 Before either RunPod recipe, run the required balance preflight. It fails open when the balance

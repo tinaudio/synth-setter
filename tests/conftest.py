@@ -271,6 +271,15 @@ def reset_hydra_config_singleton() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_wandb_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent tests from reusing a prior test's W&B service token.
+
+    :param monkeypatch: Removes the process-local service address for each test.
+    """
+    monkeypatch.delenv("WANDB_SERVICE", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _clear_hydra_config_singleton() -> Iterator[None]:
     """Reset the ``HydraConfig`` singleton after every test.
 
@@ -413,13 +422,15 @@ def cfg_torchsynth_train(tmp_path: Path) -> Iterator[DictConfig]:
     GlobalHydra.instance().clear()
 
 
-@pytest.fixture
-def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
-    """Compose a one-step CPU smoke config for the production TorchSynth audio-loss flow.
+def _compose_torchsynth_flow_smoke(tmp_path: Path, experiment: str, *overrides: str) -> DictConfig:
+    r"""Compose a one-step CPU smoke config for a production TorchSynth flow experiment.
 
-    Keeps checkpointing and CSV logging enabled while shrinking only render and model capacity.
+    Keeps checkpointing and CSV logging enabled while shrinking only render and model
+    capacity, so every flow smoke leg runs the same harness.
 
     :param tmp_path: Pinned Hydra output and log directory.
+    :param experiment: ``experiment=`` group value to compose.
+    :param \*overrides: Experiment-specific Hydra overrides appended after the shared ones.
     :returns: Ready-to-run training configuration with checkpoint and CSV artifacts enabled.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -427,7 +438,7 @@ def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
             config_name="train.yaml",
             return_hydra_config=True,
             overrides=[
-                "experiment=torchsynth/flow_audio",
+                f"experiment={experiment}",
                 "trainer=cpu",
                 "logger=csv",
                 "datamodule.sample_rate=8000",
@@ -445,10 +456,7 @@ def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
                 "model.vector_field.d_ff=8",
                 "model.vector_field.num_layers=1",
                 "model.vector_field.projection.num_tokens=2",
-                "model.validation_sample_steps=1",
-                "model.test_sample_steps=1",
-                "model.cfg_dropout_rate=0.0",
-                "model.audio_loss.t_min=0.0",
+                *overrides,
             ],
         )
     with open_dict(cfg):
@@ -468,6 +476,38 @@ def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
         cfg.callbacks.model_checkpoint.save_last = True
         cfg.training.val_audio_probe = False
     return cfg
+
+
+@pytest.fixture
+def cfg_torchsynth_flow_audio_train(tmp_path: Path) -> DictConfig:
+    """Compose a one-step CPU smoke config for the production TorchSynth audio-loss flow.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :returns: Ready-to-run training configuration with checkpoint and CSV artifacts enabled.
+    """
+    return _compose_torchsynth_flow_smoke(
+        tmp_path,
+        "torchsynth/flow_audio",
+        "model.validation_sample_steps=1",
+        "model.test_sample_steps=1",
+        "model.cfg_dropout_rate=0.0",
+        "model.audio_loss.t_min=0.0",
+    )
+
+
+@pytest.fixture
+def cfg_torchsynth_flow_endpoint_train(tmp_path: Path) -> DictConfig:
+    """Compose a one-step CPU smoke config for the endpoint-parameterized TorchSynth flow.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :returns: Ready-to-run training configuration with checkpoint and CSV artifacts enabled.
+    """
+    return _compose_torchsynth_flow_smoke(
+        tmp_path,
+        "torchsynth/flow_endpoint",
+        "model.validation_sample_steps=2",
+        "model.test_sample_steps=2",
+    )
 
 
 def _configure_online_conditioning_smoke(cfg: DictConfig, tmp_path: Path) -> None:
@@ -516,6 +556,34 @@ def cfg_torchsynth_pupujepa_large_online_train(tmp_path: Path) -> DictConfig:
             overrides=[
                 "experiment=torchsynth/flow",
                 "conditioning=pupujepa_large_online",
+                "trainer=cpu",
+                "callbacks=none",
+                "logger=[]",
+            ],
+        )
+    _configure_online_conditioning_smoke(cfg, tmp_path)
+    with open_dict(cfg):
+        cfg.datamodule.sample_rate = 24_000
+        cfg.datamodule.signal_length = 24_000
+        cfg.datamodule.train_val_test_sizes = [2, 2, 2]
+        cfg.datamodule.batch_size = 2
+    return cfg
+
+
+@pytest.fixture
+def cfg_torchsynth_pupujepa_tiny_scratch_train(tmp_path: Path) -> DictConfig:
+    """Compose one CPU step through from-scratch PupuJEPA Tiny conditioning.
+
+    :param tmp_path: Pinned output directory.
+    :returns: Ready-to-run checkpoint-free PupuJEPA Tiny TorchSynth configuration.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=torchsynth/flow",
+                "conditioning=pupujepa_tiny_scratch",
                 "trainer=cpu",
                 "callbacks=none",
                 "logger=[]",
@@ -2588,13 +2656,19 @@ _PYFDN_LANCE_SMOKE_SYNTH = "pyfdn_n8_mono_householder"
 
 
 def _write_pyfdn_lance_smoke_split(
-    path: Path, *, seed: int, include_sketch: bool, num_params: int
+    path: Path,
+    *,
+    seed: int,
+    include_sketch: bool,
+    channels: int,
+    num_params: int,
 ) -> None:
     """Write one pyFDN split for entrypoint tests.
 
     :param path: Output ``.lance`` split.
     :param seed: RNG seed distinguishing splits.
     :param include_sketch: Whether to persist the temporal reverb profile.
+    :param channels: Audio and mel channel count of the identity under test.
     :param num_params: Encoded width of the selected pyFDN spec.
     """
     from synth_setter.conditioning import PYFDN_SKETCH_CONTROLS
@@ -2606,8 +2680,10 @@ def _write_pyfdn_lance_smoke_split(
 
     rng = np.random.default_rng(seed)
     columns = {
-        "audio": rng.uniform(-1.0, 1.0, (1, 1, 176_400)).astype(np.float16),
-        "mel_spec": rng.standard_normal((1, *_PYFDN_LANCE_SMOKE_MEL_SHAPE)).astype(np.float32),
+        "audio": rng.uniform(-1.0, 1.0, (1, channels, 176_400)).astype(np.float16),
+        "mel_spec": rng.standard_normal((1, channels, *_PYFDN_LANCE_SMOKE_MEL_SHAPE[1:])).astype(
+            np.float32
+        ),
         "param_array": rng.random((1, num_params)).astype(np.float32),
     }
     batch = shard_record_batch(columns)
@@ -2631,19 +2707,6 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
     experiment, synth = (param, _PYFDN_LANCE_SMOKE_SYNTH) if isinstance(param, str) else param
     dataset_root = tmp_path / "pyfdn-lance-data"
     dataset_root.mkdir()
-    for seed, split in enumerate(("train", "val", "test")):
-        _write_pyfdn_lance_smoke_split(
-            dataset_root / f"{split}.lance",
-            seed=seed,
-            include_sketch="sketch" in experiment,
-            num_params=len(param_specs[synth]),
-        )
-    np.savez(
-        dataset_root / "stats.npz",
-        mean=np.zeros(_PYFDN_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-        std=np.ones(_PYFDN_LANCE_SMOKE_MEL_SHAPE, dtype=np.float32),
-    )
-    (dataset_root / "dataset.complete").touch()
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -2651,6 +2714,22 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
             return_hydra_config=True,
             overrides=[f"experiment={experiment}", f"synth={synth}", "trainer=cpu"],
         )
+        channels = int(cfg.render.channels)
+        mel_shape = (channels, *_PYFDN_LANCE_SMOKE_MEL_SHAPE[1:])
+        for seed, split in enumerate(("train", "val", "test")):
+            _write_pyfdn_lance_smoke_split(
+                dataset_root / f"{split}.lance",
+                seed=seed,
+                include_sketch="sketch" in experiment,
+                channels=channels,
+                num_params=len(param_specs[cfg.datamodule.param_spec_name]),
+            )
+        np.savez(
+            dataset_root / "stats.npz",
+            mean=np.zeros(mel_shape, dtype=np.float32),
+            std=np.ones(mel_shape, dtype=np.float32),
+        )
+        (dataset_root / "dataset.complete").touch()
         with open_dict(cfg):
             cfg.paths.root_dir = str(operator_workspace())
             cfg.paths.output_dir = str(tmp_path)
@@ -2841,7 +2920,8 @@ def cfg_slap_train_lance(tmp_path: Path, request: pytest.FixtureRequest) -> Dict
     """Compose a one-step shipped SLAP experiment over local Lance splits.
 
     The configuration exercises fit, validation, checkpoint reload, and test. Indirect
-    parametrization selects the experiment; the default is the canonical SLAP pair.
+    parametrization selects the experiment; the default is the canonical SLAP pair. Both backbones
+    use one layer; random mel/parameter pairs prove wiring, not sound quality.
 
     :param tmp_path: Isolated dataset and training output root.
     :param request: Fixture request optionally carrying an experiment name.
@@ -2880,8 +2960,8 @@ def cfg_slap_train_lance(tmp_path: Path, request: pytest.FixtureRequest) -> Dict
         cfg.trainer.min_steps = None
         cfg.trainer.max_steps = -1
         cfg.trainer.limit_train_batches = 1
-        cfg.trainer.limit_val_batches = 1
-        cfg.trainer.limit_test_batches = 1
+        cfg.trainer.limit_val_batches = 1.0
+        cfg.trainer.limit_test_batches = 1.0
         cfg.trainer.num_sanity_val_steps = 0
         cfg.trainer.val_check_interval = 1
         cfg.trainer.enable_model_summary = False

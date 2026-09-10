@@ -227,6 +227,8 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             "-w",
             str(cfg.evaluation.num_workers),
         ]
+        if OmegaConf.select(cfg, "render.renderer_backend") == "pyfdn":
+            args.extend(["--renderer-backend", "pyfdn"])
         # Upper-bounds the sample count compute_audio_metrics scores (it skips
         # subdirs lacking both wavs); the surplus only loosens the budget.
         n_metric_samples = sum(1 for d in audio_dir.glob("*") if d.is_dir())

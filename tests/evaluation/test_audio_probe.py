@@ -265,6 +265,9 @@ def test_run_audio_probe_pyfdn_real_chain_returns_reverb_metrics(tmp_path: Path)
         num_workers=1,
     )
 
+    assert metrics["val_audio/joint_time_frequency_ot_mean"] == pytest.approx(0.0)
+    assert metrics["val_audio/pyfdn_match_cumulative_energy_mean"] == pytest.approx(0.0)
+    assert np.isfinite(metrics["val_audio/pyfdn_flat_spectrogram_pred_mean"])
     reverb_metrics = {
         key: value for key, value in metrics.items() if key.startswith("val_audio/octave_")
     }

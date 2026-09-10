@@ -4995,7 +4995,7 @@ dev = [
     { name = "torchvision", version = "0.27.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "transformers" },
     { name = "vastai-sdk" },
-    { name = "wandb" },
+    { name = "wandb", extra = ["workspaces"] },
 ]
 docs = [
     { name = "griffe-pydantic" },
@@ -5072,7 +5072,7 @@ runtime = [
     { name = "torchvision", version = "0.27.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "transformers" },
     { name = "vastai-sdk" },
-    { name = "wandb" },
+    { name = "wandb", extra = ["workspaces"] },
 ]
 torch = [
     { name = "beartype" },
@@ -5107,7 +5107,7 @@ util = [
     { name = "tenacity" },
     { name = "tensorboard" },
     { name = "threadpoolctl" },
-    { name = "wandb" },
+    { name = "wandb", extra = ["workspaces"] },
 ]
 
 [package.metadata]
@@ -5236,7 +5236,7 @@ dev = [
     { name = "torchvision", specifier = ">=0.15.0" },
     { name = "transformers", specifier = ">=5.0.0" },
     { name = "vastai-sdk", specifier = "==0.2.5" },
-    { name = "wandb" },
+    { name = "wandb", extras = ["workspaces"] },
 ]
 docs = [
     { name = "griffe-pydantic" },
@@ -5307,7 +5307,7 @@ runtime = [
     { name = "torchvision", specifier = ">=0.15.0" },
     { name = "transformers", specifier = ">=5.0.0" },
     { name = "vastai-sdk", specifier = "==0.2.5" },
-    { name = "wandb" },
+    { name = "wandb", extras = ["workspaces"] },
 ]
 torch = [
     { name = "beartype", specifier = ">=0.19" },
@@ -5336,7 +5336,7 @@ util = [
     { name = "tenacity" },
     { name = "tensorboard" },
     { name = "threadpoolctl" },
-    { name = "wandb" },
+    { name = "wandb", extras = ["workspaces"] },
 ]
 
 [[package]]
@@ -6033,6 +6033,24 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/7c/d0/4e846ffc1d0cc435518dfa581ce73ac82cfd0ebbf35f3853c9277f632e5f/wandb-0.26.1-py3-none-win32.whl", hash = "sha256:5c2bd44e575ae9944e2764d1aaa031461178276bf2636d5558399c2816ef5cfe", size = 24968151, upload-time = "2026-04-23T16:27:22.086Z" },
     { url = "https://files.pythonhosted.org/packages/e3/9b/487413eaccefdb58799a226726e24b486e9192d2671c75a4550c160aba23/wandb-0.26.1-py3-none-win_amd64.whl", hash = "sha256:5817785467d3f1676f1812ec19a89f77f6e56dfe67d9f47080075af95f705d3e", size = 24968155, upload-time = "2026-04-23T16:27:25.731Z" },
     { url = "https://files.pythonhosted.org/packages/04/dc/5baf3e99b3eeb709d6f75124b5bec8cb73d4b38d2b10df7fdcfde4966200/wandb-0.26.1-py3-none-win_arm64.whl", hash = "sha256:f848b7744f896bc04cabbb28360a2814d1551a91fa2c456243e06435729c8a2e", size = 22912416, upload-time = "2026-04-23T16:27:29.456Z" },
+]
+
+[package.optional-dependencies]
+workspaces = [
+    { name = "wandb-workspaces" },
+]
+
+[[package]]
+name = "wandb-workspaces"
+version = "0.4.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "wandb" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8b/ea/36baee6eb9e6df05fba9425d853c61b298a443ccb87c497e35f9b4cc9c5b/wandb_workspaces-0.4.5.tar.gz", hash = "sha256:4df63f42f8cc9ed37c6b5d50e823baf9b34cc55a3f898b34fd4a72da59ce35d1", size = 245256, upload-time = "2026-08-04T14:23:12.608Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/94/1f/ea940756a5a8f50ec52d0748d11a2dfb2bb8c7fa396545abf2cd504c19a3/wandb_workspaces-0.4.5-py3-none-any.whl", hash = "sha256:c29d9ec33f5726f66fb37e6e66af0ed76043ea86f70a952208b0231b2c0ac767", size = 115180, upload-time = "2026-08-04T14:23:11.036Z" },
 ]
 
 [[package]]

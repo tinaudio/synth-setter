@@ -2,6 +2,8 @@
 
 # codespell-exempt: program and control labels are verbatim host values. See #1674.
 
+from copy import deepcopy
+
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
@@ -211,7 +213,8 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         CategoricalParameter(
             name="transpose_offset", values=list(range(-24, 37)), encoding="scalar"
         ),
-        ContinuousParameter(name="master_volume"),
+        # Bound post-chorus gain while retaining the control's nonlinear taper.
+        ContinuousParameter(name="master_volume", max=0.25),
         CategoricalParameter(name="voices", values=[6, 7, 8, 9, 10], encoding="scalar"),
         CategoricalParameter(
             name="vcf_oversample", values=["Off", "2x", "3x", "4x"], encoding="onehot"
@@ -272,3 +275,20 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         NoteDurationParameter(name="note_start_and_end", max_note_duration_seconds=4.0),
     ],
 )
+
+
+def _onehot_voices_variant() -> ParamSpec:
+    """Return an independent spec where only voices uses onehot encoding.
+
+    :returns: A deep copy safe from mutation through the legacy identity.
+    :raises TypeError: The legacy voices control is no longer categorical.
+    """
+    variant = deepcopy(ULTRAMASTER_KR106_PARAM_SPEC)
+    voices = next((param for param in variant.synth_params if param.name == "voices"), None)
+    if not isinstance(voices, CategoricalParameter):
+        raise TypeError("voices must remain categorical")
+    voices.encoding = "onehot"
+    return variant
+
+
+ULTRAMASTER_KR106_ONEHOT_PARAM_SPEC = _onehot_voices_variant()
