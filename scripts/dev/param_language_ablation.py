@@ -194,6 +194,36 @@ def prepare_dataset(root: Path) -> None:
     (root / "dataset.sha256").write_text(checkpoint_tree_sha256(dataset) + "\n")
 
 
+def summarize_parameters(
+    predicted: torch.Tensor, target: torch.Tensor, param_spec_name: str
+) -> dict[str, float]:
+    """Report field MSE and categorical accuracy only for one-hot encoded fields.
+
+    :param predicted: Model-coordinate predictions for the held-out examples.
+    :param target: Corresponding model-coordinate targets.
+    :param param_spec_name: Registry layout of both matrices.
+    :returns: Per-field errors and applicable one-hot accuracies.
+    """
+    metrics = {}
+    accuracies = []
+    for field, span in param_specs[param_spec_name].encoded_slices():
+        metrics[f"field_mse/{field.name}"] = float(
+            (predicted[:, span] - target[:, span]).square().mean()
+        )
+        if (
+            isinstance(field, (CategoricalParameter, DiscreteLiteralParameter))
+            and field.encoding == "onehot"
+        ):
+            accuracy = float(
+                (predicted[:, span].argmax(-1) == target[:, span].argmax(-1)).float().mean()
+            )
+            metrics[f"onehot/{field.name}"] = accuracy
+            accuracies.append(accuracy)
+    if accuracies:
+        metrics["onehot/mean_accuracy"] = float(np.mean(accuracies))
+    return metrics
+
+
 def run_experiment(root: Path, consumer: str, variant: str, *, seed: int, steps: int) -> None:
     """Train, reload, evaluate, and persist one treatment's real observations.
 
@@ -283,18 +313,7 @@ def run_experiment(root: Path, consumer: str, variant: str, *, seed: int, steps:
         target = torch.load(
             output / "predictions" / "target-params-0.pt", weights_only=True
         ).reshape_as(predicted)
-        accuracies = []
-        for field, span in spec.encoded_slices():
-            if (
-                isinstance(field, (CategoricalParameter, DiscreteLiteralParameter))
-                and field.encoding == "onehot"
-            ):
-                accuracy = float(
-                    (predicted[:, span].argmax(-1) == target[:, span].argmax(-1)).float().mean()
-                )
-                metrics[f"onehot/{field.name}"] = accuracy
-                accuracies.append(accuracy)
-        metrics["onehot/mean_accuracy"] = float(np.mean(accuracies))
+        metrics.update(summarize_parameters(predicted, target, "surge_simple"))
         metrics["audio/evaluated_rows"] = float(len(predicted))
     history_files = sorted((output / "metrics").glob("version_*/metrics.csv"))
     history = pd.read_csv(history_files[0])
