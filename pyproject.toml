@@ -21,7 +21,6 @@ dependencies = [
   "pydantic-settings>=2",
   "python-dotenv",
   "pyyaml",
-  "sentence-transformers>=5.1,<6",
 ]
 
 [project.optional-dependencies]
@@ -185,6 +184,7 @@ data = [
   "pandas",
   "numpy",
   "pylance>=9.0.0,<10.0.0",
+  "sentence-transformers>=5.1,<6",
 ]
 # Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking against
 # torch / librosa / kymatio during lock resolution. See #1247.

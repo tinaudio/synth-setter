@@ -4869,7 +4869,6 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "sentence-transformers" },
 ]
 
 [package.optional-dependencies]
@@ -4920,6 +4919,7 @@ data = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "pylance" },
+    { name = "sentence-transformers" },
 ]
 dev = [
     { name = "beartype" },
@@ -4974,6 +4974,7 @@ dev = [
     { name = "ruff" },
     { name = "runpod" },
     { name = "scipy" },
+    { name = "sentence-transformers" },
     { name = "sh" },
     { name = "skypilot", extra = ["kubernetes", "runpod", "vast"] },
     { name = "smoosense", extra = ["jupyter"] },
@@ -5052,6 +5053,7 @@ runtime = [
     { name = "rich" },
     { name = "runpod" },
     { name = "scipy" },
+    { name = "sentence-transformers" },
     { name = "sh" },
     { name = "skypilot", extra = ["kubernetes", "runpod", "vast"] },
     { name = "ssondo" },
@@ -5121,7 +5123,6 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "sentence-transformers", specifier = ">=5.1,<6" },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'cpu') or (sys_platform == 'win32' and extra == 'cpu')", specifier = ">=2.0.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "synth-setter", extra = "cpu" } },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'cu128') or (sys_platform == 'win32' and extra == 'cu128')", specifier = ">=2.0.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "synth-setter", extra = "cu128" } },
     { name = "torch", marker = "sys_platform != 'linux' and sys_platform != 'win32' and extra == 'cpu'", specifier = ">=2.0.0" },
@@ -5167,6 +5168,7 @@ data = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "pylance", specifier = ">=9.0.0,<10.0.0" },
+    { name = "sentence-transformers", specifier = ">=5.1,<6" },
 ]
 dev = [
     { name = "beartype", specifier = ">=0.19" },
@@ -5221,6 +5223,7 @@ dev = [
     { name = "ruff" },
     { name = "runpod", specifier = "==1.8.1" },
     { name = "scipy", specifier = ">=1.14,<1.15" },
+    { name = "sentence-transformers", specifier = ">=5.1,<6" },
     { name = "sh" },
     { name = "skypilot", extras = ["runpod", "kubernetes", "vast"], specifier = "==0.12.0" },
     { name = "smoosense", extras = ["jupyter"] },
@@ -5293,6 +5296,7 @@ runtime = [
     { name = "rich" },
     { name = "runpod", specifier = "==1.8.1" },
     { name = "scipy", specifier = ">=1.14,<1.15" },
+    { name = "sentence-transformers", specifier = ">=5.1,<6" },
     { name = "sh" },
     { name = "skypilot", extras = ["runpod", "kubernetes", "vast"], specifier = "==0.12.0" },
     { name = "ssondo", specifier = "==0.3.1" },
