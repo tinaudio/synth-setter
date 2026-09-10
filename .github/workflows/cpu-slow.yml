@@ -76,7 +76,7 @@ jobs:
           sudo apt-get install --yes --no-install-recommends faust g++
 
       - name: Verify production Faust version
-        run: test "$(faust --version)" = "FAUST Version 2.37.3"
+        run: faust --version 2>&1 | grep -F "FAUST Version 2.37.3"
 
       - name: Install FaustWasm browser dependencies
         run: |

@@ -116,7 +116,7 @@ def test_cpu_slow_pins_production_faust_toolchain(project_root: Path) -> None:
     )
 
     assert job["runs-on"] == "ubuntu-22.04"
-    assert version_step["run"] == 'test "$(faust --version)" = "FAUST Version 2.37.3"'
+    assert version_step["run"] == 'faust --version 2>&1 | grep -F "FAUST Version 2.37.3"'
 
 
 @pytest.mark.infra
