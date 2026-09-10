@@ -75,6 +75,9 @@ jobs:
           - name: pipeline-add-private-n-z
             patterns:
               - synth_setter.pipeline.data.add_*.x__[n-z]*
+          - name: pipeline-cqt
+            patterns:
+              - synth_setter.pipeline.data.cqt.*
           - name: pipeline-slap-export
             patterns:
               - synth_setter.pipeline.data.export_slap.*
