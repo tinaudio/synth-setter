@@ -25,6 +25,7 @@ from agent._shared.run_pi_review_follow_up import FollowUpManifest
 from tests.helpers.package_available import _SH_AVAILABLE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+_DETACHED_FOLLOW_UP_TIMEOUT_SECONDS = 10.0
 
 
 def _process_state(pid: int) -> str | None:
@@ -442,12 +443,10 @@ def test_pi_review_launcher_manifest_starts_detached_follow_up(tmp_path: Path) -
     assert transcript_match is not None
     transcript = Path(transcript_match.group(1))
     try:
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + _DETACHED_FOLLOW_UP_TIMEOUT_SECONDS
         while not marker.exists() and time.monotonic() < deadline:
-            pass
+            time.sleep(0.01)
         assert str(result).strip() == "foreground-complete"
-        if sys.platform == "darwin" and not marker.exists():
-            pytest.xfail("#3367: detached follow-up startup can exceed two seconds on macOS")
         assert marker.exists()
     finally:
         manifest.unlink(missing_ok=True)
@@ -883,11 +882,9 @@ def test_pi_review_follow_up_launcher_runs_detached_pinned_process(tmp_path: Pat
             _env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
         )
         pid = int(str(result))
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + _DETACHED_FOLLOW_UP_TIMEOUT_SECONDS
         while not marker.exists() and time.monotonic() < deadline:
-            pass
-        if sys.platform == "darwin" and not marker.exists():
-            pytest.xfail("#3367: detached follow-up startup can exceed two seconds on macOS")
+            time.sleep(0.01)
         assert marker.exists()
         _assert_process_terminated(pid, timeout=2)
     finally:
