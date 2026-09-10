@@ -7,6 +7,7 @@ from pathlib import Path
 
 import lance
 import numpy as np
+import pyarrow as pa
 import pytest
 
 from synth_setter.cli.generate_dataset import build_generate_args
@@ -14,8 +15,6 @@ from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRA
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, RenderConfig
 from synth_setter.synth_spec import SYNTHS, SynthName
 from tests._vst import VST_SUBPROCESS_TIMEOUT_SECONDS
-
-_NODE_MODULE = Path(__file__).parents[3] / "node_modules/@grame/faustwasm/package.json"
 
 
 @pytest.mark.slow
@@ -90,7 +89,6 @@ def test_faust_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
 def test_faustwasm_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
     """The production CLI drives Python through Node into a consumable Lance row.
 
@@ -134,13 +132,50 @@ def test_faustwasm_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
-    table = lance.dataset(str(shard)).to_table(
-        columns=[AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD]
+    dataset = lance.dataset(str(shard))
+    expected_schema = pa.schema(
+        [
+            pa.field(
+                "audio",
+                pa.fixed_shape_tensor(pa.float16(), (2, 176_400)),
+                nullable=False,
+            ),
+            pa.field(
+                "mel_spec",
+                pa.fixed_shape_tensor(pa.float32(), (2, 128, 401)),
+                nullable=False,
+            ),
+            pa.field(
+                "param_array",
+                pa.fixed_shape_tensor(pa.float32(), (13,)),
+                nullable=False,
+            ),
+            pa.field("debug", pa.json_(), nullable=False),
+            pa.field(
+                "audio_mp3",
+                pa.binary(),
+                nullable=False,
+                metadata={b"mime_type": b"audio/mpeg"},
+            ),
+            pa.field("audio_uuid", pa.string(), nullable=False),
+        ]
     )
+    assert dataset.schema.remove_metadata() == expected_schema
+
+    table = dataset.to_table(columns=[AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD])
     audio = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()[0]
+    mel_spec = table.column(MEL_SPEC_FIELD).combine_chunks().to_numpy_ndarray()[0]
     params = table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()[0]
     assert table.num_rows == 1
-    assert audio.shape == (2, 176400)
+    assert audio.shape == (2, 176_400)
+    assert audio.dtype == np.float16
+    assert mel_spec.shape == (2, 128, 401)
+    assert mel_spec.dtype == np.float32
     assert params.shape == (13,)
+    assert params.dtype == np.float32
     assert np.isfinite(audio).all()
+    assert np.isfinite(mel_spec).all()
+    assert np.isfinite(params).all()
+    assert np.all((params >= 0.0) & (params <= 1.0))
     assert float(np.max(np.abs(audio))) > 1e-4
+    assert float(np.max(np.abs(audio))) <= 1.0
