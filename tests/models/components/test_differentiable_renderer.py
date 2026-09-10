@@ -24,7 +24,7 @@ def test_flamo_householder_batch_matches_pyfdn_geometry_and_amplitude() -> None:
     """Independent parameter rows preserve pyFDN's timing and unnormalized amplitude."""
     first, first_native = _model_row(2)
     second, second_native = _model_row(3)
-    renderer = FlamoFDNDifferentiableRenderer(
+    renderer = FlamoFDNDifferentiableRenderer.from_param_spec(
         param_spec="pyfdn_n8_mono_householder",
         sample_rate=44_100,
         signal_length=176_400,
@@ -34,12 +34,12 @@ def test_flamo_householder_batch_matches_pyfdn_geometry_and_amplitude() -> None:
     actual = renderer(torch.stack((first, second))).detach().numpy()
     expected = np.stack(
         (
-            PyFDNRenderer().render(first_native)[0],
-            PyFDNRenderer().render(second_native)[0],
+            PyFDNRenderer().render(first_native),
+            PyFDNRenderer().render(second_native),
         )
     )
 
-    assert actual.shape == (2, 176_400)
+    assert actual.shape == (2, 1, 176_400)
     assert np.sqrt(np.mean((actual - expected) ** 2)) < 1.1e-3
     assert np.max(np.abs(actual - expected)) < 1.4e-2
 
@@ -52,7 +52,7 @@ def test_flamo_householder_supported_controls_have_finite_nonzero_gradients(devi
     """
     row, _ = _model_row(4)
     row = row.to(device).requires_grad_(True)
-    renderer = FlamoFDNDifferentiableRenderer(
+    renderer = FlamoFDNDifferentiableRenderer.from_param_spec(
         param_spec="pyfdn_n8_mono_householder",
         sample_rate=44_100,
         signal_length=4096,
@@ -75,7 +75,7 @@ def test_flamo_audio_feedback_unclipped_target_has_zero_loss() -> None:
 
     row = torch.zeros(1, 27)
     row[:, 8:25] = 1.0
-    renderer = FlamoFDNDifferentiableRenderer(
+    renderer = FlamoFDNDifferentiableRenderer.from_param_spec(
         param_spec="pyfdn_n8_mono_householder", sample_rate=44_100, signal_length=4096
     )
     target = renderer(row).detach()
@@ -99,7 +99,7 @@ def test_flamo_renderer_wrong_parameter_width_raises(width: int) -> None:
 
     :param width: Encoded width incompatible with the supported spec.
     """
-    renderer = FlamoFDNDifferentiableRenderer(
+    renderer = FlamoFDNDifferentiableRenderer.from_param_spec(
         param_spec="pyfdn_n8_mono_householder", sample_rate=44_100, signal_length=4096
     )
     with pytest.raises(ValueError, match="width 27"):
@@ -112,7 +112,7 @@ def test_flamo_renderer_nonfinite_parameters_raise(value: float) -> None:
 
     :param value: Nonfinite model output.
     """
-    renderer = FlamoFDNDifferentiableRenderer(
+    renderer = FlamoFDNDifferentiableRenderer.from_param_spec(
         param_spec="pyfdn_n8_mono_householder", sample_rate=44_100, signal_length=4096
     )
     with pytest.raises(ValueError, match="finite"):
@@ -121,23 +121,30 @@ def test_flamo_renderer_nonfinite_parameters_raise(value: float) -> None:
 
 def test_flamo_renderer_empty_batch_preserves_audio_geometry() -> None:
     """No rows still produces a batch-first waveform tensor."""
-    renderer = FlamoFDNDifferentiableRenderer(
+    renderer = FlamoFDNDifferentiableRenderer.from_param_spec(
         param_spec="pyfdn_n8_mono_householder", sample_rate=44_100, signal_length=4096
     )
-    assert renderer(torch.empty(0, 27)).shape == (0, 4096)
+    assert renderer(torch.empty(0, 27)).shape == (0, 1, 4096)
 
 
 @pytest.mark.parametrize(
     "param_spec",
-    ["pyfdn_pitchshift_n8_mono_householder", "pyfdn_diffvox"],
+    [
+        "pyfdn_pitchshift_n8_mono_householder",
+        "pyfdn_diffvox",
+        "pyfdn_gotz_n8_mono_fixed_delays",
+        "pyfdn_gotz_n8_mono_learned_delays",
+        "pyfdn_gotz_n8_mono_fixed_delays_givens",
+        "pyfdn_gotz_n8_mono_learned_delays_givens",
+    ],
 )
 def test_flamo_renderer_rejects_unsupported_topology(param_spec: str) -> None:
-    """Time-varying and composite stereo graphs need dedicated adapters.
+    """An advanced effect cannot silently discard processing outside its FDN build.
 
-    :param param_spec: Topology outside the mono time-invariant FDN contract.
+    :param param_spec: Advanced effect outside the complete BasicFDN contract.
     """
     with pytest.raises(ValueError, match="unsupported FLAMO topology"):
-        FlamoFDNDifferentiableRenderer(
+        FlamoFDNDifferentiableRenderer.from_param_spec(
             param_spec=param_spec,
             sample_rate=44_100,
             signal_length=4096,
@@ -150,10 +157,6 @@ def test_flamo_renderer_rejects_unsupported_topology(param_spec: str) -> None:
         "pyfdn_n8_mono_householder",
         "pyfdn_n8_mono_householder_vector",
         "pyfdn_n8_mono_kronecker",
-        "pyfdn_gotz_n8_mono_fixed_delays",
-        "pyfdn_gotz_n8_mono_learned_delays",
-        "pyfdn_gotz_n8_mono_fixed_delays_givens",
-        "pyfdn_gotz_n8_mono_learned_delays_givens",
     ],
 )
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -175,7 +178,7 @@ def test_flamo_same_prediction_offline_and_online_audio_agree(
     )
     native, _ = decode_model_output(prediction.numpy(), spec)
     expected = PyFDNRenderer(param_spec_name=ParamSpecName(param_spec)).render(native)[0]
-    renderer = FlamoFDNDifferentiableRenderer(
+    renderer = FlamoFDNDifferentiableRenderer.from_param_spec(
         param_spec=param_spec,
         sample_rate=44_100,
         signal_length=8192,
@@ -183,6 +186,6 @@ def test_flamo_same_prediction_offline_and_online_audio_agree(
     )
     renderer = renderer.double() if dtype == torch.float64 else renderer.float()
 
-    actual = renderer(prediction.unsqueeze(0)).detach().numpy()[0]
+    actual = renderer(prediction.unsqueeze(0)).detach().numpy()[0, 0]
 
     np.testing.assert_allclose(actual, expected[:8192], atol=2e-4, rtol=2e-3)
