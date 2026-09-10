@@ -95,7 +95,7 @@ Grep ALL file types, not just `.py` — include `.yaml`/`.yml`, `.md`, `.json`, 
 
 <important if="you are opening or driving a pull request">
 
-- **Keep auxiliary work in separate PRs** (AGENTS.md "Keep auxiliary work in separate PRs"). Extract independently useful non-core refactors, cleanup, and pre-existing bug fixes, even when required by the main work. Open prerequisite PRs first and base the main PR on the auxiliary branch; link both PRs, merge prerequisites in dependency order, then rebase and retarget the main PR to `main`. Non-prerequisite work gets an independent PR. Keep regressions introduced by the current PR, and directly supporting tests/docs, in that PR; continue tracking out-of-scope bugs via `/github-taxonomy`.
+- **Keep auxiliary work in separate PRs** (AGENTS.md "Keep auxiliary work in separate PRs"). Extract independently useful non-core refactors, cleanup, and pre-existing bug fixes, even when required by the main work. Open prerequisite PRs first and base the main PR on the auxiliary branch; link both PRs and save the prerequisite tip SHA before merging. After fetching `origin`, rebase only dependent commits with `git rebase --onto origin/main <saved-prerequisite-tip-sha>` (safe after squash merges), push with `--force-with-lease`, and retarget to `main`; repeat in dependency order. Non-prerequisite work gets an independent PR. Keep regressions introduced by the current PR, and directly supporting tests/docs, in that PR; continue tracking out-of-scope bugs via `/github-taxonomy`.
 
 - **Link a taxonomy-compliant issue** in the body via `Closes #N` / `Fixes #N` / `Refs #N` / `Part of #N` (use `Refs` for partial fixes; `Fixes` auto-closes). Every issue traces to an Epic via Phase → Task / Bug / Feature. See `/github-taxonomy`.
 

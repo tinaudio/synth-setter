@@ -190,9 +190,13 @@ unintended shell expansion. A `PreToolUse` hook
   supporting tests and docs with their behavior change.
 - **Stack prerequisites below the main PR.** Open the auxiliary PR against
   `main`, then base the dependent main PR on the auxiliary branch so its diff
-  contains only the core change. Link the dependency in both PR bodies, merge
-  the prerequisite first, then rebase and retarget the main PR to `main`.
-  For multiple prerequisites, repeat in dependency order.
+  contains only the core change. Link the dependency in both PR bodies and save
+  the prerequisite tip SHA before merging it first. Then fetch `origin` and,
+  from the dependent branch, run
+  `git rebase --onto origin/main <saved-prerequisite-tip-sha>` to replay only
+  its own commits, including after a squash merge. Push with `--force-with-lease`
+  and retarget the main PR to `main`. For multiple prerequisites, repeat in
+  dependency order.
 - Non-core work that is not a prerequisite belongs in an independent PR, not
   in the stack. Continue to file out-of-scope bugs via `/github-taxonomy`;
   separating a prerequisite fix does not replace its tracking issue.
