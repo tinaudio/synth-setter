@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789033889016,
+  "lastUpdate": 1789050353746,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -16122,6 +16122,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.029861509799957275,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "25710edda8c4fa5b81251a776d037b9e005bd781",
+          "message": "internal-feat(data-pipeline): separate synth format and render backend (#3419)\n\n* internal-feat(pipeline): add explicit synth format contract\n\n* internal-fix(data-pipeline): preserve explicit synth render contract\n\n* internal-fix(data-pipeline): validate legacy Faust provenance\n\n* chore: refresh PR checks after title correction\n\n* internal-fix(data-pipeline): register canonical Faust source URIs\n\n* internal-fix(data-pipeline): preserve oracle render provenance\n\n* internal-fix(data-pipeline): reject legacy Faust VST sentinel\n\n* internal-fix(data-pipeline): compose oracle render identity\n\n* internal-fix(data-pipeline): omit derived synth format from YAML\n\n* internal-fix(data-pipeline): tighten render provenance validation\n\n* internal-fix(data-pipeline): refresh persisted spec fixture\n\n* internal-fix(data-pipeline): label SurgePy parity identity\n\n* test(data-pipeline): cover Faust provenance failures",
+          "timestamp": "2026-09-10T09:02:16-04:00",
+          "tree_id": "e13d5eb56193b83387677d277bb332a2e45431bc",
+          "url": "https://github.com/tinaudio/synth-setter/commit/25710edda8c4fa5b81251a776d037b9e005bd781"
+        },
+        "date": 1789050350318,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.3996307849884033,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 5.83448650856968,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.01948489435017109,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.012046456336975098,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.995727062225342,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.436183126749938,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 3.8121674060821533,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.3551270559942346,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.021234998479485512,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.021093904972076416,
             "unit": "1-cos"
           },
           {
