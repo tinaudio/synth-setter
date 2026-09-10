@@ -1,0 +1,11 @@
+# @package _global_
+
+defaults:
+  - /experiment/pyfdn/eval_flow_sketch_rir_base
+  - override /datamodule: third_party/rir/mit_ir_survey
+  - _self_
+
+run_name: flow-sketch-rir-mit-ir-survey
+
+evaluation:
+  upload_output_dir_uri: r2://experiments/evaluations/flow_sketch/flow_sketch-20260908T170724945Z/rir/mit-ir-survey
