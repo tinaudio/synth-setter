@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import shutil
 
 import numpy as np
 import pytest
@@ -14,8 +14,7 @@ from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousPar
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.synth_spec import SYNTHS, SynthName
 
-_ROOT = Path(__file__).parents[3]
-_NODE_MODULE = _ROOT / "node_modules/@grame/faustwasm/package.json"
+_NODE_UNAVAILABLE = shutil.which("node") is None
 
 
 def _configured_backend_version() -> str:
@@ -173,7 +172,7 @@ def test_faustwasm_renderer_rejects_non_integer_channels(channels: object) -> No
         )
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_registry_reference_renders_real_source() -> None:
     """A canonical registry URI selects source consumed by the real runtime."""
     renderer = _renderer(
@@ -226,7 +225,7 @@ def test_faustwasm_mismatched_registry_reference_fails_before_compile() -> None:
         )
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_blank_plugin_path_retains_legacy_compatibility() -> None:
     """A blank source path retains the pathless legacy render contract."""
     renderer = _renderer(
@@ -243,7 +242,7 @@ def test_faustwasm_blank_plugin_path_retains_legacy_compatibility() -> None:
     assert np.isfinite(audio).all()
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_real_render_clamps_fractional_duration_boundary() -> None:
     """The real runtime renders a final fractional duration into fixed frames."""
     renderer = _renderer("faust_filter_osc", sample_rate=10, duration=0.15, channels=1)
@@ -255,7 +254,7 @@ def test_faustwasm_real_render_clamps_fractional_duration_boundary() -> None:
     assert np.isfinite(audio).all()
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize(
     ("identity", "address"),
     [
@@ -280,7 +279,7 @@ def test_faustwasm_discrete_patch_rejects_fractional_value(
         renderer.render(patch, 60, 100, (0.0, 0.005))
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize("raw_value", [0.0, 1.0])
 def test_faustwasm_discrete_patch_accepts_canonical_endpoints(raw_value: float) -> None:
     """Every registered button state reaches the real runtime.

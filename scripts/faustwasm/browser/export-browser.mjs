@@ -6,7 +6,16 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const browserDirectory = path.dirname(fileURLToPath(import.meta.url));
-const defaultRuntimePath = path.join(browserDirectory, "..", "runtime.mjs");
+const defaultRuntimePath = path.join(
+  browserDirectory,
+  "..",
+  "..",
+  "..",
+  "src",
+  "synth_setter",
+  "faustwasm",
+  "runtime.mjs",
+);
 const defaultFaustModulePath = path.join(
   browserDirectory,
   "node_modules",
@@ -25,7 +34,6 @@ const RESERVED_BUNDLE_PATHS = new Set([
   "vendor",
 ]);
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
-const SUPPORTED_FAUSTWASM_VERSION = "0.18.3";
 
 function manifestError(field, requirement) {
   throw new Error(`Invalid manifest.${field}: ${requirement}`);
@@ -91,7 +99,7 @@ function validateParameter(parameter, index) {
   }
 }
 
-function validateManifest(manifest) {
+function validateManifest(manifest, supportedFaustWasmVersion) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("Invalid manifest: must be an object");
   }
@@ -99,8 +107,8 @@ function validateManifest(manifest) {
     manifestError("schemaVersion", `requires 1, received ${manifest.schemaVersion}`);
   }
   requireNonEmptyString(manifest.identity, "identity");
-  if (manifest.faustwasmVersion !== SUPPORTED_FAUSTWASM_VERSION) {
-    manifestError("faustwasmVersion", `must be ${SUPPORTED_FAUSTWASM_VERSION}`);
+  if (manifest.faustwasmVersion !== supportedFaustWasmVersion) {
+    manifestError("faustwasmVersion", `must be ${supportedFaustWasmVersion}`);
   }
   requireNonEmptyString(manifest.libfaustVersion, "libfaustVersion");
   if (typeof manifest.compileOptions !== "string") {
@@ -182,7 +190,12 @@ async function readManifest(artifactDirectory) {
   const manifestPath = path.join(artifactDirectory, "manifest.json");
   await rejectSymbolicLink(manifestPath, "manifest.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-  validateManifest(manifest);
+  const packageMetadata = JSON.parse(
+    await readFile(path.join(browserDirectory, "package.json"), "utf8"),
+  );
+  const supportedFaustWasmVersion = packageMetadata.dependencies?.["@grame/faustwasm"];
+  requireNonEmptyString(supportedFaustWasmVersion, "faustwasmVersion");
+  validateManifest(manifest, supportedFaustWasmVersion);
   return manifest;
 }
 

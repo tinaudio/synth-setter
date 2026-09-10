@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import shutil
 
 import numpy as np
 import pytest
@@ -22,8 +22,7 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 from synth_setter.synth_spec import SYNTHS, SynthName
 
-_ROOT = Path(__file__).parents[3]
-_NODE_MODULE = _ROOT / "node_modules/@grame/faustwasm/package.json"
+_NODE_UNAVAILABLE = shutil.which("node") is None
 _EXPECTED_PARAMETER_ADDRESSES = {
     "faust_bright_organ": (
         ("/Sequencer/DSP1/brightOrgan/Main/volume", "/brightOrgan/Main/volume"),
@@ -130,9 +129,9 @@ def test_faustwasm_contract_covers_every_canonical_parameter_once() -> None:
         assert [item.canonical_address for item in contract] == spec.synth_param_names
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
-def test_faustwasm_backend_version_reads_pinned_node_package() -> None:
-    """Backend provenance matches the installed lockfile dependency."""
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
+def test_faustwasm_backend_version_reads_packaged_metadata() -> None:
+    """Backend provenance matches the bundled runtime metadata."""
     assert extract_backend_version("faustwasm") == _configured_backend_version()
 
 
@@ -144,7 +143,7 @@ def test_faustwasm_legacy_digest_projection_is_rejected() -> None:
         RenderConfig.model_validate(values)
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize(
     ("identity", "channels"),
     [
@@ -178,7 +177,7 @@ def test_faustwasm_factory_renders_real_source(identity: str, channels: int) -> 
     assert float(np.max(np.abs(audio))) > 1e-4
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_note_off_changes_audio_at_exact_requested_frame() -> None:
     """A note-off event first affects audio at its requested sample."""
     renderer = make_audio_renderer(_config())
@@ -192,7 +191,7 @@ def test_faustwasm_note_off_changes_audio_at_exact_requested_frame() -> None:
     assert differing_frames[0] == 11_025
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_patch_state_is_isolated_across_a_b_a_renders() -> None:
     """An intervening patch cannot contaminate a repeated render."""
     patch_a = _midpoint_patch("faust_bright_organ")
@@ -209,7 +208,7 @@ def test_faustwasm_patch_state_is_isolated_across_a_b_a_renders() -> None:
     assert np.array_equal(first_a, second_a)
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_bright_organ_midi_octave_doubles_dominant_frequency() -> None:
     """Bright organ follows MIDI pitch across one octave."""
     renderer = make_audio_renderer(_config())
@@ -225,7 +224,7 @@ def test_faustwasm_bright_organ_midi_octave_doubles_dominant_frequency() -> None
     assert high_dominant / low_dominant == pytest.approx(2.0, rel=0.02)
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize(
     ("identity", "channels"),
     [("faust_bubble", 2), ("faust_church_organ", 2), ("faust_filter_osc", 1)],
@@ -254,7 +253,7 @@ def test_faustwasm_mono_source_is_independent_of_midi_pitch(
     assert np.array_equal(low, high)
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_filter_osc_preserves_clipping_for_dataset_rejection() -> None:
     """Native clipping remains visible to the dataset amplitude gate."""
     params = _midpoint_patch("faust_filter_osc")
@@ -268,7 +267,7 @@ def test_faustwasm_filter_osc_preserves_clipping_for_dataset_rejection() -> None
         _reject_clipped_audio(audio)
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_incomplete_patch_is_rejected() -> None:
     """Rendering rejects a patch missing a canonical control."""
     renderer = make_audio_renderer(_config())
@@ -279,7 +278,7 @@ def test_faustwasm_incomplete_patch_is_rejected() -> None:
         renderer.render(params, 60, 100, (0.05, 0.3))
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_out_of_domain_patch_is_rejected() -> None:
     """Rendering rejects canonical values outside their native domain."""
     renderer = make_audio_renderer(_config())
@@ -290,7 +289,7 @@ def test_faustwasm_out_of_domain_patch_is_rejected() -> None:
         renderer.render(params, 60, 100, (0.05, 0.3))
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_canonical_volume_has_causal_effect() -> None:
     """The canonical volume control changes real rendered level."""
     quiet = _midpoint_patch("faust_bright_organ")

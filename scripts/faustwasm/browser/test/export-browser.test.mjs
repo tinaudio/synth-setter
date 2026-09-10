@@ -87,8 +87,6 @@ test("export_browser_cli_creates_relocatable_site_outside_checkout", async () =>
   const root = await mkdtemp(path.join(tmpdir(), "faust-browser-cli-"));
   const artifactDirectory = await makeArtifact(root);
   const outputDirectory = path.join(root, "published", "player");
-  const runtimePath = path.join(root, "runtime.mjs");
-  await writeFile(runtimePath, "export const loadFaustArtifact = () => {};\n");
 
   const { stdout } = await execFileAsync(process.execPath, [
     path.resolve(import.meta.dirname, "..", "export-browser.mjs"),
@@ -96,12 +94,13 @@ test("export_browser_cli_creates_relocatable_site_outside_checkout", async () =>
     artifactDirectory,
     "--output",
     outputDirectory,
-    "--runtime",
-    runtimePath,
   ]);
 
   assert.match(stdout, /Browser bundle exported/);
   assert.match(await readFile(path.join(outputDirectory, "controller.mjs"), "utf8"), /AudioContext/);
+  const exportedRuntime = await readFile(path.join(outputDirectory, "runtime.mjs"), "utf8");
+  assert.match(exportedRuntime, /const verifyBytes/);
+  assert.doesNotMatch(exportedRuntime, /src\/synth_setter\/faustwasm/);
   const relocatedDirectory = path.join(root, "relocated-player");
   await rename(outputDirectory, relocatedDirectory);
   await rm(artifactDirectory, { recursive: true });

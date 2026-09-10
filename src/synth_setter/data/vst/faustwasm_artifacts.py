@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,7 @@ from synth_setter.data.vst.faustwasm_contract import (
     faustwasm_reserved_addresses,
 )
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.resources import as_file, faustwasm_dir
 from synth_setter.synth_spec import SYNTHS, SynthName, SynthSpec
 
 _NODE_TIMEOUT_SECONDS = 60
@@ -201,26 +203,39 @@ class _ArtifactManifest(BaseModel):
 type ArtifactManifest = _ArtifactManifest
 
 
-def repository_faustwasm_script(name: str) -> Path:
-    """Resolve a checkout-only Node entrypoint with an actionable install error.
+def _faustwasm_entrypoint(resource_directory: Path, name: str) -> Path:
+    """Validate one materialized Node entrypoint before execution.
 
-    :param name: Entry-point filename under ``scripts/faustwasm``.
+    :param resource_directory: Materialized packaged FaustWasm directory.
+    :param name: Entry-point filename in that directory.
     :returns: Absolute entry-point path.
-    :raises RuntimeError: The script, dependency, or Node.js executable is unavailable.
+    :raises RuntimeError: The entrypoint or Node.js executable is unavailable.
     """
-    root = Path(__file__).resolve().parents[4]
-    script = root / "scripts" / "faustwasm" / name
-    package = root / "node_modules" / "@grame" / "faustwasm" / "package.json"
-    if not script.is_file():
-        raise RuntimeError(
-            "FaustWasm Node assets are unavailable outside a synth-setter checkout; "
-            "run from the repository containing scripts/faustwasm"
-        )
-    if not package.is_file():
-        raise RuntimeError("FaustWasm runtime is not installed; run `npm ci` at the repository root")
     if shutil.which("node") is None:
         raise RuntimeError("FaustWasm rendering requires Node.js on PATH")
+    script = resource_directory / name
+    if not script.is_file():
+        raise RuntimeError(f"packaged FaustWasm entrypoint is unavailable: {name}")
     return script
+
+
+def _assemble_faustwasm_file(resource_directory: Path, filename: str) -> None:
+    """Assemble one compiler binary from its packaged chunks.
+
+    :param resource_directory: Writable materialized FaustWasm directory.
+    :param filename: Filename under ``vendor/libfaust-wasm``.
+    :raises RuntimeError: Packaged chunks are missing or malformed.
+    """
+    parent = resource_directory / "vendor" / "libfaust-wasm"
+    parts = sorted(parent.glob(f"{filename}.binpart*"))
+    if not parts:
+        raise RuntimeError(f"packaged FaustWasm binary chunks are unavailable: {filename}")
+    with (parent / filename).open("wb") as destination:
+        for part in parts:
+            with part.open("rb") as source:
+                if source.read(1) != b"\0":
+                    raise RuntimeError(f"malformed packaged FaustWasm binary chunk: {part.name}")
+                shutil.copyfileobj(source, destination)
 
 
 def _compile_request(synth: SynthSpec, backend_version: str) -> dict[str, object]:
@@ -281,18 +296,27 @@ def compile_faustwasm_artifact(
     request_path = output_directory / ".compile-request.json"
     request_path.write_text(json.dumps(request))
     try:
-        subprocess.run(  # noqa: S603
-            [
-                "node",
-                str(repository_faustwasm_script("export-artifacts.mjs")),
-                str(request_path),
-                str(output_directory),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=_NODE_TIMEOUT_SECONDS,
-        )
+        with (
+            as_file(faustwasm_dir()) as packaged_directory,
+            tempfile.TemporaryDirectory(prefix="synth-setter-faustwasm-") as temporary_directory,
+        ):
+            resource_directory = Path(temporary_directory) / "faustwasm"
+            shutil.copytree(packaged_directory, resource_directory)
+            # FaustWasm writes a transient ESM shim beside libfaust-wasm.js during compilation.
+            for root, _, _ in os.walk(resource_directory):
+                directory = Path(root)
+                directory.chmod(directory.stat().st_mode | stat.S_IWUSR)
+            # Source-control size gates require the compiler binaries to ship as bounded chunks.
+            _assemble_faustwasm_file(resource_directory, "libfaust-wasm.data")
+            _assemble_faustwasm_file(resource_directory, "libfaust-wasm.wasm")
+            script = _faustwasm_entrypoint(resource_directory, "export-artifacts.mjs")
+            subprocess.run(  # noqa: S603
+                ["node", str(script), str(request_path), str(output_directory)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=_NODE_TIMEOUT_SECONDS,
+            )
     finally:
         request_path.unlink(missing_ok=True)
 
@@ -325,19 +349,21 @@ def run_faustwasm_render_worker(
     :param request_path: JSON render request path.
     :param output_path: Destination for channel-major little-endian float32 samples.
     """
-    subprocess.run(  # noqa: S603
-        [
-            "node",
-            str(repository_faustwasm_script("render-worker.mjs")),
-            str(artifact_directory / "manifest.json"),
-            str(request_path),
-            str(output_path),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=_NODE_TIMEOUT_SECONDS,
-    )
+    with as_file(faustwasm_dir()) as resource_directory:
+        script = _faustwasm_entrypoint(resource_directory, "render-worker.mjs")
+        subprocess.run(  # noqa: S603
+            [
+                "node",
+                str(script),
+                str(artifact_directory / "manifest.json"),
+                str(request_path),
+                str(output_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=_NODE_TIMEOUT_SECONDS,
+        )
 
 
 def export_faustwasm_artifact(

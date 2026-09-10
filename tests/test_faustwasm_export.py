@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+from importlib.resources import as_file
 from pathlib import Path
 from typing import Any
 
@@ -16,11 +18,11 @@ from synth_setter.data.vst.faustwasm_artifacts import (
     compile_faustwasm_artifact,
     run_faustwasm_render_worker,
 )
+from synth_setter.resources import faustwasm_dir
 from synth_setter.synth_spec import SYNTHS, SynthName
 from synth_setter.tools.export_faustwasm import main
 
-_ROOT = Path(__file__).parents[1]
-_NODE_MODULE = _ROOT / "node_modules/@grame/faustwasm/package.json"
+_NODE_UNAVAILABLE = shutil.which("node") is None
 
 
 def _configured_backend_version() -> str:
@@ -32,73 +34,22 @@ def _configured_backend_version() -> str:
         return str(compose(config_name="render/faustwasm").render.backend_version)
 
 
-def _relocate_artifact_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Relocate module-root discovery to a real temporary checkout layout.
-
-    :param monkeypatch: Replaces the module's runtime file location.
-    :param tmp_path: Temporary checkout root.
-    :returns: Temporary checkout root containing the relocated module.
-    """
-    relocated = tmp_path / "src/synth_setter/data/vst/faustwasm_artifacts.py"
-    relocated.parent.mkdir(parents=True)
-    relocated.touch()
-    monkeypatch.setattr(faustwasm_artifacts, "__file__", str(relocated))
-    return tmp_path
-
-
-def test_runtime_resolver_missing_script_raises_checkout_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A relocated module without scripts reports the checkout requirement.
-
-    :param monkeypatch: Relocates module-root discovery.
-    :param tmp_path: Real temporary checkout layout.
-    """
-    _relocate_artifact_module(monkeypatch, tmp_path)
-
-    with pytest.raises(RuntimeError, match="Node assets are unavailable"):
-        faustwasm_artifacts.repository_faustwasm_script("render-worker.mjs")
+def test_faustwasm_resources_include_pinned_runtime() -> None:
+    """Packaged Node assets include the configured compiler and render workers."""
+    with as_file(faustwasm_dir()) as resource_directory:
+        package = json.loads((resource_directory / "vendor/package.json").read_text())
+        assert package["version"] == _configured_backend_version()
+        assert (resource_directory / "export-artifacts.mjs").is_file()
+        assert (resource_directory / "render-worker.mjs").is_file()
+        assert (resource_directory / "runtime.mjs").is_file()
+        assert (resource_directory / "package-version.mjs").is_file()
+        compiler_directory = resource_directory / "vendor/libfaust-wasm"
+        assert tuple(compiler_directory.glob("libfaust-wasm.data.binpart*"))
+        assert (compiler_directory / "libfaust-wasm.js").is_file()
+        assert tuple(compiler_directory.glob("libfaust-wasm.wasm.binpart*"))
 
 
-def test_runtime_resolver_missing_package_raises_install_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A checkout script without its npm package reports the install command.
-
-    :param monkeypatch: Relocates module-root discovery.
-    :param tmp_path: Real temporary checkout layout.
-    """
-    root = _relocate_artifact_module(monkeypatch, tmp_path)
-    script = root / "scripts/faustwasm/render-worker.mjs"
-    script.parent.mkdir(parents=True)
-    script.touch()
-
-    with pytest.raises(RuntimeError, match=r"not installed; run `npm ci`"):
-        faustwasm_artifacts.repository_faustwasm_script("render-worker.mjs")
-
-
-def test_runtime_resolver_empty_path_raises_node_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A complete temporary layout still requires Node on the real PATH lookup.
-
-    :param monkeypatch: Relocates module-root discovery and empties PATH.
-    :param tmp_path: Real temporary checkout layout.
-    """
-    root = _relocate_artifact_module(monkeypatch, tmp_path)
-    script = root / "scripts/faustwasm/render-worker.mjs"
-    script.parent.mkdir(parents=True)
-    script.touch()
-    package = root / "node_modules/@grame/faustwasm/package.json"
-    package.parent.mkdir(parents=True)
-    package.write_text('{"version": "0.18.3"}')
-    monkeypatch.setenv("PATH", "")
-
-    with pytest.raises(RuntimeError, match="requires Node.js on PATH"):
-        faustwasm_artifacts.repository_faustwasm_script("render-worker.mjs")
-
-
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize(
     ("identity", "expected_mode", "expected_outputs"),
     [
@@ -160,7 +111,7 @@ def test_export_cli_persists_hashed_artifact_consumed_by_real_runtime(
     assert float(np.max(np.abs(audio))) > 1e-6
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_real_runtime_rejects_configured_backend_version_mismatch(tmp_path: Path) -> None:
     """The render worker checks its request against installed package metadata.
 
@@ -199,7 +150,7 @@ def test_real_runtime_rejects_configured_backend_version_mismatch(tmp_path: Path
     assert "FaustWasm version mismatch" in exc_info.value.stderr
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_real_runtime_rejects_persisted_manifest_version_mismatch(tmp_path: Path) -> None:
     """The Node consumer compares persisted provenance with its installed package.
 
@@ -242,7 +193,7 @@ def test_real_runtime_rejects_persisted_manifest_version_mismatch(tmp_path: Path
     assert "artifact 999.0.0, installed" in exc_info.value.stderr
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_real_runtime_rejects_corrupted_persisted_module(tmp_path: Path) -> None:
     """The Node consumer rejects module bytes that drift from the manifest digest.
 
@@ -283,7 +234,7 @@ def test_real_runtime_rejects_corrupted_persisted_module(tmp_path: Path) -> None
     assert "artifact digest mismatch" in exc_info.value.stderr
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_compile_rejects_backend_version_that_differs_from_installed_package(
     tmp_path: Path,
 ) -> None:
@@ -301,7 +252,7 @@ def test_compile_rejects_backend_version_that_differs_from_installed_package(
     assert "FaustWasm version mismatch" in exc_info.value.stderr
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize(
     ("field", "invalid_value"),
     [

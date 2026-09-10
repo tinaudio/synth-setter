@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 from hydra import compose, initialize_config_module
@@ -12,6 +11,7 @@ from omegaconf import DictConfig
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.renderer_backend import FlushBlocks
+from synth_setter.resources import faustwasm_dir
 from synth_setter.synth_spec import SynthName, SynthSpec
 
 _GENERIC_RENDER_FIELDS = {
@@ -267,12 +267,9 @@ def test_render_faust_composes_into_valid_render_config(
 
 def test_faustwasm_hydra_version_matches_pinned_node_dependency() -> None:
     """The authored render contract and installed dependency pin cannot drift."""
-    package = json.loads((Path(__file__).parents[3] / "package.json").read_text())
+    package = json.loads((faustwasm_dir() / "vendor" / "package.json").read_text())
 
-    assert (
-        _compose_render_group("faustwasm").backend_version
-        == package["devDependencies"]["@grame/faustwasm"]
-    )
+    assert _compose_render_group("faustwasm").backend_version == package["version"]
 
 
 @pytest.mark.parametrize(

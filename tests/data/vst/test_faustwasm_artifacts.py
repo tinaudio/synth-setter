@@ -7,6 +7,7 @@ import errno
 import json
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -17,12 +18,10 @@ from synth_setter.data.vst import faustwasm_artifacts
 from synth_setter.data.vst.faustwasm_artifacts import (
     compile_faustwasm_artifact,
     export_faustwasm_artifact,
-    repository_faustwasm_script,
 )
 from synth_setter.synth_spec import SYNTHS, SynthName
 
-_ROOT = Path(__file__).parents[3]
-_NODE_MODULE = _ROOT / "node_modules/@grame/faustwasm/package.json"
+_NODE_UNAVAILABLE = shutil.which("node") is None
 
 
 def _configured_backend_version() -> str:
@@ -32,71 +31,6 @@ def _configured_backend_version() -> str:
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         return str(compose(config_name="render/faustwasm").render.backend_version)
-
-
-def _set_fake_checkout(monkeypatch: pytest.MonkeyPatch, root: Path) -> Path:
-    """Relocate repository asset discovery beneath ``root``.
-
-    :param monkeypatch: Replaces module-root discovery.
-    :param root: Temporary checkout root.
-    :returns: Expected script path in the relocated checkout.
-    """
-    module_path = root / "src/synth_setter/data/vst/faustwasm_artifacts.py"
-    monkeypatch.setattr(faustwasm_artifacts, "__file__", str(module_path))
-    return root / "scripts/faustwasm/export-artifacts.mjs"
-
-
-def test_repository_script_missing_checkout_asset_reports_install_contract(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An installed wheel without repository scripts reports the required checkout.
-
-    :param tmp_path: Isolated checkout-shaped root.
-    :param monkeypatch: Redirects module path discovery to the isolated root.
-    """
-    _set_fake_checkout(monkeypatch, tmp_path)
-
-    with pytest.raises(RuntimeError, match="unavailable outside a synth-setter checkout"):
-        repository_faustwasm_script("export-artifacts.mjs")
-
-
-def test_repository_script_missing_node_package_reports_npm_command(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A checkout without installed FaustWasm dependencies reports ``npm ci``.
-
-    :param tmp_path: Isolated checkout-shaped root.
-    :param monkeypatch: Redirects module path discovery to the isolated root.
-    """
-    script = _set_fake_checkout(monkeypatch, tmp_path)
-    script.parent.mkdir(parents=True)
-    script.touch()
-
-    with pytest.raises(RuntimeError, match="run `npm ci`"):
-        repository_faustwasm_script("export-artifacts.mjs")
-
-
-def test_repository_script_missing_node_executable_reports_path_requirement(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Installed assets without a Node executable fail before subprocess launch.
-
-    :param tmp_path: Isolated checkout-shaped root.
-    :param monkeypatch: Redirects module and executable discovery.
-    """
-    script = _set_fake_checkout(monkeypatch, tmp_path)
-    script.parent.mkdir(parents=True)
-    script.touch()
-    package = tmp_path / "node_modules/@grame/faustwasm/package.json"
-    package.parent.mkdir(parents=True)
-    package.write_text("{}")
-    monkeypatch.setattr(faustwasm_artifacts.shutil, "which", lambda _name: None)
-
-    with pytest.raises(RuntimeError, match="requires Node.js on PATH"):
-        repository_faustwasm_script("export-artifacts.mjs")
 
 
 def test_compile_artifact_rejects_non_faust_identity_before_filesystem_write(
@@ -118,7 +52,7 @@ def test_compile_artifact_rejects_non_faust_identity_before_filesystem_write(
     assert not output.exists()
 
 
-@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize(
     ("field", "replacement"),
     [

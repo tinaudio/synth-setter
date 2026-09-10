@@ -32,24 +32,24 @@ class TestExtractBackendVersion:
     """Rendering-host package version extractor."""
 
     @staticmethod
-    def _relocate_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-        relocated = tmp_path / "src/synth_setter/data/vst/core.py"
-        relocated.parent.mkdir(parents=True)
-        relocated.touch()
-        monkeypatch.setattr(core, "__file__", str(relocated))
-        return tmp_path / "node_modules/@grame/faustwasm/package.json"
+    def _replace_packaged_resources(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> Path:
+        resource_directory = tmp_path / "faustwasm"
+        monkeypatch.setattr(core, "faustwasm_dir", lambda: resource_directory)
+        return resource_directory / "vendor/package.json"
 
-    def test_faustwasm_missing_package_metadata_raises_install_error(
+    def test_faustwasm_missing_package_metadata_raises_packaging_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        """A relocated checkout without npm metadata reports the install command.
+        """An incomplete installed package reports missing bundled metadata.
 
-        :param monkeypatch: Relocates the module file used to resolve the checkout root.
-        :param tmp_path: Real temporary checkout layout.
+        :param monkeypatch: Replaces packaged resource discovery.
+        :param tmp_path: Isolated package resource directory.
         """
-        self._relocate_module(monkeypatch, tmp_path)
+        self._replace_packaged_resources(monkeypatch, tmp_path)
 
-        with pytest.raises(RuntimeError, match=r"not installed; run `npm ci`"):
+        with pytest.raises(RuntimeError, match="packaged @grame/faustwasm metadata is unavailable"):
             core.extract_backend_version("faustwasm")
 
     @pytest.mark.parametrize(
@@ -64,18 +64,15 @@ class TestExtractBackendVersion:
     ) -> None:
         """Missing, non-string, and malformed versions share a metadata error.
 
-        :param monkeypatch: Relocates the module file used to resolve the checkout root.
-        :param tmp_path: Real temporary checkout layout.
+        :param monkeypatch: Replaces packaged resource discovery.
+        :param tmp_path: Isolated package resource directory.
         :param contents: Invalid package metadata under test.
         """
-        package = self._relocate_module(monkeypatch, tmp_path)
+        package = self._replace_packaged_resources(monkeypatch, tmp_path)
         package.parent.mkdir(parents=True)
         package.write_text(contents)
 
-        with pytest.raises(
-            RuntimeError,
-            match=r"@grame/faustwasm package metadata .*run `npm ci`",
-        ):
+        with pytest.raises(RuntimeError, match="packaged @grame/faustwasm metadata is malformed"):
             core.extract_backend_version("faustwasm")
 
     def test_unversioned_backend_rejects_separate_version_lookup(self) -> None:

@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 
 import { compileFaustArtifact } from './export-artifacts.mjs';
 import {
@@ -13,11 +15,27 @@ import {
 } from './runtime.mjs';
 import { readFaustWasmPackageVersion } from './package-version.mjs';
 
+const execFileAsync = promisify(execFile);
+
 const SOURCE = `declare name "contract";
 import("stdfaust.lib");
 gain = hslider("gain", 0.5, 0, 1, 0.01);
 process = os.osc(440) * gain;
 `;
+
+test('canonical export entrypoint runs through a symlinked path', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'faustwasm-entrypoint-'));
+    const alias = join(directory, 'runtime');
+    try {
+        await symlink(resolve('src/synth_setter/faustwasm'), alias, 'dir');
+        await assert.rejects(
+            execFileAsync(process.execPath, [join(alias, 'export-artifacts.mjs')]),
+            (error) => error.code === 1 && /usage:/i.test(error.stderr),
+        );
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
 
 test('offline boundaries reject non-positive and fractional loop sizes', async () => {
     const artifact = { manifest: { mode: 'mono' } };
