@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789033878089,
+  "lastUpdate": 1789033881218,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -39968,6 +39968,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/diverse-patches/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.0003337264060974121,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e89112eeaaa373927bf9ce5a05d25702a89813ae",
+          "message": "internal-feat(training): decode pyFDN predictions into FLAMO graphs (#3307)\n\n* internal-feat(training): add differentiable FLAMO FDN rendering\n\nInject tensor-native renderers into audio feedback and simulator control.\nKeep backend amplitude handling out of the shared loss. Exercise real local\npyFDN generation, FLAMO training, and checkpoint evaluation in CPU CI.\n\nRefs #3302\n\n* test(training): verify single-row FLAMO evaluation metrics\n\nAssert per-pair response metrics rather than Pearson correlations, which\nare undefined for the one-row CI evaluation sample.\n\n* refactor(training): reuse FLAMO proportional shelving filter\n\nKeep only pyFDN RT60-to-gain mapping and SOS packing in the adapter;\nuse FLAMO for the actual filter design.\n\n* internal-feat(training): decode pyFDN predictions into FLAMO graphs\n\nBuild the mono LTI graph once through dss_to_flamo and bind tensor-native\nParamSpec decodes for Householder, Kronecker and Gotz feedback. Reuse\npyFDN filter design and preserve tone EQ and the Gotz direct-path delay.\n\nVerify offline/online waveform parity, CPU/CUDA gradients and real flow\ntraining with checkpoint evaluation for fixed and learned feedback.\n\nRefs #3302\n\n* internal-fix(training): normalize Lance audio for FLAMO finetuning\n\nShare target downmixing across direct audio feedback and simulator control,\nincluding validation, test and predict sampling boundaries. Exercise the\nreal Lance batch with a trained flow, FLAMO scoring and control gradients.\nPin the exact float32 delay-rounding boundary from the review.\n\nRefs #3302\n\n* internal-feat(training): bind multichannel BasicFDN predictions in FLAMO\n\nUse the complete canonical build without reconstructing DSP topology.\nSeparate model encoding from build geometry, preserve all input/output\ntransfer paths, and score waveform channels before reducing their losses.\nReject advanced effects whose full processing is outside FDNBuild.\n\nRefs #3302\n\n* docs(training): clarify FLAMO channel and spec support\n\n* internal-fix(training): retain gradients for saturated FDN controls\n\nKeep exact offline clipping with an affine straight-through gradient so\nunconstrained flow predictions are not stranded outside physical bounds.\nShare experiment geometry through interpolation and pin override behavior.\n\nRefs #3302\n\n* chore(training): retain base lockfile after restack",
+          "timestamp": "2026-09-10T04:06:00-04:00",
+          "tree_id": "2b09df905accb21728c1407037c5a56c6090c0bb",
+          "url": "https://github.com/tinaudio/synth-setter/commit/e89112eeaaa373927bf9ce5a05d25702a89813ae"
+        },
+        "date": 1789033880621,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/diverse-patches/render-count",
+            "value": 8,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard/dataset-seconds-per-render",
+            "value": 12.863416104750002,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard/dataset-realtime-factor",
+            "value": 3.2158540261875004,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer/dataset-seconds-per-render",
+            "value": 5.902204919999974,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer/dataset-realtime-factor",
+            "value": 1.4755512299999936,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/surgepy/dataset-seconds-per-render",
+            "value": 0.3228016846250057,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/surgepy/dataset-realtime-factor",
+            "value": 0.08070042115625142,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 2.8228747844696045,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-dawdreamer/mss-max",
+            "value": 0.789901077747345,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.006192226428538561,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 1.3910634077596478,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.00025194883346557617,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 2.6210267543792725,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-surgepy/mss-max",
+            "value": 0.6338490843772888,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-surgepy/sot-max",
+            "value": 0.006168550346046686,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 1.3332909966725857,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.0003877878189086914,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 2.828632354736328,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer-vs-surgepy/mss-max",
+            "value": 0.6543207764625549,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.0063018412329256535,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 1.3749526914488523,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.0005075335502624512,
             "unit": "1-cos"
           }
         ]
