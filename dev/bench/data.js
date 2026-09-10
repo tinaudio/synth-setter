@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789028783668,
+  "lastUpdate": 1789028787519,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -27491,6 +27491,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.067648636099966,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6cbbcad5a76526b91aa96ea7b382bb7a81bdaf5f",
+          "message": "internal-feat(training): add BasicFDN build and renderer boundary (#3401)\n\n* internal-feat(training): add BasicFDN build and renderer boundary\n\nKeep the complete FDNBuild as the canonical representation and delegate\noffline and FLAMO rendering to pyFDN. Reject malformed builds at\nconstruction and verify real MIMO parity with every filter hook.\n\nRefs #3302\n\n* internal-feat(training): complete BasicFDN integration boundary\n\n* test(training): validate normalization for every FDN hook\n\n* internal-fix(training): validate BasicFDN native controls",
+          "timestamp": "2026-09-10T03:17:40-04:00",
+          "tree_id": "b4a44f08c975eb109e284f1ac6c4113e4a47fd42",
+          "url": "https://github.com/tinaudio/synth-setter/commit/6cbbcad5a76526b91aa96ea7b382bb7a81bdaf5f"
+        },
+        "date": 1789028786949,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.38888931274414,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.877016235291958,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09305477142333984,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.00399702787399292,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.3311405181884766,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.365746256700003,
             "unit": "seconds"
           }
         ]
