@@ -672,7 +672,7 @@ docs:
         covers: "Loopback serving and prediction validation"
       - pattern: "src/synth_setter/models/flow_onnx.py"
         covers: "Supported checkpoint and export contracts"
-      - pattern: "src/synth_setter/web/**"
+      - pattern: "src/synth_setter/web/*"
         covers: "Browser runtime, dependency installation, and RK4 sampling"
       - pattern: "tests/integration/test_browser_surgepy_e2e.py"
         covers: "Real checkpoint, browser, and audio-consumer verification"
