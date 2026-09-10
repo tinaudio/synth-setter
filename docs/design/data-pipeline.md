@@ -1128,7 +1128,7 @@ endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
 invocation augments one finalized Lance dataset without modifying finalize-owned
 dataset cards or completion markers. It writes global vector columns for `clap`
 (LAION-CLAP, 512 dimensions) and `ssondo` (S-SONDO MATPAC-MobileNetV3, 960
-dimensions), plus sequence embeddings (`m2l`, `same_s`, `same_l`, `matpac_plus`,
+dimensions), plus sequence features (`cqt`, `m2l`, `same_s`, `same_l`, `matpac_plus`,
 `meanaudio_16k`, `pupujepa_tiny`, and `pupujepa_large`) stored as fixed-shape
 tensors. All are derived from the audio column and selectable via `embeddings=`
 (the selectable set is
@@ -1137,8 +1137,8 @@ are each loaded and written in their own sequential pass). SAME-S and SAME-L
 use Stable Audio 3's autoencoder factory with strict safetensors state loading;
 local directories, R2 mirrors, and HuggingFace repo IDs retain the same
 checkpoint-resolution behavior. Each sequence embedding also writes a mean-pooled
-`FixedSizeList<float32, D>` companion (`m2l_vec`, `same_s_vec`, `same_l_vec`,
-`matpac_plus_vec`, `meanaudio_16k_vec`, `pupujepa_tiny_vec`, or
+`FixedSizeList<float32, D>` companion (`cqt_vec`, `m2l_vec`, `same_s_vec`,
+`same_l_vec`, `matpac_plus_vec`, `meanaudio_16k_vec`, `pupujepa_tiny_vec`, or
 `pupujepa_large_vec`); when `build_index=true`, IVF_PQ indexes `clap`, `ssondo`,
 and the selected companion columns for `nearest=` search. S-SONDO audio is downmixed,
 resampled to 32 kHz, and right-padded to its 10-second input window; longer
@@ -1150,6 +1150,13 @@ missing indexes without re-encoding complete columns. An optional
 `resume_cache=<path>` caches per-batch encoder outputs so an interrupted write
 can resume without re-encoding already-processed rows. Generated fields carry
 artifact and input-policy identities so retries reject incompatible output.
+`cqt` runs the commit-pinned CQT_pytorch NSGT transform on the selected Torch device.
+It downmixes channels on-device, stores 8 octaves × 32 bins of float32 `log1p` magnitude on
+the canonical 100 Hz frame grid, and runs in a solo encoder pass to bound transform memory.
+For four-second 44.1 kHz rows the stored shape is `(256, 401)`, consumed by
+`conditioning=cqt` through `EmbeddingPool`. CQT has no checkpoint override; its field identity
+records the immutable source commit and preprocessing policy.
+
 The default CLAP, SAME, and S-SONDO sources hydrate under
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
 `checkpoints.<embedding>=<source>` Hydra overrides remain authoritative.
