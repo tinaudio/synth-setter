@@ -4,6 +4,7 @@ from collections.abc import Iterable, Sequence
 import importlib.metadata
 import importlib.util
 import plistlib
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -74,6 +75,23 @@ class TestExtractBackendVersion:
 
         with pytest.raises(RuntimeError, match="packaged @grame/faustwasm metadata is malformed"):
             core.extract_backend_version("faustwasm")
+
+    def test_faustcpp_version_probe_timeout_raises_runtime_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hung native compiler probe preserves the backend error contract.
+
+        :param monkeypatch: Stubs executable discovery and the version subprocess.
+        """
+        monkeypatch.setattr(core.shutil, "which", lambda _executable: "/usr/bin/tool")
+        monkeypatch.setattr(
+            core.subprocess,
+            "run",
+            MagicMock(side_effect=subprocess.TimeoutExpired(["faust", "--version"], 10)),
+        )
+
+        with pytest.raises(RuntimeError, match="version probe timed out after 10 seconds"):
+            core.extract_backend_version("faustcpp")
 
     def test_unversioned_backend_rejects_separate_version_lookup(self) -> None:
         """A host without an independent version contract fails closed."""

@@ -27,6 +27,7 @@ from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.synth_spec import validate_faust_registry_reference
 
 _COMPILE_TIMEOUT_SECONDS = 120
+_CPP_INT_MAX = 2_147_483_647
 _RENDER_TIMEOUT_SECONDS = 60
 
 
@@ -88,8 +89,12 @@ class FaustCppRenderer(AudioRenderer):
             self._identity = validate_faust_registry_reference(
                 self.plugin_path, self.param_spec_name
             )
-        if isinstance(self.block_size, bool) or not isinstance(self.block_size, int) or self.block_size < 1:
-            raise ValueError("block_size must be a positive integer")
+        if (
+            isinstance(self.block_size, bool)
+            or not isinstance(self.block_size, int)
+            or not 1 <= self.block_size <= _CPP_INT_MAX
+        ):
+            raise ValueError("block_size must be an integer in [1, 2147483647]")
         if (
             not math.isfinite(self.sample_rate)
             or self.sample_rate <= 0

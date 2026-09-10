@@ -162,6 +162,14 @@ def test_faustcpp_render_isolates_state_across_calls() -> None:
     np.testing.assert_array_equal(first, repeated)
 
 
+def test_faustcpp_block_size_above_cpp_int_range_raises() -> None:
+    """Native request integers reject block sizes they cannot represent."""
+    config = _config().model_copy(update={"block_size": 2_147_483_648})
+
+    with pytest.raises(ValueError, match=r"block_size must be an integer in \[1, 2147483647\]"):
+        make_audio_renderer(config)
+
+
 def test_faustcpp_missing_toolchain_reports_install_command(monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing compiler provenance fails with an actionable dependency message.
 
