@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pyFDN sketch flow in the browser</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 1.5rem; max-width: 60rem; }
+      form { display: grid; grid-template-columns: max-content 1fr; gap: 0.5rem 1rem; align-items: center; }
+      table { border-collapse: collapse; }
+      td { border: 1px solid #ccc; padding: 0.2rem 0.6rem; font-variant-numeric: tabular-nums; }
+      section { margin-top: 1.5rem; }
+      audio { display: block; margin-bottom: 0.5rem; }
+    </style>
+  </head>
+  <body>
+    <h1>pyFDN sketch flow in the browser</h1>
+    <p>
+      Upload an impulse response. The page extracts its mel spectrogram and reverb sketch, samples the
+      flow with ONNX Runtime Web, renders the predicted FDN with FaustWasm, and scores the render
+      against the upload. Nothing leaves the browser.
+    </p>
+    <form id="controls">
+      <label for="target">Target impulse response (WAV)</label>
+      <input id="target" name="target" type="file" accept="audio/wav,audio/x-wav,.wav" required />
+      <label for="mode">Conditioning</label>
+      <select id="mode" name="mode">
+        <option value="both">Mel and sketch</option>
+        <option value="mel_only">Mel only</option>
+        <option value="sketch_only">Sketch only</option>
+        <option value="unconditional">Unconditional</option>
+      </select>
+      <label for="content">Content CFG strength</label>
+      <input id="content" name="content" type="number" min="0" step="0.1" value="2" />
+      <label for="sketch">Sketch CFG strength</label>
+      <input id="sketch" name="sketch" type="number" min="0" step="0.1" value="2" />
+      <label for="steps">Integration steps</label>
+      <input id="steps" name="steps" type="number" min="1" max="1000" value="50" />
+      <label for="seed">Noise seed</label>
+      <input id="seed" name="seed" type="number" min="0" step="1" value="17" />
+      <span></span>
+      <button id="run" type="submit" disabled>Run evaluation</button>
+    </form>
+    <p id="status" role="status">Loading</p>
+    <div id="results"></div>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>
