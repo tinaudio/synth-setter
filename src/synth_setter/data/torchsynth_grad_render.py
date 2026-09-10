@@ -114,8 +114,8 @@ def render_torchsynth_grad(
     :param render_batch_size: Fixed row count of the voice this render runs on; a
         shorter batch is padded up and sliced back, so a trailing partial batch
         neither allocates a second voice nor shifts the render.
-    :returns: Float32 audio shaped ``(batch, signal_length)``, differentiable
-        w.r.t. ``params``' synth columns.
+    :returns: Float32 audio shaped ``(batch, signal_length)`` in ``[-1, 1]``,
+        differentiable w.r.t. ``params``' synth columns.
     :raises ValueError: Wrong row width, a non-finite value, a batch exceeding
         ``render_batch_size``, or a non-finite render.
     """
@@ -155,6 +155,9 @@ def render_torchsynth_grad(
         # otherwise write NaN into every weight on the next backward pass.
         raise ValueError("TorchSynth rendered non-finite audio")
     starts = column([note["note_start_and_end"][0] for note in notes[:rows]])
+    # Stored targets are hard-clamped by render_torchsynth; a straight-through clamp
+    # matches that contract without zeroing gradient on clipped samples.
+    audio = audio + (audio.clamp(-1.0, 1.0) - audio).detach()
     return _delay_by_note_start(audio, starts, sample_rate)
 
 
