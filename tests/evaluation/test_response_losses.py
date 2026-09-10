@@ -144,8 +144,8 @@ def test_response_losses_nonfinite_audio_raises() -> None:
 
 def test_response_losses_multichannel_average_corresponding_channel_scores() -> None:
     """A wrong opposite-phase second channel contributes to each scalar reduction."""
-    first = _broadband_decay(decay_rate=20.0)
-    second = _broadband_decay(decay_rate=12.0)
+    first = np.ones((1, 8192), dtype=np.float64)
+    second = np.full_like(first, 0.5)
     target = np.concatenate((first, second), axis=0)
     pred = np.concatenate((first, -second), axis=0)
 
