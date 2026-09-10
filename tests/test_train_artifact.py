@@ -21,6 +21,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -46,6 +47,8 @@ from tests.helpers.wandb_offline import read_run_binary
 
 _CKPT_URI = "r2://models/model-flow-simple/best.ckpt"
 _CKPT_S3_REF = "s3://models/model-flow-simple/best.ckpt"
+_LAUNCH_UUID = "7ac31b3ff42c4f13a21997adb4a74e86"
+_SECOND_LAUNCH_UUID = "f52af7e63eaa41048599080186b92b5d"
 _TRAINING_RUN_ID = "flow-simple-20260908T170724945Z"
 
 # `cfg_train` composes no Hydra experiment, so `resolve_run_config_id` falls back
@@ -106,17 +109,20 @@ class _RecordingWandbLogger(WandbLogger):
         self.logged.append(artifact)
 
 
-def test_derive_checkpoint_uri_default_uses_config_and_run_ids() -> None:
-    """A null override derives a run-scoped checkpoint URI."""
-    uri = _derive_checkpoint_uri(_cfg(task_name="flow-simple"), _TRAINING_RUN_ID)
+def test_derive_checkpoint_uri_default_uses_config_run_and_launch_ids() -> None:
+    """A null override derives a launch-scoped checkpoint URI."""
+    uri = _derive_checkpoint_uri(_cfg(task_name="flow-simple"), _TRAINING_RUN_ID, _LAUNCH_UUID)
     assert uri == (
-        "r2://intermediate-data/checkpoints/flow-simple/flow-simple-20260908T170724945Z/model.ckpt"
+        "r2://intermediate-data/checkpoints/flow-simple/"
+        "flow-simple-20260908T170724945Z/7ac31b3ff42c4f13a21997adb4a74e86/model.ckpt"
     )
 
 
 def test_derive_checkpoint_uri_override_is_used_verbatim() -> None:
     """A set ``upload_checkpoints_uri`` overrides the derived path verbatim."""
-    uri = _derive_checkpoint_uri(_cfg(upload_checkpoints_uri=_CKPT_URI), _TRAINING_RUN_ID)
+    uri = _derive_checkpoint_uri(
+        _cfg(upload_checkpoints_uri=_CKPT_URI), _TRAINING_RUN_ID, _LAUNCH_UUID
+    )
     assert uri == _CKPT_URI
 
 
@@ -249,15 +255,15 @@ def test_log_model_artifact_forwards_checkpoint_metadata() -> None:
     assert logger.logged[0].metadata["epoch"] == 9
 
 
-def test_upload_best_checkpoint_reachable_uploads_to_derived_uri(
+def test_upload_best_checkpoint_same_run_launches_keep_distinct_objects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When R2 is reachable, the best ckpt uploads to the derived URI (renamed model.ckpt).
+    """Two launches of one run upload readable checkpoints without overwriting.
 
     Drives the real ``rclone`` binary against a local-backed ``r2:`` remote, so
-    the assertion is the object materializing on disk — not a mocked call.
+    the assertions read the materialized objects instead of mocked calls.
 
-    :param tmp_path: Backs the ``r2:`` remote; the uploaded object lands under it.
+    :param tmp_path: Backs the ``r2:`` remote; the uploaded objects land under it.
     :param monkeypatch: Points rclone at the local fs and forces R2 reachable.
     """
     if shutil.which("rclone") is None:
@@ -265,23 +271,34 @@ def test_upload_best_checkpoint_reachable_uploads_to_derived_uri(
     monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
-    ckpt = tmp_path / "epoch=3.ckpt"
-    ckpt.write_bytes(b"weights")
+    first_ckpt = tmp_path / "epoch=3.ckpt"
+    second_ckpt = tmp_path / "epoch=4.ckpt"
+    first_ckpt.write_bytes(b"first weights")
+    second_ckpt.write_bytes(b"second weights")
 
-    uri = _upload_best_checkpoint(_cfg(task_name="flow-simple"), str(ckpt), _TRAINING_RUN_ID)
-
-    assert uri == (
-        "r2://intermediate-data/checkpoints/flow-simple/flow-simple-20260908T170724945Z/model.ckpt"
+    first_uri = _upload_best_checkpoint(
+        _cfg(task_name="flow-simple"), str(first_ckpt), _TRAINING_RUN_ID, _LAUNCH_UUID
     )
-    landed = (
+    second_uri = _upload_best_checkpoint(
+        _cfg(task_name="flow-simple"),
+        str(second_ckpt),
+        _TRAINING_RUN_ID,
+        _SECOND_LAUNCH_UUID,
+    )
+
+    assert first_uri != second_uri
+    first_object = (
         tmp_path
         / "intermediate-data"
         / "checkpoints"
         / "flow-simple"
         / "flow-simple-20260908T170724945Z"
+        / _LAUNCH_UUID
         / "model.ckpt"
     )
-    assert landed.read_bytes() == b"weights"
+    second_object = first_object.parents[1] / _SECOND_LAUNCH_UUID / "model.ckpt"
+    assert first_object.read_bytes() == b"first weights"
+    assert second_object.read_bytes() == b"second weights"
 
 
 def test_upload_best_checkpoint_unreachable_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -295,7 +312,10 @@ def test_upload_best_checkpoint_unreachable_returns_none(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _unavailable)
     assert (
-        _upload_best_checkpoint(_cfg(), "/run/checkpoints/epoch=3.ckpt", _TRAINING_RUN_ID) is None
+        _upload_best_checkpoint(
+            _cfg(), "/run/checkpoints/epoch=3.ckpt", _TRAINING_RUN_ID, _LAUNCH_UUID
+        )
+        is None
     )
 
 
@@ -305,7 +325,7 @@ def test_upload_best_checkpoint_empty_path_returns_none(monkeypatch: pytest.Monk
     :param monkeypatch: Stubs ``ensure_r2_env_loaded`` so only the empty path gates.
     """
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
-    assert _upload_best_checkpoint(_cfg(), "", _TRAINING_RUN_ID) is None
+    assert _upload_best_checkpoint(_cfg(), "", _TRAINING_RUN_ID, _LAUNCH_UUID) is None
 
 
 def test_upload_best_checkpoint_upload_failure_returns_none(
@@ -322,7 +342,12 @@ def test_upload_best_checkpoint_upload_failure_returns_none(
 
     monkeypatch.setattr(r2_io, "upload_to_uri", _boom)
     assert (
-        _upload_best_checkpoint(_cfg(task_name="flow-simple"), "/x/epoch=3.ckpt", _TRAINING_RUN_ID)
+        _upload_best_checkpoint(
+            _cfg(task_name="flow-simple"),
+            "/x/epoch=3.ckpt",
+            _TRAINING_RUN_ID,
+            _LAUNCH_UUID,
+        )
         is None
     )
 
@@ -448,7 +473,7 @@ def test_train_logs_model_artifact_to_offline_wandb_run(
 
 @pytest.mark.slow
 @pytest.mark.integration_r2
-def test_train_uploaded_checkpoint_is_run_scoped_and_described_by_artifact(
+def test_train_uploaded_checkpoint_is_launch_scoped_and_described_by_artifact(
     cfg_train_lance: DictConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A real train run uploads and describes its checkpoint under its run ID.
@@ -486,17 +511,16 @@ def test_train_uploaded_checkpoint_is_run_scoped_and_described_by_artifact(
 
         training_run_id = str(cfg_train_lance.logger.wandb.id)
         prefix = f"checkpoints/train/{training_run_id}/"
-        ckpt_uri = f"r2://{bucket}/{prefix}model.ckpt"
-        ckpt_bytes = r2_io.object_size(ckpt_uri)
-        assert ckpt_bytes is not None and ckpt_bytes > 0
-
         offline_dirs = list((tmp_path / "wandb").glob("offline-run-*"))
         binary = next(iter(offline_dirs[0].glob("run-*.wandb")))
         payload = read_run_binary(binary, until=lambda data: b'"ckpt_bytes"' in data)
         start = payload.find(b'{"git_sha"')
         metadata = json.loads(payload[start : payload.find(b"}", start) + 1])
 
-        assert metadata["ckpt_uri"] == ckpt_uri
+        ckpt_uri = metadata["ckpt_uri"]
+        assert re.fullmatch(rf"r2://{bucket}/{prefix}[0-9a-f]{{32}}/model\.ckpt", ckpt_uri)
+        ckpt_bytes = r2_io.object_size(ckpt_uri)
+        assert ckpt_bytes is not None and ckpt_bytes > 0
         assert metadata["ckpt_bytes"] == ckpt_bytes
         assert metadata["global_step"] == 2
         assert metadata["monitor"] == "val/param_mse"
