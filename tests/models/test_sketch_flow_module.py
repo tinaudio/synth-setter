@@ -441,6 +441,22 @@ def test_fixed_time_diagnostics_use_conditional_sketch_tokens() -> None:
     )
 
 
+def test_sample_batch_active_conditioning_none_raises_value_error() -> None:
+    """The active conditioning field cannot use an inactive field's ``None`` sentinel."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+    batch_with_missing_conditioning = {**batch, "mel": None}
+
+    with pytest.raises(ValueError, match="conditioning.*'mel'.*must contain a tensor"):
+        model.sample_batch(
+            batch_with_missing_conditioning,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=2,
+        )
+
+
 def test_sample_batch_wrong_noise_shape_raises() -> None:
     """Explicit noise must provide one parameter vector per input row."""
     model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
