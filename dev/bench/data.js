@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789060398215,
+  "lastUpdate": 1789060401884,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -27920,6 +27920,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.897517967600015,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "660126865692dd7b5e88539a1937c8cc2524d9a8",
+          "message": "internal-feat(data-pipeline): render and export Faust via FaustWasm (#3421)\n\n* internal-feat(data-pipeline): add offline FaustWasm rendering\n\n* internal-fix(data-pipeline): harden FaustWasm production export\n\n* test(data-pipeline): exercise FaustWasm production contracts\n\n* test(testing): trigger slow E2E for FaustWasm scripts\n\n* internal-fix(data-pipeline): register canonical Faust source URIs\n\n* internal-fix(data-pipeline): resolve FaustWasm registry references\n\n* internal-fix(data-pipeline): prevent concurrent artifact clobber\n\n* internal-fix(data-pipeline): omit derived synth format from YAML\n\n* test(data-pipeline): reject corrupted FaustWasm artifacts\n\n* internal-fix(ci-automation): allow additional npm tests\n\n* internal-fix(data-pipeline): address FaustWasm review feedback\n\nPersist offline block size through render provenance and worker transport.\nCover lifecycle, runtime prerequisite, and compiled manifest rejection paths.\nExercise both Faust backends through operator configuration and reuse buffers.\n\nAddress review 5167761128 on PR #3421.",
+          "timestamp": "2026-09-10T11:07:54-04:00",
+          "tree_id": "3a5f4ad513f7b8f7c83e14b416715ae9f656f9b5",
+          "url": "https://github.com/tinaudio/synth-setter/commit/660126865692dd7b5e88539a1937c8cc2524d9a8"
+        },
+        "date": 1789060401432,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 9.055400848388672,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.977949077934026,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08850093930959702,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0023731589317321777,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.3189592361450195,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.775421011199978,
             "unit": "seconds"
           }
         ]
