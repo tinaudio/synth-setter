@@ -197,9 +197,10 @@ requests never receive R2 credentials.
 ### Faust host parity
 
 [`test_faustwasm_dawdreamer_parity_e2e.py`](../../tests/data/vst/test_faustwasm_dawdreamer_parity_e2e.py)
-renders the same bright-organ A/B/A volume workload through FaustWasm 0.18.3 and
-DawDreamer 0.8.3. Both paths use the production renderer factory, Lance writer,
-and Lance reader. The test requires byte-identical normalized parameter rows,
+renders the same four-second bright-organ A/B/A volume workload through
+FaustWasm 0.18.3 and DawDreamer 0.8.3. Both paths use the production renderer
+factory, Lance writer, and Lance reader. Parity metrics cover the calibrated
+first 0.5 seconds. The test requires byte-identical normalized parameter rows,
 non-early aligned onsets, deterministic repeated A rows, and a causal difference
 for the B row.
 
