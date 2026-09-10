@@ -22,7 +22,6 @@ import glob
 import json
 import os
 import shutil
-import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, NoReturn, cast
@@ -449,10 +448,10 @@ def test_train_logs_model_artifact_to_offline_wandb_run(
 
 @pytest.mark.slow
 @pytest.mark.integration_r2
-def test_train_uploaded_checkpoint_is_described_by_offline_artifact_metadata(
+def test_train_uploaded_checkpoint_is_run_scoped_and_described_by_artifact(
     cfg_train_lance: DictConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A real R2 checkpoint is identifiable from the logged artifact metadata (#2424).
+    """A real train run uploads and describes its checkpoint under its run ID.
 
     :param cfg_train_lance: CPU-cheap Lance train cfg, run for two steps so a checkpoint exists.
     :param tmp_path: Hosts the dataset, offline run directory, and training outputs.
@@ -465,10 +464,6 @@ def test_train_uploaded_checkpoint_is_described_by_offline_artifact_metadata(
     wandb.teardown()
 
     bucket = "intermediate-data"
-    run_id = os.environ.get("GITHUB_RUN_ID", "local")
-    run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "0")
-    prefix = f"ci-train-artifact/{run_id}/{run_attempt}/{uuid.uuid4().hex[:8]}/"
-    ckpt_uri = f"r2://{bucket}/{prefix}model.ckpt"
 
     with open_dict(cfg_train_lance):
         cfg_train_lance.trainer.fast_dev_run = False
@@ -479,14 +474,19 @@ def test_train_uploaded_checkpoint_is_described_by_offline_artifact_metadata(
         cfg_train_lance.trainer.val_check_interval = 2
         cfg_train_lance.trainer.check_val_every_n_epoch = 1
         cfg_train_lance.test = False
-        cfg_train_lance.training.upload_checkpoints_uri = ckpt_uri
+        cfg_train_lance.r2.bucket = bucket
+        cfg_train_lance.training.upload_checkpoints_uri = None
         # vst_ffn logs val/param_mse, not the group default's val/loss.
         cfg_train_lance.callbacks.model_checkpoint.monitor = "val/param_mse"
     _attach_offline_wandb_logger(cfg_train_lance, tmp_path)
 
+    prefix = ""
     try:
         train(cfg_train_lance)
 
+        training_run_id = str(cfg_train_lance.logger.wandb.id)
+        prefix = f"checkpoints/train/{training_run_id}/"
+        ckpt_uri = f"r2://{bucket}/{prefix}model.ckpt"
         ckpt_bytes = r2_io.object_size(ckpt_uri)
         assert ckpt_bytes is not None and ckpt_bytes > 0
 
@@ -502,4 +502,5 @@ def test_train_uploaded_checkpoint_is_described_by_offline_artifact_metadata(
         assert metadata["monitor"] == "val/param_mse"
         assert isinstance(metadata["monitor_score"], float)
     finally:
-        r2_io.purge_prefix(bucket, prefix)
+        if prefix:
+            r2_io.purge_prefix(bucket, prefix)
