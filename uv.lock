@@ -1148,6 +1148,21 @@ wheels = [
 ]
 
 [[package]]
+name = "essentia"
+version = "2.1b6.dev1389"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pyyaml" },
+    { name = "six" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ab/29/cf1d727d5142bd2c32cf6ca21849c1fab6f5e13c2a4e8ac6603e23ddc037/essentia-2.1b6.dev1389-cp312-cp312-macosx_13_0_x86_64.whl", hash = "sha256:9552bb8e4ff79135cd361a680e10fa8e6d1ef3571b8fc1d9f1314c9d8cf50b5a", size = 21946388, upload-time = "2025-07-24T21:08:08.637Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/84/097c329cdbd62ff7cd4097e98e62ad2fe818c9c0d2c7aac28eb8fdc4796b/essentia-2.1b6.dev1389-cp312-cp312-macosx_15_0_arm64.whl", hash = "sha256:ca58a269185c49da232e5f4c177b566f7d248c57b113dd355af778ac0b132e6e", size = 20350841, upload-time = "2025-07-24T21:08:12.03Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/24/8ed5806bb62c4d8e5bb6a83bda4d03d501465c804f6d7d2a678defb4f0e2/essentia-2.1b6.dev1389-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5905c38da25d8ccf4259bd045e50242103a47f482b77559ec6899d4b463ca4e7", size = 13763604, upload-time = "2025-07-24T21:08:14.54Z" },
+]
+
+[[package]]
 name = "execnet"
 version = "2.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1333,6 +1348,14 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/26/00/35d85dcce6c57fdc871f3867d465d780f302a175ea360f62533f12b27e2b/flask-3.1.3.tar.gz", hash = "sha256:0ef0e52b8a9cd932855379197dd8f94047b359ca0a78695144304cb45f87c9eb", size = 759004, upload-time = "2026-02-19T05:00:57.678Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/9c/34f6962f9b9e9c71f6e5ed806e0d0ff03c9d1b0b2340088a0cf4bce09b18/flask-3.1.3-py3-none-any.whl", hash = "sha256:f4bcbefc124291925f1a26446da31a5178f9483862233b23c0c96a20701f670c", size = 103424, upload-time = "2026-02-19T05:00:56.027Z" },
+]
+
+[[package]]
+name = "flatbuffers"
+version = "25.12.19"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl", hash = "sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4", size = 26661, upload-time = "2025-12-19T23:16:13.622Z" },
 ]
 
 [[package]]
@@ -2488,6 +2511,22 @@ wheels = [
 ]
 
 [[package]]
+name = "ml-dtypes"
+version = "0.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/12/72/307d7c4bd0600601c7133fba5cb78af7db968152951c1cd473abb1cda782/ml_dtypes-0.6.0.tar.gz", hash = "sha256:5e60251d32ced5598972e4d5e06a2f044341f9291402551a3f6f0ec44f9299b0", size = 3032327, upload-time = "2026-08-13T14:14:40.215Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/84/6a/441eb053b078954f7fea284dfb288701884d0a1404d39babb858e1649023/ml_dtypes-0.6.0-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:5359c588cc62de6f78d7430f06b65853d884955494d86d6ad90b6dd64a3f3a08", size = 565447, upload-time = "2026-08-13T14:14:01.737Z" },
+    { url = "https://files.pythonhosted.org/packages/ed/cf/87e8a6c57eed63a91782a0d229856ddf73e138ce004dd71e2799a9dcdb33/ml_dtypes-0.6.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:37da32aa97749251025666d62372775019594577b9c9e9cfda83bed48d778fdb", size = 360227, upload-time = "2026-08-13T14:14:02.938Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/f9/7d76c1eae866f5d4636401b31b6d6dd90e4b4ced1fa7cfdfcca9c60e4bd3/ml_dtypes-0.6.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:3b4a480aa8fd54a1805b8ac10f3f91763926a74f73c0c364c10f9231854f4170", size = 409890, upload-time = "2026-08-13T14:14:04.248Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/db/9c61ec2760b5cbfb1c6558d5c991a6d8fd3271053c32db20506a9a90272b/ml_dtypes-0.6.0-cp312-cp312-win_amd64.whl", hash = "sha256:2a3e9d53925597fbffafd2a37048dadeddd0bdaba58058f6ae0869ed709a184d", size = 439333, upload-time = "2026-08-13T14:14:05.501Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/57/780ca3e5ab135b9fbdd8e5441abf5f801b30398371b691291e05ab9834c0/ml_dtypes-0.6.0-cp312-cp312-win_arm64.whl", hash = "sha256:6eaed129a4afe90694b8685e2f9b6294849f5eda4af9a15be83a4326eeebd775", size = 552268, upload-time = "2026-08-13T14:14:06.866Z" },
+]
+
+[[package]]
 name = "mpmath"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3093,6 +3132,78 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/09/48/6388f1bb9da707110532cb70ec4d2822858ddfb44f1cdf1233c20a80ea4b/omegaconf-2.3.0.tar.gz", hash = "sha256:d5d4b6d29955cc50ad50c46dc269bcd92c6e00f5f90d23ab5fee7bfca4ba4cc7", size = 3298120, upload-time = "2022-12-08T20:59:22.753Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e3/94/1843518e420fa3ed6919835845df698c7e27e183cb997394e4a670973a65/omegaconf-2.3.0-py3-none-any.whl", hash = "sha256:7b4df175cdb08ba400f45cae3bdcae7ba8365db4d165fc65fd04b050ab63b46b", size = 79500, upload-time = "2022-12-08T20:59:19.686Z" },
+]
+
+[[package]]
+name = "onnx"
+version = "1.22.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ml-dtypes" },
+    { name = "numpy" },
+    { name = "protobuf" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/04/19/8ea73a64b368b75fe339771a20a02bc61ea1f551484c9e3d9d0bfbd0450f/onnx-1.22.0.tar.gz", hash = "sha256:ef40c0aaf0b643857ea9306fc7eddce17eaf9fb0407e4801f1fc5758443a38e0", size = 12024721, upload-time = "2026-06-15T12:50:05.354Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ee/6a/481561f1093834376ed493e4ca42a73e5be0d50031f2969c86593bdc7c96/onnx-1.22.0-cp312-abi3-macosx_12_0_universal2.whl", hash = "sha256:596fbf0490947533c1c1045ba860851dc9fb77471023dac9a71ba5b42ceab103", size = 20167081, upload-time = "2026-06-15T12:49:32.078Z" },
+    { url = "https://files.pythonhosted.org/packages/84/55/b34fc2aa30aa54b4a775402d24c4082242c720283a274fe976ac8eb94480/onnx-1.22.0-cp312-abi3-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ae5a563f281cd9d2845622cecf6c092a57e4ee1b138f66fdbbdd4200567a5e16", size = 18889249, upload-time = "2026-06-15T12:49:34.7Z" },
+    { url = "https://files.pythonhosted.org/packages/09/a6/bd32357e6cc1ecb473afd78193d7231724f284435d2db25696ecfaaa1503/onnx-1.22.0-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:955e02e1f6d385b53d52f9cd7b9cdf5caf417c300bcfe3c64c6d542be763845b", size = 19106514, upload-time = "2026-06-15T12:49:37.424Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/9d/3af461ac6c714b8b369cb71499659932f4f12cfb066250b62f7567c3d530/onnx-1.22.0-cp312-abi3-pyemscripten_2025_0_wasm32.whl", hash = "sha256:82e9f27fc1223cb06d68a56bed6f9d3caf3d0dad1b61bce45006d529b15bd94c", size = 16966387, upload-time = "2026-06-15T12:49:40.918Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/f0/68195b5e5a53e333faf2660f5352ee43738d0e42fc5216cc6b1871a9fbfb/onnx-1.22.0-cp312-abi3-win32.whl", hash = "sha256:cc8b66b312f8f03a53e268afb67180a2d97dd12cc79e2b61361c6c0073448016", size = 17081568, upload-time = "2026-06-15T12:49:43.398Z" },
+    { url = "https://files.pythonhosted.org/packages/13/a8/734725bb703c5fabb687f79c79e51249475212b3eb37771ac4a4ac9b487f/onnx-1.22.0-cp312-abi3-win_amd64.whl", hash = "sha256:72ccebab3bac07215c204ce8848d42e78eaaa666badbf72d25cd359b9f269e3a", size = 17213290, upload-time = "2026-06-15T12:49:45.933Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/2a/8ce48d8ae26a8761ad4e5dc771961b155c5c3c7c8540ec7f2f2d71b69af0/onnx-1.22.0-cp312-abi3-win_arm64.whl", hash = "sha256:f3c120dcdb70ad738f3c061b32798f408ea299eb69f84dd69ab4a6bf3c2ec01f", size = 17207030, upload-time = "2026-06-15T12:49:48.635Z" },
+]
+
+[[package]]
+name = "onnx-ir"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ml-dtypes" },
+    { name = "numpy" },
+    { name = "onnx" },
+    { name = "sympy" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d6/c2/61194cec0dbc5622273c0ebd592d37cc1dca0d7f1a744f02edd45ac905a3/onnx_ir-1.0.0.tar.gz", hash = "sha256:9e261f25fde8da9612ae5cb43b3b374d5ff469c04af0363cad588b2bb000b812", size = 163121, upload-time = "2026-08-11T14:49:46.895Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/91/cd/6d1637172eb59c7b18ac90ed089d1f599a11fe0e63b4db2d017f3bb38a32/onnx_ir-1.0.0-py3-none-any.whl", hash = "sha256:e578f0d608d3062866b48223616eb2d10a6d6d01f8b8faac596129034f483cc7", size = 185849, upload-time = "2026-08-11T14:49:45.524Z" },
+]
+
+[[package]]
+name = "onnxruntime"
+version = "1.29.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "flatbuffers" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "protobuf" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d4/80/381c1e9efed9cc32d00aa7cab0547dc84116cec906c3ffe3613686d6963a/onnxruntime-1.29.0-cp312-cp312-macosx_14_0_arm64.whl", hash = "sha256:3a3814c041251d6a77fdf513fb282056538ee826d2f1178a0df3c549d3fff6ba", size = 21430049, upload-time = "2026-08-17T22:53:48.286Z" },
+    { url = "https://files.pythonhosted.org/packages/30/12/4be0e345d38fe707a701ca07e8f63c05b152a2e6285d1e43a7faf63fedd2/onnxruntime-1.29.0-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:d2fb19e848f7c33ed8d3182b52504aaa11c5e8da438bbb47296f85b133cbcf6b", size = 20816870, upload-time = "2026-08-17T22:53:51.169Z" },
+    { url = "https://files.pythonhosted.org/packages/96/eb/e6968f5e41aac3125f2ff5708855f09cb0b70d85ed3115b625b0b58305ba/onnxruntime-1.29.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:2b80d8c7ec2cc7438e4da3760b88c24568cba72c9ace96d668800a6c79419acb", size = 23136745, upload-time = "2026-08-17T22:53:53.92Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/80/5b28f1f1111210fc4a336ddbc6950f468ebf9a6a265420568f4f43fa33ce/onnxruntime-1.29.0-cp312-cp312-win_amd64.whl", hash = "sha256:4acf2b4948b7ede87221ca6332344b8facdc8059d6ac751a7d367d04532b02dd", size = 14001407, upload-time = "2026-08-17T22:53:56.486Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/d6/6883f89ea4b044e6e8447ebfaf9bcecdf457b7d80a683635e130b25498e0/onnxruntime-1.29.0-cp312-cp312-win_arm64.whl", hash = "sha256:dc61a79cb39afd66ab3f01fd2c23591a7f01de89c1668e1fb6315067fc279164", size = 13746981, upload-time = "2026-08-17T22:53:58.977Z" },
+]
+
+[[package]]
+name = "onnxscript"
+version = "0.7.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ml-dtypes" },
+    { name = "numpy" },
+    { name = "onnx" },
+    { name = "onnx-ir" },
+    { name = "packaging" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0a/01/3e3fab8d643ca097ea4aa9e51246643699dfaaa0650589744fe44bc46651/onnxscript-0.7.2.tar.gz", hash = "sha256:2c664f6383d10f332a4d47b2876dcab16dba84909fe703656b19abc281fda165", size = 646719, upload-time = "2026-09-09T17:06:44.567Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/3b/06260997cdc41138e58718588a6c87d0eb342bbe0dda8a6aae91d163c384/onnxscript-0.7.2-py3-none-any.whl", hash = "sha256:d0e7121c6a1eefd608058928e111cbdb76709f70d269ff0d07aee493bd1d13c9", size = 754215, upload-time = "2026-09-09T17:06:46.442Z" },
 ]
 
 [[package]]
@@ -4888,10 +4999,14 @@ cu128 = [
     { name = "torchvision", version = "0.26.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "torchvision", version = "0.27.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
 ]
+tiv-cpu = [
+    { name = "essentia" },
+]
 
 [package.dev-dependencies]
 audio = [
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'darwin' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "flamo" },
     { name = "librosa" },
     { name = "mido" },
     { name = "pedalboard" },
@@ -4928,6 +5043,8 @@ dev = [
     { name = "dtw-python" },
     { name = "duckdb" },
     { name = "einops" },
+    { name = "essentia", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform != 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "flamo" },
     { name = "griffe-pydantic" },
     { name = "hydra-colorlog" },
     { name = "hydra-core" },
@@ -4952,6 +5069,9 @@ dev = [
     { name = "nflows" },
     { name = "numpy" },
     { name = "omegaconf" },
+    { name = "onnx" },
+    { name = "onnxruntime" },
+    { name = "onnxscript" },
     { name = "pandas" },
     { name = "pedalboard" },
     { name = "pesto-pitch" },
@@ -5021,12 +5141,18 @@ notebooks = [
     { name = "nbconvert" },
     { name = "smoosense", extra = ["jupyter"] },
 ]
+onnx = [
+    { name = "onnx" },
+    { name = "onnxruntime" },
+    { name = "onnxscript" },
+]
 runtime = [
     { name = "beartype" },
     { name = "click" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'darwin' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
     { name = "dtw-python" },
     { name = "einops" },
+    { name = "flamo" },
     { name = "hydra-colorlog" },
     { name = "hydra-core" },
     { name = "hydra-optuna-sweeper" },
@@ -5119,6 +5245,7 @@ util = [
 
 [package.metadata]
 requires-dist = [
+    { name = "essentia", marker = "extra == 'tiv-cpu'", specifier = "==2.1b6.dev1389" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pydantic-settings", specifier = ">=2" },
     { name = "python-dotenv" },
@@ -5136,11 +5263,12 @@ requires-dist = [
     { name = "torchvision", marker = "sys_platform != 'linux' and sys_platform != 'win32' and extra == 'cpu'", specifier = ">=0.15.0" },
     { name = "torchvision", marker = "sys_platform != 'linux' and sys_platform != 'win32' and extra == 'cu128'", specifier = ">=0.15.0" },
 ]
-provides-extras = ["cpu", "cu128"]
+provides-extras = ["tiv-cpu", "cpu", "cu128"]
 
 [package.metadata.requires-dev]
 audio = [
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')", specifier = "==0.8.3" },
+    { name = "flamo", specifier = "==0.2.18" },
     { name = "librosa", specifier = "==0.11.0" },
     { name = "mido" },
     { name = "pedalboard" },
@@ -5177,6 +5305,8 @@ dev = [
     { name = "dtw-python", specifier = "==1.7.4" },
     { name = "duckdb", specifier = ">=1.5.4" },
     { name = "einops" },
+    { name = "essentia", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "flamo", specifier = "==0.2.18" },
     { name = "griffe-pydantic" },
     { name = "hydra-colorlog", specifier = "==1.2.0" },
     { name = "hydra-core", specifier = "==1.3.2" },
@@ -5201,6 +5331,9 @@ dev = [
     { name = "nflows" },
     { name = "numpy" },
     { name = "omegaconf" },
+    { name = "onnx", specifier = ">=1.17" },
+    { name = "onnxruntime", specifier = ">=1.20" },
+    { name = "onnxscript", specifier = ">=0.3" },
     { name = "pandas" },
     { name = "pedalboard" },
     { name = "pesto-pitch", specifier = "==2.0.1" },
@@ -5264,12 +5397,18 @@ notebooks = [
     { name = "nbconvert", specifier = ">=7.16" },
     { name = "smoosense", extras = ["jupyter"] },
 ]
+onnx = [
+    { name = "onnx", specifier = ">=1.17" },
+    { name = "onnxruntime", specifier = ">=1.20" },
+    { name = "onnxscript", specifier = ">=0.3" },
+]
 runtime = [
     { name = "beartype", specifier = ">=0.19" },
     { name = "click", specifier = "<8.2" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')", specifier = "==0.8.3" },
     { name = "dtw-python", specifier = "==1.7.4" },
     { name = "einops" },
+    { name = "flamo", specifier = "==0.2.18" },
     { name = "hydra-colorlog", specifier = "==1.2.0" },
     { name = "hydra-core", specifier = "==1.3.2" },
     { name = "hydra-optuna-sweeper", specifier = "==1.2.0" },

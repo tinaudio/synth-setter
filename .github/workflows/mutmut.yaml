@@ -29,6 +29,9 @@ jobs:
           - name: evaluation-audio
             patterns:
               - synth_setter.evaluation.a*
+          - name: evaluation-browser
+            patterns:
+              - synth_setter.evaluation.browser_flow.*
           - name: evaluation-metrics
             patterns:
               - synth_setter.evaluation.compute_audio_metrics.*

@@ -12,7 +12,7 @@ from typing import cast
 
 import numpy as np
 from jaxtyping import Float32
-from pyFDN import FDNBuild, build_set_decay, build_to_impz, decay_to_geq, process_fdn
+from pyFDN import FDNBuild, build_set_decay, decay_to_geq, process_fdn
 from pyFDN.auxiliary.utils import hertz_to_rad
 from pyFDN.eq import (
     BANDWIDTH_R,
@@ -24,6 +24,7 @@ from pyFDN.eq import (
 )
 from pyFDN.td import PitchShift, SOSBank, Series
 
+from synth_setter.data.basic_fdn import BasicFDN
 from synth_setter.data.pyfdn_diffvox import render_diffvox_chain
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_DIRECT_DELAY_SAMPLES,
@@ -833,9 +834,10 @@ class PyFDNRenderer(AudioRenderer):
         else:
             if self._param_spec_name in _DERIVED_FEEDBACK:
                 params = _verified_plain_params(params, self._param_spec_name)
-            build = params_to_fdn_build(params, sample_rate=_SAMPLE_RATE)
+            basic = BasicFDN(params_to_fdn_build(params, sample_rate=_SAMPLE_RATE))
+            build = basic.build
             if self._excitation == "impulse":
-                impulse_response = np.asarray(build_to_impz(build, ir_len=_SIGNAL_LENGTH))
+                impulse_response = basic.impulse_response(_SIGNAL_LENGTH)
                 impulse_shape = (_SIGNAL_LENGTH, _CHANNELS, _CHANNELS)
                 if impulse_response.shape != impulse_shape:
                     raise ValueError(

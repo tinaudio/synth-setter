@@ -24,6 +24,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Essentia HPCP is needed only by sketch=tiv_online_cpu.
+tiv-cpu = ["essentia==2.1b6.dev1389"]
 # Backend selector for `uv sync` / `uv lock` on Linux/Win — mutually exclusive
 # (see [tool.uv].conflicts). The cpu/cu128 extras themselves are NOT platform-
 # gated; the `sys_platform == 'linux' or sys_platform == 'win32'` markers
@@ -190,6 +192,7 @@ data = [
 # torch / librosa / kymatio during lock resolution. See #1247.
 audio = [
   "dawdreamer==0.8.3; (sys_platform == 'darwin' and (platform_machine == 'arm64' or platform_machine == 'x86_64')) or (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
+  "flamo==0.2.18",
   "librosa==0.11.0",
   "mido",
   "pedalboard",
@@ -236,6 +239,8 @@ runtime = [
   { include-group = "util" },
 ]
 dev = [
+  # Exercise optional CPU HPCP in Linux coverage without requiring it at runtime.
+  "essentia; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "hypothesis",
   "mutmut==3.5.*",
   "nflows",
@@ -255,7 +260,13 @@ dev = [
   "ruff",
   { include-group = "docs" },
   { include-group = "notebooks" },
+  { include-group = "onnx" },
   { include-group = "runtime" },
+]
+onnx = [
+    "onnx>=1.17",
+    "onnxruntime>=1.20",
+    "onnxscript>=0.3",
 ]
 
 [tool.uv]
@@ -381,6 +392,9 @@ namespaces = true
   "configs/**/*.sh",
   "scripts/*.sh",
   "data/vst/*_param_map.json",
+  "web/*.html",
+  "web/*.mjs",
+  "web/package*.json",
 ]
 
 

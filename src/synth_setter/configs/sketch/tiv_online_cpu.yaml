@@ -1,0 +1,14 @@
+# @package _global_
+
+# Reference-style HPCP runs on CPU even when the training batch is on CUDA.
+model:
+  sketch_controls:
+    profile: tiv
+    source: online
+    tiv_backend: essentia
+    sample_rate: 44_100
+    num_frames: 32
+    num_control_tokens: 32
+
+datamodule:
+  sketch: ${model.sketch_controls}
