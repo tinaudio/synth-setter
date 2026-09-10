@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from math import prod
 from pathlib import Path
@@ -12,6 +12,7 @@ import lance
 import numpy as np
 import pyarrow as pa
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from synth_setter.conditioning import (
@@ -42,6 +43,7 @@ from synth_setter.data.vst_datamodule import (
     prepare_batch,
     ranked_generator_seed,
 )
+from synth_setter.features.tiv import extract_tiv_batch
 from synth_setter.param_spec_name import ParamSpecName
 
 _FAKE_BATCHES_PER_EPOCH = 10_000
@@ -352,7 +354,11 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         """
         self._num_rows = batch_size * _FAKE_BATCHES_PER_EPOCH
         self._num_params = num_params
-        self._read_audio = read_audio or conditioning == "audio"
+        self._read_audio = (
+            read_audio
+            or conditioning == "audio"
+            or (sketch is not None and sketch.source == "online")
+        )
         self._read_mel = conditioning == "mel"
         self._preserve_legacy_m2l = (
             isinstance(conditioning, str) and conditioning == "m2l"
@@ -381,7 +387,7 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
             else None
         )
         m2l = conditioning if self._preserve_legacy_m2l else None
-        if self._sketch is not None:
+        if self._sketch is not None and self._sketch.source == "stored":
             sketch = torch.rand(
                 num_rows, self._sketch.layout.num_controls, self._sketch.num_frames
             )
@@ -647,8 +653,9 @@ class LanceVSTDataModule(VSTDataModule):
         if spec is not None:
             _validate_embedding_column(shard_path, spec)
         sketch = self.sketch_controls
-        if sketch is not None:
-            _validate_sketch_column(shard_path, sketch)
+        stored_sketch = sketch if sketch is not None and sketch.source == "stored" else None
+        if stored_sketch is not None:
+            _validate_sketch_column(shard_path, stored_sketch)
         columns = self._loader_columns(read_audio=read_audio)
         mean, std = stats if stats is not None else (None, None)
         return _MapSplit(
@@ -660,11 +667,11 @@ class LanceVSTDataModule(VSTDataModule):
                 ot=ot,
                 conditioning_column=spec.column if spec is not None else None,
                 conditioning_shape=spec.input_shape if spec is not None else None,
-                sketch_column=sketch.column if sketch is not None else None,
+                sketch_column=stored_sketch.column if stored_sketch is not None else None,
                 sketch_profile=sketch.profile if sketch is not None else "music",
                 sketch_pitch_zero_threshold=(
-                    sketch.pitch_zero_threshold
-                    if sketch is not None and sketch.profile == "music"
+                    stored_sketch.pitch_zero_threshold
+                    if stored_sketch is not None and stored_sketch.profile == "music"
                     else None
                 ),
                 preserve_legacy_m2l=(
@@ -806,6 +813,34 @@ class LanceVSTDataModule(VSTDataModule):
         :returns: Sample-indexed prediction dataloader.
         """
         return self._dataloader("predict", shuffle=False, drop_last=False)
+
+    def on_after_batch_transfer(
+        self, batch: Mapping[str, torch.Tensor | None], dataloader_idx: int
+    ) -> ModelBatch:
+        """Extract online TIV sketch controls from transferred waveform audio.
+
+        :param batch: Model batch containing projected audio for online TIV.
+        :param dataloader_idx: Unused; each stage serves one loader.
+        :returns: Batch with temporal ``sketch_ctrl`` when online TIV is configured.
+        :raises ValueError: Online TIV is configured but audio is absent.
+        """
+        del dataloader_idx
+        model_batch = dict(batch)
+        sketch = self.sketch_controls
+        if sketch is None or sketch.source != "online":
+            return model_batch
+        audio = model_batch.get("audio")
+        if audio is None:
+            raise ValueError("online TIV sketch extraction requires batch audio")
+        if sketch.sample_rate is None:
+            raise ValueError("online TIV sketch extraction requires sample_rate")
+        controls = extract_tiv_batch(
+            audio, sketch.sample_rate, backend=sketch.tiv_backend
+        )
+        model_batch[SKETCH_CTRL_FIELD] = F.adaptive_avg_pool1d(
+            controls, sketch.num_frames
+        )
+        return model_batch
 
     def teardown(self, stage: str | None = None) -> None:
         """Release references to process-local Lance datasets.
