@@ -77,7 +77,7 @@ training:
   resume: null
   # Optional `r2://bucket/key` override for the checkpoint upload target the model
   # W&B artifact references; null auto-derives
-  # `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt`.
+  # `r2://{r2.bucket}/checkpoints/{training_config_id}/{training_run_id}/model.ckpt`.
   upload_checkpoints_uri: null
   # Mirror each ModelCheckpoint write to R2 mid-run (synchronous on rank 0; best
   # for single-device runs) so a host crash before train-end can't strand it.

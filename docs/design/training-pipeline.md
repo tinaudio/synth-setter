@@ -246,7 +246,7 @@ ______________________________________________________________________
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Trigger**  | At train end, `_upload_best_checkpoint` uploads the best checkpoint. With `upload_checkpoints_during_training=true`, `CheckpointUploader` also mirrors completed rank-0 saves and the exception checkpoint. |
 | **Input**    | Train-end `best.ckpt`; opt-in `last.ckpt` revisions                                                                                                                                                         |
-| **Output**   | `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` plus its W&B reference; opt-in `r2://{r2.bucket}/checkpoints/{config_id}/{wandb_run_id}-{uuid}/last.ckpt` recovery object                             |
+| **Output**   | `r2://{r2.bucket}/checkpoints/{training_config_id}/{training_run_id}/model.ckpt` plus its W&B reference; opt-in `r2://{r2.bucket}/checkpoints/{config_id}/{wandb_run_id}-{uuid}/last.ckpt` recovery object  |
 | **Compute**  | One rclone upload at train end; opt-in synchronous uploads on checkpoint cadence                                                                                                                            |
 | **Contract** | Train-end upload is best-effort. Opt-in mid-run durability requires R2 at startup and fails before training when preflight cannot reach it; later transient upload failures do not abort training.          |
 
@@ -321,7 +321,7 @@ Behavior:
 
 ### 6.2 Checkpoint Durability via R2
 
-`log_model: False` keeps checkpoint files out of W&B (5 GB total storage budget). At train end, on global-zero, `train.py` uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` (`_derive_checkpoint_uri`), then the `model-{config_id}` artifact references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference. `training.upload_checkpoints_uri` optionally overrides the target (null = auto-derive). When `training.upload_checkpoints_during_training` is set (default off), a rank-0 `CheckpointUploader` callback (`utils/callbacks.py`) mirrors each `ModelCheckpoint` write under `r2://{r2.bucket}/checkpoints/{config_id}/{wandb_run_id}-{uuid}/last.ckpt`. The UUID isolates concurrent launches even if their timestamp-based W&B run IDs collide. Enabling this mode requires exactly one `ModelCheckpoint`; configuration fails before training otherwise. Uploads are synchronous on the training thread, so this mode targets single-device or coarse-cadence runs.
+`log_model: False` keeps checkpoint files out of W&B (5 GB total storage budget). At train end, on global-zero, `train.py` uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived `r2://{r2.bucket}/checkpoints/{training_config_id}/{training_run_id}/model.ckpt` (`_derive_checkpoint_uri`), then the `model-{config_id}` artifact references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference. `training.upload_checkpoints_uri` optionally overrides the target (null = auto-derive). When `training.upload_checkpoints_during_training` is set (default off), a rank-0 `CheckpointUploader` callback (`utils/callbacks.py`) mirrors each `ModelCheckpoint` write under `r2://{r2.bucket}/checkpoints/{config_id}/{wandb_run_id}-{uuid}/last.ckpt`. The UUID isolates concurrent launches even if their timestamp-based W&B run IDs collide. Enabling this mode requires exactly one `ModelCheckpoint`; configuration fails before training otherwise. Uploads are synchronous on the training thread, so this mode targets single-device or coarse-cadence runs.
 
 ```yaml
 # src/synth_setter/configs/logger/wandb.yaml
@@ -338,7 +338,7 @@ This gives us:
 - **Resume** — the `${wandb:...}` resolver rclone-downloads the referenced checkpoint from R2 to resume from any machine
 - **Registry** — browsable in the W&B model registry
 
-The train-end `model.ckpt` remains a per-`config_id` object and is overwritten by later runs. Mid-run recovery objects are launch-scoped and do not overwrite one another; their exact URI is emitted as `Mid-run checkpoint uploaded to ...` in the training log.
+The train-end `model.ckpt` is scoped by both `config_id` and `run_id`, while mid-run recovery objects add a launch UUID. Neither is overwritten by a later training run; each recovery URI is emitted as `Mid-run checkpoint uploaded to ...` in the training log.
 
 To recover a crashed launch, copy the URI from that log line. If pod logs are unavailable, list the deterministic config/run prefix; multiple results mean the same W&B run ID was reused, so select the launch by object time and run context:
 
