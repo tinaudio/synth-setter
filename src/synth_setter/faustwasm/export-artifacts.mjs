@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
     FaustCompiler,
@@ -149,6 +149,9 @@ export const main = async () => {
     await compileFaustArtifact(request, outputDir);
 };
 
-if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
+if (
+    process.argv[1]
+    && await realpath(process.argv[1]) === await realpath(fileURLToPath(import.meta.url))
+) {
     await main();
 }
