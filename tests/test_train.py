@@ -532,7 +532,7 @@ def test_train_pyfdn_derived_feedback_one_step_predicts_widened_row(
     assert 0.0 <= metrics["val/per_param_abs_cosine_distance/delays"].item() <= 1.0
     assert torch.isfinite(metrics[f"val/per_param_mse/{control}"])
     assert torch.isfinite(metrics[f"val_per_param_mse_best_swap/{control}"])
-    assert torch.isfinite(metrics[f"val/per_param_mse_number_group_swap/{control}"])
+    assert torch.isfinite(metrics[f"val/number_group_optimal_assignment_mse/{control}"])
 
 
 @pytest.mark.slow
@@ -889,7 +889,9 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
         assert values, f"no {prefix} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
-    assert torch.isfinite(metric_dict["val/per_param_mse_number_group_swap/adsr_1.attack"]).all()
+    assert torch.isfinite(
+        metric_dict["val/number_group_optimal_assignment_mse/adsr_1.attack"]
+    ).all()
 
     checkpoint = tmp_path / "checkpoints" / "last.ckpt"
     assert checkpoint.is_file()

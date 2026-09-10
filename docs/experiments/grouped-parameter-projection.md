@@ -76,11 +76,11 @@ cosine similarity, categorical accuracy, and throughput.
 | --------------------------------------------- | ----------------: | ----------------: |
 | Final train loss                              |           1.69585 |           1.85598 |
 | Parameter MSE                                 |           1.64548 |           1.92961 |
-| Number-group swap MSE                         |           1.36429 |           1.59635 |
-| Number-group swap gap                         |           0.28118 |           0.33325 |
+| Number-group optimal-assignment MSE           |           1.36429 |           1.59635 |
+| Number-group assignment gap                   |           0.28118 |           0.33325 |
 | Oscillator-only parameter MSE                 |           1.63709 |           1.78374 |
-| Oscillator-only number-group swap MSE         |           1.33456 |           1.43208 |
-| Oscillator-only swap gap                      |           0.30253 |           0.35167 |
+| Oscillator-only optimal-assignment MSE        |           1.33456 |           1.43208 |
+| Oscillator-only assignment gap                |           0.30253 |           0.35167 |
 | One-hot field argmax accuracy (256 decisions) |           0.26172 |           0.28906 |
 | MSS, mean ± sample std                        | 30.6432 ± 20.0909 |  29.1528 ± 9.6172 |
 | wMFCC, mean ± sample std                      |  19.4501 ± 6.7236 |  22.7703 ± 9.0212 |
@@ -103,14 +103,14 @@ was larger despite fewer model parameters because the Lightning checkpoint also
 contains optimizer and training state with architecture-dependent serialization.
 
 Parameter-space and audio metrics were mixed: learned had lower plain and
-swap-aware parameter MSE, while grouped had slightly higher aggregate one-hot
+optimal-assignment parameter MSE, while grouped had slightly higher aggregate one-hot
 accuracy, lower MSS/SOT, and higher RMS similarity but higher wMFCC. Surge XT
 injects render variation, and eight clips give wide audio-metric standard
 deviations. None of these differences establishes quality.
 
-The number-group metric optimally rematches fields whose names differ only by a
-number. The oscillator-only rows restrict its per-column output to `a_osc_*`
-fields. The swap gap is plain MSE minus rematched MSE; a larger gap means more
+The number-group metric optimally assigns fields whose names differ only by a
+number. The oscillator-only rows restrict its per-coordinate output to `a_osc_*`
+fields. The assignment gap is plain MSE minus assigned MSE; a larger gap means more
 error can be removed by reassigning values among numbered peers. Grouped showed
 a larger oscillator gap in this smoke run, not reduced oscillator placement
 ambiguity. A quality claim would require multiple seeds, a representative
@@ -197,7 +197,7 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.data.vst.param_spec import CategoricalParameter, DiscreteLiteralParameter
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.metrics import number_group_swap_per_param_mse
+from synth_setter.metrics import number_group_optimal_assignment_per_param_mse
 from tests._vst import PLUGIN_PATH
 from tests.conftest import (
     _build_surge_smoke_lance_datasets,
@@ -371,11 +371,11 @@ def run_arm(kind: str, dataset_root: Path) -> dict[str, object]:
 
     predicted, target = load_predictions(run_dir)
     per_param_mse = (predicted - target).square().mean(dim=0)
-    grouped_per_param_mse = number_group_swap_per_param_mse(
+    grouped_per_param_mse = number_group_optimal_assignment_per_param_mse(
         predicted, target, param_specs[SPEC_NAME]
     )
     mse = float(per_param_mse.mean())
-    swap_mse = float(grouped_per_param_mse.mean())
+    assignment_mse = float(grouped_per_param_mse.mean())
     oscillator_indices = torch.tensor(
         [
             index
@@ -385,7 +385,7 @@ def run_arm(kind: str, dataset_root: Path) -> dict[str, object]:
         ]
     )
     oscillator_mse = float(per_param_mse[oscillator_indices].mean())
-    oscillator_swap_mse = float(grouped_per_param_mse[oscillator_indices].mean())
+    oscillator_assignment_mse = float(grouped_per_param_mse[oscillator_indices].mean())
     categorical_accuracy, categorical_decisions, per_field_accuracy = onehot_accuracy(
         predicted, target
     )
@@ -398,11 +398,11 @@ def run_arm(kind: str, dataset_root: Path) -> dict[str, object]:
         "sample_steps": SAMPLE_STEPS,
         "train_loss": float(metric_dict["train/loss"]),
         "parameter_mse": mse,
-        "number_group_swap_mse": swap_mse,
-        "number_group_swap_gap": mse - swap_mse,
+        "number_group_optimal_assignment_mse": assignment_mse,
+        "number_group_assignment_gap": mse - assignment_mse,
         "oscillator_parameter_mse": oscillator_mse,
-        "oscillator_number_group_swap_mse": oscillator_swap_mse,
-        "oscillator_swap_gap": oscillator_mse - oscillator_swap_mse,
+        "oscillator_number_group_optimal_assignment_mse": oscillator_assignment_mse,
+        "oscillator_assignment_gap": oscillator_mse - oscillator_assignment_mse,
         "onehot_field_argmax_accuracy": categorical_accuracy,
         "onehot_field_decisions": categorical_decisions,
         "onehot_accuracy_by_field": per_field_accuracy,

@@ -1249,7 +1249,7 @@ def test_log_per_param_mse_config_requires_synth_selection() -> None:
 
 @pytest.mark.parametrize("model_name", ["vst_flow", "vst_flowmlp"])
 def test_vst_flow_config_uses_active_synth_spec_for_structured_metrics(model_name: str) -> None:
-    """Every flow model receives the selected ParamSpec for number-group swaps.
+    """Every flow model receives the selected ParamSpec for grouped assignment metrics.
 
     :param model_name: Hydra flow-model group under test.
     """

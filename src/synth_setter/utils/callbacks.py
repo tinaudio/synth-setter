@@ -28,7 +28,11 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from matplotlib.figure import Figure
 
 from synth_setter.data.vst import param_specs
-from synth_setter.metrics import spec_per_param_abs_cosine_distance, spec_quantized_per_param_mse
+from synth_setter.metrics import (
+    number_group_optimal_assignment_mse_groups,
+    spec_per_param_abs_cosine_distance,
+    spec_quantized_per_param_mse,
+)
 from synth_setter.models.components.transformer import LearntProjection
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
@@ -918,10 +922,11 @@ class ValAudioProbe(Callback):
         self._future_step = step
 
 
+_NUMBER_GROUP_OPTIMAL_ASSIGNMENT_OUTPUT = "per_param_mse_number_group_optimal_assignment"
 _PER_PARAM_MSE_OUTPUTS = (
     "per_param_mse",
     "per_param_mse_best_swap",
-    "per_param_mse_number_group_swap",
+    _NUMBER_GROUP_OPTIMAL_ASSIGNMENT_OUTPUT,
 )
 _SPEC_QUANTIZED_PER_PARAM_MSE = "per_param_mse_spec_quantized"
 
@@ -1009,6 +1014,17 @@ class LogPerParamMSE(Callback):
             )
             if metric_name.startswith("per_param_abs_cosine_distance/"):
                 metrics[f"{stage}/{metric_name}"] = mean.item()
+                continue
+            if metric_name == _NUMBER_GROUP_OPTIMAL_ASSIGNMENT_OUTPUT:
+                grouped_mse = number_group_optimal_assignment_mse_groups(
+                    torch.as_tensor(mean), self.param_spec
+                )
+                metrics.update(
+                    {
+                        f"{stage}/number_group_optimal_assignment_mse/{name}": value.item()
+                        for name, value in grouped_mse.items()
+                    }
+                )
                 continue
             metric_namespace = (
                 f"{stage}_{metric_name}"

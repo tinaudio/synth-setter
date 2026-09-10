@@ -372,7 +372,7 @@ def test_evaluate_pyfdn_derived_feedback_checkpoint_preserves_parameter_metrics(
     assert 0.0 <= metrics["test/per_param_abs_cosine_distance/delays"].item() <= 1.0
     assert torch.isfinite(metrics[f"test/per_param_mse/{control}"])
     assert torch.isfinite(metrics[f"test_per_param_mse_best_swap/{control}"])
-    assert torch.isfinite(metrics[f"test/per_param_mse_number_group_swap/{control}"])
+    assert torch.isfinite(metrics[f"test/number_group_optimal_assignment_mse/{control}"])
     assert torch.isfinite(metrics[f"test/per_param_mse_spec_quantized/{control}"])
 
 
@@ -1264,7 +1264,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
 def test_eval_torchsynth_flow_logs_grouped_per_param_metrics_by_default(
     cfg_torchsynth_flow_audio_train: DictConfig,
 ) -> None:
-    """The eval entrypoint publishes grouped-swap errors for the active synth spec.
+    """The eval entrypoint publishes grouped assignment errors for the active synth spec.
 
     :param cfg_torchsynth_flow_audio_train: Composed tiny production flow configuration.
     """
@@ -1281,7 +1281,9 @@ def test_eval_torchsynth_flow_logs_grouped_per_param_metrics_by_default(
     finally:
         GlobalHydra.instance().clear()
 
-    assert torch.isfinite(metric_dict["val/per_param_mse_number_group_swap/adsr_1.attack"]).all()
+    assert torch.isfinite(
+        metric_dict["val/number_group_optimal_assignment_mse/adsr_1.attack"]
+    ).all()
 
 
 @pytest.mark.slow

@@ -74,37 +74,37 @@ to all loggers via `logger.log_hyperparams()`:
 
 Logged via `self.log()` in each LightningModule:
 
-| Module                  | Metric                                                       | Step | Epoch |
-| ----------------------- | ------------------------------------------------------------ | ---- | ----- |
-| `VSTFlowMatchingModule` | `train/loss`                                                 | yes  | yes   |
-|                         | `train/audio_loss` (when `model/audio_loss` is set)          | yes  | yes   |
-|                         | `train/audio_grad_ratio` (audio/flow gradient norm)          | yes  | —     |
-|                         | `train/audio_grad_cosine` (gradient alignment)               | yes  | —     |
-|                         | `train/slot_cosine` (layerwise conditioning only)            | yes  | —     |
-|                         | `train/penalty`                                              | yes  | yes   |
-|                         | `train/weighted_{velocity,endpoint}_mse`                     | —    | yes   |
-|                         | `train/{velocity_endpoint,endpoint}_mse`                     | —    | yes   |
-|                         | `train/per_param_weighted_{velocity,endpoint}_mse/{name}`    | —    | yes   |
-|                         | `train/per_param_{velocity_endpoint,endpoint}_mse/{name}`    | —    | yes   |
-|                         | `{val,test}/{velocity_endpoint,endpoint}_mse/t_{05..95}`     | —    | yes   |
-|                         | `{val,test}/{velocity_endpoint,endpoint}_mse/equal_bin_mean` | —    | yes   |
-|                         | `val/param_mse`                                              | —    | yes   |
-|                         | `test/param_mse`                                             | —    | yes   |
-|                         | `val/param_mse_best_swap`                                    | —    | yes   |
-|                         | `test/param_mse_best_swap`                                   | —    | yes   |
-|                         | `val/param_mse_number_group_swap` (with ParamSpec)           | —    | yes   |
-|                         | `test/param_mse_number_group_swap` (with ParamSpec)          | —    | yes   |
-|                         | `vector_field/*_norm`                                        | yes  | —     |
-|                         | `encoder/*_norm`                                             | yes  | —     |
-| `VSTFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std`          | yes  | yes   |
-|                         | `train/{reconstruction,latent,param}_loss`                   | yes  | yes   |
-|                         | `train/beta`                                                 | yes  | —     |
-|                         | `val/{reconstruction,latent,param}_loss`                     | —    | yes   |
-|                         | `val/param_mean`, `val/param_std`                            | —    | yes   |
-|                         | `test/{reconstruction,latent,param}_loss`                    | —    | yes   |
-|                         | `net/*` gradient norms                                       | yes  | —     |
-| `VSTFeedForwardModule`  | `train/loss`                                                 | yes  | yes   |
-|                         | `val/param_mse`, `test/param_mse`                            | —    | yes   |
+| Module                  | Metric                                                            | Step | Epoch |
+| ----------------------- | ----------------------------------------------------------------- | ---- | ----- |
+| `VSTFlowMatchingModule` | `train/loss`                                                      | yes  | yes   |
+|                         | `train/audio_loss` (when `model/audio_loss` is set)               | yes  | yes   |
+|                         | `train/audio_grad_ratio` (audio/flow gradient norm)               | yes  | —     |
+|                         | `train/audio_grad_cosine` (gradient alignment)                    | yes  | —     |
+|                         | `train/slot_cosine` (layerwise conditioning only)                 | yes  | —     |
+|                         | `train/penalty`                                                   | yes  | yes   |
+|                         | `train/weighted_{velocity,endpoint}_mse`                          | —    | yes   |
+|                         | `train/{velocity_endpoint,endpoint}_mse`                          | —    | yes   |
+|                         | `train/per_param_weighted_{velocity,endpoint}_mse/{name}`         | —    | yes   |
+|                         | `train/per_param_{velocity_endpoint,endpoint}_mse/{name}`         | —    | yes   |
+|                         | `{val,test}/{velocity_endpoint,endpoint}_mse/t_{05..95}`          | —    | yes   |
+|                         | `{val,test}/{velocity_endpoint,endpoint}_mse/equal_bin_mean`      | —    | yes   |
+|                         | `val/param_mse`                                                   | —    | yes   |
+|                         | `test/param_mse`                                                  | —    | yes   |
+|                         | `val/param_mse_best_swap`                                         | —    | yes   |
+|                         | `test/param_mse_best_swap`                                        | —    | yes   |
+|                         | `val/param_mse_number_group_optimal_assignment` (with ParamSpec)  | —    | yes   |
+|                         | `test/param_mse_number_group_optimal_assignment` (with ParamSpec) | —    | yes   |
+|                         | `vector_field/*_norm`                                             | yes  | —     |
+|                         | `encoder/*_norm`                                                  | yes  | —     |
+| `VSTFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std`               | yes  | yes   |
+|                         | `train/{reconstruction,latent,param}_loss`                        | yes  | yes   |
+|                         | `train/beta`                                                      | yes  | —     |
+|                         | `val/{reconstruction,latent,param}_loss`                          | —    | yes   |
+|                         | `val/param_mean`, `val/param_std`                                 | —    | yes   |
+|                         | `test/{reconstruction,latent,param}_loss`                         | —    | yes   |
+|                         | `net/*` gradient norms                                            | yes  | —     |
+| `VSTFeedForwardModule`  | `train/loss`                                                      | yes  | yes   |
+|                         | `val/param_mse`, `test/param_mse`                                 | —    | yes   |
 
 The two audio-gradient diagnostics are emitted only when audio feedback is enabled, once per
 `trainer.log_every_n_steps` cadence. `train/slot_cosine` rides the same cadence but is emitted only
@@ -168,12 +168,18 @@ Under the default `many_loggers` composition (W&B + CSV + TB), plots land in
 both W&B and TensorBoard; with `logger=tensorboard` they go to TensorBoard
 only; with `logger=wandb` they go to W&B only.
 
-| Callback                 | Logged key                                                                                                                                                                                                                                                                          | Trigger                                                                                                                                                           | Symbol                                                                                                               |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `PlotLossPerTimestep`    | `plot` (image)                                                                                                                                                                                                                                                                      | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`                                                 |
-| `PlotLearntProjection`   | `assignment`, `value` (images)                                                                                                                                                                                                                                                      | `on_validation_epoch_end` or every N steps                                                                                                                        | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`                                               |
-| `LogPerParamMSE`         | `{val,test}/per_param_mse/{name}`, `{val,test}_per_param_mse_best_swap/{name}`, `{val,test}/per_param_mse_number_group_swap/{name}`, `{val,test}/per_param_mse_spec_quantized/{name}`, `{val,test}/param_mse_spec_quantized`, and `{val,test}/per_param_abs_cosine_distance/{name}` | `on_{validation,test}_epoch_end` (via `pl_module.log_dict`)                                                                                                       | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
-| `ValAudioProbe` (opt-in) | `val_audio/<metric>_<stat>` + `val_audio/probe_step`                                                                                                                                                                                                                                | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
+| Callback                 | Logged key                                                                                                                                                                                                                                                                                        | Trigger                                                                                                                                                           | Symbol                                                                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `PlotLossPerTimestep`    | `plot` (image)                                                                                                                                                                                                                                                                                    | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`                                                 |
+| `PlotLearntProjection`   | `assignment`, `value` (images)                                                                                                                                                                                                                                                                    | `on_validation_epoch_end` or every N steps                                                                                                                        | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`                                               |
+| `LogPerParamMSE`         | `{val,test}/per_param_mse/{name}`, `{val,test}_per_param_mse_best_swap/{name}`, `{val,test}/number_group_optimal_assignment_mse/{collapsed-name}`, `{val,test}/per_param_mse_spec_quantized/{name}`, `{val,test}/param_mse_spec_quantized`, and `{val,test}/per_param_abs_cosine_distance/{name}` | `on_{validation,test}_epoch_end` (via `pl_module.log_dict`)                                                                                                       | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
+| `ValAudioProbe` (opt-in) | `val_audio/<metric>_<stat>` + `val_audio/probe_step`                                                                                                                                                                                                                                              | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
+
+Number-group optimal-assignment metrics match complete encoded fields only within
+number-collapsed, equal-width name families. Each per-group key averages every
+assigned coordinate and replaces digit runs in the representative name with `N`
+(for example, `a_filter_1_type` becomes `a_filter_N_type`); singleton labels are
+unchanged.
 
 `{val,test}/param_mse_spec_quantized` clips predictions to the ParamSpec domain
 and snaps categorical and integral fields to the values used for rendering

@@ -21,10 +21,10 @@ from synth_setter.conditioning import (
 )
 from synth_setter.metrics import (
     BestSwapParamMSE,
-    NumberGroupSwapParamMSE,
+    NumberGroupOptimalAssignmentParamMSE,
     best_swap_per_param_mse,
     midi_pitch_residuals,
-    number_group_swap_per_param_mse,
+    number_group_optimal_assignment_per_param_mse,
     supports_midi_pitch_residuals,
 )
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
@@ -488,7 +488,7 @@ class VSTFlowMatchingModule(LightningModule):
             ``_partial_: true``); invoked in :meth:`configure_optimizers`.
         :param scheduler: ``functools.partial``-style scheduler factory or ``None``.
         :param num_params: Parameter-vector width the field operates on.
-        :param param_spec: Registered parameter spec enabling structured swap metrics.
+        :param param_spec: Registered parameter spec enabling grouped assignment metrics.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
         :param sketch_controls: Optional sketch-control spec enabling concat
             control-token injection into the vector field (#2612).
@@ -606,11 +606,11 @@ class VSTFlowMatchingModule(LightningModule):
             if metric_spec is not None and supports_midi_pitch_residuals(metric_spec)
             else None
         )
-        self.val_param_mse_number_group_swap = (
-            NumberGroupSwapParamMSE(metric_spec) if metric_spec is not None else None
+        self.val_param_mse_number_group_optimal_assignment = (
+            NumberGroupOptimalAssignmentParamMSE(metric_spec) if metric_spec is not None else None
         )
-        self.test_param_mse_number_group_swap = (
-            NumberGroupSwapParamMSE(metric_spec) if metric_spec is not None else None
+        self.test_param_mse_number_group_optimal_assignment = (
+            NumberGroupOptimalAssignmentParamMSE(metric_spec) if metric_spec is not None else None
         )
 
     def on_train_start(self) -> None:
@@ -1275,13 +1275,13 @@ class VSTFlowMatchingModule(LightningModule):
         self,
         predicted: Float[torch.Tensor, "batch params"],
         target: Float[torch.Tensor, "batch params"],
-        number_group_metric: NumberGroupSwapParamMSE | None,
+        number_group_metric: NumberGroupOptimalAssignmentParamMSE | None,
     ) -> dict[str, Shaped[torch.Tensor, ...]]:
         """Build the per-parameter metrics consumed by evaluation callbacks.
 
         :param predicted: Sampled model-space parameter vectors.
         :param target: Ground-truth model-space parameter vectors.
-        :param number_group_metric: Structured metric defining eligible parameter swaps.
+        :param number_group_metric: Structured metric defining eligible grouped assignments.
         :returns: Scalar, per-parameter, and prediction tensors for one batch.
         """
         per_param_mse = (predicted - target).square().mean(dim=0)
@@ -1292,10 +1292,12 @@ class VSTFlowMatchingModule(LightningModule):
             "preds": predicted,
         }
         if number_group_metric is not None:
-            outputs["per_param_mse_number_group_swap"] = number_group_swap_per_param_mse(
-                predicted,
-                target,
-                number_group_metric.param_spec,
+            outputs["per_param_mse_number_group_optimal_assignment"] = (
+                number_group_optimal_assignment_per_param_mse(
+                    predicted,
+                    target,
+                    number_group_metric.param_spec,
+                )
             )
         return outputs
 
@@ -1330,7 +1332,7 @@ class VSTFlowMatchingModule(LightningModule):
         outputs = self._per_param_mse_outputs(
             pred_params,
             batch["params"],
-            self.val_param_mse_number_group_swap,
+            self.val_param_mse_number_group_optimal_assignment,
         )
         self.log(
             "val/param_mse", outputs["param_mse"], on_step=False, on_epoch=True, prog_bar=True
@@ -1343,11 +1345,11 @@ class VSTFlowMatchingModule(LightningModule):
             on_step=False,
             on_epoch=True,
         )
-        if self.val_param_mse_number_group_swap is not None:
-            self.val_param_mse_number_group_swap.update(pred_params, batch["params"])
+        if self.val_param_mse_number_group_optimal_assignment is not None:
+            self.val_param_mse_number_group_optimal_assignment.update(pred_params, batch["params"])
             self.log(
-                "val/param_mse_number_group_swap",
-                self.val_param_mse_number_group_swap,
+                "val/param_mse_number_group_optimal_assignment",
+                self.val_param_mse_number_group_optimal_assignment,
                 on_step=False,
                 on_epoch=True,
             )
@@ -1386,7 +1388,7 @@ class VSTFlowMatchingModule(LightningModule):
         outputs = self._per_param_mse_outputs(
             pred_params,
             batch["params"],
-            self.test_param_mse_number_group_swap,
+            self.test_param_mse_number_group_optimal_assignment,
         )
         self.log(
             "test/param_mse", outputs["param_mse"], on_step=False, on_epoch=True, prog_bar=True
@@ -1399,11 +1401,13 @@ class VSTFlowMatchingModule(LightningModule):
             on_step=False,
             on_epoch=True,
         )
-        if self.test_param_mse_number_group_swap is not None:
-            self.test_param_mse_number_group_swap.update(pred_params, batch["params"])
+        if self.test_param_mse_number_group_optimal_assignment is not None:
+            self.test_param_mse_number_group_optimal_assignment.update(
+                pred_params, batch["params"]
+            )
             self.log(
-                "test/param_mse_number_group_swap",
-                self.test_param_mse_number_group_swap,
+                "test/param_mse_number_group_optimal_assignment",
+                self.test_param_mse_number_group_optimal_assignment,
                 on_step=False,
                 on_epoch=True,
             )

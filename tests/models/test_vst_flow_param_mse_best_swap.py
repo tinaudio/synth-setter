@@ -1,7 +1,7 @@
-"""Pin global and number-group-constrained parameter swap metrics.
+"""Pin global matching and number-group optimal-assignment parameter metrics.
 
 Global best-swap remains unconditional. Selecting a ParamSpec also logs the
-structured middle bound ``best_swap <= number_group_swap <= param_mse``.
+structured middle bound ``best_swap <= number_group_optimal_assignment <= param_mse``.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from lightning.pytorch.loggers import CSVLogger, Logger
 from torch.utils.data import DataLoader, Dataset
 
 from synth_setter.data.vst import param_specs
-from synth_setter.metrics import BestSwapParamMSE, NumberGroupSwapParamMSE
+from synth_setter.metrics import BestSwapParamMSE, NumberGroupOptimalAssignmentParamMSE
 from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
@@ -220,14 +220,20 @@ def test_ctor_instantiates_best_swap_metrics_unconditionally() -> None:
     assert isinstance(module.test_param_mse_best_swap, BestSwapParamMSE)
 
 
-def test_ctor_instantiates_number_group_swap_metrics_with_param_spec() -> None:
+def test_ctor_instantiates_number_group_optimal_assignment_metrics_with_param_spec() -> None:
     """Selecting a ParamSpec enables both structured loop metrics."""
     spec = param_specs["surge_simple"]
 
     module = _flow_module(spec.encoded_width, param_spec="surge_simple")
 
-    assert isinstance(module.val_param_mse_number_group_swap, NumberGroupSwapParamMSE)
-    assert isinstance(module.test_param_mse_number_group_swap, NumberGroupSwapParamMSE)
+    assert isinstance(
+        module.val_param_mse_number_group_optimal_assignment,
+        NumberGroupOptimalAssignmentParamMSE,
+    )
+    assert isinstance(
+        module.test_param_mse_number_group_optimal_assignment,
+        NumberGroupOptimalAssignmentParamMSE,
+    )
 
 
 def test_validation_loop_logs_best_swap_alongside_param_mse() -> None:
@@ -242,8 +248,8 @@ def test_validation_loop_logs_best_swap_alongside_param_mse() -> None:
     assert metrics["val/param_mse_best_swap"] <= metrics["val/param_mse"] + 1e-6
 
 
-def test_validation_loop_logs_number_group_swap_metrics() -> None:
-    """Structured swap MSE lands between global best-swap and fixed-order MSE."""
+def test_validation_loop_logs_number_group_optimal_assignment_metrics() -> None:
+    """Optimal-assignment MSE lands between global best-swap and fixed-order MSE."""
     spec = param_specs["surge_simple"]
     module = _flow_module(spec.encoded_width, param_spec="surge_simple")
     loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
@@ -251,10 +257,12 @@ def test_validation_loop_logs_number_group_swap_metrics() -> None:
 
     metrics = trainer.validate(module, dataloaders=loader)[0]
 
-    assert "val/param_mse_number_group_swap" in metrics
-    assert "val/per_param_mse_number_group_swap/a_osc_1_pitch" in metrics
-    assert metrics["val/param_mse_best_swap"] <= metrics["val/param_mse_number_group_swap"]
-    assert metrics["val/param_mse_number_group_swap"] <= metrics["val/param_mse"] + 1e-6
+    grouped_key = "val/param_mse_number_group_optimal_assignment"
+    assert grouped_key in metrics
+    assert "val/number_group_optimal_assignment_mse/a_osc_N_pitch" in metrics
+    assert "val/number_group_optimal_assignment_mse/a_osc_1_pitch" not in metrics
+    assert metrics["val/param_mse_best_swap"] <= metrics[grouped_key]
+    assert metrics[grouped_key] <= metrics["val/param_mse"] + 1e-6
 
 
 def test_validation_loop_logs_per_param_best_swap() -> None:
@@ -352,7 +360,7 @@ def test_pyfdn_loop_persists_abs_cosine_for_array_parameters_without_losing_metr
     expected_existing_keys = {
         f"{stage}/per_param_mse/{geometric_name}",
         f"{stage}_per_param_mse_best_swap/{geometric_name}",
-        f"{stage}/per_param_mse_number_group_swap/{geometric_name}",
+        f"{stage}/number_group_optimal_assignment_mse/{geometric_name}",
         f"{stage}/per_param_mse_spec_quantized/{geometric_name}",
     }
     assert expected_existing_keys <= metrics.keys()
@@ -378,7 +386,7 @@ def test_pyfdn_validation_loop_logs_all_per_param_metric_families() -> None:
 
     assert "val/per_param_mse/delays" in metrics
     assert "val_per_param_mse_best_swap/delays" in metrics
-    assert "val/per_param_mse_number_group_swap/delays" in metrics
+    assert "val/number_group_optimal_assignment_mse/delays" in metrics
     assert "val/per_param_mse_spec_quantized/delays" in metrics
 
 
@@ -395,11 +403,11 @@ def test_pyfdn_test_loop_logs_all_per_param_metric_families() -> None:
 
     assert "test/per_param_mse/delays" in metrics
     assert "test_per_param_mse_best_swap/delays" in metrics
-    assert "test/per_param_mse_number_group_swap/delays" in metrics
+    assert "test/number_group_optimal_assignment_mse/delays" in metrics
     assert "test/per_param_mse_spec_quantized/delays" in metrics
 
 
-def test_test_loop_logs_number_group_swap() -> None:
+def test_test_loop_logs_number_group_optimal_assignment() -> None:
     """The test loop emits the structured scalar metric when a spec is selected."""
     spec = param_specs["surge_simple"]
     module = _flow_module(spec.encoded_width, param_spec="surge_simple")
@@ -408,14 +416,16 @@ def test_test_loop_logs_number_group_swap() -> None:
 
     metrics = trainer.test(module, dataloaders=loader)[0]
 
-    assert "test/param_mse_number_group_swap" in metrics
+    grouped_key = "test/param_mse_number_group_optimal_assignment"
+    assert grouped_key in metrics
     assert "test/per_param_mse/a_osc_1_pitch" in metrics
     assert "test_per_param_mse_best_swap/a_osc_1_pitch" in metrics
-    assert "test/per_param_mse_number_group_swap/a_osc_1_pitch" in metrics
+    assert "test/number_group_optimal_assignment_mse/a_osc_N_pitch" in metrics
+    assert "test/number_group_optimal_assignment_mse/a_osc_1_pitch" not in metrics
     assert "test/per_param_mse_spec_quantized/a_osc_1_pitch" in metrics
     assert "test/param_mse_spec_quantized" in metrics
-    assert metrics["test/param_mse_best_swap"] <= metrics["test/param_mse_number_group_swap"]
-    assert metrics["test/param_mse_number_group_swap"] <= metrics["test/param_mse"] + 1e-6
+    assert metrics["test/param_mse_best_swap"] <= metrics[grouped_key]
+    assert metrics[grouped_key] <= metrics["test/param_mse"] + 1e-6
 
 
 def test_test_loop_logs_best_swap() -> None:
