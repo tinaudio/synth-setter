@@ -127,11 +127,62 @@ def test_flamo_renderer_empty_batch_preserves_audio_geometry() -> None:
     assert renderer(torch.empty(0, 27)).shape == (0, 4096)
 
 
-def test_flamo_renderer_rejects_unsupported_topology() -> None:
-    """A different pyFDN spec must not silently use the fixed-Householder mapping."""
-    with pytest.raises(ValueError, match="supports only pyfdn_n8_mono_householder"):
+@pytest.mark.parametrize(
+    "param_spec",
+    ["pyfdn_pitchshift_n8_mono_householder", "pyfdn_diffvox"],
+)
+def test_flamo_renderer_rejects_unsupported_topology(param_spec: str) -> None:
+    """Time-varying and composite stereo graphs need dedicated adapters.
+
+    :param param_spec: Topology outside the mono time-invariant FDN contract.
+    """
+    with pytest.raises(ValueError, match="unsupported FLAMO topology"):
         FlamoFDNDifferentiableRenderer(
-            param_spec="pyfdn_n8_mono_kronecker",
+            param_spec=param_spec,
             sample_rate=44_100,
             signal_length=4096,
         )
+
+
+@pytest.mark.parametrize(
+    "param_spec",
+    [
+        "pyfdn_n8_mono_householder",
+        "pyfdn_n8_mono_householder_vector",
+        "pyfdn_n8_mono_kronecker",
+        "pyfdn_gotz_n8_mono_fixed_delays",
+        "pyfdn_gotz_n8_mono_learned_delays",
+        "pyfdn_gotz_n8_mono_fixed_delays_givens",
+        "pyfdn_gotz_n8_mono_learned_delays_givens",
+    ],
+)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_flamo_same_prediction_offline_and_online_audio_agree(
+    param_spec: str, dtype: torch.dtype
+) -> None:
+    """A model prediction retains its sound through either decoding/rendering path.
+
+    :param param_spec: Registered feedback and attenuation parameterization.
+    :param dtype: Precision shared by the prediction and online renderer.
+    """
+    from synth_setter.data.vst.param_spec import decode_model_output
+    from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+    from synth_setter.param_spec_name import ParamSpecName
+
+    spec = resolve_param_spec(ParamSpecName(param_spec))
+    prediction = torch.tensor(
+        np.random.default_rng(12).uniform(-0.9, 0.9, spec.encoded_width), dtype=dtype
+    )
+    native, _ = decode_model_output(prediction.numpy(), spec)
+    expected = PyFDNRenderer(param_spec_name=ParamSpecName(param_spec)).render(native)[0]
+    renderer = FlamoFDNDifferentiableRenderer(
+        param_spec=param_spec,
+        sample_rate=44_100,
+        signal_length=8192,
+        fft_size=262_144,
+    )
+    renderer = renderer.double() if dtype == torch.float64 else renderer.float()
+
+    actual = renderer(prediction.unsqueeze(0)).detach().numpy()[0]
+
+    np.testing.assert_allclose(actual, expected[:8192], atol=2e-4, rtol=2e-3)

@@ -42,6 +42,9 @@ from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
+from synth_setter.models.components.differentiable_renderer import (
+    FlamoFDNDifferentiableRenderer,
+)
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
 from synth_setter.models.components.pretrained_encoder import (
@@ -251,19 +254,26 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize(
+    "synth", ["pyfdn_n8_mono_householder", "pyfdn_n8_mono_householder_vector"]
+)
 def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
     cfg_dataset_pyfdn_householder: DictConfig,
     tmp_path: Path,
+    synth: str,
 ) -> None:
     """Generate pyFDN data, train through FLAMO, then reload and evaluate its checkpoint.
 
     :param cfg_dataset_pyfdn_householder: Real local pyFDN producer configuration.
     :param tmp_path: Root for generated, checkpoint, metric, and audio artifacts.
+    :param synth: Feedback topology shared by data generation and differentiable training.
     """
     from synth_setter.data.vst.writers import make_lance_dataset
     from synth_setter.pipeline.data.stats import finalize, fold_lance_shard_into_welford
 
     with open_dict(cfg_dataset_pyfdn_householder):
+        cfg_dataset_pyfdn_householder.synth.name = synth
+        cfg_dataset_pyfdn_householder.synth.param_spec_name = synth
         cfg_dataset_pyfdn_householder.train_val_test_sizes = [2, 2, 2]
         cfg_dataset_pyfdn_householder.render.samples_per_shard = 2
         cfg_dataset_pyfdn_householder.render.min_loudness = -100.0
@@ -283,7 +293,7 @@ def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
         cfg = hydra.compose(
             config_name="train.yaml",
             return_hydra_config=True,
-            overrides=["experiment=pyfdn/flow_audio_flamo", "trainer=cpu"],
+            overrides=["experiment=pyfdn/flow_audio_flamo", f"synth={synth}", "trainer=cpu"],
         )
     with open_dict(cfg):
         cfg.paths.root_dir = str(operator_workspace())
@@ -325,19 +335,48 @@ def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
             del cfg.callbacks.lr_monitor
     HydraConfig().set_config(cfg)
     torch.manual_seed(cfg.seed)
+    initial_model = hydra.utils.instantiate(cfg.model)
+    assert isinstance(initial_model.audio_loss.renderer, FlamoFDNDifferentiableRenderer)
     before = {
         name: value.detach().clone()
-        for name, value in hydra.utils.instantiate(cfg.model).vector_field.named_parameters()
+        for name, value in initial_model.vector_field.named_parameters()
     }
+    del initial_model
     train_metrics, objects = train(cfg)
     checkpoint = Path(cfg.paths.output_dir) / "checkpoints" / "last.ckpt"
+    model = objects["model"]
 
+    assert isinstance(model, VSTFlowMatchingModule)
+    assert model.audio_loss is not None
+    assert isinstance(model.audio_loss.renderer, FlamoFDNDifferentiableRenderer)
     assert checkpoint.is_file()
     assert torch.isfinite(train_metrics["train/audio_loss_step"])
+    assert train_metrics["train/audio_loss_step"] > 0
+    assert torch.isfinite(train_metrics["train/audio_grad_ratio"])
+    assert train_metrics["train/audio_grad_ratio"] > 0
     assert any(
         not torch.equal(before[name], value.detach())
-        for name, value in objects["model"].vector_field.named_parameters()
+        for name, value in model.vector_field.named_parameters()
     )
+
+    datamodule = objects["datamodule"]
+    datamodule.setup(stage="fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    step = model._train_step(batch)
+    assert step.audio_term is not None
+    audio_gradients = torch.autograd.grad(
+        step.audio_term,
+        tuple(model.vector_field.parameters()),
+        allow_unused=True,
+    )
+    assert any(
+        gradient is not None
+        and torch.isfinite(gradient).all()
+        and torch.count_nonzero(gradient) > 0
+        for gradient in audio_gradients
+    )
+    datamodule.teardown(stage="fit")
+    del step, audio_gradients
 
     with open_dict(cfg):
         cfg.ckpt_path = str(checkpoint)
