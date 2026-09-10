@@ -113,14 +113,19 @@ parameter; `train/per_param_endpoint_mse/{name}` is the same objective when
 the two are never overlaid. Both are distinct from `val/per_param_mse/{name}`, which measures
 sampled endpoint error under either parameterization.
 
-### Reproducible flow evaluation protocol
+### Seeded flow evaluation
 
-Flow validation and test sampling derive local noise from `cfg.seed`, stage, loader batch index,
-and distributed rank without advancing global RNG state. A comparison must record the dataset
-artifact/version, `cfg.seed`, loader batch size and worker count, rank/world-size topology, sampler
-steps, and content/sketch CFG strengths. Reproducibility requires the same ordered dataset and
-loader topology; changing batching, world size, model, checkpoint, device kernels, or dependency
-versions may change results.
+Set `seeded_evaluation=true` on the evaluation CLI, or `model.seeded_evaluation=true` during
+training, to derive validation and test noise from the seed, stage, loader batch index, and
+distributed rank without advancing the global RNG stream. Standalone evaluation seeds model and
+datamodule construction only in this mode; it uses seed 42 when an enabled legacy config omits or
+nulls `seed`. The default `false` preserves fresh `torch.randn_like` sampling and does not seed the
+evaluation entrypoint.
+
+A comparison must record the dataset artifact/version, seed, loader batch size and worker count,
+rank/world-size topology, sampler steps, and content/sketch CFG strengths. Repeatability requires
+the same ordered dataset and loader topology; changing batching, world size, model, checkpoint,
+device kernels, or dependency versions may change results.
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 
