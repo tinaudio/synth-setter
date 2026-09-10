@@ -47,6 +47,7 @@ from tests.helpers.wandb_offline import read_run_binary
 
 _CKPT_URI = "r2://models/model-flow-simple/best.ckpt"
 _CKPT_S3_REF = "s3://models/model-flow-simple/best.ckpt"
+_TRAINING_RUN_ID = "flow-simple-20260908T170724945Z"
 
 # `cfg_train` composes no Hydra experiment, so `resolve_run_config_id` falls back
 # to `task_name` ("train") — the config_id the e2e artifact name is built from.
@@ -106,15 +107,17 @@ class _RecordingWandbLogger(WandbLogger):
         self.logged.append(artifact)
 
 
-def test_derive_checkpoint_uri_default_uses_bucket_and_config_id() -> None:
-    """A null override derives ``r2://{bucket}/checkpoints/{config_id}/model.ckpt``."""
-    uri = _derive_checkpoint_uri(_cfg(task_name="flow-simple"))
-    assert uri == "r2://intermediate-data/checkpoints/flow-simple/model.ckpt"
+def test_derive_checkpoint_uri_default_uses_config_and_run_ids() -> None:
+    """A null override derives a run-scoped checkpoint URI."""
+    uri = _derive_checkpoint_uri(_cfg(task_name="flow-simple"), _TRAINING_RUN_ID)
+    assert uri == (
+        "r2://intermediate-data/checkpoints/flow-simple/flow-simple-20260908T170724945Z/model.ckpt"
+    )
 
 
 def test_derive_checkpoint_uri_override_is_used_verbatim() -> None:
     """A set ``upload_checkpoints_uri`` overrides the derived path verbatim."""
-    uri = _derive_checkpoint_uri(_cfg(upload_checkpoints_uri=_CKPT_URI))
+    uri = _derive_checkpoint_uri(_cfg(upload_checkpoints_uri=_CKPT_URI), _TRAINING_RUN_ID)
     assert uri == _CKPT_URI
 
 
@@ -266,10 +269,19 @@ def test_upload_best_checkpoint_reachable_uploads_to_derived_uri(
     ckpt = tmp_path / "epoch=3.ckpt"
     ckpt.write_bytes(b"weights")
 
-    uri = _upload_best_checkpoint(_cfg(task_name="flow-simple"), str(ckpt))
+    uri = _upload_best_checkpoint(_cfg(task_name="flow-simple"), str(ckpt), _TRAINING_RUN_ID)
 
-    assert uri == "r2://intermediate-data/checkpoints/flow-simple/model.ckpt"
-    landed = tmp_path / "intermediate-data" / "checkpoints" / "flow-simple" / "model.ckpt"
+    assert uri == (
+        "r2://intermediate-data/checkpoints/flow-simple/flow-simple-20260908T170724945Z/model.ckpt"
+    )
+    landed = (
+        tmp_path
+        / "intermediate-data"
+        / "checkpoints"
+        / "flow-simple"
+        / "flow-simple-20260908T170724945Z"
+        / "model.ckpt"
+    )
     assert landed.read_bytes() == b"weights"
 
 
@@ -283,7 +295,9 @@ def test_upload_best_checkpoint_unreachable_returns_none(monkeypatch: pytest.Mon
         raise RuntimeError("R2 credentials missing from process env")
 
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _unavailable)
-    assert _upload_best_checkpoint(_cfg(), "/run/checkpoints/epoch=3.ckpt") is None
+    assert (
+        _upload_best_checkpoint(_cfg(), "/run/checkpoints/epoch=3.ckpt", _TRAINING_RUN_ID) is None
+    )
 
 
 def test_upload_best_checkpoint_empty_path_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -292,7 +306,7 @@ def test_upload_best_checkpoint_empty_path_returns_none(monkeypatch: pytest.Monk
     :param monkeypatch: Stubs ``ensure_r2_env_loaded`` so only the empty path gates.
     """
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
-    assert _upload_best_checkpoint(_cfg(), "") is None
+    assert _upload_best_checkpoint(_cfg(), "", _TRAINING_RUN_ID) is None
 
 
 def test_upload_best_checkpoint_upload_failure_returns_none(
@@ -308,7 +322,10 @@ def test_upload_best_checkpoint_upload_failure_returns_none(
         raise RuntimeError("rclone boom")
 
     monkeypatch.setattr(r2_io, "upload_to_uri", _boom)
-    assert _upload_best_checkpoint(_cfg(task_name="flow-simple"), "/x/epoch=3.ckpt") is None
+    assert (
+        _upload_best_checkpoint(_cfg(task_name="flow-simple"), "/x/epoch=3.ckpt", _TRAINING_RUN_ID)
+        is None
+    )
 
 
 def test_log_model_artifact_logs_to_wandb_logger() -> None:
