@@ -53,6 +53,17 @@ def build_parameter_workspace(entity: str, project: str) -> ws.Workspace:
                         title="Spec-quantized MSE by parameter",
                         metric_regex=r"^val/per_param_mse_spec_quantized/.+$",
                     ),
+                    wr.LinePlot(
+                        title="Categorical mismatch rate by parameter",
+                        metric_regex=r"^val/categorical_mismatch_rate/.+$",
+                    ),
+                    wr.LinePlot(
+                        title="Number-group categorical mismatch rate",
+                        metric_regex=(
+                            r"^val/number_group_optimal_assignment_"
+                            r"categorical_mismatch_rate/.+$"
+                        ),
+                    ),
                 ],
             ),
         ],

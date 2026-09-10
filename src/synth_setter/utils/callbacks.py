@@ -29,6 +29,8 @@ from matplotlib.figure import Figure
 
 from synth_setter.data.vst import param_specs
 from synth_setter.metrics import (
+    categorical_mismatch_rates,
+    number_group_optimal_assignment_categorical_mismatch_rates,
     number_group_optimal_assignment_mse_groups,
     spec_per_param_abs_cosine_distance,
     spec_quantized_per_param_mse,
@@ -968,6 +970,8 @@ class LogPerParamMSE(Callback):
     def _reset(self) -> None:
         self.metric_totals: dict[str, np.ndarray] = {}
         self.metric_counts: dict[str, int] = {}
+        self.categorical_totals: dict[str, dict[str, float]] = {}
+        self.categorical_counts: dict[str, int] = {}
 
     def _accumulate(self, outputs: object, batch: object) -> None:
         if not isinstance(outputs, Mapping):
@@ -995,6 +999,23 @@ class LogPerParamMSE(Callback):
                     predictions, params, self.param_spec
                 ).items()
             )
+            categorical_metrics = {
+                "categorical_mismatch_rate": categorical_mismatch_rates(
+                    predictions, params, self.param_spec
+                ),
+                "number_group_optimal_assignment_categorical_mismatch_rate": (
+                    number_group_optimal_assignment_categorical_mismatch_rates(
+                        predictions, params, self.param_spec
+                    )
+                ),
+            }
+            for namespace, values in categorical_metrics.items():
+                totals = self.categorical_totals.setdefault(namespace, {})
+                for name, value in values.items():
+                    totals[name] = totals.get(name, 0.0) + value.item() * weight
+                self.categorical_counts[namespace] = (
+                    self.categorical_counts.get(namespace, 0) + weight
+                )
 
         for metric_name, metric, metric_weight in batch_metrics:
             values = metric.detach().cpu().numpy()
@@ -1039,6 +1060,11 @@ class LogPerParamMSE(Callback):
             )
             if metric_name == _SPEC_QUANTIZED_PER_PARAM_MSE:
                 metrics[f"{stage}/param_mse_spec_quantized"] = mean.mean()
+        for namespace, totals in self.categorical_totals.items():
+            count = self.categorical_counts[namespace]
+            for name, total in totals.items():
+                mean = _distributed_metric_mean(np.asarray(total), count, pl_module.device)
+                metrics[f"{stage}/{namespace}/{name}"] = mean.item()
         pl_module.log_dict(metrics)
 
     def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
