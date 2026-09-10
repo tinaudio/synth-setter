@@ -39,9 +39,27 @@ class TestTrainConfigAcceptsLiveCompose:
         assert isinstance(model.test, bool)
         assert model.ckpt_path is None or isinstance(model.ckpt_path, str)
         assert isinstance(model.estimate_normalization_stats, bool)
+        assert model.feature_flags == []
         assert model.seed is None or (isinstance(model.seed, int) and model.seed >= 0)
         assert model.optimized_metric is None or isinstance(model.optimized_metric, str)
         assert model.watch_gradients is None or isinstance(model.watch_gradients, bool)
+
+    def test_feature_flag_numbers_resolve_to_metadata(self) -> None:
+        """Hydra's integer list becomes typed feature-flag records."""
+        cfg_dict = compose_train_cfg()
+        cfg_dict["feature_flags"] = [3160]
+
+        model = TrainConfig.model_validate(cfg_dict)
+
+        assert model.feature_flags[0].name == "SYNTH_SETTER_FF_3160_CORRECT_AST_PATCH_PADDING"
+
+    def test_feature_flags_round_trip_through_train_config_dump(self) -> None:
+        """TrainConfig serialization preserves integer IDs for revalidation."""
+        model = TrainConfig.model_validate({"feature_flags": [3160]})
+
+        restored = TrainConfig.model_validate(model.model_dump())
+
+        assert restored.feature_flags == model.feature_flags
 
 
 class TestTrainConfigRejectsBadInputs:
