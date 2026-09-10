@@ -1048,7 +1048,8 @@ class VSTFlowMatchingModule(LightningModule):
             return self._endpoint_prediction_to_model(prediction)
         sigma = self.hparams.rectified_sigma_min
         remaining = 1 - t
-        return (x_t + (1 - sigma) * remaining * prediction) / (1 - sigma * remaining)
+        denominator = t + (1 - sigma) * remaining
+        return (x_t + (1 - sigma) * remaining * prediction) / denominator
 
     def _sample(
         self,
