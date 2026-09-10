@@ -16,6 +16,7 @@ from synth_setter.data.vst.param_spec import (
     DirectionArrayParameter,
     DiscreteArrayParameter,
     DiscreteLiteralParameter,
+    LegacyEndpointNoteDurationParameter,
     NoteDurationParameter,
     ParamSpec,
     decode_model_output,
@@ -690,7 +691,7 @@ def test_param_spec_roundtrip_preserves_mixed_array_scalar_and_note_values() -> 
 
     assert decoded_synth["gain"] == 1.0
     np.testing.assert_array_equal(decoded_synth["matrix"], synth_values["matrix"])
-    assert decoded_note["window"] == note_values["window"]
+    assert decoded_note["window"] == pytest.approx(note_values["window"], abs=1e-6)
 
 
 def test_param_spec_encoded_names_match_encoded_width() -> None:
@@ -720,8 +721,8 @@ def test_param_spec_encoded_names_match_encoded_width() -> None:
         "mode.1",
         "matrix.0.0",
         "matrix.0.1",
-        "window.0",
-        "window.1",
+        "window.onset",
+        "window.duration_fraction",
     ]
     assert len(spec.encoded_names) == spec.encoded_width
 
@@ -948,9 +949,9 @@ def test_categorical_parameter_encode_rejects_nonnumeric_value() -> None:
         parameter.encode("a")
 
 
-def test_note_duration_golden_encoding_remains_unchanged() -> None:
-    """Preserve legacy note-duration encoding and decoding behavior."""
-    parameter = NoteDurationParameter(
+def test_legacy_note_duration_golden_encoding_remains_unchanged() -> None:
+    """Preserve legacy endpoint encoding for existing artifact identities."""
+    parameter = LegacyEndpointNoteDurationParameter(
         name="note_start_and_end",
         max_note_duration_seconds=4.0,
     )
@@ -961,18 +962,110 @@ def test_note_duration_golden_encoding_remains_unchanged() -> None:
     assert parameter.decode(encoded) == (1.0, 3.0)
 
 
-@pytest.mark.parametrize("value", [[1.0, 3.0], (1.0,), (1.0, "end")])
+def test_note_duration_encodes_onset_and_remaining_window_fraction() -> None:
+    """Encode endpoints as onset plus duration bounded by the remaining window."""
+    parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+        min_note_duration_seconds=0.001,
+    )
+
+    encoded = parameter.encode((1.0, 3.0))
+
+    np.testing.assert_allclose(encoded, np.array([1.0 / 3.999, 1.999 / 2.999]))
+    assert parameter.decode(encoded) == pytest.approx((1.0, 3.0))
+
+
+def test_note_duration_sample_preserves_truncated_uniform_endpoint_prior() -> None:
+    """Sampling shifts the sorted upper endpoint by the minimum duration."""
+    parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+        min_note_duration_seconds=0.001,
+    )
+
+    sampled = parameter.sample(np.random.default_rng(7))
+
+    assert sampled == pytest.approx((2.499756770952063, 3.5889579900773323))
+
+
+def test_note_duration_final_onset_encodes_canonical_duration_fraction() -> None:
+    """The singular final-onset window has one canonical encoded representation."""
+    parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+        min_note_duration_seconds=0.001,
+    )
+
+    encoded = parameter.encode((3.999, 4.0))
+
+    np.testing.assert_array_equal(encoded, np.array([1.0, 0.0]))
+
+
+def test_note_duration_encoded_names_describe_model_coordinates() -> None:
+    """Timing labels distinguish onset from remaining-window duration."""
+    parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+        min_note_duration_seconds=0.001,
+    )
+
+    assert parameter.encoded_names() == (
+        "note_start_and_end.onset",
+        "note_start_and_end.duration_fraction",
+    )
+
+
+@pytest.mark.parametrize(
+    ("encoded", "expected"),
+    [
+        ([0.0, 0.0], (0.0, 0.001)),
+        ([0.0, 1.0], (0.0, 4.0)),
+        ([1.0, 0.0], (3.999, 4.0)),
+        ([1.0, 1.0], (3.999, 4.0)),
+    ],
+)
+def test_note_duration_decode_always_returns_valid_window(
+    encoded: list[float], expected: tuple[float, float]
+) -> None:
+    """Every encoded boundary maps to an ordered minimum-length note window.
+
+    :param encoded: Unit-domain onset and duration coordinates.
+    :param expected: Renderer-native endpoint pair.
+    """
+    parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+        min_note_duration_seconds=0.001,
+    )
+
+    assert parameter.decode(np.array(encoded)) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        [1.0, 3.0],
+        (1.0,),
+        (1.0, "end"),
+        (-0.1, 1.0),
+        (1.0, 1.0005),
+        (1.0, 4.1),
+        (math.nan, 2.0),
+    ],
+)
 def test_note_duration_encode_rejects_invalid_endpoint_pair(value: object) -> None:
-    """Note-duration encoding requires exactly two numeric tuple endpoints.
+    """Onset-duration encoding rejects malformed or unrenderable windows.
 
     :param value: Invalid endpoint container or value under test.
     """
     parameter = NoteDurationParameter(
         name="note_start_and_end",
         max_note_duration_seconds=4.0,
+        min_note_duration_seconds=0.001,
     )
 
-    with pytest.raises(TypeError, match="must be a pair of numeric endpoints"):
+    with pytest.raises((TypeError, ValueError)):
         parameter.encode(value)
 
 
@@ -1189,8 +1282,10 @@ class TestDecodeModelOutput:
         _, note_params = decode_model_output(row, _tiny_spec())
 
         assert note_params["pitch"] == 108
-        # 0.2 in [-1, 1] rescales to 0.6, then lerps onto the 4 s duration grid.
-        assert note_params["note_start_and_end"] == pytest.approx((2.4, 2.4))
+        # Both 0.2 predictions map to encoded 0.6: onset first, then held-duration fraction.
+        assert note_params["note_start_and_end"] == pytest.approx(
+            (2.3994, 3.36016), abs=1e-6
+        )
 
     def test_input_row_is_not_mutated(self) -> None:
         """Decoding never mutates the caller's row (callers reuse prediction tensors)."""
@@ -1236,19 +1331,12 @@ class TestDecodeModelOutput:
         with pytest.raises(ValueError):
             decode_model_output(row, _tiny_spec())
 
-    def test_tail_truncated_rows_corrupt_note_duration_silently(self) -> None:
-        """Current contract: a row missing only tail values decodes without raising.
-
-        The note-duration value comes back malformed (a 1-tuple) — pinned so a
-        future width guard is a deliberate contract change.
-        """
+    def test_tail_truncated_rows_reject_invalid_note_duration_width(self) -> None:
+        """A row missing a duration coordinate cannot decode to a renderer window."""
         row = np.array(_ROW[:5], dtype=np.float32)
 
-        _, note_params = decode_model_output(row, _tiny_spec())
-        note_window = note_params["note_start_and_end"]
-
-        assert isinstance(note_window, tuple)
-        assert len(note_window) == 1
+        with pytest.raises(ValueError, match=r"must have shape \(2,\)"):
+            decode_model_output(row, _tiny_spec())
 
 
 class TestModelSpaceConversion:

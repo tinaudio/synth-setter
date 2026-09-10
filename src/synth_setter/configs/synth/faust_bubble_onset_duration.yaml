@@ -1,0 +1,7 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "faust_bubble_onset_duration"
+param_spec_name: "faust_bubble_onset_duration"
+plugin_path: "registry://faust/faust_bubble"
+plugin_state_path: ""
+synth_version: "1"
+source_sha256: "731727e725ac0336a897c18df4e8b73f1e75c3d8add40a978efb1d95f88db23c"

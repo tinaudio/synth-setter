@@ -50,6 +50,7 @@ _ENDPOINT_TIME_WEIGHTING_KEY = "endpoint_time_weighting"
 _LEGACY_ENDPOINT_TIME_WEIGHTING = "uniform"
 _PARAMETERIZATION_KEY = "parameterization"
 _LEGACY_PARAMETERIZATION = "velocity"
+_PARAM_SPEC_IDENTITY_KEY = "param_spec_identity"
 
 EndpointLoss = Literal["mse", "mixed"]
 EndpointTimeWeighting = Literal["uniform", "flowmol3"]
@@ -95,6 +96,22 @@ def _checkpoint_endpoint_time_weighting(checkpoint: Mapping[str, object]) -> obj
             _LEGACY_ENDPOINT_TIME_WEIGHTING,
         )
     return _LEGACY_ENDPOINT_TIME_WEIGHTING
+
+
+@jaxtyped(typechecker=beartype)
+def _checkpoint_param_spec(checkpoint: Mapping[str, object]) -> object:
+    """Return the stamped or legacy hyperparameter identity from a checkpoint.
+
+    :param checkpoint: Lightning checkpoint payload.
+    :returns: Stored parameter-spec identity, or ``None`` for untyped legacy models.
+    """
+    stored = checkpoint.get(_PARAM_SPEC_IDENTITY_KEY)
+    if stored is not None:
+        return stored
+    hyperparameters = checkpoint.get("hyper_parameters")
+    if isinstance(hyperparameters, Mapping):
+        return hyperparameters.get("param_spec")
+    return None
 
 
 if TYPE_CHECKING:
@@ -531,6 +548,13 @@ class VSTFlowMatchingModule(LightningModule):
             )
             if not isinstance(checkpoint, Mapping):
                 raise TypeError("Lightning checkpoint payload must be a mapping")
+            stored_param_spec = _checkpoint_param_spec(checkpoint)
+            requested_param_spec = kwargs.get("param_spec", stored_param_spec)
+            if requested_param_spec != stored_param_spec:
+                raise ValueError(
+                    f"checkpoint trained param_spec={stored_param_spec!r}, "
+                    f"load override requested {requested_param_spec!r}"
+                )
             if _ENDPOINT_TIME_WEIGHTING_KEY not in checkpoint:
                 stored_time_weighting = _checkpoint_endpoint_time_weighting(checkpoint)
                 if hparams_file is not None:
@@ -749,6 +773,7 @@ class VSTFlowMatchingModule(LightningModule):
         checkpoint[_ENDPOINT_LOSS_KEY] = self.hparams.endpoint_loss
         checkpoint[_ENDPOINT_TIME_WEIGHTING_KEY] = self.hparams.endpoint_time_weighting
         checkpoint[_PARAMETERIZATION_KEY] = self.hparams.parameterization
+        checkpoint[_PARAM_SPEC_IDENTITY_KEY] = self.hparams.param_spec
         if not isinstance(self.encoder, PretrainedConditioningEncoder):
             return
         state = checkpoint.get("state_dict")
@@ -771,6 +796,12 @@ class VSTFlowMatchingModule(LightningModule):
         :raises ValueError: The checkpoint trained another parameterization, endpoint loss, or
             endpoint time weighting; same-shaped weights would load under another objective.
         """
+        stored_param_spec = _checkpoint_param_spec(checkpoint)
+        if stored_param_spec != self.hparams.param_spec:
+            raise ValueError(
+                f"checkpoint trained param_spec={stored_param_spec!r}, "
+                f"module expects {self.hparams.param_spec!r}"
+            )
         stored_parameterization = checkpoint.get(_PARAMETERIZATION_KEY, _LEGACY_PARAMETERIZATION)
         if stored_parameterization != self.hparams.parameterization:
             raise ValueError(

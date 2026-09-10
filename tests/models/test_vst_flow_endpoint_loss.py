@@ -751,6 +751,24 @@ def test_load_legacy_checkpoint_without_endpoint_loss_counts_as_mse(tmp_path: Pa
     assert loaded.hparams["endpoint_loss"] == "mse"
 
 
+def test_load_checkpoint_with_same_width_timing_semantics_override_raises(
+    tmp_path: Path,
+) -> None:
+    """Resume rejects exchanging endpoint and onset-duration identities by shape.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(_module(param_spec="cardinal"), tmp_path / "legacy.ckpt")
+
+    with pytest.raises(ValueError, match="param_spec"):
+        VSTFlowMatchingModule.load_from_checkpoint(
+            path,
+            encoder=_WaveformEncoder(),
+            param_spec="cardinal_onset_duration",
+            weights_only=False,
+        )
+
+
 def test_load_checkpoint_with_other_endpoint_time_weighting_raises(tmp_path: Path) -> None:
     """Resume rejects silently switching a same-shaped endpoint objective.
 

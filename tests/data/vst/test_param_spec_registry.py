@@ -13,7 +13,11 @@ import pytest
 
 import synth_setter.data.vst as vst
 import synth_setter.data.vst.param_spec_registry as param_spec_registry
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import (
+    LegacyEndpointNoteDurationParameter,
+    NoteDurationParameter,
+    ParamSpec,
+)
 from synth_setter.data.vst.param_spec_registry import (
     default_plugin_path,
     param_specs,
@@ -103,6 +107,20 @@ def test_param_spec_widths_match_known_values() -> None:
     assert param_specs["pyfdn_n8_mono_householder"].encoded_width == 27
     assert param_specs["pyfdn_n8_mono_kronecker"].encoded_width == 36
     assert param_specs["pyfdn_n8_mono_householder_vector"].encoded_width == 35
+
+
+def test_onset_duration_spec_uses_versioned_timing_without_changing_width() -> None:
+    """Versioned names preserve legacy artifacts while selecting new timing semantics."""
+    legacy = param_specs["surge_4"]
+    onset_duration = param_specs["surge_4_onset_duration"]
+
+    assert isinstance(legacy.note_params[-1], LegacyEndpointNoteDurationParameter)
+    assert isinstance(onset_duration.note_params[-1], NoteDurationParameter)
+    assert onset_duration.encoded_width == legacy.encoded_width
+    assert onset_duration.encoded_names[-2:] == [
+        "note_start_and_end.onset",
+        "note_start_and_end.duration_fraction",
+    ]
 
 
 def test_resolve_param_spec_width_returns_encoded_width() -> None:

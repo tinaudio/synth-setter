@@ -1,0 +1,7 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "faust_filter_osc_onset_duration"
+param_spec_name: "faust_filter_osc_onset_duration"
+plugin_path: "registry://faust/faust_filter_osc"
+plugin_state_path: ""
+synth_version: "1"
+source_sha256: "6ad65d28d787f08a3fa66eb4de7d4091be8d2267ad1e9edc200618effbbe588c"

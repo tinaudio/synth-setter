@@ -137,9 +137,10 @@ The draft is a starting point, not a finished spec. Open
 - `AngleArrayParameter(name, shape)` — a fixed-shape array of radians carried as
   one `(cos θ, sin θ)` pair per angle, so `±π` share one encoding and the loss
   is seam-aware; decode projects predictions onto the unit circle.
-- `NoteDurationParameter(name, max_note_duration_seconds)` — samples when the
-  note starts and ends within the audio buffer (not an ADSR envelope); lives in
-  the `note_params` list.
+- `NoteDurationParameter(name, max_note_duration_seconds)` — encodes an onset
+  plus the held-duration fraction of the remaining render window, with a 1 ms
+  minimum duration; it still decodes to renderer-native `(start, end)` seconds
+  and lives in the `note_params` list.
 
 A `ParamSpec` takes two lists: `synth_params` (the synth's parameters) and
 `note_params` (`pitch`, a `DiscreteLiteralParameter` whose MIDI window the
@@ -168,6 +169,16 @@ parameter into several dimensions, and the note parameters add their own. VST
 model configs resolve this width from the root `synth` group's
 `param_spec_name`; experiments must not repeat it as a `num_params`, `d_out`,
 or `latent_dim` literal.
+
+Existing endpoint-encoded artifacts retain their original synth names. Select
+an `_onset_duration` synth group (for example,
+`synth=torchsynth_full_onset_duration`) for new datasets and checkpoints. The
+versioned groups have the same width but different coordinate semantics, so
+checkpoints and rows must not be exchanged based on shape alone. Renderers
+continue to receive endpoint seconds; TorchSynth converts those endpoints to
+its keyboard duration after decoding, so note timing remains parameter-loss-only
+rather than part of differentiable audio feedback.
+
 See [`surge_xt_param_spec.py`](../../src/synth_setter/data/vst/surge_xt_param_spec.py)
 and [`obxf_param_spec.py`](../../src/synth_setter/data/vst/obxf_param_spec.py)
 for hand-tuned examples.

@@ -24,6 +24,8 @@ from __future__ import annotations
 from importlib.abc import Traversable
 from importlib.resources import as_file, files
 
+from synth_setter.param_spec_name import ParamSpecName, legacy_endpoint_param_spec_name
+
 __all__ = ["as_file", "configs_dir", "faustwasm_dir", "param_map", "vst_headless_wrapper"]
 
 
@@ -55,7 +57,8 @@ def param_map(param_spec_name: str) -> Traversable:
     :returns: Traversable pointing at ``<param_spec_name>_param_map.json``.
     :raises FileNotFoundError: when no map is packaged for the spec.
     """
-    ref = files("synth_setter") / "data" / "vst" / f"{param_spec_name}_param_map.json"
+    resource_name = legacy_endpoint_param_spec_name(ParamSpecName(param_spec_name))
+    ref = files("synth_setter") / "data" / "vst" / f"{resource_name}_param_map.json"
     if not ref.is_file():
         raise FileNotFoundError(f"no packaged parameter map for spec {param_spec_name!r}")
     return ref

@@ -16,7 +16,7 @@ from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
     DiscreteLiteralParameter,
-    NoteDurationParameter,
+    LegacyEndpointNoteDurationParameter,
     Parameter,
     decode_model_output,
 )
@@ -416,7 +416,7 @@ def test_faust_note_conditioning_contract_is_identity_stable(param_spec_name: st
     assert (pitch.name, pitch.min, pitch.max) == ("pitch", 48, 72)
     assert pitch.decode(np.array([0.0])) == 48
     assert pitch.decode(np.array([1.0])) == 72
-    assert isinstance(note_window, NoteDurationParameter)
+    assert isinstance(note_window, LegacyEndpointNoteDurationParameter)
     assert note_window.name == "note_start_and_end"
     assert note_window.max_note_duration_seconds == 4.0
     assert note_window.decode(np.array([0.0, 1.0])) == pytest.approx((0.0, 4.0))

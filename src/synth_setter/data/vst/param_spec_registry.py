@@ -33,7 +33,11 @@ from synth_setter.data.pyfdn_param_spec import (
 from synth_setter.data.vst.cardinal_param_spec import CARDINAL_PARAM_SPEC
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.obxf_param_spec import OBXF_PARAM_SPEC
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import (
+    LegacyEndpointNoteDurationParameter,
+    ParamSpec,
+    onset_duration_variant,
+)
 from synth_setter.data.vst.surge_xt_param_spec import (
     SURGE_4_PARAM_SPEC,
     SURGE_SIMPLE_PARAM_SPEC,
@@ -49,7 +53,11 @@ from synth_setter.data.vst.ultramaster_kr106_param_spec import (
     ULTRAMASTER_KR106_PARAM_SPEC,
     ULTRAMASTER_KR106_SINGLE_NOTE_PARAM_SPEC,
 )
-from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.param_spec_name import (
+    LEGACY_ENDPOINT_PARAM_SPEC_NAMES,
+    ParamSpecName,
+    onset_duration_param_spec_name,
+)
 from synth_setter.synth_spec import SYNTHS
 
 _param_specs: dict[ParamSpecName, ParamSpec] = {
@@ -90,6 +98,17 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("ultramaster_kr106_onehot"): ULTRAMASTER_KR106_ONEHOT_PARAM_SPEC,
     ParamSpecName("ultramaster_kr106_single_note"): ULTRAMASTER_KR106_SINGLE_NOTE_PARAM_SPEC,
 }
+_param_specs.update(
+    {
+        onset_duration_param_spec_name(name): onset_duration_variant(spec)
+        for name, spec in tuple(_param_specs.items())
+        if name in LEGACY_ENDPOINT_PARAM_SPEC_NAMES
+        and any(
+            isinstance(parameter, LegacyEndpointNoteDurationParameter)
+            for parameter in spec.note_params
+        )
+    }
+)
 param_specs = cast(Mapping[str, ParamSpec], MappingProxyType(_param_specs))
 
 # Projection of the identity table, not a second source: keeping it derived is what

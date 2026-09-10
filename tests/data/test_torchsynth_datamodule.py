@@ -34,7 +34,7 @@ from synth_setter.data.torchsynth_grad_render import (
 )
 from synth_setter.data.vst.param_spec import (
     DiscreteLiteralParameter,
-    NoteDurationParameter,
+    LegacyEndpointNoteDurationParameter,
     NoteParams,
 )
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
@@ -51,7 +51,7 @@ _PITCH_PARAM = next(
 _NOTE_WINDOW_PARAM = next(
     param
     for param in TORCHSYNTH_FULL_PARAM_SPEC.note_params
-    if isinstance(param, NoteDurationParameter)
+    if isinstance(param, LegacyEndpointNoteDurationParameter)
 )
 _BUFFER_SECONDS = _RENDER_KWARGS["signal_length"] / _RENDER_KWARGS["sample_rate"]
 _WORKER_PID_KEY = "worker_pid"
