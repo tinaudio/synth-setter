@@ -7,3 +7,4 @@ patch_size: 16
 patch_stride: 10
 input_channels: 2
 spec_shape: [128, 401]
+use_fixed_ast_padding: false

@@ -692,6 +692,7 @@ class PatchEmbed(nn.Module):
         in_channels: int,
         d_model: int,
         spec_shape: tuple[int, int] = (128, 401),
+        use_fixed_ast_padding: bool = False,
     ):
         """Build overlapping patches over a mel-by-time input grid.
 
@@ -700,6 +701,8 @@ class PatchEmbed(nn.Module):
         :param in_channels: Spectrogram channel count.
         :param d_model: Output width of each patch token.
         :param spec_shape: Mel-bin and time-frame counts.
+        :param use_fixed_ast_padding: Whether padding follows the matching mel and time axes;
+            false preserves legacy checkpoint token geometry.
         """
         super().__init__()
         assert stride < patch_size, "Overlap must be less than patch size"
@@ -709,7 +712,12 @@ class PatchEmbed(nn.Module):
         mel_padding = (stride - (spec_shape[0] - patch_size)) % stride
         time_padding = (stride - (spec_shape[1] - patch_size)) % stride
 
-        self.pad = nn.ZeroPad2d((0, time_padding, 0, mel_padding))
+        padding = (
+            (0, time_padding, 0, mel_padding)
+            if use_fixed_ast_padding
+            else (0, mel_padding, 0, time_padding)
+        )
+        self.pad = nn.ZeroPad2d(padding)
         self.projection = nn.Conv2d(
             in_channels=in_channels,
             out_channels=d_model,
@@ -758,6 +766,7 @@ class AudioSpectrogramTransformer(nn.Module):
         input_channels: int = 2,
         spec_shape: tuple[int, int] = (128, 401),
         token_embed: nn.Module | None = None,
+        use_fixed_ast_padding: bool = False,
     ):
         """Build the token embed, positional encoding, class tokens, and encoder stack.
 
@@ -771,6 +780,8 @@ class AudioSpectrogramTransformer(nn.Module):
         :param spec_shape: Mel-by-frames input shape, ignored with ``token_embed``.
         :param token_embed: Replacement input tokenizer exposing ``num_tokens`` and
             mapping inputs to ``(batch, tokens, d_model)``.
+        :param use_fixed_ast_padding: Whether patch padding follows matching axes;
+            false preserves legacy checkpoint token geometry.
         """
         super().__init__()
 
@@ -784,6 +795,7 @@ class AudioSpectrogramTransformer(nn.Module):
                 in_channels=input_channels,
                 d_model=d_model,
                 spec_shape=spec_shape,
+                use_fixed_ast_padding=use_fixed_ast_padding,
             )
         )
 
@@ -854,6 +866,7 @@ class ASTWithProjectionHead(AudioSpectrogramTransformer):
         input_channels: int = 2,
         spec_shape: tuple[int, int] = (128, 401),
         token_embed: nn.Module | None = None,
+        use_fixed_ast_padding: bool = False,
     ) -> None:
         """Encode inputs into one vector through the residual projection head.
 
@@ -867,6 +880,8 @@ class ASTWithProjectionHead(AudioSpectrogramTransformer):
         :param spec_shape: Mel-by-frame shape, ignored with ``token_embed``.
         :param token_embed: Optional tokenizer exposing ``num_tokens`` and producing
             ``(batch, tokens, d_model)`` sequences.
+        :param use_fixed_ast_padding: Whether patch padding follows matching axes;
+            false preserves legacy checkpoint token geometry.
         """
         super().__init__(
             d_model=d_model,
@@ -878,6 +893,7 @@ class ASTWithProjectionHead(AudioSpectrogramTransformer):
             input_channels=input_channels,
             spec_shape=spec_shape,
             token_embed=token_embed,
+            use_fixed_ast_padding=use_fixed_ast_padding,
         )
 
         self.prediction_head = nn.Sequential(

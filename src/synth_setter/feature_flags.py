@@ -2,8 +2,8 @@
 
 .. code-block:: python
 
-    resolved = FeatureFlagConfig.model_validate({"feature_flags": [3160]})
-    assert resolved.feature_flags[0].number == 3160
+    resolved = FeatureFlagConfig.model_validate({"feature_flags": []})
+    assert resolved.feature_flags == []
 """
 
 from __future__ import annotations
@@ -46,14 +46,10 @@ class FeatureFlag:
     description: str
 
 
-_REGISTERED_FEATURE_FLAGS = (
-    FeatureFlag(
-        number=3160,
-        name="SYNTH_SETTER_FF_3160_CORRECT_AST_PATCH_PADDING",
-        description="Use the corrected AST patch-padding axis order.",
-    ),
-)
-_FEATURE_FLAGS = {feature_flag.number: feature_flag for feature_flag in _REGISTERED_FEATURE_FLAGS}
+_REGISTERED_FEATURE_FLAGS: tuple[FeatureFlag, ...] = ()
+_FEATURE_FLAGS: dict[int, FeatureFlag] = {
+    feature_flag.number: feature_flag for feature_flag in _REGISTERED_FEATURE_FLAGS
+}
 
 
 def _resolve_feature_flags(value: object) -> object:

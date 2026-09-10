@@ -58,6 +58,31 @@ def test_train_config(cfg_train: DictConfig) -> None:
     hydra.utils.instantiate(cfg_train.trainer)
 
 
+def test_canonical_ast_config_defaults_to_legacy_padding() -> None:
+    """Expose checkpoint-compatible AST padding as the canonical safe default."""
+    cfg = _compose(
+        "train.yaml",
+        ["datamodule=surge_lance", "model=vst_flow", "trainer=cpu"],
+    )
+
+    assert cfg.model.encoder.use_fixed_ast_padding is False
+
+
+def test_canonical_ast_config_corrected_padding_can_opt_in() -> None:
+    """Allow corrected AST models to select matching-axis padding explicitly."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "model=vst_flow",
+            "model.encoder.use_fixed_ast_padding=true",
+            "trainer=cpu",
+        ],
+    )
+
+    assert cfg.model.encoder.use_fixed_ast_padding is True
+
+
 def test_eval_config(cfg_eval: DictConfig) -> None:
     """Tests the evaluation configuration provided by the `cfg_eval` pytest fixture.
 
