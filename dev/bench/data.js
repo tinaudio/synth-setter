@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789028787519,
+  "lastUpdate": 1789033874994,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -16038,6 +16038,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.06029325723648071,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e89112eeaaa373927bf9ce5a05d25702a89813ae",
+          "message": "internal-feat(training): decode pyFDN predictions into FLAMO graphs (#3307)\n\n* internal-feat(training): add differentiable FLAMO FDN rendering\n\nInject tensor-native renderers into audio feedback and simulator control.\nKeep backend amplitude handling out of the shared loss. Exercise real local\npyFDN generation, FLAMO training, and checkpoint evaluation in CPU CI.\n\nRefs #3302\n\n* test(training): verify single-row FLAMO evaluation metrics\n\nAssert per-pair response metrics rather than Pearson correlations, which\nare undefined for the one-row CI evaluation sample.\n\n* refactor(training): reuse FLAMO proportional shelving filter\n\nKeep only pyFDN RT60-to-gain mapping and SOS packing in the adapter;\nuse FLAMO for the actual filter design.\n\n* internal-feat(training): decode pyFDN predictions into FLAMO graphs\n\nBuild the mono LTI graph once through dss_to_flamo and bind tensor-native\nParamSpec decodes for Householder, Kronecker and Gotz feedback. Reuse\npyFDN filter design and preserve tone EQ and the Gotz direct-path delay.\n\nVerify offline/online waveform parity, CPU/CUDA gradients and real flow\ntraining with checkpoint evaluation for fixed and learned feedback.\n\nRefs #3302\n\n* internal-fix(training): normalize Lance audio for FLAMO finetuning\n\nShare target downmixing across direct audio feedback and simulator control,\nincluding validation, test and predict sampling boundaries. Exercise the\nreal Lance batch with a trained flow, FLAMO scoring and control gradients.\nPin the exact float32 delay-rounding boundary from the review.\n\nRefs #3302\n\n* internal-feat(training): bind multichannel BasicFDN predictions in FLAMO\n\nUse the complete canonical build without reconstructing DSP topology.\nSeparate model encoding from build geometry, preserve all input/output\ntransfer paths, and score waveform channels before reducing their losses.\nReject advanced effects whose full processing is outside FDNBuild.\n\nRefs #3302\n\n* docs(training): clarify FLAMO channel and spec support\n\n* internal-fix(training): retain gradients for saturated FDN controls\n\nKeep exact offline clipping with an affine straight-through gradient so\nunconstrained flow predictions are not stranded outside physical bounds.\nShare experiment geometry through interpolation and pin override behavior.\n\nRefs #3302\n\n* chore(training): retain base lockfile after restack",
+          "timestamp": "2026-09-10T04:06:00-04:00",
+          "tree_id": "2b09df905accb21728c1407037c5a56c6090c0bb",
+          "url": "https://github.com/tinaudio/synth-setter/commit/e89112eeaaa373927bf9ce5a05d25702a89813ae"
+        },
+        "date": 1789033872010,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.096741199493408,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.900030583441257,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.030286168679594994,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.02897399663925171,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.8527071475982666,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.512575191499915,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.309486389160156,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.933078051805496,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.030286168679594994,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.029861509799957275,
             "unit": "1-cos"
           },
           {
