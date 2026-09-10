@@ -2,8 +2,10 @@
 
 import hashlib
 import logging
+import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import torch
 from beartype import beartype
@@ -16,7 +18,25 @@ from synth_setter.models.vst_flow_matching_module import (
 
 logger = logging.getLogger(__name__)
 
+_BASE_CHECKPOINT_SOURCE_ENV = "SYNTH_SETTER_BASE_CHECKPOINT_SOURCE"
 _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
+
+
+@jaxtyped(typechecker=beartype)
+def checkpoint_source_uri(checkpoint: str | Path) -> str:
+    """Return a credential-free source URI for a materialized checkpoint.
+
+    :param checkpoint: Materialized checkpoint path used when no source override is present.
+    :returns: Source URI without user info, query parameters, or a fragment.
+    """
+    source = os.getenv(_BASE_CHECKPOINT_SOURCE_ENV)
+    if source is None:
+        return Path(checkpoint).expanduser().resolve(strict=True).as_uri()
+    parsed = urlsplit(source)
+    if not parsed.scheme:
+        return Path(source).expanduser().absolute().as_uri()
+    authority = parsed.netloc.rsplit("@", maxsplit=1)[-1]
+    return urlunsplit((parsed.scheme, authority, parsed.path, "", ""))
 
 
 @jaxtyped(typechecker=beartype)
@@ -74,9 +94,14 @@ class PretrainedBaseMixin:
     .. attribute :: base_checkpoint_sha256
 
        SHA-256 of the loaded base, or ``None`` until a saved checkpoint supplies it.
+
+    .. attribute :: base_checkpoint_source
+
+       Credential-free source URI of the loaded base, retained across resume.
     """
 
     base_checkpoint_sha256: str | None
+    base_checkpoint_source: str | None = None
 
     @jaxtyped(typechecker=beartype)
     def on_fit_start(self) -> None:
@@ -99,6 +124,7 @@ class PretrainedBaseMixin:
         """
         super().on_save_checkpoint(checkpoint)  # pyright: ignore[reportAttributeAccessIssue]
         checkpoint["base_checkpoint_sha256"] = self.base_checkpoint_sha256
+        checkpoint["base_checkpoint_source"] = self.base_checkpoint_source
 
     @jaxtyped(typechecker=beartype)
     def on_load_checkpoint(self, checkpoint: dict[str, object]) -> None:
@@ -118,3 +144,6 @@ class PretrainedBaseMixin:
                 "base_checkpoint does not match the base this checkpoint was refined from "
                 f"(configured sha256 {self.base_checkpoint_sha256[:12]}…, saved {saved[:12]}…)"
             )
+        saved_source = checkpoint.get("base_checkpoint_source")
+        if isinstance(saved_source, str):
+            self.base_checkpoint_source = saved_source

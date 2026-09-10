@@ -30,6 +30,7 @@ from synth_setter.models.components.differentiable_renderer import (
 )
 from synth_setter.models.components.pretrained_flow import (
     PretrainedBaseMixin,
+    checkpoint_source_uri,
     load_pretrained_flow,
 )
 from synth_setter.models.components.simulator_control import (
@@ -191,6 +192,9 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         # get deep-copied; the group admits large weight-normalized pretrained encoders.
         self.save_hyperparameters(ignore=["cost", "control_encoder", "renderer"], logger=False)
         self.num_params = num_params
+        self.base_checkpoint_source = (
+            checkpoint_source_uri(base_checkpoint) if base_checkpoint is not None else None
+        )
         self.base_checkpoint_sha256 = (
             load_pretrained_flow(self, base_checkpoint) if base_checkpoint is not None else None
         )
