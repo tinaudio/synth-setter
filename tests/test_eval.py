@@ -1668,13 +1668,11 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
     )
 
 
-@pytest.mark.slow
-def test_evaluate_seeded_override_repeats_legacy_mixed_endpoint_checkpoint(
-    tmp_path: Path,
-) -> None:
-    """Evaluation opts a legacy mixed-endpoint checkpoint into repeatable sampling.
+def _prepare_flowmol3_eval_checkpoint(tmp_path: Path) -> DictConfig:
+    """Compose a tiny eval config and write its matching FlowMol3 checkpoint.
 
     :param tmp_path: Checkpoint and evaluation output directory.
+    :returns: Evaluation config pointing at the saved checkpoint.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -1727,7 +1725,18 @@ def test_evaluate_seeded_override_repeats_legacy_mixed_endpoint_checkpoint(
     )
     trainer.strategy.connect(instantiate(cfg.model))
     trainer.save_checkpoint(checkpoint_path)
+    return cfg
 
+
+@pytest.mark.slow
+def test_evaluate_seeded_override_repeats_flowmol3_mixed_endpoint_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """Evaluation opts a mixed-endpoint checkpoint into repeatable sampling.
+
+    :param tmp_path: Checkpoint and evaluation output directory.
+    """
+    cfg = _prepare_flowmol3_eval_checkpoint(tmp_path)
     with open_dict(cfg):
         cfg.model.seeded_evaluation = True
         cfg.seed = 42
@@ -1761,6 +1770,21 @@ def test_evaluate_seeded_override_repeats_legacy_mixed_endpoint_checkpoint(
     assert object_dict["model"].hparams.endpoint_loss == "mixed"
     assert object_dict["model"].hparams.endpoint_time_weighting == "flowmol3"
     assert object_dict["model"].hparams.seeded_evaluation is True
+
+
+@pytest.mark.slow
+def test_evaluate_uniform_override_of_flowmol3_checkpoint_raises(tmp_path: Path) -> None:
+    """The real eval entrypoint rejects a checkpoint trained with another weighting.
+
+    :param tmp_path: Checkpoint and evaluation output directory.
+    """
+    cfg = _prepare_flowmol3_eval_checkpoint(tmp_path)
+    with open_dict(cfg):
+        cfg.model.endpoint_time_weighting = "uniform"
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(ValueError, match="endpoint_time_weighting"):
+        evaluate(cfg)
 
 
 def test_evaluate_loads_compiled_cpu_training_checkpoint(

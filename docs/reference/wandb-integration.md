@@ -145,20 +145,6 @@ device kernels, or dependency versions may change results. `val/param_mse` and
 metrics remain available in predict mode. Fixed diagnostics establish comparability, not model
 quality; quality claims still require matched checkpoints, compute, seeds, and representative data.
 
-### Seeded flow evaluation
-
-Set `seeded_evaluation=true` on the evaluation CLI, or `model.seeded_evaluation=true` during
-training, to derive validation and test noise from the seed, stage, loader batch index, and
-distributed rank without advancing the global RNG stream. Standalone evaluation seeds model and
-datamodule construction only in this mode; it uses seed 42 when an enabled legacy config omits or
-nulls `seed`. The default `false` preserves fresh `torch.randn_like` sampling and does not seed the
-evaluation entrypoint.
-
-A comparison must record the dataset artifact/version, seed, loader batch size and worker count,
-rank/world-size topology, sampler steps, and content/sketch CFG strengths. Repeatability requires
-the same ordered dataset and loader topology; changing batching, world size, model, checkpoint,
-device kernels, or dependency versions may change results.
-
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 
 Image-producing callbacks route figures through `_log_figure` in

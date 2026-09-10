@@ -1610,6 +1610,46 @@ def test_train_surge_simple_flow_default_width_matches_fake_batch(
 
 
 @pytest.mark.slow
+def test_train_flowmol3_checkpoint_rejects_uniform_resume(tmp_path: Path) -> None:
+    """A train-produced FlowMol3 checkpoint rejects a uniform resume.
+
+    :param tmp_path: Hydra output and checkpoint directory; no dataset is read.
+    """
+    cfg = build_fake_train_cfg(
+        tmp_path,
+        param_spec_name="cardinal",
+        model_group="vst_flow",
+    )
+    with open_dict(cfg):
+        cfg.model.compile = False
+        cfg.model.endpoint_time_weighting = "flowmol3"
+        cfg.model.parameterization = "endpoint"
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 16
+        cfg.model.vector_field.num_heads = 1
+        cfg.model.vector_field.d_ff = 16
+        cfg.model.vector_field.projection.num_tokens = 2
+        cfg.trainer.max_steps = 1
+        cfg.test = False
+
+    HydraConfig().set_config(cfg)
+    train(cfg)
+
+    checkpoint_path = tmp_path / "checkpoints" / "last.ckpt"
+    checkpoint = torch.load(checkpoint_path, weights_only=False)
+    assert checkpoint["endpoint_time_weighting"] == "flowmol3"
+
+    with open_dict(cfg):
+        cfg.ckpt_path = str(checkpoint_path)
+        cfg.model.endpoint_time_weighting = "uniform"
+        cfg.trainer.max_steps = 2
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(ValueError, match="endpoint_time_weighting"):
+        train(cfg)
+
+
+@pytest.mark.slow
 def test_train_cardinal_mixed_endpoint_time_weighting_overfits_fixed_batch(
     tmp_path: Path,
 ) -> None:
@@ -1651,6 +1691,7 @@ def test_train_cardinal_mixed_endpoint_time_weighting_overfits_fixed_batch(
     assert object_dict["model"].hparams["endpoint_time_weighting"] == "flowmol3"
     assert metric_dict["train/loss_step"].item() < 0.05
     assert metric_dict["train/per_param_endpoint_mse/parameter_1_v"].item() < 0.05
+    assert metric_dict["train/endpoint_mse"].item() < 0.1
 
 
 @pytest.mark.slow
