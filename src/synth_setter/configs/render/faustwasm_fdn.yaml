@@ -1,0 +1,6 @@
+# Mono FDN impulse responses; identity comes from `synth=faust_fdn_n8_mono_householder`.
+defaults:
+  - faustwasm
+  - _self_
+
+channels: 1

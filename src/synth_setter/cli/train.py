@@ -93,8 +93,8 @@ def _default_checkpoint_prefix_uri(cfg: DictConfig) -> str:
     return f"r2://{cfg.r2.bucket}/checkpoints/{config_id}"
 
 
-def _derive_checkpoint_uri(cfg: DictConfig, run_id: str) -> str:
-    """Return the run-scoped ``r2://`` URI for the best checkpoint.
+def _derive_checkpoint_uri(cfg: DictConfig, run_id: str, launch_uuid: str) -> str:
+    """Return the launch-scoped ``r2://`` URI for the best checkpoint.
 
     Honors ``training.upload_checkpoints_uri`` verbatim when set. Otherwise the
     config and run IDs isolate the checkpoint from later training runs while the
@@ -102,20 +102,21 @@ def _derive_checkpoint_uri(cfg: DictConfig, run_id: str) -> str:
 
     :param cfg: Hydra-composed train cfg; reads ``r2.bucket`` and the optional
         ``training.upload_checkpoints_uri`` override.
-    :param run_id: Canonical training run ID used as the immutable path segment.
-    :returns: The canonical ``r2://`` checkpoint URI for this run.
+    :param run_id: Canonical training run ID used as a provenance path segment.
+    :param launch_uuid: Collision-resistant ID that makes the object immutable.
+    :returns: The canonical ``r2://`` checkpoint URI for this launch.
     """
     override = OmegaConf.select(cfg, "training.upload_checkpoints_uri")
     if override:
         return str(override)
-    return f"{_default_checkpoint_prefix_uri(cfg)}/{run_id}/model.ckpt"
+    return f"{_default_checkpoint_prefix_uri(cfg)}/{run_id}/{launch_uuid}/model.ckpt"
 
 
 def _make_launch_namespace(run_id: str) -> str:
     """Return a collision-resistant namespace for one training launch.
 
     :param run_id: Canonical W&B run ID retained as the human-readable prefix.
-    :returns: The run ID plus a random UUID used for launch-scoped R2 artifacts.
+    :returns: The run ID plus a UUID used for launch-scoped R2 artifacts.
     """
     return f"{run_id}-{uuid4().hex}"
 
@@ -322,8 +323,10 @@ def _configure_val_audio_probe(
     )
 
 
-def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str, run_id: str) -> str | None:
-    """Upload the best checkpoint to its run-scoped URI; return it or ``None``.
+def _upload_best_checkpoint(
+    cfg: DictConfig, best_model_path: str, run_id: str, launch_uuid: str
+) -> str | None:
+    """Upload the best checkpoint to its launch-scoped URI; return it or ``None``.
 
     Best-effort and degrades to ``None`` (a lineage-only model artifact) when no
     checkpoint was written (``best_model_path`` empty — e.g. ``fast_dev_run``),
@@ -337,7 +340,8 @@ def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str, run_id: str) 
     :param cfg: Train cfg forwarded to :func:`_derive_checkpoint_uri`.
     :param best_model_path: ``trainer.checkpoint_callback.best_model_path``;
         empty when no checkpoint exists.
-    :param run_id: Canonical training run ID used to isolate the default target.
+    :param run_id: Canonical training run ID used to group launch checkpoints.
+    :param launch_uuid: Collision-resistant ID that isolates the default target.
     :returns: The ``r2://`` URI the checkpoint landed at, or ``None`` when no
         upload happened.
     """
@@ -349,7 +353,7 @@ def _upload_best_checkpoint(cfg: DictConfig, best_model_path: str, run_id: str) 
     except Exception as exc:  # noqa: BLE001 — R2 unavailable must not abort a completed run
         log.info(f"R2 unavailable; logging lineage-only model artifact (no upload): {exc}")
         return None
-    uri = _derive_checkpoint_uri(cfg, run_id)
+    uri = _derive_checkpoint_uri(cfg, run_id, launch_uuid)
     try:
         r2_io.upload_to_uri(Path(best_model_path), uri)
     except Exception as exc:  # noqa: BLE001 — upload failure must not abort a completed run
@@ -527,6 +531,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     recovered_run_id = _apply_auto_resume(cfg, config_id)
     run_id = recovered_run_id or make_wandb_run_id(config_id)
     launch_namespace = _make_launch_namespace(run_id)
+    launch_uuid = launch_namespace.removeprefix(f"{run_id}-")
 
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
@@ -609,7 +614,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     # artifact versions). Degrades to lineage-only when R2 is unreachable or no ckpt exists.
     if trainer.is_global_zero and _has_wandb_logger(logger):
         best_model_path = getattr(trainer.checkpoint_callback, "best_model_path", "") or ""
-        ckpt_uri = _upload_best_checkpoint(cfg, best_model_path, run_id)
+        ckpt_uri = _upload_best_checkpoint(cfg, best_model_path, run_id, launch_uuid)
         ckpt_metadata = (
             _checkpoint_metadata(trainer, best_model_path, ckpt_uri) if ckpt_uri else None
         )
