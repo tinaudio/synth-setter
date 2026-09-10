@@ -183,6 +183,27 @@ cannot be queried and stops when the known balance is insufficient:
 uv run python -c "from synth_setter.pipeline.skypilot_launch import _check_runpod_balance; _check_runpod_balance(); print('balance preflight passed')"
 ```
 
+For RunPod managed-job launches, configure the jobs controller in the launcher client's
+`~/.sky/config.yaml`:
+
+```yaml
+jobs:
+  controller:
+    resources:
+      disk_size: 40
+      autostop:
+        idle_minutes: 30
+        down: true
+        wait_for: jobs_and_ssh
+```
+
+SkyPilot 0.12.0 otherwise requests a 50 GB controller disk, but the RunPod CPU controller used by
+this project accepts at most 40 GB. The nested `resources.autostop` placement is intentional; the
+sibling `controller.autostop` form is deprecated in 0.12.0. RunPod also cannot stop pods, so `down: true` terminates the
+controller after 30 idle minutes; `wait_for: jobs_and_ssh` prevents the timer from expiring while a
+job or SSH session is active. SkyPilot forwards the launcher's config to a remote API server.
+`SYNTH_SETTER_CI_MODE=1` replaces the file with CI's smaller controller configuration.
+
 Dataset generation has an integrated SkyPilot path. It materializes and uploads the spec before
 dispatching workers:
 
