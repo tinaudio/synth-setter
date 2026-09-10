@@ -54,9 +54,13 @@ class TrainConfig(StrictAllowExtraModel):
 
         Path to a Lightning checkpoint to resume from.
 
+    .. attribute :: estimate_normalization_stats
+
+        Estimate online frontend statistics from training waveforms when absent.
+
     .. attribute :: seed
 
-        Seed forwarded to ``lightning.seed_everything``.
+        Seed forwarded to ``lightning.seed_everything`` and calibration sampling.
 
     .. attribute :: optimized_metric
 
@@ -99,11 +103,19 @@ class TrainConfig(StrictAllowExtraModel):
             "this checkpoint and ``trainer.test`` loads it as the test weights."
         ),
     )
+    estimate_normalization_stats: StrictBool = Field(
+        default=False,
+        description=(
+            "Estimate online log-mel normalization from up to 10,000 training "
+            "waveforms when neither the frontend nor dataset supplies statistics."
+        ),
+    )
     seed: NonNegativeInt | None = Field(
         default=None,
         description=(
             "Seed forwarded to ``lightning.seed_everything`` for PyTorch, NumPy, "
-            "and Python's ``random``. ``None`` means non-deterministic."
+            "and Python's ``random``. ``None`` leaves training non-deterministic; "
+            "calibration sampling alone then uses seed 1234."
         ),
     )
     optimized_metric: NonBlankStr | None = Field(
