@@ -42,8 +42,11 @@ PYFDN_SKETCH_ECHO_DENSITY_CHILD: str = "echo_density"
 PYFDN_SKETCH_SPECTRAL_FLATNESS_CHILD: str = "spectral_flatness"
 PYFDN_SKETCH_EDC_BANDS: int = 8
 PYFDN_SKETCH_CONTROLS: int = 10
+TIV_SKETCH_CONTROLS: int = 12
 
-type SketchControlProfile = Literal["music", "pyfdn_reverb"]
+type SketchControlProfile = Literal["music", "pyfdn_reverb", "tiv"]
+type SketchControlSource = Literal["stored", "online"]
+type TIVBackend = Literal["torch", "essentia"]
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,11 @@ _SKETCH_CONTROL_LAYOUTS: Mapping[SketchControlProfile, SketchControlLayout] = {
             slice(PYFDN_SKETCH_EDC_BANDS, PYFDN_SKETCH_EDC_BANDS + 1),
             slice(PYFDN_SKETCH_EDC_BANDS + 1, PYFDN_SKETCH_CONTROLS),
         ),
+    ),
+    "tiv": SketchControlLayout(
+        profile="tiv",
+        group_names=("tiv",),
+        group_slices=(slice(0, TIV_SKETCH_CONTROLS),),
     ),
 }
 
@@ -199,6 +207,18 @@ class SketchControlSpec(BaseModel):
 
         Channel layout and temporal tokenization contract.
 
+    .. attribute :: source
+
+        Stored struct or online waveform extraction.
+
+    .. attribute :: sample_rate
+
+        Waveform sample rate in Hz for online extraction.
+
+    .. attribute :: tiv_backend
+
+        Device-local STFT chroma or CPU reference-style HPCP extraction.
+
     .. attribute :: num_frames
 
         Mel-grid frames per stored control row.
@@ -216,6 +236,9 @@ class SketchControlSpec(BaseModel):
 
     column: str = Field(default=SKETCH_STRUCT_FIELD, min_length=1)
     profile: SketchControlProfile = "music"
+    source: SketchControlSource = "stored"
+    sample_rate: PositiveInt | None = None
+    tiv_backend: TIVBackend = "torch"
     num_frames: PositiveInt
     num_control_tokens: PositiveInt = 32
     # Bounded to the documented [0, 1] activation range: a negative threshold
@@ -234,6 +257,13 @@ class SketchControlSpec(BaseModel):
         :returns: The validated sketch-control specification.
         :raises ValueError: Stored frames and model token counts violate the profile.
         """
+        if self.profile == "tiv":
+            if self.source != "online":
+                raise ValueError("tiv sketch requires source='online'")
+            if self.sample_rate is None:
+                raise ValueError("tiv sketch requires sample_rate for audio extraction")
+        elif self.source == "online":
+            raise ValueError("source='online' is supported only by the tiv sketch profile")
         if self.profile == "pyfdn_reverb" and (
             self.num_frames != SKETCH_STORAGE_FRAMES
             or self.num_control_tokens != SKETCH_STORAGE_FRAMES

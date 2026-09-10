@@ -24,7 +24,11 @@ from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
 )
-from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.vst_flow_matching_module import (
+    EndpointLoss,
+    Parameterization,
+    VSTFlowMatchingModule,
+)
 from synth_setter.utils.callbacks import LogPerParamMSE
 
 _MEL_CHANNELS = 2
@@ -78,10 +82,18 @@ class _FakeBatchDataset(Dataset[dict[str, torch.Tensor]]):
         }
 
 
-def _flow_module(num_params: int, *, param_spec: str | None = None) -> VSTFlowMatchingModule:
+def _flow_module(
+    num_params: int,
+    *,
+    endpoint_loss: EndpointLoss = "mse",
+    parameterization: Parameterization = "velocity",
+    param_spec: str | None = None,
+) -> VSTFlowMatchingModule:
     """Build a tiny real flow-matching module with a 1-step sampler.
 
     :param num_params: Parameter-vector width.
+    :param endpoint_loss: Flat MSE or per-parameter MSE/CE for one-hot spans.
+    :param parameterization: Field output semantics.
     :param param_spec: Optional registered spec enabling structured swap metrics.
     :returns: Module wired for the fake batch shapes.
     """
@@ -110,6 +122,8 @@ def _flow_module(num_params: int, *, param_spec: str | None = None) -> VSTFlowMa
         optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
         scheduler=None,  # pyright: ignore[reportArgumentType]
         num_params=num_params,
+        endpoint_loss=endpoint_loss,
+        parameterization=parameterization,
         param_spec=param_spec,
         validation_sample_steps=1,
         validation_cfg_strength=1.0,
@@ -141,8 +155,8 @@ def _tiny_trainer(
     )
 
 
-def test_training_loop_logs_per_param_flow_mse_alongside_validation_metrics() -> None:
-    """Training flow errors and validation endpoint errors retain distinct namespaces."""
+def test_training_loop_logs_weighted_velocity_and_unweighted_endpoint_names() -> None:
+    """Training objectives and one-step endpoint diagnostics use distinct namespaces."""
     spec_name = "surge_4"
     spec = param_specs[spec_name]
     module = _flow_module(spec.encoded_width, param_spec=spec_name)
@@ -152,18 +166,44 @@ def test_training_loop_logs_per_param_flow_mse_alongside_validation_metrics() ->
     trainer.fit(module, train_dataloaders=loader, val_dataloaders=loader)
 
     metrics = trainer.callback_metrics
-    expected_train_metrics = {f"train/per_param_flow_mse/{name}" for name in spec.names}
-    assert expected_train_metrics <= metrics.keys()
+    weighted_names = {f"train/per_param_weighted_velocity_mse/{name}" for name in spec.names}
+    endpoint_names = {f"train/per_param_velocity_endpoint_mse/{name}" for name in spec.names}
+    assert weighted_names | endpoint_names <= metrics.keys()
+    assert not any(key.startswith("train/per_param_flow_mse/") for key in metrics)
+    assert not any(key.startswith("train/per_param_endpoint_mse/") for key in metrics)
     grouped_flow_mse = (
-        metrics["train/per_param_flow_mse/a_amp_eg_attack"]
-        + metrics["train/per_param_flow_mse/a_filter_1_cutoff"]
-        + metrics["train/per_param_flow_mse/a_lfo_1_amplitude"]
-        + metrics["train/per_param_flow_mse/a_lfo_1_rate"]
-        + metrics["train/per_param_flow_mse/pitch"]
-        + 2 * metrics["train/per_param_flow_mse/note_start_and_end"]
+        metrics["train/per_param_weighted_velocity_mse/a_amp_eg_attack"]
+        + metrics["train/per_param_weighted_velocity_mse/a_filter_1_cutoff"]
+        + metrics["train/per_param_weighted_velocity_mse/a_lfo_1_amplitude"]
+        + metrics["train/per_param_weighted_velocity_mse/a_lfo_1_rate"]
+        + metrics["train/per_param_weighted_velocity_mse/pitch"]
+        + 2 * metrics["train/per_param_weighted_velocity_mse/note_start_and_end"]
     ) / 7
     assert grouped_flow_mse.item() == pytest.approx(metrics["train/loss_epoch"].item())
     assert "val/per_param_mse/a_amp_eg_attack" in metrics
+
+
+def test_training_loop_logs_weighted_and_unweighted_endpoint_names() -> None:
+    """Direct endpoint objectives never reuse the velocity diagnostic namespace."""
+    spec_name = "cardinal"
+    spec = param_specs[spec_name]
+    module = _flow_module(
+        spec.encoded_width,
+        endpoint_loss="mixed",
+        parameterization="endpoint",
+        param_spec=spec_name,
+    )
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+
+    _tiny_trainer().fit(module, train_dataloaders=loader, val_dataloaders=loader)
+
+    metrics = module.trainer.callback_metrics
+    assert "train/weighted_endpoint_mse" in metrics
+    assert "train/endpoint_mse" in metrics
+    assert "train/per_param_weighted_endpoint_mse/parameter_1_v" in metrics
+    assert "train/per_param_endpoint_mse/parameter_1_v" in metrics
+    assert "train/weighted_velocity_mse" not in metrics
+    assert "train/velocity_endpoint_mse" not in metrics
 
 
 def test_ctor_param_spec_width_mismatch_raises() -> None:
@@ -225,7 +265,7 @@ def test_validation_loop_logs_per_param_best_swap() -> None:
 
     metrics = trainer.validate(module, dataloaders=loader)[0]
 
-    assert "val/per_param_mse_best_swap/note_start_and_end" in metrics
+    assert "val_per_param_mse_best_swap/note_start_and_end" in metrics
 
 
 def test_validation_loop_logs_spec_quantized_metrics() -> None:
@@ -311,7 +351,7 @@ def test_pyfdn_loop_persists_abs_cosine_for_array_parameters_without_losing_metr
 
     expected_existing_keys = {
         f"{stage}/per_param_mse/{geometric_name}",
-        f"{stage}/per_param_mse_best_swap/{geometric_name}",
+        f"{stage}_per_param_mse_best_swap/{geometric_name}",
         f"{stage}/per_param_mse_number_group_swap/{geometric_name}",
         f"{stage}/per_param_mse_spec_quantized/{geometric_name}",
     }
@@ -337,7 +377,7 @@ def test_pyfdn_validation_loop_logs_all_per_param_metric_families() -> None:
     )[0]
 
     assert "val/per_param_mse/delays" in metrics
-    assert "val/per_param_mse_best_swap/delays" in metrics
+    assert "val_per_param_mse_best_swap/delays" in metrics
     assert "val/per_param_mse_number_group_swap/delays" in metrics
     assert "val/per_param_mse_spec_quantized/delays" in metrics
 
@@ -354,7 +394,7 @@ def test_pyfdn_test_loop_logs_all_per_param_metric_families() -> None:
     )[0]
 
     assert "test/per_param_mse/delays" in metrics
-    assert "test/per_param_mse_best_swap/delays" in metrics
+    assert "test_per_param_mse_best_swap/delays" in metrics
     assert "test/per_param_mse_number_group_swap/delays" in metrics
     assert "test/per_param_mse_spec_quantized/delays" in metrics
 
@@ -370,7 +410,7 @@ def test_test_loop_logs_number_group_swap() -> None:
 
     assert "test/param_mse_number_group_swap" in metrics
     assert "test/per_param_mse/a_osc_1_pitch" in metrics
-    assert "test/per_param_mse_best_swap/a_osc_1_pitch" in metrics
+    assert "test_per_param_mse_best_swap/a_osc_1_pitch" in metrics
     assert "test/per_param_mse_number_group_swap/a_osc_1_pitch" in metrics
     assert "test/per_param_mse_spec_quantized/a_osc_1_pitch" in metrics
     assert "test/param_mse_spec_quantized" in metrics

@@ -691,8 +691,16 @@ class PatchEmbed(nn.Module):
         stride: int,
         in_channels: int,
         d_model: int,
-        spec_shape: tuple[int] = (128, 401),
+        spec_shape: tuple[int, int] = (128, 401),
     ):
+        """Build overlapping patches over a mel-by-time input grid.
+
+        :param patch_size: Square patch edge length.
+        :param stride: Patch step along both axes; must be smaller than ``patch_size``.
+        :param in_channels: Spectrogram channel count.
+        :param d_model: Output width of each patch token.
+        :param spec_shape: Mel-bin and time-frame counts.
+        """
         super().__init__()
         assert stride < patch_size, "Overlap must be less than patch size"
 
@@ -701,7 +709,7 @@ class PatchEmbed(nn.Module):
         mel_padding = (stride - (spec_shape[0] - patch_size)) % stride
         time_padding = (stride - (spec_shape[1] - patch_size)) % stride
 
-        self.pad = nn.ZeroPad2d((0, mel_padding, 0, time_padding))
+        self.pad = nn.ZeroPad2d((0, time_padding, 0, mel_padding))
         self.projection = nn.Conv2d(
             in_channels=in_channels,
             out_channels=d_model,
@@ -748,7 +756,7 @@ class AudioSpectrogramTransformer(nn.Module):
         patch_size: int = 16,
         patch_stride: int = 10,
         input_channels: int = 2,
-        spec_shape: tuple[int] = (128, 401),
+        spec_shape: tuple[int, int] = (128, 401),
         token_embed: nn.Module | None = None,
     ):
         """Build the token embed, positional encoding, class tokens, and encoder stack.
@@ -844,7 +852,7 @@ class ASTWithProjectionHead(AudioSpectrogramTransformer):
         patch_size: int = 16,
         patch_stride: int = 10,
         input_channels: int = 2,
-        spec_shape: tuple[int] = (128, 401),
+        spec_shape: tuple[int, int] = (128, 401),
         token_embed: nn.Module | None = None,
     ) -> None:
         """Encode inputs into one vector through the residual projection head.

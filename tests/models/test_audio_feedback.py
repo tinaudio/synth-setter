@@ -330,6 +330,64 @@ def test_grad_render_of_saturated_parameters_still_backprops_nonzero_gradient() 
     assert torch.count_nonzero(gradient[:, saturated]).item() > 0
 
 
+@pytest.fixture
+def clipping_voice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable torchsynth's per-row peak normalizer so a max-gain row overshoots ``[-1, 1]``.
+
+    ``AudioMixer`` ends in ``normalize_if_clipping``, so a stock voice never clips; the
+    output clamp exists so the audio contract survives without that internal.
+
+    :param monkeypatch: Pytest patcher, restored on teardown.
+    """
+    import torchsynth.util
+
+    monkeypatch.setattr(torchsynth.util, "normalize_if_clipping", lambda signal: signal)
+
+
+def _max_gain_params() -> torch.Tensor:
+    """Encode one row whose mixer, envelopes, and amp modulation all sit at full scale.
+
+    :returns: Encoded row shaped ``(1, encoded_width)`` in ``[0, 1]``.
+    """
+    params = _encoded_rows(1, 0)
+    for index, spec in enumerate(INFERABLE_SPEC):
+        if spec.module == "mixer" or spec.name == "sustain" or spec.name.endswith("_amp"):
+            params[:, index] = 1.0
+        elif spec.name in ("attack", "decay"):
+            params[:, index] = 0.0
+    return params
+
+
+@pytest.mark.usefixtures("clipping_voice")
+def test_grad_render_of_a_clipping_row_matches_the_hard_clamped_production_render() -> None:
+    """A clipping estimate lands on the same ``[-1, 1]`` audio the stored target carries.
+
+    Without the clamp, every clipped sample carries an irreducible distance to its target, which an
+    audio loss or reward reads as error the parameters cannot fix.
+    """
+    params = _max_gain_params()
+
+    assert torch.equal(_render(params, render_batch_size=1), _per_row_targets(params))
+
+
+@pytest.mark.usefixtures("clipping_voice")
+def test_grad_render_of_a_clipping_row_keeps_nonzero_gradient_on_clipped_samples() -> None:
+    """Straight-through output clamp: clipped samples still pull on the parameters."""
+    params = _max_gain_params().requires_grad_()
+
+    audio = render_torchsynth_grad(
+        params,
+        sample_rate=_SAMPLE_RATE,
+        signal_length=_SIGNAL_LENGTH,
+        render_batch_size=1,
+    )
+    clipped = audio.detach().abs() >= 1.0
+    (gradient,) = torch.autograd.grad((audio * clipped).sum(), params)
+
+    assert clipped.any()
+    assert torch.count_nonzero(gradient[:, _SYNTH_COLUMNS]).item() > 0
+
+
 def test_grad_render_note_columns_receive_no_gradient() -> None:
     """Note conditioning is read off the row but never backpropagated into.
 

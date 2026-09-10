@@ -4,6 +4,7 @@ Every arm renders real torchsynth audio through the production differentiable re
 with the production spectral distance; nothing here stands in for the simulator.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -484,6 +485,33 @@ def _logged_control_metrics(
     return logged
 
 
+def test_finetune_fixed_time_diagnostics_use_controlled_sampling_field(tmp_path: Path) -> None:
+    """Held-out diagnostics measure the finetuned field rather than its frozen base.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path), control_mode="null")
+    batch = _batch()
+    perfect_velocity = batch["params"] - batch["noise"]
+
+    def controlled_field(
+        *args: object, **kwargs: object
+    ) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+        del args, kwargs
+
+        def velocity(x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+            del t
+            return perfect_velocity.to(x_t)
+
+        return velocity
+
+    module._velocity_field = controlled_field  # pyright: ignore[reportAttributeAccessIssue]
+
+    metrics = module._fixed_time_endpoint_mse(batch, batch["noise"])  # noqa: SLF001
+
+    torch.testing.assert_close(metrics["velocity_endpoint_mse/equal_bin_mean"], torch.tensor(0.0))
+
+
 def test_finetune_train_step_loss_carries_no_audio_term(tmp_path: Path) -> None:
     """The cost reaches the run only as control input, so the objective stays pure flow matching.
 
@@ -503,6 +531,11 @@ def test_finetune_train_step_unequal_column_errors_remain_distinct(tmp_path: Pat
     for parameter in base.parameters():
         torch.nn.init.zeros_(parameter)
     module = _finetune(_base_checkpoint(tmp_path, base), control_mode="null")
+
+    def fixed_time(batch_size: int, device: torch.device) -> torch.Tensor:
+        return torch.full((batch_size, 1), 0.5, device=device)
+
+    module._sample_time = fixed_time  # pyright: ignore[reportAttributeAccessIssue]
     noise = torch.zeros(_BATCH, _WIDTH)
     noise[:, :3] = torch.tensor([1.0, 2.0, 3.0])
     batch = {
@@ -514,6 +547,7 @@ def test_finetune_train_step_unequal_column_errors_remain_distinct(tmp_path: Pat
     outputs = module._train_step(batch)
 
     assert torch.equal(outputs.per_param_flow_mse[:4], torch.tensor([1.0, 4.0, 9.0, 0.0]))
+    assert torch.equal(outputs.per_param_endpoint_mse[:4], torch.tensor([0.25, 1.0, 2.25, 0.0]))
 
 
 @pytest.mark.slow

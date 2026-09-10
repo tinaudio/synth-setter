@@ -2,6 +2,8 @@
 
 # codespell-exempt: program and control labels are verbatim host values. See #1674.
 
+from copy import deepcopy
+
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
@@ -211,7 +213,8 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         CategoricalParameter(
             name="transpose_offset", values=list(range(-24, 37)), encoding="scalar"
         ),
-        ContinuousParameter(name="master_volume"),
+        # Bound post-chorus gain while retaining the control's nonlinear taper.
+        ContinuousParameter(name="master_volume", max=0.25),
         CategoricalParameter(name="voices", values=[6, 7, 8, 9, 10], encoding="scalar"),
         CategoricalParameter(
             name="vcf_oversample", values=["Off", "2x", "3x", "4x"], encoding="onehot"
@@ -271,4 +274,65 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         DiscreteLiteralParameter(name="pitch", min=48, max=72),
         NoteDurationParameter(name="note_start_and_end", max_note_duration_seconds=4.0),
     ],
+)
+
+def _onehot_voices_variant() -> ParamSpec:
+    """Return an independent spec where only voices uses onehot encoding.
+
+    :returns: A deep copy safe from mutation through the legacy identity.
+    :raises TypeError: The legacy voices control is no longer categorical.
+    """
+    variant = deepcopy(ULTRAMASTER_KR106_PARAM_SPEC)
+    voices = next((param for param in variant.synth_params if param.name == "voices"), None)
+    if not isinstance(voices, CategoricalParameter):
+        raise TypeError("voices must remain categorical")
+    voices.encoding = "onehot"
+    return variant
+
+
+ULTRAMASTER_KR106_ONEHOT_PARAM_SPEC = _onehot_voices_variant()
+
+
+_SINGLE_NOTE_EXCLUDED_PARAMS = frozenset(
+    {
+        "arpeggio",
+        "arp_limit_kbd",
+        "arp_mode",
+        "arp_quantize",
+        "arp_range",
+        "arp_rate",
+        "arp_sync_host",
+        "bypass",
+        "chorus_off",
+        "mono_retrigger",
+        "power",
+        "program",
+        "send_midi_sysex",
+        "transpose",
+        "transpose_offset",
+        "voices",
+    }
+)
+_SINGLE_NOTE_PARAM_OVERRIDES = {
+    "porta_mode": CategoricalParameter(
+        name="porta_mode",
+        values=["Mono", "Poly I"],
+        raw_values=[0.0, 0.5],
+        encoding="onehot",
+    ),
+    "vcf_oversample": CategoricalParameter(
+        name="vcf_oversample",
+        values=["Off", "2x", "4x"],
+        raw_values=[0.0, 1.0 / 3.0, 1.0],
+        encoding="onehot",
+    ),
+}
+
+ULTRAMASTER_KR106_SINGLE_NOTE_PARAM_SPEC = ParamSpec(
+    [
+        deepcopy(_SINGLE_NOTE_PARAM_OVERRIDES.get(param.name, param))
+        for param in ULTRAMASTER_KR106_PARAM_SPEC.synth_params
+        if param.name not in _SINGLE_NOTE_EXCLUDED_PARAMS
+    ],
+    deepcopy(ULTRAMASTER_KR106_PARAM_SPEC.note_params),
 )

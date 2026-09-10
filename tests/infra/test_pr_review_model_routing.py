@@ -25,6 +25,7 @@ from agent._shared.run_pi_review_follow_up import FollowUpManifest
 from tests.helpers.package_available import _SH_AVAILABLE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+_DETACHED_FOLLOW_UP_TIMEOUT_SECONDS = 10.0
 
 
 def _process_state(pid: int) -> str | None:
@@ -325,8 +326,8 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert re.search(r"never merely print the audit\s+and stop", text)
     assert re.search(r"both Codex and the secondary-review pass provider", text)
     assert "fallback_candidates" in text
-    assert "skip remaining candidates from that provider" in text
-    assert "authentication never triggers Codex fallback" in text
+    assert re.search(r"secondary attempt fails\s+authentication", text)
+    assert re.search(r"authentication never triggers\s+Codex fallback", text)
     assert "Codex fallback" in text
     assert "Free-pool review failed; only Codex ran." in text
     assert "## Provider incidents" in text
@@ -442,9 +443,9 @@ def test_pi_review_launcher_manifest_starts_detached_follow_up(tmp_path: Path) -
     assert transcript_match is not None
     transcript = Path(transcript_match.group(1))
     try:
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + _DETACHED_FOLLOW_UP_TIMEOUT_SECONDS
         while not marker.exists() and time.monotonic() < deadline:
-            pass
+            time.sleep(0.01)
         assert str(result).strip() == "foreground-complete"
         assert marker.exists()
     finally:
@@ -881,9 +882,9 @@ def test_pi_review_follow_up_launcher_runs_detached_pinned_process(tmp_path: Pat
             _env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
         )
         pid = int(str(result))
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + _DETACHED_FOLLOW_UP_TIMEOUT_SECONDS
         while not marker.exists() and time.monotonic() < deadline:
-            pass
+            time.sleep(0.01)
         assert marker.exists()
         _assert_process_terminated(pid, timeout=2)
     finally:

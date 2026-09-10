@@ -115,6 +115,52 @@ Use a compatible experiment for the dataset and its columns; for example,
 [training experiments](../../src/synth_setter/configs/experiment/), and the selected
 [datamodule config](../../src/synth_setter/configs/datamodule/).
 
+To derive tonal interval vectors from each waveform during training instead of
+reading a stored sketch column:
+
+```bash
+DATASET_ROOT_URI='r2://BUCKET/data/TASK_NAME/RUN_ID/'
+synth-setter-train \
+  experiment=surge/flow_sketch_prelim \
+  sketch=tiv_online_gpu \
+  "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI}"
+```
+
+Choose either sketch configuration:
+
+- `tiv_online_gpu`: batched PyTorch STFT chroma on the training device (CUDA
+  with a GPU trainer; also works on CPU). Uses a 2048-sample Blackman window,
+  512-sample hop, and all positive-frequency bins mapped to 12-TET pitch classes.
+- `tiv_online_cpu`: Essentia HPCP on CPU, using the
+  [TIVlib example](https://github.com/aframires/TIVlib/blob/e91da1323388620e077d9047dc999f64740c7fab/TIVlib_example.ipynb)
+  settings: 1024-sample Blackman-Harris 62 dB window, 512-sample hop, five
+  spectral peaks, and C-rooted HPCP. Install with `uv sync --extra tiv-cpu`
+  (add `--extra cu128` if selecting CUDA wheels). CPU extraction copies audio
+  from the training device and returns controls to that device.
+
+Both configs expect 44.1 kHz dataset audio and perform no resampling. They use
+[TIVlib's](https://github.com/aframires/TIVlib) L1-normalized chroma DFT bins
+1–6 and audio weights from the [TIV paper](https://arxiv.org/pdf/2008.11529).
+The 12 interleaved real/imaginary channels are mean-pooled to 32 temporal sketch
+tokens. Unlike the example's global descriptor, training retains per-frame
+TIVs before temporal pooling. The frontends produce different features; choose
+one consistently for training and evaluation. Both add extraction cost to every
+train, validation, and test batch; no precomputed sketch column is required.
+
+## Create a synth-parameter W&B workspace
+
+Create a shared workspace whose regex-backed panels discover each synth's parameter names:
+
+```bash
+synth-setter-create-wandb-parameter-workspace \
+  --entity WANDB_ENTITY \
+  --project synth-setter
+```
+
+The command prints the saved workspace URL. Its run set has no synth-name filter, so the same
+panels cover Surge, pyFDN, TorchSynth, OB-Xf, Faust, Cardinal, and KR-106 runs. It creates a new
+saved view each time; retain the printed URL instead of rerunning it for the same project.
+
 ## Launch with SkyPilot
 
 Before either RunPod recipe, run the required balance preflight. It fails open when the balance

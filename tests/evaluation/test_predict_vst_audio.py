@@ -29,7 +29,11 @@ import torch  # noqa: E402
 from pydantic_settings import CliApp  # noqa: E402
 
 from synth_setter.data.vst import param_specs  # noqa: E402
-from synth_setter.data.vst.param_spec import NoteParams  # noqa: E402
+from synth_setter.data.vst.param_spec import (  # noqa: E402
+    AngleArrayParameter,
+    NoteParams,
+    ParamSpec,
+)
 from synth_setter.evaluation import predict_vst_audio  # noqa: E402
 from synth_setter.evaluation.predict_vst_audio import (  # noqa: E402
     _canonicalize_prediction_note_window,
@@ -163,6 +167,33 @@ def test_params_to_csv_writes_pred_and_target_columns(tmp_path: Path) -> None:
     assert bool(df["target"].notna().all())
     assert bool(df["pred_effective"].notna().all())
     assert df["pred_effective"].equals(df["pred"])
+
+
+def test_params_to_csv_writes_native_angle_array_coordinates(tmp_path: Path) -> None:
+    """Angle arrays retain one radian-valued CSV row per native coordinate.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    spec = ParamSpec(
+        synth_params=[AngleArrayParameter(name="phase", shape=(2,))],
+        note_params=[],
+    )
+    out = tmp_path / "params.csv"
+
+    params_to_csv(
+        None,
+        None,
+        {"phase": np.array([-np.pi / 2, np.pi / 4])},
+        NoteParams(pitch=60, note_start_and_end=(0.0, 0.0)),
+        str(out),
+        spec,
+        pred_effective_note_window=(0.0, 0.0),
+    )
+
+    df = pd.read_csv(out, index_col=0)
+    assert list(df.index[:2]) == ["phase.0", "phase.1"]
+    assert float(df.at["phase.0", "pred"]) == pytest.approx(-np.pi / 2)
+    assert float(df.at["phase.1", "pred"]) == pytest.approx(np.pi / 4)
 
 
 def test_params_to_csv_writes_spec_quantized_effective_synth_value(tmp_path: Path) -> None:
