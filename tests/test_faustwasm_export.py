@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -73,6 +74,46 @@ def test_export_cli_persists_hashed_artifact_consumed_by_real_runtime(
 
     assert np.isfinite(audio).all()
     assert float(np.max(np.abs(audio))) > 1e-6
+
+
+@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+def test_real_runtime_rejects_corrupted_persisted_module(tmp_path: Path) -> None:
+    """The Node consumer rejects module bytes that drift from the manifest digest.
+
+    :param tmp_path: Isolated persistent artifact and render destination.
+    """
+    output_dir = tmp_path / "artifact"
+    main(["--synth", "faust_filter_osc", "--output", str(output_dir)])
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    module_path = output_dir / manifest["files"]["dsp"]["path"]
+    module_path.write_bytes(module_path.read_bytes() + b"corrupt")
+    request_path = tmp_path / "render.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "sampleRate": 44_100,
+                "blockSize": 128,
+                "frames": 128,
+                "note": 60,
+                "velocity": 100,
+                "startFrame": 0,
+                "endFrame": 64,
+                "params": {
+                    parameter["canonicalAddress"]: (
+                        parameter["values"][0]
+                        if parameter["kind"] == "discrete"
+                        else (parameter["min"] + parameter["max"]) / 2.0
+                    )
+                    for parameter in manifest["parameters"]
+                },
+            }
+        )
+    )
+
+    with pytest.raises(subprocess.CalledProcessError, match="render-worker.mjs") as exc_info:
+        run_faustwasm_render_worker(output_dir, request_path, tmp_path / "audio.f32")
+
+    assert "artifact digest mismatch" in exc_info.value.stderr
 
 
 def test_export_cli_existing_output_fails_without_modifying_destination(tmp_path: Path) -> None:
