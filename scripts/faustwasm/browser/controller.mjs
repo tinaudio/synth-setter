@@ -157,7 +157,7 @@ async function startPlayer() {
     context = new AudioContext({ latencyHint: "interactive" });
     await context.resume();
     const manifest = await fetchJson("./manifest.json");
-    const artifact = await loadFaustArtifact(manifest, loadBytes);
+    const artifact = await loadFaustArtifact(manifest, loadBytes, manifest.faustwasmVersion);
     const node = await createFaustNode(context, manifest, artifact);
     if (!node) throw new Error("FaustWasm did not create an audio node");
 

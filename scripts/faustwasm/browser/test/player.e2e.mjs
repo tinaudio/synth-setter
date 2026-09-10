@@ -101,8 +101,11 @@ test("mono_filter_osc_capture_matches_offline_native_channel_shape", async ({ pa
   );
   const { applyCanonicalPatch, createOfflineSynth, loadFaustArtifact, renderNote } =
     await import(runtimePath);
-  const artifact = await loadFaustArtifact(manifest, async (relativePath) =>
-    new Uint8Array(await readFile(path.join(activeArtifactDirectory, relativePath))),
+  const artifact = await loadFaustArtifact(
+    manifest,
+    async (relativePath) =>
+      new Uint8Array(await readFile(path.join(activeArtifactDirectory, relativePath))),
+    manifest.faustwasmVersion,
   );
   const synth = await createOfflineSynth(artifact, {
     blockSize: 128,
@@ -240,8 +243,11 @@ test("browser_and_offline_paths_render_identical_patch_and_note_timeline", async
 
   const manifest = JSON.parse(await readFile(path.join(artifactDirectory, "manifest.json"), "utf8"));
   const { applyCanonicalPatch, createOfflineSynth, loadFaustArtifact, renderNote } = await import(runtimePath);
-  const artifact = await loadFaustArtifact(manifest, async (relativePath) =>
-    new Uint8Array(await readFile(path.join(artifactDirectory, relativePath))),
+  const artifact = await loadFaustArtifact(
+    manifest,
+    async (relativePath) =>
+      new Uint8Array(await readFile(path.join(artifactDirectory, relativePath))),
+    manifest.faustwasmVersion,
   );
   const synth = await createOfflineSynth(artifact, {
     blockSize: 128,
