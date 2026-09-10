@@ -300,15 +300,21 @@ benchmark publish — either the `workflow_run` trigger fires
 automatically when `test-vst-slow` completes on main, or a maintainer
 can `gh workflow run Docs --ref main` to redeploy on demand.
 
-### Publishing from a feature branch (pre-merge)
+### Running one host-parity cell
 
-The workflow's `workflow_dispatch` accepts a `publish_metrics` boolean.
-However, `gh workflow run --ref <feature-branch>` returns 404 because
-the gh CLI looks up the workflow file on the default branch first, and
-the standard PAT doesn't have permission for the REST `dispatches`
-endpoint. So pre-merge bootstrapping uses a temporary `push:` trigger
-on the feature branch + a relaxed publish-step `if:` condition; revert
-both once the chart exists.
+The workflow's `workflow_dispatch` accepts a `synth` choice. Select a registered
+synth to avoid running the other VST matrix cells:
+
+```bash
+gh workflow run test-vst-slow.yml \
+  --ref "$(git branch --show-current)" \
+  -f synth=ultramaster_kr106 \
+  -f image_tag=dev-snapshot \
+  -f publish_metrics=false
+```
+
+The `publish_metrics` opt-in applies only to dispatches that include the Surge XT
+cell because the benchmark dashboards and comparison artifact are Surge-specific.
 
 ### Adding a new benchmark dashboard
 

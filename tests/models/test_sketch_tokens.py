@@ -112,6 +112,29 @@ class TestSketchControlSpec:
         assert spec.layout.group_names == ("edc", "echo_density", "spectral_flatness")
         assert spec.layout.group_widths == (8, 1, 1)
 
+    def test_tiv_profile_is_online_audio_only_with_one_control_group(self) -> None:
+        """TIV opts into audio extraction and exposes all coordinates as one group."""
+        spec = SketchControlSpec(
+            profile="tiv",
+            source="online",
+            sample_rate=44_100,
+            num_frames=32,
+        )
+
+        assert spec.layout.num_controls == 12
+        assert spec.layout.group_names == ("tiv",)
+        assert spec.layout.group_widths == (12,)
+
+    def test_tiv_profile_without_audio_source_rejected(self) -> None:
+        """TIV cannot silently request a nonexistent stored sketch column."""
+        with pytest.raises(ValueError, match="tiv sketch requires source='online'"):
+            SketchControlSpec(profile="tiv", num_frames=32)
+
+    def test_online_audio_source_without_sample_rate_rejected(self) -> None:
+        """Online extraction requires the waveform sample rate explicitly."""
+        with pytest.raises(ValueError, match="sample_rate"):
+            SketchControlSpec(profile="tiv", source="online", num_frames=32)
+
     def test_pyfdn_reverb_profile_rejects_noncanonical_frames(self) -> None:
         """Reverb controls retain one token for each canonical stored frame."""
         with pytest.raises(ValueError, match="pyfdn_reverb sketch requires"):
@@ -294,6 +317,45 @@ class TestSketchControlTokens:
         bad = torch.rand(_BATCH, NUM_SKETCH_CONTROLS - 1, _NUM_FRAMES)
         with pytest.raises((TypeCheckError, ValueError), match="channel|shape"):
             module(bad, _keep_all())
+
+
+class TestTIVSketchControlTokens:
+    """Validate temporal TIV pooling and channel contracts."""
+
+    @pytest.mark.gpu
+    def test_forward_tiv_cpu_and_cuda_outputs_are_numerically_equivalent(self) -> None:
+        """TIV pooling and projection preserve outputs across CPU and CUDA."""
+        if not torch.cuda.is_available():
+            pytest.skip("requires CUDA")
+        module = _tokens_module(seed=19, profile="tiv")
+        controls = torch.randn(2, 12, 47, generator=torch.Generator().manual_seed(23))
+        keep = torch.ones(2, 1, dtype=torch.bool)
+
+        with torch.no_grad():
+            expected = module(controls, keep)
+            actual = module.cuda()(controls.cuda(), keep.cuda()).cpu()
+
+        torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
+
+    def test_forward_pools_tiv_coordinates_by_mean(self) -> None:
+        """TIV coordinates use average pooling rather than music pitch maxima."""
+        module = SketchControlTokens(d_model=1, num_control_tokens=2, profile="tiv")
+        with torch.no_grad():
+            cast(torch.nn.Linear, module.projections["tiv"]).weight.fill_(1.0)
+        controls = torch.zeros(1, 12, 4)
+        controls[0, 0] = torch.tensor([0.0, 2.0, 4.0, 6.0])
+        keep = torch.ones(1, 1, dtype=torch.bool)
+
+        contribution = module(controls, keep) - module.unconditional(1)
+
+        torch.testing.assert_close(contribution[0, :, 0], torch.tensor([1.0, 5.0]))
+
+    def test_forward_tiv_wrong_channel_count_raises(self) -> None:
+        """TIV rejects controls not carrying six real-imaginary pairs."""
+        module = SketchControlTokens(d_model=_D_MODEL, profile="tiv")
+
+        with pytest.raises(ValueError, match="12 channels"):
+            module(torch.randn(_BATCH, 11, _NUM_FRAMES), torch.ones(_BATCH, 1, dtype=torch.bool))
 
 
 class TestPyFDNReverbSketchControlTokens:
