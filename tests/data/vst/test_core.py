@@ -31,6 +31,41 @@ if TYPE_CHECKING:
 class TestExtractBackendVersion:
     """Rendering-host package version extractor."""
 
+    def test_missing_faustwasm_package_reports_npm_command(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A checkout without Node dependencies reports the install command.
+
+        :param tmp_path: Isolated checkout-shaped root.
+        :param monkeypatch: Redirects package discovery to the isolated root.
+        """
+        module_path = tmp_path / "src/synth_setter/data/vst/core.py"
+        monkeypatch.setattr(core, "__file__", str(module_path))
+
+        with pytest.raises(RuntimeError, match="run `npm ci`"):
+            core.extract_backend_version("faustwasm")
+
+    def test_faustwasm_package_without_string_version_is_rejected(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Malformed Node package metadata cannot establish host provenance.
+
+        :param tmp_path: Isolated checkout-shaped root.
+        :param monkeypatch: Redirects package discovery to the isolated root.
+        """
+        module_path = tmp_path / "src/synth_setter/data/vst/core.py"
+        monkeypatch.setattr(core, "__file__", str(module_path))
+        package = tmp_path / "node_modules/@grame/faustwasm/package.json"
+        package.parent.mkdir(parents=True)
+        package.write_text('{"version": 18}')
+
+        with pytest.raises(RuntimeError, match="metadata has no version"):
+            core.extract_backend_version("faustwasm")
+
     def test_unversioned_backend_rejects_separate_version_lookup(self) -> None:
         """A host without an independent version contract fails closed."""
         with pytest.raises(ValueError, match="no separate version contract"):

@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -476,6 +477,83 @@ class TestRenderConfig:
         config = RenderConfig(**values)
 
         assert config.renderer_backend == "faustwasm"
+
+    def test_faustwasm_rejects_v1_with_prevalidated_synth(self) -> None:
+        """FaustWasm cannot consume a legacy digest even from a typed synth input."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values["synth"] = SYNTHS[SynthName("faust_bright_organ")]
+        values["renderer_backend"] = "faustwasm"
+        values["backend_version"] = "0.18.3"
+        values["render_contract_version"] = 1
+        values["plugin_reload_cadence"] = "render"
+        values["gui_toggle_cadence"] = "never"
+
+        with pytest.raises(ValidationError, match="faustwasm rejects render_contract_version=1"):
+            RenderConfig(**values)
+
+    def test_faustwasm_rejects_non_render_reload_cadence(self) -> None:
+        """Each FaustWasm render must start an isolated processor."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values["synth"] = SYNTHS[SynthName("faust_bright_organ")]
+        values["renderer_backend"] = "faustwasm"
+        values["backend_version"] = "0.18.3"
+        values["render_contract_version"] = 2
+        values["plugin_reload_cadence"] = "once"
+        values["gui_toggle_cadence"] = "never"
+
+        with pytest.raises(
+            ValidationError, match='faustwasm requires plugin_reload_cadence="render"'
+        ):
+            RenderConfig(**values)
+
+    def test_faustwasm_rejects_editor_cadence(self) -> None:
+        """A browser-independent offline host cannot open a plugin editor."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values["synth"] = SYNTHS[SynthName("faust_bright_organ")]
+        values["renderer_backend"] = "faustwasm"
+        values["backend_version"] = "0.18.3"
+        values["render_contract_version"] = 2
+        values["plugin_reload_cadence"] = "render"
+        values["gui_toggle_cadence"] = "once"
+
+        with pytest.raises(
+            ValidationError, match='format="faust" requires gui_toggle_cadence="never"'
+        ):
+            RenderConfig(**values)
+
+    def test_faust_v1_rejects_drifted_prevalidated_synth(self) -> None:
+        """Typed legacy input cannot bypass the historical provenance snapshot."""
+        synth = SYNTHS[SynthName("faust_bright_organ")].model_copy(update={"synth_version": "2"})
+        values = _valid_render_kwargs(plugin_path="faust")
+        values["synth"] = synth
+        values["renderer_backend"] = "dawdreamer"
+        values["backend_version"] = "0.8.3"
+        values["render_contract_version"] = 1
+        values["gui_toggle_cadence"] = "never"
+
+        with pytest.raises(ValidationError, match="render_contract_version=2"):
+            RenderConfig(**values)
+
+    def test_faust_rejects_runtime_source_digest_drift(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The source consumed at validation must match the registered synth digest.
+
+        :param monkeypatch: Replaces source resolution with drifted source text.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst.faust_sources.resolve_faust_dsp",
+            lambda _identity: SimpleNamespace(source="drifted source"),
+        )
+        values = _valid_render_kwargs(plugin_path="faust")
+        values["synth"] = SYNTHS[SynthName("faust_bright_organ")]
+        values["renderer_backend"] = "dawdreamer"
+        values["backend_version"] = "0.8.3"
+        values["gui_toggle_cadence"] = "never"
+
+        with pytest.raises(ValidationError, match="registered Faust source does not match"):
+            RenderConfig(**values)
 
     def test_faust_format_rejects_pedalboard_backend(self) -> None:
         """A source program cannot be passed to a VST3-only host."""

@@ -1519,6 +1519,45 @@ class TestRun(RenderSeamFixtures):
 
         patched_subprocess.assert_not_called()
 
+    def test_matching_faust_backend_version_allows_generation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Matching checked-in source and host provenance reaches shard dispatch.
+
+        :param tmp_path: Isolated worker output directory.
+        :param monkeypatch: Replaces runtime probes and shard dispatch at their boundaries.
+        """
+        kwargs = _base_spec_kwargs(tmp_path)
+        kwargs["render"] = {
+            **kwargs["render"],  # type: ignore[dict-item]
+            "synth": SYNTHS[SynthName("faust_bright_organ")],
+            "renderer_backend": "dawdreamer",
+            "backend_version": "0.8.3",
+            "gui_toggle_cadence": "never",
+        }
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
+        dispatched: list[Path] = []
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.ensure_dawdreamer_runtime",
+            lambda _backend: None,
+        )
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.extract_backend_version",
+            lambda _backend: "0.8.3",
+        )
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset._dispatch_shards",
+            lambda _spec, *, work_dir, loggers: (
+                dispatched.append(work_dir) or (0, 0, 0, RenderRejectionMetrics())
+            ),
+        )
+
+        generate(spec, tmp_path, [])
+
+        assert dispatched == [tmp_path]
+
     def test_run_defaults_to_single_worker_when_skypilot_env_absent(
         self,
         patched_subprocess: MagicMock,

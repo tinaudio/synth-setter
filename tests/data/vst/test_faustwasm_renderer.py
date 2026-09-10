@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+from synth_setter.data.vst import faustwasm_contract
 from synth_setter.data.vst.core import extract_backend_version
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.faustwasm_contract import faustwasm_parameter_contract
@@ -118,6 +120,39 @@ def test_faustwasm_contract_covers_every_canonical_parameter_once() -> None:
         spec = resolve_faust_param_spec(ParamSpecName(identity))
         contract = faustwasm_parameter_contract(ParamSpecName(identity))
         assert [item.canonical_address for item in contract] == spec.synth_param_names
+
+
+def test_faustwasm_contract_incomplete_address_table_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A compiler map cannot silently omit canonical controls.
+
+    :param monkeypatch: Replaces the address table with an incomplete snapshot.
+    """
+    identity = ParamSpecName("faust_filter_osc")
+    monkeypatch.setattr(faustwasm_contract, "_WASM_ADDRESSES", {identity: ()})
+
+    with pytest.raises(ValueError, match="address mapping is incomplete"):
+        faustwasm_parameter_contract(identity)
+
+
+def test_faustwasm_contract_unsupported_parameter_domain_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A canonical parameter without a supported native domain fails closed.
+
+    :param monkeypatch: Supplies a registry result with an unsupported parameter kind.
+    """
+    identity = ParamSpecName("faust_filter_osc")
+    monkeypatch.setattr(faustwasm_contract, "_WASM_ADDRESSES", {identity: ("/unsupported",)})
+    monkeypatch.setattr(
+        faustwasm_contract,
+        "resolve_faust_param_spec",
+        lambda _identity: SimpleNamespace(synth_params=(object(),)),
+    )
+
+    with pytest.raises(TypeError, match="unsupported FaustWasm parameter object"):
+        faustwasm_parameter_contract(identity)
 
 
 @pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")

@@ -236,6 +236,25 @@ def test_make_audio_renderer_pedalboard_forwards_flush_blocks() -> None:
     assert renderer.flush_blocks == FlushBlocks(post_load=690, post_param=0, post_render=690)
 
 
+def test_make_audio_renderer_dawdreamer_rejects_bypassed_format_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A copied config cannot route an unsupported representation into DawDreamer.
+
+    :param monkeypatch: Replaces the host availability probe before dispatch.
+    """
+    config = _render_config(renderer_backend="dawdreamer")
+    invalid_synth = config.synth.model_copy(update={"format": "pyfdn"})
+    bypassed = config.model_copy(update={"synth": invalid_synth})
+    monkeypatch.setattr(
+        "synth_setter.data.vst.dawdreamer_runtime.ensure_dawdreamer_runtime",
+        lambda _backend: None,
+    )
+
+    with pytest.raises(AssertionError, match="unsupported DawDreamer synth format 'pyfdn'"):
+        make_audio_renderer(bypassed)
+
+
 def test_make_audio_renderer_dawdreamer_forwards_flush_blocks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
