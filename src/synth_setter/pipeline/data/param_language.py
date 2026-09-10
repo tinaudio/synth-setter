@@ -2,18 +2,24 @@
 
 import hashlib
 import json
+import zipfile
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Literal
 
 import numpy as np
+import structlog
 from pydantic import BaseModel, ConfigDict
 
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+from synth_setter.model_cache import retry_external_io
 from synth_setter.param_spec_name import ParamSpecName
 
 PARAM_LANGUAGE_FILENAME = "param_language.npz"
 EMBEDDING_MODEL = "google/embeddinggemma-300m"
 EMBEDDING_REVISION = "57c266a740f537b4dc058e1b0cda161fd15afa75"
+
+logger = structlog.get_logger(__name__)
 
 
 def describe_fields(param_spec_name: str, synth_name: str) -> list[str]:
@@ -71,9 +77,18 @@ def encode_param_language(
     :param batch_size: Number of descriptions per inference batch.
     :returns: Native-width float32 embeddings shaped ``(fields, 768)``.
     """
+    from httpx import TransportError
     from sentence_transformers import SentenceTransformer
 
-    model = SentenceTransformer(EMBEDDING_MODEL, revision=EMBEDDING_REVISION, device=device)
+    @retry_external_io(retry_exceptions=(OSError, TransportError))
+    def load_model() -> SentenceTransformer:
+        """Load the pinned encoder with bounded retries for transport failures.
+
+        :returns: Encoder loaded from the pinned checkpoint.
+        """
+        return SentenceTransformer(EMBEDDING_MODEL, revision=EMBEDDING_REVISION, device=device)
+
+    model = load_model()
     model.eval()
     model.requires_grad_(False)
     descriptions = describe_fields(param_spec_name, synth_name)
@@ -179,6 +194,17 @@ def _validate_vectors(embeddings: np.ndarray, count: int, dimension: int) -> Non
         raise ValueError("parameter language embeddings must be finite")
 
 
+def _validate_unit_norm(embeddings: np.ndarray) -> None:
+    """Reject field embeddings whose rows are not unit normalized.
+
+    :param embeddings: Validated field-major matrix.
+    :raises ValueError: Any row does not have unit norm within artifact tolerance.
+    """
+    norms = np.linalg.norm(embeddings.astype(np.float64), axis=1)
+    if not np.allclose(norms, 1.0, rtol=1e-4, atol=1e-5):
+        raise ValueError("parameter language embeddings must have unit norm")
+
+
 def save_param_language(
     path: Path, embeddings: np.ndarray, param_spec_name: str, synth_name: str
 ) -> None:
@@ -194,6 +220,7 @@ def save_param_language(
     if embeddings.ndim != 2:
         raise ValueError("parameter language embeddings must be a matrix")
     _validate_vectors(embeddings, len(descriptions), embeddings.shape[1])
+    _validate_unit_norm(embeddings)
     metadata = ParamLanguageMetadata(
         dimension=embeddings.shape[1],
         param_spec_name=param_spec_name,
@@ -202,7 +229,14 @@ def save_param_language(
         descriptions_sha256=_description_digest(descriptions),
         embeddings_sha256=_embedding_digest(embeddings),
     )
-    np.savez(path, embeddings=embeddings, metadata=np.array(metadata.model_dump_json()))
+    with TemporaryDirectory(dir=path.parent) as temporary_directory:
+        temporary_path = Path(temporary_directory) / PARAM_LANGUAGE_FILENAME
+        np.savez(
+            temporary_path,
+            embeddings=embeddings,
+            metadata=np.array(metadata.model_dump_json()),
+        )
+        temporary_path.replace(path)
 
 
 def load_param_language(
@@ -228,6 +262,7 @@ def load_param_language(
     ):
         raise ValueError("parameter language artifact does not match the current spec")
     _validate_vectors(embeddings, len(expected), metadata.dimension)
+    _validate_unit_norm(embeddings)
     if metadata.embeddings_sha256 != _embedding_digest(embeddings):
         raise ValueError("parameter language embedding checksum mismatch")
     return embeddings, metadata
@@ -245,9 +280,13 @@ def prepare_param_language(
     :returns: Validated, staged dataset-level NPZ path.
     """
     cache_path = work_dir / "param_language_full.npz"
+    embeddings = None
     if cache_path.exists():
-        embeddings, _ = load_param_language(cache_path, param_spec_name, synth_name)
-    else:
+        try:
+            embeddings, _ = load_param_language(cache_path, param_spec_name, synth_name)
+        except (OSError, ValueError, EOFError, zipfile.BadZipFile, KeyError):
+            logger.warning("param_language_cache_invalid", path=str(cache_path))
+    if embeddings is None:
         embeddings = encode_param_language(param_spec_name, synth_name)
         save_param_language(cache_path, embeddings, param_spec_name, synth_name)
     output = work_dir / PARAM_LANGUAGE_FILENAME

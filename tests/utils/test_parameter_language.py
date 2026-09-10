@@ -26,7 +26,8 @@ def test_lifecycle_initialization_supplies_vectors_before_forward(
     """
     count = len(describe_fields("surge_4", "surge_4"))
     path = tmp_path / "language.npz"
-    save_param_language(path, np.ones((count, 128), dtype=np.float32), "surge_4", "surge_4")
+    vectors = np.full((count, 128), 1 / np.sqrt(128), dtype=np.float32)
+    save_param_language(path, vectors, "surge_4", "surge_4")
     projection = LanguageParameterProjection(16, "surge_4", "surge_4", embedding_path=str(path))
     model = LightningModule()
     model.add_module("projection", projection)
