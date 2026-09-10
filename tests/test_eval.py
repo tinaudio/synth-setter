@@ -792,8 +792,26 @@ def test_evaluate_pyfdn_sketch_experiment_uses_temporal_profile(
     assert objects["datamodule"].sketch_controls.num_frames == 32
 
 
-def test_eval_faust_render_group_resolves_production_renderer_contract() -> None:
-    """The eval operator config accepts the production brightOrgan render group."""
+@pytest.mark.parametrize(
+    ("render_group", "backend", "version", "block_size"),
+    [
+        pytest.param("faust", "dawdreamer", "0.8.3", None, id="dawdreamer"),
+        pytest.param("faustwasm", "faustwasm", "0.18.3", 128, id="faustwasm"),
+    ],
+)
+def test_eval_faust_render_group_resolves_production_renderer_contract(
+    render_group: str,
+    backend: str,
+    version: str,
+    block_size: int | None,
+) -> None:
+    """The eval operator config accepts each production brightOrgan render group.
+
+    :param render_group: Hydra render group under test.
+    :param backend: Expected rendering backend.
+    :param version: Expected rendering runtime version.
+    :param block_size: Expected optional offline-processing block size.
+    """
     try:
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             cfg = compose(
@@ -804,15 +822,16 @@ def test_eval_faust_render_group_resolves_production_renderer_contract() -> None
                     "trainer=cpu",
                     "ckpt_path=.",
                     "synth=faust_bright_organ",
-                    "render=faust",
+                    f"render={render_group}",
                 ],
             )
         render = RenderConfig.from_cfg_nodes(cfg.render, cfg.synth)
     finally:
         GlobalHydra.instance().clear()
 
-    assert render.renderer_backend == "dawdreamer"
-    assert render.backend_version == "0.8.3"
+    assert render.renderer_backend == backend
+    assert render.backend_version == version
+    assert render.block_size == block_size
     assert render.plugin_path == "registry://faust/faust_bright_organ"
     assert render.synth.format == "faust"
     assert render.plugin_reload_cadence == "render"

@@ -262,6 +262,36 @@ def test_render_faust_composes_into_valid_render_config(
     assert spec.num_params == num_params
 
 
+@pytest.mark.parametrize(
+    ("name", "channels", "render_group"),
+    [
+        ("faust_bright_organ", 2, "faustwasm"),
+        ("faust_bubble", 2, "faustwasm"),
+        ("faust_church_organ", 2, "faustwasm"),
+        ("faust_filter_osc", 1, "faustwasm_filter_osc"),
+    ],
+)
+def test_render_faustwasm_composes_with_explicit_v2_contract(
+    name: str,
+    channels: int,
+    render_group: str,
+) -> None:
+    """Each FaustWasm group composes with explicit backend provenance.
+
+    :param name: Faust source identity.
+    :param channels: Native output channel count.
+    :param render_group: Render group with matching channel geometry.
+    """
+    spec = _spec_from_dataset_overrides([f"synth={name}", f"render={render_group}"])
+
+    assert spec.render.renderer_backend == "faustwasm"
+    assert spec.render.backend_version == "0.18.3"
+    assert spec.render.block_size == 128
+    assert spec.render.render_contract_version == 2
+    assert spec.render.channels == channels
+    assert spec.render.plugin_reload_cadence == "render"
+
+
 def test_render_obxf_composes_into_valid_render_config() -> None:
     """``synth=obxf render=vst`` composes into a valid ``RenderConfig``; plugin_path stays repo-relative and num_params resolves without ``KeyError``."""
     spec = _spec_from_dataset_overrides(["synth=obxf", "render=vst"])

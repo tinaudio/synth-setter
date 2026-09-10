@@ -12,9 +12,10 @@ from typing import Literal
 
 type PyFDNExcitation = Literal["chirp", "impulse"]
 type RendererBackend = Literal[
+    "dawdreamer",
+    "faustwasm",
     "pedalboard",
     "pyfdn",
-    "dawdreamer",
     "surgepy",
     "torchsynth",
 ]

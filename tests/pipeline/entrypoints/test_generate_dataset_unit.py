@@ -3568,11 +3568,18 @@ class TestMainDispatchBranches:
         assert not any(a.startswith("+evaluation.metric_prefix=") for a in called_argv)
 
     @pytest.mark.parametrize(
-        ("synth_name", "renderer_backend", "backend_version", "contract_version"),
+        (
+            "synth_name",
+            "renderer_backend",
+            "backend_version",
+            "block_size",
+            "contract_version",
+        ),
         [
-            ("faust_bright_organ", "dawdreamer", "0.8.3", 2),
-            ("surge_xt", "pedalboard", None, 2),
-            ("surge_xt", "pedalboard", None, 1),
+            ("faust_bright_organ", "dawdreamer", "0.8.3", None, 2),
+            ("faust_bright_organ", "faustwasm", "0.18.3", 64, 2),
+            ("surge_xt", "pedalboard", None, None, 2),
+            ("surge_xt", "pedalboard", None, None, 1),
         ],
     )
     def test_run_oracle_eval_subprocess_argv_composes_real_eval_config(
@@ -3583,6 +3590,7 @@ class TestMainDispatchBranches:
         synth_name: str,
         renderer_backend: str,
         backend_version: str | None,
+        block_size: int | None,
         contract_version: int,
     ) -> None:
         """Production oracle argv composes Faust, VST, and legacy render identities.
@@ -3593,6 +3601,7 @@ class TestMainDispatchBranches:
         :param synth_name: Registry identity transported to the eval process.
         :param renderer_backend: Renderer backend transported to the eval process.
         :param backend_version: Optional backend version transported to the eval process.
+        :param block_size: Optional FaustWasm processing block size transported to eval.
         :param contract_version: Render contract version transported to the eval process.
         """
         from hydra import compose, initialize_config_module
@@ -3613,6 +3622,7 @@ class TestMainDispatchBranches:
                 "synth": SYNTHS[SynthName(synth_name)],
                 "renderer_backend": renderer_backend,
                 "backend_version": backend_version,
+                "block_size": block_size,
                 "render_contract_version": contract_version,
             }
         )
@@ -3633,6 +3643,7 @@ class TestMainDispatchBranches:
         assert composed.synth.plugin_path == render.synth.plugin_path
         assert composed.render.renderer_backend == renderer_backend
         assert composed.render.get("backend_version") == backend_version
+        assert composed.render.get("block_size") == block_size
         assert composed.render.render_contract_version == contract_version
 
     def test_run_oracle_eval_subprocess_metric_prefix_adds_override(

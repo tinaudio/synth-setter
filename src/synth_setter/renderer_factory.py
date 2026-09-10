@@ -115,6 +115,23 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
             signal_duration_seconds=render_config.signal_duration_seconds,
         )
 
+    if backend == "faustwasm":
+        from synth_setter.data.vst.faustwasm_renderer import FaustWasmRenderer
+
+        if render_config.block_size is None:
+            raise AssertionError("validated FaustWasm config has no block_size")
+        return FaustWasmRenderer(
+            plugin_path=render_config.plugin_path,
+            sample_rate=render_config.sample_rate,
+            channels=render_config.channels,
+            signal_duration_seconds=render_config.signal_duration_seconds,
+            plugin_state_path=render_config.plugin_state_path,
+            block_size=render_config.block_size,
+            param_spec_name=render_config.param_spec_name,
+            source_sha256=render_config.synth.source_sha256 or "",
+            backend_version=render_config.backend_version or "",
+        )
+
     if backend == "pedalboard":
         plugin = None
         if render_config.plugin_reload_cadence == "once":

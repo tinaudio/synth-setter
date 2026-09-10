@@ -176,6 +176,7 @@ class TestValidateStructure:
         """Only backward-compatible storage fields may be omitted."""
         assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
             "audio_dtype",
+            "block_size",
             "mel_spec_dtype",
             "post_load_flush_blocks",
             "post_param_flush_blocks",
