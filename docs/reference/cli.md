@@ -160,6 +160,17 @@ TIVs before temporal pooling. The frontends produce different features; choose
 one consistently for training and evaluation. Both add extraction cost to every
 train, validation, and test batch; no precomputed sketch column is required.
 
+For repeatable standalone flow evaluation, opt in through the model config and provide the seed
+explicitly:
+
+```bash
+synth-setter-eval experiment=surge/flow_simple ckpt_path=/path/to/model.ckpt model.seeded_evaluation=true seed=12345
+```
+
+The eval config declares `seed: null` so Hydra accepts `seed=...`; it supplies no fallback. When
+`model.seeded_evaluation=false` (the default), evaluation ignores the seed and retains fresh
+sampling.
+
 ## Create a synth-parameter W&B workspace
 
 Create a shared workspace whose regex-backed panels discover each synth's parameter names:
