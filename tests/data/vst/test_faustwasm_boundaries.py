@@ -93,30 +93,34 @@ def test_quantize_note_window_subsample_interval_remains_representable() -> None
 
 
 @pytest.mark.parametrize(
-    "window",
+    ("window", "frames", "duration"),
     [
-        (float("nan"), 0.1),
-        (0.0, float("inf")),
-        (-0.1, 0.1),
-        (0.1, 0.1),
-        (0.2, 0.1),
-        (0.0, 0.21),
-        (0.11, 0.15),
+        ((float("nan"), 0.1), 1, 0.15),
+        ((0.0, float("inf")), 1, 0.15),
+        ((-0.1, 0.1), 1, 0.15),
+        ((0.1, 0.1), 1, 0.15),
+        ((0.2, 0.1), 1, 0.15),
+        ((0.0, 0.21), 2, 0.2),
+        ((0.11, 0.15), 1, 0.15),
     ],
 )
 def test_quantize_note_window_invalid_or_unrepresentable_window_rejected(
     window: tuple[float, float],
+    frames: int,
+    duration: float,
 ) -> None:
     """Malformed, out-of-range, and discarded-tail windows fail before Node.
 
     :param window: Invalid note window under test.
+    :param frames: Fixed output frame count.
+    :param duration: Configured output duration in seconds.
     """
     with pytest.raises(ValueError, match="note times"):
         _quantize_note_window(
             window,
             sample_rate=10,
-            frames=2 if window[-1] > 0.15 else 1,
-            signal_duration_seconds=0.2 if window[-1] > 0.15 else 0.15,
+            frames=frames,
+            signal_duration_seconds=duration,
         )
 
 

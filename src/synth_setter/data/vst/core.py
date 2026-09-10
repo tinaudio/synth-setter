@@ -66,9 +66,18 @@ def extract_backend_version(renderer_backend: str) -> str:
         )
         if not package.is_file():
             raise RuntimeError("FaustWasm runtime is not installed; run `npm ci` at the repository root")
-        version = json.loads(package.read_text()).get("version")
-        if not isinstance(version, str):
-            raise RuntimeError("@grame/faustwasm package metadata has no version")
+        try:
+            version = json.loads(package.read_text()).get("version")
+        except (json.JSONDecodeError, AttributeError) as error:
+            raise RuntimeError(
+                "@grame/faustwasm package metadata is malformed; run `npm ci` "
+                "at the repository root"
+            ) from error
+        if not isinstance(version, str) or not version.strip():
+            raise RuntimeError(
+                "@grame/faustwasm package metadata has no valid version; run `npm ci` "
+                "at the repository root"
+            )
         return version
     raise ValueError(f"renderer backend has no separate version contract: {renderer_backend!r}")
 

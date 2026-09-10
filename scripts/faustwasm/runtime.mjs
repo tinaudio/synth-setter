@@ -114,13 +114,14 @@ export const renderNote = (synth, { frames, note, velocity, startFrame, endFrame
         throw new Error('manifest outputs must be a positive integer');
     }
     const output = Array.from({ length: manifest.outputs }, () => new Float32Array(frames));
+    const blockOutput = Array.from(
+        { length: manifest.outputs },
+        () => new Float32Array(blockSize),
+    );
     processor.start();
     for (let blockStart = 0; blockStart < frames; blockStart += blockSize) {
         const count = Math.min(blockSize, frames - blockStart);
-        const blockOutput = Array.from(
-            { length: manifest.outputs },
-            () => new Float32Array(blockSize),
-        );
+        for (const channel of blockOutput) channel.fill(0);
         const events = [];
         if (manifest.mode === 'poly' && startFrame >= blockStart && startFrame < blockStart + blockSize) {
             events.push({

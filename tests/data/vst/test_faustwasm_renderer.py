@@ -72,6 +72,7 @@ def _config(identity: str = "faust_bright_organ", channels: int = 2) -> RenderCo
         synth=SYNTHS[SynthName(identity)],
         renderer_backend="faustwasm",
         backend_version=_FAUSTWASM_VERSION,
+        block_size=64,
         render_contract_version=2,
         sample_rate=44_100,
         channels=channels,
@@ -161,6 +162,7 @@ def test_faustwasm_factory_renders_real_source(identity: str, channels: int) -> 
     audio = renderer.render(params, 60, 100, (0.05, 0.3))
 
     assert isinstance(renderer, FaustWasmRenderer)
+    assert renderer.block_size == 64
     assert audio.shape == (channels, 22_050)
     assert audio.dtype == np.float32
     assert np.isfinite(audio).all()
@@ -285,7 +287,11 @@ def test_faustwasm_and_dawdreamer_share_bright_organ_invariants() -> None:
     params = _midpoint_patch("faust_bright_organ")
     wasm = make_audio_renderer(_config()).render(params, 60, 100, (0.1, 0.25))
     daw_config = _config().model_copy(
-        update={"renderer_backend": "dawdreamer", "backend_version": "0.8.3"}
+        update={
+            "renderer_backend": "dawdreamer",
+            "backend_version": "0.8.3",
+            "block_size": None,
+        }
     )
     daw = make_audio_renderer(daw_config).render(params, 60, 100, (0.1, 0.25))
 

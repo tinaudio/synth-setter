@@ -286,6 +286,7 @@ def test_render_faustwasm_composes_with_explicit_v2_contract(
 
     assert spec.render.renderer_backend == "faustwasm"
     assert spec.render.backend_version == "0.18.3"
+    assert spec.render.block_size == 128
     assert spec.render.render_contract_version == 2
     assert spec.render.channels == channels
     assert spec.render.plugin_reload_cadence == "render"

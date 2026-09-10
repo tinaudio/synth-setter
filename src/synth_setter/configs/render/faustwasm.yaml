@@ -1,6 +1,7 @@
 # FaustWasm compiles the selected digest-pinned source and renders in isolated Node workers.
 renderer_backend: faustwasm
 backend_version: "0.18.3"
+block_size: 128
 render_contract_version: 2
 sample_rate: 44100
 channels: 2

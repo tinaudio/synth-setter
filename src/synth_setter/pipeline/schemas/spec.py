@@ -316,7 +316,12 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     )
     backend_version: str | None = Field(
         default=None,
-        description="Pinned host runtime version; required when DawDreamer compiles Faust.",
+        description="Pinned host runtime version; required for Faust rendering.",
+    )
+    block_size: int | None = Field(
+        default=None,
+        ge=1,
+        description="Offline processing block size; required only for FaustWasm.",
     )
     # CliApp.serialize omits literal defaults; a factory preserves v2 during worker transport.
     render_contract_version: Literal[1, 2] = Field(
@@ -724,14 +729,23 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         if self.synth.format != "faust":
             if self.backend_version is not None:
                 raise ValueError("backend_version is supported only for format='faust'")
+            if self.block_size is not None:
+                raise ValueError("block_size is supported only for faustwasm")
             return self
         if self.renderer_backend == "faustwasm":
             if self.render_contract_version == 1:
                 raise ValueError(
                     "faustwasm rejects render_contract_version=1 legacy digest projection"
                 )
+            if self.block_size is None:
+                raise ValueError("faustwasm requires an explicit block_size")
             if self.plugin_reload_cadence != "render":
-                raise ValueError('faustwasm requires plugin_reload_cadence="render"')
+                raise ValueError(
+                    'faustwasm requires plugin_reload_cadence="render": '
+                    "each render uses an isolated Node process"
+                )
+        elif self.block_size is not None:
+            raise ValueError("block_size is supported only for faustwasm")
         if self.backend_version is None or not self.backend_version.strip():
             raise ValueError("format='faust' requires a non-blank backend_version")
         if self.gui_toggle_cadence != "never":
