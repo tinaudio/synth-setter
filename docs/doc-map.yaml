@@ -663,6 +663,20 @@ docs:
         covers: "Packer provisioning for the developer environment"
         scope: "tart"
 
+  - doc: docs/reference/faustcpp-backend.md
+    description: Native Faust compilation, rendering, and benchmark contract
+    sources:
+      - pattern: "src/synth_setter/data/vst/faustcpp_architecture.txt"
+        covers: "Native request parsing, DSP isolation, note events, and audio output"
+      - pattern: "src/synth_setter/data/vst/faustcpp_renderer.py"
+        covers: "Source verification, compilation, parameter dispatch, and render validation"
+      - pattern: "src/synth_setter/configs/render/faustcpp*.yaml"
+        covers: "Native backend defaults and channel geometry"
+      - pattern: "tests/data/vst/test_faustcpp_renderer.py"
+        covers: "Real compiler coverage for every registered Faust identity"
+      - pattern: "tests/data/vst/test_faust_dataset_e2e.py"
+        covers: "Generate-dataset to Lance production-path verification"
+
   - doc: docs/guides/surgepy-browser-evaluation.md
     description: Browser-to-SurgePy evaluation playbook
     sources:

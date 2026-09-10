@@ -396,6 +396,7 @@ namespaces = true
   "configs/**/*.sh",
   "scripts/*.sh",
   "data/vst/*_param_map.json",
+  "data/vst/faustcpp_architecture.txt",
   "faustwasm/**/*.js",
   "faustwasm/**/*.json",
   "faustwasm/**/*.mjs",

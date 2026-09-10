@@ -1,0 +1,161 @@
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "faust/dsp/dsp.h"
+#include "faust/gui/MapUI.h"
+#include "faust/gui/meta.h"
+
+<<includeIntrinsic>>
+
+<<includeclass>>
+
+namespace {
+  struct Request {
+    int frames;
+    int block_size;
+    int sample_rate;
+    int start_frame;
+    int end_frame;
+    int midi_note;
+    int velocity;
+    bool midi_owned_controls;
+    std::vector<std::pair<std::string, FAUSTFLOAT>> parameters;
+  };
+
+  bool read_request(const std::string& path, Request& request) {
+    std::ifstream stream(path);
+    int parameter_count = 0;
+    int midi_owned_controls = 0;
+    if (!(stream >> request.frames >> request.block_size >>
+          request.sample_rate >> request.start_frame >> request.end_frame >>
+          request.midi_note >> request.velocity >> midi_owned_controls >>
+          parameter_count)) {
+      return false;
+    }
+    request.midi_owned_controls = midi_owned_controls != 0;
+    stream.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    for (int index = 0; index < parameter_count; ++index) {
+      std::string line;
+      if (!std::getline(stream, line)) {
+        return false;
+      }
+      const auto separator = line.find('\t');
+      if (separator == std::string::npos) {
+        return false;
+      }
+      try {
+        request.parameters.emplace_back(
+            line.substr(0, separator),
+            static_cast<FAUSTFLOAT>(std::stod(line.substr(separator + 1))));
+      } catch (const std::exception&) {
+        return false;
+      }
+    }
+    return request.frames > 0 && request.block_size > 0 &&
+           request.sample_rate > 0 && request.start_frame >= 0 &&
+           request.start_frame < request.end_frame &&
+           request.end_frame <= request.frames && request.velocity >= 0 &&
+           request.velocity <= 127 && parameter_count >= 0;
+  }
+
+  bool set_parameter(MapUI & ui, const std::string& address, FAUSTFLOAT value) {
+    FAUSTFLOAT* zone = ui.getParamZone(address);
+    if (zone == nullptr) {
+      std::cerr << "unknown Faust parameter address: " << address << '\n';
+      return false;
+    }
+    *zone = value;
+    return true;
+  }
+
+  void compute_interval(SynthSetterDsp & dsp, int begin, int end,
+                        int block_size,
+                        std::vector<std::vector<FAUSTFLOAT>>& inputs,
+                        std::vector<std::vector<FAUSTFLOAT>>& outputs) {
+    std::vector<FAUSTFLOAT*> input_pointers(inputs.size());
+    std::vector<FAUSTFLOAT*> output_pointers(outputs.size());
+    for (int position = begin; position < end;) {
+      const int count = std::min(block_size, end - position);
+      for (std::size_t channel = 0; channel < inputs.size(); ++channel) {
+        input_pointers[channel] = inputs[channel].data() + position;
+      }
+      for (std::size_t channel = 0; channel < outputs.size(); ++channel) {
+        output_pointers[channel] = outputs[channel].data() + position;
+      }
+      dsp.compute(count, input_pointers.data(), output_pointers.data());
+      position += count;
+    }
+  }
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  if (argc != 3) {
+    std::cerr << "usage: faustcpp-render REQUEST OUTPUT\n";
+    return 2;
+  }
+  Request request{};
+  if (!read_request(argv[1], request)) {
+    std::cerr << "invalid Faust C++ render request\n";
+    return 2;
+  }
+
+  SynthSetterDsp dsp;
+  dsp.init(request.sample_rate);
+  MapUI ui;
+  dsp.buildUserInterface(&ui);
+  for (const auto& [address, value] : request.parameters) {
+    if (!set_parameter(ui, address, value)) {
+      return 3;
+    }
+  }
+
+  std::vector<std::vector<FAUSTFLOAT>> inputs(
+      dsp.getNumInputs(), std::vector<FAUSTFLOAT>(request.frames, 0));
+  std::vector<std::vector<FAUSTFLOAT>> outputs(
+      dsp.getNumOutputs(), std::vector<FAUSTFLOAT>(request.frames, 0));
+  if (request.midi_owned_controls) {
+    if (!set_parameter(
+            ui, "/brightOrgan/Main/freq",
+            static_cast<FAUSTFLOAT>(
+                440.0 * std::pow(2.0, (request.midi_note - 69) / 12.0))) ||
+        !set_parameter(ui, "/brightOrgan/Main/gate", 0)) {
+      return 3;
+    }
+    compute_interval(dsp, 0, request.start_frame, request.block_size, inputs,
+                     outputs);
+    set_parameter(ui, "/brightOrgan/Main/gate",
+                  request.velocity / FAUSTFLOAT(127));
+    compute_interval(dsp, request.start_frame, request.end_frame,
+                     request.block_size, inputs, outputs);
+    set_parameter(ui, "/brightOrgan/Main/gate", 0);
+    compute_interval(dsp, request.end_frame, request.frames, request.block_size,
+                     inputs, outputs);
+  } else {
+    compute_interval(dsp, 0, request.frames, request.block_size, inputs,
+                     outputs);
+  }
+
+  std::ofstream output(argv[2], std::ios::binary);
+  if (!output) {
+    std::cerr << "cannot open Faust C++ output\n";
+    return 4;
+  }
+  const int output_copies =
+      request.midi_owned_controls && outputs.size() == 1 ? 2 : 1;
+  for (const auto& channel : outputs) {
+    for (int copy = 0; copy < output_copies; ++copy) {
+      output.write(
+          reinterpret_cast<const char*>(channel.data()),
+          static_cast<std::streamsize>(channel.size() * sizeof(FAUSTFLOAT)));
+    }
+  }
+  return output ? 0 : 4;
+}

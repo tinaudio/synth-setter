@@ -1,5 +1,8 @@
 import importlib.metadata
 import json
+import re
+import shutil
+import subprocess
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -57,6 +60,23 @@ def extract_backend_version(renderer_backend: str) -> str:
     """
     if renderer_backend == "dawdreamer":
         return importlib.metadata.version("dawdreamer")
+    if renderer_backend == "faustcpp":
+        if shutil.which("faust") is None or shutil.which("g++") is None:
+            raise RuntimeError("install the Faust CLI and g++ to use renderer_backend='faustcpp'")
+        try:
+            result = subprocess.run(  # noqa: S603
+                ["faust", "--version"],  # noqa: S607
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError(f"Faust CLI version probe failed: {error.stderr}") from error
+        match = re.search(r"FAUST Version ([0-9]+(?:\.[0-9]+)+)", result.stdout)
+        if match is None:
+            raise RuntimeError("Faust CLI returned an unrecognized version string")
+        return match.group(1)
     if renderer_backend == "faustwasm":
         package = faustwasm_dir() / "vendor" / "package.json"
         if not package.is_file():
