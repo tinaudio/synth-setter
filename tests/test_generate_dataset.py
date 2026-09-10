@@ -276,6 +276,70 @@ def test_cfg_dataset_faust_resolves_production_renderer_contract(
     assert spec.num_params == 13
 
 
+def test_cfg_dataset_faustwasm_fdn_resolves_pyfdn_width_on_the_faustwasm_backend(
+    cfg_dataset_faustwasm_fdn: DictConfig,
+) -> None:
+    """``synth=faust_fdn_n8_mono_householder render=faustwasm_fdn`` resolves the 27-wide contract.
+
+    :param cfg_dataset_faustwasm_fdn: Composed FaustWasm FDN dataset config.
+    """
+    spec = spec_from_cfg(cfg_dataset_faustwasm_fdn)
+
+    assert spec.render.renderer_backend == "faustwasm"
+    assert spec.render.plugin_path == "registry://faust/faust_fdn_n8_mono_householder"
+    assert spec.render.channels == 1
+    assert spec.render.block_size == 128
+    assert spec.num_params == 27
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is unavailable")
+def test_from_hydra_faustwasm_fdn_writes_consumable_shard(
+    cfg_dataset_faustwasm_fdn: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The public entrypoint renders pyFDN householder rows through the FaustWasm FDN.
+
+    :param cfg_dataset_faustwasm_fdn: Composed FaustWasm FDN dataset config.
+    :param fake_r2_remote: Local filesystem backing the real rclone transport.
+    :param monkeypatch: Configures the single local worker process.
+    :param tmp_path: Finalize workspace.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_faustwasm_fdn):
+        cfg_dataset_faustwasm_fdn.train_val_test_sizes = [2, 0, 0]
+        cfg_dataset_faustwasm_fdn.render.samples_per_shard = 2
+        cfg_dataset_faustwasm_fdn.render.min_loudness = -100.0
+        cfg_dataset_faustwasm_fdn.r2.prefix = "fake-r2/faustwasm-fdn-run/"
+        cfg_dataset_faustwasm_fdn.logger = None
+
+    spec = spec_from_cfg(cfg_dataset_faustwasm_fdn)
+    from_hydra(cfg_dataset_faustwasm_fdn)
+
+    assert spec.render.param_spec_name == "faust_fdn_n8_mono_householder"
+    shard = spec.shards[0]
+    assert shard_has_complete_attempt(spec, shard.shard_id)
+
+    finalize_dir = tmp_path / "finalize"
+    finalize_dir.mkdir()
+    finalize_lance(spec, finalize_dir)
+    split = split_for_shard(spec, shard.shard_id)
+    dataset_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / f"{split}.lance"
+    table = lance.dataset(dataset_path).to_table(columns=[AUDIO_FIELD, PARAM_ARRAY_FIELD])
+    audio = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()
+    params = table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()
+
+    assert audio.shape == (2, 1, 176_400)
+    assert params.shape == (2, 27)
+    assert np.isfinite(audio).all()
+    assert np.max(np.abs(audio)) <= 1.0
+    assert np.any(audio != 0.0)
+    assert ((params >= 0.0) & (params <= 1.0)).all()
+
+
 @pytest.mark.slow
 def test_from_hydra_pyfdn_householder_writes_consumable_shard(
     cfg_dataset_pyfdn_householder: DictConfig,

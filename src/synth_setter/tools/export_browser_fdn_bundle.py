@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -24,6 +25,8 @@ from synth_setter.models.flow_onnx import export_flow_onnx
 from synth_setter.models.mel_frontend import NormalizedMelFrontend, export_frontend_onnx
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.param_spec_name import ParamSpecName
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA_VERSION = 1
 _SAMPLE_RATE = 44_100
@@ -110,7 +113,11 @@ def export_browser_fdn_bundle(
         )
         os.rename(staging, output)
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        if staging.exists():
+            try:
+                shutil.rmtree(staging)
+            except OSError:
+                logger.warning("failed to remove bundle staging directory %s", staging)
     return manifest
 
 

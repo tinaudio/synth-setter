@@ -10,6 +10,7 @@ import onnxruntime as ort
 import pytest
 import torch
 from hydra.utils import instantiate
+from lightning import Trainer
 
 from synth_setter.models.components.transformer import ApproxEquivTransformer, LearntProjection
 from synth_setter.models.flow_onnx import branch_weights
@@ -262,6 +263,51 @@ def test_cli_wrong_checkpoint_digest_fails_before_writing(
             ]
         )
     assert not (tmp_path / "bundle").exists()
+
+
+def test_cli_tiny_checkpoint_publishes_bundle_the_runtime_can_drive(
+    tmp_path: Path, tiny_fdn_model: VSTFlowMatchingModule, stats_path: Path
+) -> None:
+    """The public entrypoint loads a real Lightning checkpoint and publishes a usable bundle.
+
+    :param tmp_path: Checkpoint and bundle location.
+    :param tiny_fdn_model: Small model saved through Lightning's checkpoint writer.
+    :param stats_path: Mel statistics.
+    """
+    checkpoint = tmp_path / "model.ckpt"
+    trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+    )
+    trainer.strategy.connect(tiny_fdn_model)
+    trainer.save_checkpoint(checkpoint)
+    bundle = tmp_path / "bundle"
+    main(
+        [
+            "--checkpoint",
+            str(checkpoint),
+            "--checkpoint-sha256",
+            _sha256(checkpoint),
+            "--stats",
+            str(stats_path),
+            "--stats-sha256",
+            _sha256(stats_path),
+            "--output",
+            str(bundle),
+        ]
+    )
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    assert manifest["checkpointSha256"] == _sha256(checkpoint)
+    assert manifest["encodedWidth"] == 27
+    rng = np.random.default_rng(1)
+    waveform = (rng.standard_normal((1, _FRAMES)) * 0.1).astype(np.float32)
+    velocity = _run_bundle(bundle, waveform, "sketch_only")
+    assert velocity.shape == (1, 27)
+    assert np.isfinite(velocity).all()
 
 
 @pytest.mark.slow
