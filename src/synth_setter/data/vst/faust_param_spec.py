@@ -22,7 +22,7 @@ from synth_setter.data.vst.param_spec import (
 from synth_setter.param_spec_name import ParamSpecName
 
 # These conditioning bounds are baked into each identity; changes require a new ParamSpecName.
-_FAUST_MAX_NOTE_DURATION_SECONDS = 4.0
+FAUST_NOTE_DURATION_SECONDS = 4.0
 _FAUST_MIDI_PITCH_MAX = 72
 _FAUST_MIDI_PITCH_MIN = 48
 
@@ -40,7 +40,7 @@ def _note_params() -> list[Parameter]:
         ),
         NoteDurationParameter(
             name="note_start_and_end",
-            max_note_duration_seconds=_FAUST_MAX_NOTE_DURATION_SECONDS,
+            max_note_duration_seconds=FAUST_NOTE_DURATION_SECONDS,
         ),
     ]
 

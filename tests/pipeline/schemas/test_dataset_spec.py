@@ -489,6 +489,71 @@ class TestRenderConfig:
         assert config.renderer_backend == "faustwasm"
         assert config.block_size == 128
 
+    @pytest.mark.parametrize(
+        ("identity", "channels"),
+        [("faust_bright_organ", 1), ("faust_filter_osc", 2)],
+    )
+    def test_faustwasm_backend_rejects_source_channel_mismatch(
+        self, identity: str, channels: int
+    ) -> None:
+        """FaustWasm config cannot contradict registered source geometry.
+
+        :param identity: Registered source whose native channel count differs.
+        :param channels: Invalid configured channel count.
+        """
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName(identity)],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=128,
+            channels=channels,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+
+        with pytest.raises(ValidationError, match="faustwasm requires channels="):
+            RenderConfig(**values)
+
+    def test_faustwasm_backend_rejects_param_spec_duration_mismatch(self) -> None:
+        """FaustWasm config cannot change the identity-stable note-time domain."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=128,
+            signal_duration_seconds=2.0,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+
+        with pytest.raises(
+            ValidationError,
+            match="faustwasm requires signal_duration_seconds>=4.0",
+        ):
+            RenderConfig(**values)
+
+    def test_faustwasm_backend_accepts_render_longer_than_note_domain(self) -> None:
+        """A longer output preserves every identity-stable note endpoint."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=128,
+            signal_duration_seconds=5.0,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+
+        config = RenderConfig(**values)
+
+        assert config.signal_duration_seconds == 5.0
+
     def test_faustwasm_backend_requires_explicit_block_size(self) -> None:
         """FaustWasm refuses an unspecified runtime block size."""
         values = _valid_render_kwargs(plugin_path="faust")

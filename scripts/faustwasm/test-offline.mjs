@@ -11,6 +11,7 @@ import {
     loadFaustArtifact,
     renderNote,
 } from './runtime.mjs';
+import { readFaustWasmPackageVersion } from './package-version.mjs';
 
 const SOURCE = `declare name "contract";
 import("stdfaust.lib");
@@ -63,7 +64,9 @@ test('canonical discrete domains reject fractions and accept listed values', () 
 test('compiled artifact loads and canonical patch changes real audio', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'faustwasm-contract-'));
     try {
+        const packageVersion = await readFaustWasmPackageVersion();
         const request = {
+            expectedFaustWasmVersion: packageVersion,
             identity: 'contract',
             source: SOURCE,
             mode: 'mono',
@@ -87,6 +90,7 @@ test('compiled artifact loads and canonical patch changes real audio', async () 
         const artifact = await loadFaustArtifact(
             manifest,
             async (path) => new Uint8Array(await readFile(join(directory, path))),
+            packageVersion,
         );
         const quietSynth = await createOfflineSynth(artifact, { sampleRate: 44_100, blockSize: 128 });
         applyCanonicalPatch(quietSynth, manifest, { '/canonical/gain': 0 });
