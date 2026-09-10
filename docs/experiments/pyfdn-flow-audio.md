@@ -3,7 +3,7 @@
 `experiment=pyfdn/flow_audio_flamo` attaches the FLAMO renderer when Hydra
 constructs the flow model. No pretrained checkpoint or separate simulator
 finetuning stage is required. The experiment loads target audio from Lance and
-uses the existing multi-scale spectral loss alongside flow matching; its inherited
+uses the shared multichannel audio distance alongside flow matching; its inherited
 `lambda_audio=0.03` already contributes to optimization.
 
 ```text
@@ -11,7 +11,7 @@ flow prediction / endpoint estimate
   → PyFDNParameterDecoder
   → native tensor matrices, delays, and filter controls
   → FLAMO graph with externally bound parameters
-  → waveform → spectral distance to target audio → flow-network gradients
+  → waveform → multichannel audio distance to target audio → flow-network gradients
 ```
 
 ## Decoder and graph construction
@@ -48,10 +48,17 @@ impulse is rendered separately; output shape is
 `channel = output * input_count + input`. No transfer path is summed or selected
 away. All three optional SOS hooks are bound in the upstream graph.
 
-Audio feedback compares corresponding channels before averaging their scalar
-losses. It rejects channel-count mismatches rather than broadcasting or downmixing.
-A singleton channel axis may be removed for legacy consumers without changing
-samples; multiple channels remain intact.
+The injected `MultichannelAudioDistance` owns channel policy once. It canonicalizes
+`(batch, samples)` and `(batch, channels, samples)` to channelized audio, rejects
+non-finite or nonmatching nonempty geometry, then combines corresponding-channel MSS,
+corresponding-channel differentiable MLDR, and MLDR over every unordered within-signal
+channel pair after energy-preserving sum/difference transforms. Mono has no pair term;
+no target channel is cross-matched against a prediction channel. The initial Hydra
+weights (`1.0` MSS, `0.1` channel MLDR, `0.1` pair MLDR) keep MSS dominant for scale
+balancing and are not empirically optimal.
+
+CLAP and SAME distances remain mono-only and remove at most a singleton channel axis
+at their own embedding boundary; they are not wrapped in the multichannel composite.
 
 The `from_param_spec()` factory adapts these currently registered basic encodings:
 
