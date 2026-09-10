@@ -1,10 +1,14 @@
 class FaustOutputCaptureProcessor extends AudioWorkletProcessor {
-  constructor() {
+  constructor(options) {
     super();
+    this.channelCount = options.processorOptions.channelCount;
     this.request = null;
     this.port.onmessage = ({ data }) => {
       this.request = {
-        channels: [new Float32Array(data.frames), new Float32Array(data.frames)],
+        channels: Array.from(
+          { length: this.channelCount },
+          () => new Float32Array(data.frames),
+        ),
         startFrame: data.startFrame,
       };
     };
@@ -14,7 +18,7 @@ class FaustOutputCaptureProcessor extends AudioWorkletProcessor {
     const input = inputs[0];
     const output = outputs[0];
     for (let channel = 0; channel < output.length; channel += 1) {
-      const inputChannel = input[channel] ?? input[0];
+      const inputChannel = input[channel];
       if (inputChannel) output[channel].set(inputChannel);
       else output[channel].fill(0);
     }
@@ -28,8 +32,8 @@ class FaustOutputCaptureProcessor extends AudioWorkletProcessor {
       const inputOffset = overlapStart - currentFrame;
       const outputOffset = overlapStart - this.request.startFrame;
       const frameCount = overlapEnd - overlapStart;
-      for (let channel = 0; channel < 2; channel += 1) {
-        const samples = input[channel] ?? input[0];
+      for (let channel = 0; channel < this.channelCount; channel += 1) {
+        const samples = input[channel];
         if (samples) {
           this.request.channels[channel].set(
             samples.subarray(inputOffset, inputOffset + frameCount),

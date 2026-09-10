@@ -1,15 +1,17 @@
 import { expect, test } from "@playwright/test";
 import { createServer } from "node:http";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { exportBrowserBundle } from "../export-browser.mjs";
 
 const artifactDirectory = process.env.FAUSTWASM_E2E_ARTIFACT;
+const monoArtifactDirectory = process.env.FAUSTWASM_MONO_E2E_ARTIFACT;
 const browserDirectory = path.resolve(import.meta.dirname, "..");
 const runtimePath =
   process.env.FAUSTWASM_RUNTIME_PATH ?? path.join(browserDirectory, "..", "runtime.mjs");
+let activeArtifactDirectory;
 let baseUrl;
 let server;
 let siteDirectory;
@@ -28,11 +30,28 @@ function rms(samples) {
   return Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
 }
 
-test.beforeEach(async () => {
-  test.skip(!artifactDirectory, "Set FAUSTWASM_E2E_ARTIFACT to a PR2-exported bright-organ artifact directory");
+test.beforeEach(async ({}, testInfo) => {
+  activeArtifactDirectory = testInfo.title.startsWith("mono_")
+    ? monoArtifactDirectory
+    : artifactDirectory;
+  test.skip(
+    !activeArtifactDirectory,
+    testInfo.title.startsWith("mono_")
+      ? "Set FAUSTWASM_MONO_E2E_ARTIFACT to a PR2-exported filter-osc artifact directory"
+      : "Set FAUSTWASM_E2E_ARTIFACT to a PR2-exported bright-organ artifact directory",
+  );
+  try {
+    await access(path.join(activeArtifactDirectory, "manifest.json"));
+  } catch {
+    test.skip(true, `PR2-exported artifact is unavailable: ${activeArtifactDirectory}`);
+  }
   temporaryDirectory = await mkdtemp(path.join(tmpdir(), "faust-browser-site-"));
   siteDirectory = path.join(temporaryDirectory, "player");
-  await exportBrowserBundle({ artifactDirectory, outputDirectory: siteDirectory, runtimePath });
+  await exportBrowserBundle({
+    artifactDirectory: activeArtifactDirectory,
+    outputDirectory: siteDirectory,
+    runtimePath,
+  });
 
   server = createServer(async (request, response) => {
     try {
@@ -56,6 +75,55 @@ test.afterEach(async () => {
   if (temporaryDirectory) await rm(temporaryDirectory, { force: true, recursive: true });
 });
 
+test("mono_filter_osc_capture_matches_offline_native_channel_shape", async ({ page }) => {
+  await page.goto(baseUrl);
+  await page.getByRole("button", { name: "Start audio" }).click();
+  await expect(page.locator("#status")).toHaveText("Audio running");
+  const browserResult = await page.evaluate(async () => {
+    const { context, manifest } = window.faustPlayer;
+    const patch = Object.fromEntries(
+      manifest.parameters.map((parameter) => [
+        parameter.canonicalAddress,
+        parameter.min + (parameter.max - parameter.min) * 0.5,
+      ]),
+    );
+    window.faustPlayer.applyPatch(patch);
+    const channels = await window.faustPlayer.recordFrames(4096);
+    return {
+      channels: channels.map((channel) => Array.from(channel)),
+      patch,
+      sampleRate: context.sampleRate,
+    };
+  });
+
+  const manifest = JSON.parse(
+    await readFile(path.join(activeArtifactDirectory, "manifest.json"), "utf8"),
+  );
+  const { applyCanonicalPatch, createOfflineSynth, loadFaustArtifact, renderNote } =
+    await import(runtimePath);
+  const artifact = await loadFaustArtifact(manifest, async (relativePath) =>
+    new Uint8Array(await readFile(path.join(activeArtifactDirectory, relativePath))),
+  );
+  const synth = await createOfflineSynth(artifact, {
+    blockSize: 128,
+    sampleRate: browserResult.sampleRate,
+  });
+  applyCanonicalPatch(synth, manifest, browserResult.patch);
+  const offlineAudio = renderNote(synth, {
+    endFrame: 2048,
+    frames: 4096,
+    note: 60,
+    startFrame: 256,
+    velocity: 100,
+  });
+
+  expect(manifest.identity).toBe("faust_filter_osc");
+  expect(browserResult.channels).toHaveLength(offlineAudio.length);
+  expect(browserResult.channels[0]).toHaveLength(offlineAudio[0].length);
+  expect(browserResult.channels.flat().every(Number.isFinite)).toBe(true);
+  expect(rms(browserResult.channels[0])).toBeGreaterThan(0.0001);
+});
+
 test("player_requires_gesture_then_emits_finite_stereo_audio_with_note_causality", async ({ page }) => {
   await page.goto(baseUrl);
   await expect(page.locator("#status")).toContainText("Ready");
@@ -77,6 +145,56 @@ test("player_requires_gesture_then_emits_finite_stereo_audio_with_note_causality
   expect(rms(duringNote[0])).toBeGreaterThan(0.0001);
   expect(rms(duringNote[1])).toBeGreaterThan(0.0001);
   expect(rms(duringNote[0])).toBeGreaterThan(rms(beforeNote[0]) * 10 + 0.0001);
+});
+
+test("overlapping_capture_rejects_second_request_and_preserves_first_length", async ({ page }) => {
+  await page.goto(baseUrl);
+  await page.getByRole("button", { name: "Start audio" }).click();
+  await expect(page.locator("#status")).toHaveText("Audio running");
+
+  const result = await page.evaluate(async () => {
+    const firstCapture = window.faustPlayer.recordFrames(128);
+    let secondError = null;
+    try {
+      await window.faustPlayer.recordFrames(256);
+    } catch (error) {
+      secondError = error.message;
+    }
+    const first = await firstCapture;
+    return { firstLengths: first.map((channel) => channel.length), secondError };
+  });
+
+  expect(result.secondError).toMatch(/capture.*already in progress/i);
+  expect(result.firstLengths).toEqual([128, 128]);
+});
+
+test("renderNote_rejected_during_capture_does_not_schedule_midi", async ({ page }) => {
+  await page.goto(baseUrl);
+  await page.getByRole("button", { name: "Start audio" }).click();
+  await expect(page.locator("#status")).toHaveText("Audio running");
+
+  const result = await page.evaluate(async () => {
+    const capture = window.faustPlayer.recordFrames(16384);
+    let renderError = null;
+    try {
+      await window.faustPlayer.renderNote({
+        endFrame: 2048,
+        frames: 4096,
+        note: 60,
+        startFrame: 256,
+        velocity: 100,
+      });
+    } catch (error) {
+      renderError = error.message;
+    }
+    return {
+      channels: (await capture).map((channel) => Array.from(channel)),
+      renderError,
+    };
+  });
+
+  expect(result.renderError).toMatch(/capture.*already in progress/i);
+  expect(Math.max(...result.channels.flat().map(Math.abs))).toBeLessThan(0.000001);
 });
 
 test("canonical_volume_control_changes_actual_captured_output", async ({ page }) => {

@@ -4,6 +4,7 @@ import { applyCanonicalPatch, loadFaustArtifact } from "./runtime.mjs";
 const AUDIO_BLOCK_SIZE = 128;
 const CAPTURE_LEAD_BLOCKS = 32;
 const DEFAULT_VELOCITY = 100;
+const activeCaptureNodes = new WeakSet();
 const startButton = document.querySelector("#start");
 const status = document.querySelector("#status");
 const controls = document.querySelector("#controls");
@@ -93,15 +94,37 @@ function nextCaptureFrame(context) {
   return (currentFrame + CAPTURE_LEAD_BLOCKS) * AUDIO_BLOCK_SIZE;
 }
 
-function captureFrames(captureNode, frameCount, startFrame) {
+function startCaptureFrames(captureNode, frameCount, startFrame) {
   if (!Number.isInteger(frameCount) || frameCount <= 0) {
-    return Promise.reject(new Error("Capture frame count must be a positive integer"));
+    throw new Error("Capture frame count must be a positive integer");
   }
-  return new Promise((resolve) => {
-    captureNode.port.addEventListener("message", (event) => resolve(event.data), { once: true });
-    captureNode.port.start();
-    captureNode.port.postMessage({ frames: frameCount, startFrame });
+  if (activeCaptureNodes.has(captureNode)) {
+    throw new Error("Audio capture is already in progress");
+  }
+  activeCaptureNodes.add(captureNode);
+  return new Promise((resolve, reject) => {
+    const receiveCapture = (event) => {
+      activeCaptureNodes.delete(captureNode);
+      resolve(event.data);
+    };
+    captureNode.port.addEventListener("message", receiveCapture, { once: true });
+    try {
+      captureNode.port.start();
+      captureNode.port.postMessage({ frames: frameCount, startFrame });
+    } catch (error) {
+      captureNode.port.removeEventListener("message", receiveCapture);
+      activeCaptureNodes.delete(captureNode);
+      reject(error);
+    }
   });
+}
+
+function captureFrames(captureNode, frameCount, startFrame) {
+  try {
+    return startCaptureFrames(captureNode, frameCount, startFrame);
+  } catch (error) {
+    return Promise.reject(error);
+  }
 }
 
 function captureOutput(context, captureNode, frameCount) {
@@ -114,7 +137,12 @@ function renderNote(context, node, captureNode, request) {
     return Promise.reject(new Error("Note frames must satisfy 0 <= start < end <= frames"));
   }
   const captureStartFrame = nextCaptureFrame(context);
-  const captured = captureFrames(captureNode, frames, captureStartFrame);
+  let captured;
+  try {
+    captured = startCaptureFrames(captureNode, frames, captureStartFrame);
+  } catch (error) {
+    return Promise.reject(error);
+  }
   node.keyOn(0, note, velocity, (captureStartFrame + startFrame) / context.sampleRate);
   node.keyOff(0, note, 0, (captureStartFrame + endFrame) / context.sampleRate);
   return captured;
@@ -135,9 +163,13 @@ async function startPlayer() {
 
     await context.audioWorklet.addModule("./capture-worklet.js");
     const captureNode = new AudioWorkletNode(context, "faust-output-capture", {
+      channelCount: manifest.outputs,
+      channelCountMode: "explicit",
+      channelInterpretation: "discrete",
       numberOfInputs: 1,
       numberOfOutputs: 1,
-      outputChannelCount: [2],
+      outputChannelCount: [manifest.outputs],
+      processorOptions: { channelCount: manifest.outputs },
     });
     node.connect(captureNode).connect(context.destination);
     renderControls(node, manifest.parameters);
