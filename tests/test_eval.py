@@ -1161,6 +1161,7 @@ def test_eval_torchsynth_experiment_validates_checkpoint(tmp_path: Path) -> None
 
     val_loss = metric_dict["val/param_mse"]
     assert torch.isfinite(val_loss)
+    assert torch.pi == math.pi
     assert val_loss < initial_val_loss * (1 - _TORCHSYNTH_MIN_RELATIVE_VAL_IMPROVEMENT)
     val_dataloader = eval_objects["datamodule"].val_dataloader()
     assert val_dataloader.num_workers == 0

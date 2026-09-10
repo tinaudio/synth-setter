@@ -745,6 +745,7 @@ def test_train_torchsynth_experiment_renders_audio_online(
     assert audio.shape[-1] == 176_400
     assert params.shape == (1, cfg_torchsynth_train.datamodule.num_params)
     assert torch.isfinite(audio).all()
+    assert torch.pi == math.pi
     assert isinstance(object_dict["model"].net.encoder, SpecEncoder)
 
 
