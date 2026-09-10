@@ -3513,7 +3513,10 @@ class TestMainDispatchBranches:
         assert "synth.plugin_state_path=presets/surge-base.vstpreset" in called_argv
         assert "synth.plugin_path=plugins/Surge XT.vst3" in called_argv
         assert f"synth.synth_version={render.synth.synth_version}" in called_argv
+        assert not any(argument.startswith("synth.source_sha256=") for argument in called_argv)
         assert f"render.renderer_backend={render.renderer_backend}" in called_argv
+        assert not any(argument.startswith("render.backend_version=") for argument in called_argv)
+        assert f"render.render_contract_version={render.render_contract_version}" in called_argv
         assert f"render.plugin_reload_cadence={render.plugin_reload_cadence}" in called_argv
         assert f"render.gui_toggle_cadence={render.gui_toggle_cadence}" in called_argv
         assert f"render.sample_rate={render.sample_rate}" in called_argv
