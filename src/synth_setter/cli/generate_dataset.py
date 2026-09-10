@@ -1063,9 +1063,9 @@ def render_and_upload_shard(
         attempt_staging_dir_uri=attempt_staging_dir_uri,
     )
     # ExitStack keeps a zipped-wheel wrapper available across renderer retries.
-    # TorchSynth has no VST or X11 dependency, so it bypasses materialization.
+    # Non-VST renderers have no X11 dependency, so they bypass materialization.
     with ExitStack() as stack:
-        if sys.platform == "linux" and spec.render.renderer_backend != "torchsynth":
+        if sys.platform == "linux" and spec.render.synth.format == "vst3":
             wrapper_path = stack.enter_context(as_file(vst_headless_wrapper()))
             args = [str(wrapper_path)]
         else:

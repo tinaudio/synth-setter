@@ -40,6 +40,8 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from hydra import compose, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
 
 from synth_setter.cli.generate_dataset import (
     _RENDERER_SCRIPT,
@@ -261,6 +263,29 @@ def _capture_renderer_dispatch(
     with pytest.raises(subprocess.CalledProcessError):
         render_and_upload_shard(spec, spec.shards[0], work_dir, loggers=[])
     return renderer_args
+
+
+def _compose_renderer_spec(synth_group: str, render_group: str) -> DatasetSpec:
+    """Compose a production renderer pair into its validated dataset spec.
+
+    :param synth_group: Hydra synth registry selection.
+    :param render_group: Hydra renderer configuration selection.
+    :returns: Validated dataset spec for the selected renderer pair.
+    """
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="dataset",
+                overrides=[
+                    "experiment=generate_dataset/smoke-shard",
+                    f"synth={synth_group}",
+                    f"render={render_group}",
+                    "render.gui_toggle_cadence=never",
+                ],
+            )
+            return DatasetSpec.from_hydra_cfg(cfg)
+    finally:
+        GlobalHydra.instance().clear()
 
 
 def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
@@ -1048,27 +1073,34 @@ class TestRun(RenderSeamFixtures):
 
         assert marker.read_text() == "called"
 
-    def test_torchsynth_shard_bypasses_headless_wrapper(
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux headless dispatch contract")
+    @pytest.mark.parametrize(
+        ("synth_group", "render_group"),
+        [
+            pytest.param("faust_bright_organ", "faust", id="dawdreamer-faust"),
+            pytest.param("faust_bright_organ", "faustwasm", id="faustwasm"),
+            pytest.param("pyfdn_n8_mono_householder", "pyfdn", id="pyfdn"),
+            pytest.param("surge_simple_surgepy", "surgepy", id="surgepy"),
+            pytest.param("torchsynth_simple", "torchsynth", id="torchsynth"),
+        ],
+    )
+    def test_non_vst_shard_bypasses_headless_wrapper(
         self,
-        spec: DatasetSpec,
+        synth_group: str,
+        render_group: str,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A TorchSynth shard dispatches Python without the VST wrapper.
+        """A non-VST shard dispatches Python without the VST wrapper.
 
-        :param spec: Base dataset specification copied with a TorchSynth render config.
+        :param synth_group: Production synth identity under test.
+        :param render_group: Compatible production renderer under test.
         :param tmp_path: Caller-supplied work directory.
         :param monkeypatch: Captures the renderer command before execution.
         """
-        render_values = spec.render.model_dump()
-        render_values.update(
-            synth=SYNTHS[SynthName("torchsynth_simple")],
-            renderer_backend="torchsynth",
-            gui_toggle_cadence="never",
-        )
-        torchsynth_spec = spec.model_copy(update={"render": RenderConfig(**render_values)})
+        non_vst_spec = _compose_renderer_spec(synth_group, render_group)
 
-        renderer_args = _capture_renderer_dispatch(torchsynth_spec, tmp_path, monkeypatch)
+        renderer_args = _capture_renderer_dispatch(non_vst_spec, tmp_path, monkeypatch)
 
         assert renderer_args[0] == sys.executable
         assert VST_HEADLESS_WRAPPER not in renderer_args
