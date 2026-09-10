@@ -1502,14 +1502,22 @@ def test_evaluate_seeded_override_repeats_legacy_mixed_endpoint_checkpoint(
     changed_seed_metric_dict, _ = evaluate(cfg)
 
     assert torch.isfinite(metric_dict["test/param_mse"])
-    for index in range(5, 100, 10):
-        assert torch.isfinite(metric_dict[f"test/endpoint_mse/t_{index:02d}"])
-    assert torch.isfinite(metric_dict["test/endpoint_mse/equal_bin_mean"])
+    endpoint_metric_keys = [
+        *(f"test/endpoint_mse/t_{index:02d}" for index in range(5, 100, 10)),
+        "test/endpoint_mse/equal_bin_mean",
+    ]
+    for key in endpoint_metric_keys:
+        assert torch.isfinite(metric_dict[key])
+        torch.testing.assert_close(metric_dict[key], repeated_metric_dict[key], rtol=0.0, atol=0.0)
     torch.testing.assert_close(
         metric_dict["test/param_mse"], repeated_metric_dict["test/param_mse"], rtol=0.0, atol=0.0
     )
     assert not torch.equal(
         metric_dict["test/param_mse"], changed_seed_metric_dict["test/param_mse"]
+    )
+    assert any(
+        not torch.equal(metric_dict[key], changed_seed_metric_dict[key])
+        for key in endpoint_metric_keys
     )
     assert object_dict["model"].hparams.endpoint_loss == "mixed"
     assert object_dict["model"].hparams.seeded_evaluation is True
