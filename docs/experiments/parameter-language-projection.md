@@ -8,7 +8,10 @@ Dataset generation/finalization accepts `param_language_dimension=128` (also 256
 512, or 768). The default `null` leaves existing datasets unchanged. Finalize runs
 frozen `google/embeddinggemma-300m` on CPU once per logical field, caches the full
 768-dimensional table in its work directory, and publishes `param_language.npz`
-before `dataset.complete`. Nothing is repeated per dataset row.
+before Lance finalization and `dataset.complete`. Nothing is repeated per dataset
+row. A replacement finalizer validates and reuses an already-published language
+artifact without loading the encoder. Published identity/dimension mismatches
+fail closed; corrupt or non-native-width local full-vector caches regenerate.
 
 The model revision is pinned to
 `57c266a740f537b4dc058e1b0cda161fd15afa75`. Its Sentence Transformers document
