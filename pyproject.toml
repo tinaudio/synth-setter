@@ -237,6 +237,8 @@ runtime = [
   { include-group = "util" },
 ]
 dev = [
+  # Exercise optional CPU HPCP in Linux coverage without requiring it at runtime.
+  "essentia; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "hypothesis",
   "mutmut==3.5.*",
   "nflows",
