@@ -46,6 +46,11 @@ jobs:
         with:
           python-version: "3.12.13"
 
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
       # Pin so an upstream tool release can't flip this gate red without a
       # repo-side change. twine 5 rejects Metadata-Version 2.4 emitted by
       # current setuptools — keep on twine 6.x. Bump deliberately as needed.
@@ -110,6 +115,57 @@ jobs:
           WHL=$(ls dist/synth_setter-*.whl)
           "$RUNNER_TEMP/full/bin/pip" install "${WHL}"
           "$RUNNER_TEMP/full/bin/uv" pip install --python "$RUNNER_TEMP/full/bin/python" --group runtime
+
+      # Run outside the checkout against read-only wheel assets without an npm installation.
+      - name: Export and render FaustWasm from installed wheel
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          FAUSTWASM_DIR=$("$RUNNER_TEMP/full/bin/python" - <<'PY'
+          from importlib.resources import files
+
+          print(files("synth_setter") / "faustwasm")
+          PY
+          )
+          chmod -R a-w "$FAUSTWASM_DIR"
+          "$RUNNER_TEMP/full/bin/python" -m synth_setter.tools.export_faustwasm \
+            --synth faust_filter_osc \
+            --output "$RUNNER_TEMP/faust-filter-osc"
+          "$RUNNER_TEMP/full/bin/python" - <<'PY'
+          import json
+          from pathlib import Path
+
+          import numpy as np
+
+          from synth_setter.data.vst.faustwasm_artifacts import run_faustwasm_render_worker
+
+          root = Path("faust-filter-osc")
+          manifest = json.loads((root / "manifest.json").read_text())
+          request = {
+              "sampleRate": 44_100,
+              "blockSize": 128,
+              "frames": 256,
+              "note": 60,
+              "velocity": 100,
+              "startFrame": 0,
+              "endFrame": 128,
+              "params": {
+                  parameter["canonicalAddress"]: (
+                      parameter["values"][0]
+                      if parameter["kind"] == "discrete"
+                      else (parameter["min"] + parameter["max"]) / 2.0
+                  )
+                  for parameter in manifest["parameters"]
+              },
+          }
+          request_path = Path("faust-render.json")
+          output_path = Path("faust-render.f32")
+          request_path.write_text(json.dumps(request))
+          run_faustwasm_render_worker(root, request_path, output_path)
+          audio = np.fromfile(output_path, dtype="<f4").reshape(1, 256)
+          assert np.isfinite(audio).all()
+          assert float(np.max(np.abs(audio))) > 1e-6
+          PY
 
       # Compose from the installed wheel to verify config registration and interpolation;
       # editable-tree instantiation is covered by tests/test_configs.py.

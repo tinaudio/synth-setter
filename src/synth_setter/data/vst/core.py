@@ -14,6 +14,7 @@ from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_PLUGIN_NAME
 from synth_setter.plugin_runtime import plugin_bundle_version, validated_bundle_lease
+from synth_setter.resources import faustwasm_dir
 from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
     PEDALBOARD_BLOCK_SIZE,
@@ -57,15 +58,9 @@ def extract_backend_version(renderer_backend: str) -> str:
     if renderer_backend == "dawdreamer":
         return importlib.metadata.version("dawdreamer")
     if renderer_backend == "faustwasm":
-        package = (
-            Path(__file__).resolve().parents[4]
-            / "node_modules"
-            / "@grame"
-            / "faustwasm"
-            / "package.json"
-        )
+        package = faustwasm_dir() / "vendor" / "package.json"
         if not package.is_file():
-            raise RuntimeError("FaustWasm runtime is not installed; run `npm ci` at the repository root")
+            raise RuntimeError("packaged @grame/faustwasm metadata is unavailable")
         version = json.loads(package.read_text()).get("version")
         if not isinstance(version, str):
             raise RuntimeError("@grame/faustwasm package metadata has no version")

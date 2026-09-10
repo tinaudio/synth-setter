@@ -1,9 +1,8 @@
 # FaustWasm offline artifacts
 
-Install the exact Node runtime, then export a registry-backed artifact to a new directory:
+Install Node.js 18 or newer, then export a registry-backed artifact to a new directory:
 
 ```bash
-npm ci
 uv run python -m synth_setter.tools.export_faustwasm \
   --synth faust_bright_organ \
   --output build/faust-bright-organ
@@ -56,5 +55,5 @@ The public `runtime.mjs` exports `loadFaustArtifact`, `createOfflineSynth`,
 addresses remain the dataset identity even where compiler hosts differ, including apostrophe
 normalization and the church-organ wet/dry label.
 
-The Python renderer and exporter resolve these Node assets from a synth-setter checkout. An
-installed wheel fails with an actionable message rather than assuming `scripts/` is present.
+The Python wheel includes the pinned FaustWasm compiler, runtime, and Node entrypoints. Rendering
+and export therefore work outside a repository checkout without running root-level `npm ci`.

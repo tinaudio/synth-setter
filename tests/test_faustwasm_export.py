@@ -4,16 +4,34 @@ from __future__ import annotations
 
 import json
 import subprocess
+from importlib.resources import as_file
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from synth_setter.data.vst.faustwasm_artifacts import run_faustwasm_render_worker
+from synth_setter.resources import faustwasm_dir
 from synth_setter.tools.export_faustwasm import main
 
 _ROOT = Path(__file__).parents[1]
 _NODE_MODULE = _ROOT / "node_modules/@grame/faustwasm/package.json"
+
+
+def test_faustwasm_resources_include_pinned_runtime() -> None:
+    """Packaged Node assets include the pinned compiler and render workers."""
+    with as_file(faustwasm_dir()) as resource_dir:
+        package = json.loads((resource_dir / "vendor/package.json").read_text())
+
+        assert package["version"] == "0.18.3"
+        assert (resource_dir / "export-artifacts.mjs").is_file()
+        assert (resource_dir / "render-worker.mjs").is_file()
+        assert (resource_dir / "runtime.mjs").is_file()
+        assert (resource_dir / "vendor/faustwasm.mjs").is_file()
+        compiler_dir = resource_dir / "vendor/libfaust-wasm"
+        assert tuple(compiler_dir.glob("libfaust-wasm.data.binpart*"))
+        assert (compiler_dir / "libfaust-wasm.js").is_file()
+        assert tuple(compiler_dir.glob("libfaust-wasm.wasm.binpart*"))
 
 
 @pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
