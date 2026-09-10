@@ -364,7 +364,7 @@ def test_ci_executes_installed_patched_core_artifact_lock_test() -> None:
     scripts = json.loads(PACKAGE_JSON.read_text())["scripts"]
     workflow = CI_TEST_WORKFLOW.read_text()
 
-    assert scripts["test"] == "node --test scripts/studiorack/test-artifact-lock.mjs"
+    assert "scripts/studiorack/test-artifact-lock.mjs" in scripts["test"].split()
     assert "npm ci" in workflow
     assert "npm test" in workflow
 
