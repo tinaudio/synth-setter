@@ -158,6 +158,21 @@ def test_faustwasm_renderer_rejects_registered_source_channel_mismatch() -> None
         _renderer("faust_filter_osc", sample_rate=44_100, duration=4.0, channels=2)
 
 
+@pytest.mark.parametrize("channels", [1.0, True])
+def test_faustwasm_renderer_rejects_non_integer_channels(channels: object) -> None:
+    """Direct construction rejects non-integer geometry before compilation.
+
+    :param channels: Value equal to one without the required integer type.
+    """
+    with pytest.raises(ValueError, match="channels must be a positive integer"):
+        _renderer(
+            "faust_filter_osc",
+            sample_rate=44_100,
+            duration=4.0,
+            channels=channels,  # type: ignore[arg-type]
+        )
+
+
 @pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
 def test_faustwasm_registry_reference_renders_real_source() -> None:
     """A canonical registry URI selects source consumed by the real runtime."""

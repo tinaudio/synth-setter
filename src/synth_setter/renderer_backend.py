@@ -122,8 +122,8 @@ def missing_render_artifacts(plugin_path: str, plugin_state_path: str) -> tuple[
     resolution fallback). ``~`` is expanded because ``DawDreamerRenderer``
     expands it.
 
-    :param plugin_path: ``RenderConfig.plugin_path``; an in-process backend name
-        is skipped, naming no bundle on disk.
+    :param plugin_path: ``RenderConfig.plugin_path``; in-process backend names and
+        registered Faust source URIs are skipped because neither names a bundle on disk.
     :param plugin_state_path: ``RenderConfig.plugin_state_path``; ``""`` when the
         backend takes no preset.
     :returns: The unresolvable paths as declared, bundle before preset.

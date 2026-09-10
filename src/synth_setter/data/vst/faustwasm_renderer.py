@@ -121,6 +121,8 @@ class FaustWasmRenderer(AudioRenderer):
             raise ValueError("render duration must contain at least one output frame")
 
         synth = SYNTHS[SynthName(source_identity)]
+        if type(self.channels) is not int or self.channels < 1:
+            raise ValueError("channels must be a positive integer")
         expected_channels = resolve_faust_dsp(source_identity).outputs
         if self.channels != expected_channels:
             raise ValueError(f"FaustWasm source requires channels={expected_channels}")
