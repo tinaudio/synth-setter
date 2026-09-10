@@ -43,7 +43,9 @@ tags: ["generate_dataset", "${task_name}"]
 mask_degenerate_bins: false
 
 # Opt in to offline EmbeddingGemma field metadata; supported widths: 128, 256, 512, 768.
-param_language_dimension: null
+# Publish one row per logical field in params.lance through add-embeddings.
+param_name_embedding: false
+param_name_embedding_dimension: 128
 
 # Dynamic shard claiming from the run's Lance claims table instead of a
 # static rank/world slice; the operator populates the table at launch.

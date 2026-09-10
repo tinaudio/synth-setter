@@ -8,7 +8,7 @@ model:
       param_spec_name: ${synth.param_spec_name}
       synth_name: ${synth.name}
       embedding_dim: 128
-      embedding_path: ${datamodule.dataset_root}/param_language.npz
+      embedding_path: ${datamodule.dataset_root}/params.lance
 
 callbacks:
   parameter_language:

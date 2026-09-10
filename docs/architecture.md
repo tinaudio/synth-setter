@@ -74,9 +74,10 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
    Design: [data-pipeline.md](design/data-pipeline.md)
 
 3. **Finalize** -- Downloads validated shards, commits their Lance fragments
-   into train/val/test split datasets, computes normalization
-   statistics, registers the dataset as a W&B artifact, and writes
-   `dataset.complete`.
+   into train/val/test split datasets, computes normalization statistics, and
+   writes `dataset.complete`. An opt-in registry-driven pass publishes one
+   canonical rich description and EmbeddingGemma vector per logical field in
+   `params.lance` before registering the W&B artifact.
    Design: [data-pipeline.md](design/data-pipeline.md)
 
 4. **Train** -- A single long-running job trains a model (flow matching,

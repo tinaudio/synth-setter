@@ -907,9 +907,13 @@ class DatasetSpec(BaseModel):
         Whether finalize substitutes ``std=1.0`` at zero-variance mel bins
         instead of raising; ``False`` is the strict production default.
 
-    .. attribute :: param_language_dimension
+    .. attribute :: param_name_embedding
 
-        Optional EmbeddingGemma width; finalize publishes one embedding per logical field.
+        Whether finalize publishes a description-embedding Lance dataset.
+
+    .. attribute :: param_name_embedding_dimension
+
+        Matryoshka width used when parameter-name embedding is enabled.
 
     .. attribute :: use_shard_queue
 
@@ -983,9 +987,13 @@ class DatasetSpec(BaseModel):
         ),
     )
 
-    param_language_dimension: Literal[128, 256, 512, 768] | None = Field(
-        default=None,
-        description="Optional Matryoshka width for finalized per-field EmbeddingGemma metadata.",
+    param_name_embedding: bool = Field(
+        default=False,
+        description="Whether finalize publishes one description embedding per logical field.",
+    )
+    param_name_embedding_dimension: Literal[128, 256, 512, 768] = Field(
+        default=128,
+        description="Matryoshka width for the optional parameter-description embeddings.",
     )
 
     use_shard_queue: bool = Field(

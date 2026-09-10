@@ -752,3 +752,13 @@ def materialize_splits(
         dest_root,
         exclude=f"{{*{shard_suffix}/**,metadata/**}}",
     )
+    from synth_setter.pipeline.data.param_language import (
+        PARAM_NAME_COMPLETE,
+        PARAM_NAME_DATASET,
+    )
+
+    if (dest_root / PARAM_NAME_COMPLETE).is_file():
+        r2_io.download_dir_no_overwrite(
+            f"{source_root_uri.rstrip('/')}/{PARAM_NAME_DATASET}",
+            dest_root / PARAM_NAME_DATASET,
+        )
