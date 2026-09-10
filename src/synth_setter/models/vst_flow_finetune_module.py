@@ -23,6 +23,7 @@ from beartype import beartype
 from jaxtyping import Float, Shaped, jaxtyped
 from torch import Tensor
 
+from synth_setter.models.components.audio_feedback import mono_target_audio
 from synth_setter.models.components.differentiable_renderer import (
     DifferentiableRenderer,
     TorchSynthDifferentiableRenderer,
@@ -487,7 +488,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         :param batch_idx: Lightning's batch index.
         :param dataloader_idx: Lightning's dataloader index.
         """
-        self._sampling_target = batch["audio"]
+        self._sampling_target = mono_target_audio(batch["audio"])
 
     @jaxtyped(typechecker=beartype)
     def on_validation_batch_end(
@@ -522,7 +523,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         :param batch_idx: Lightning's batch index.
         :param dataloader_idx: Lightning's dataloader index.
         """
-        self._sampling_target = batch["audio"]
+        self._sampling_target = mono_target_audio(batch["audio"])
 
     @jaxtyped(typechecker=beartype)
     def on_predict_batch_end(
@@ -554,7 +555,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         :param batch_idx: Lightning's batch index.
         :param dataloader_idx: Lightning's dataloader index.
         """
-        self._sampling_target = batch["audio"]
+        self._sampling_target = mono_target_audio(batch["audio"])
 
     @jaxtyped(typechecker=beartype)
     def on_test_batch_end(
@@ -630,7 +631,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         # different amount of noise and confound the comparison between them.
         active = (t.squeeze(-1) >= self.vector_field.t_min) & conditioning_keep.identity_keep
         control_input = self._control_signal(
-            self._one_step_estimate(x_t, t, velocity), batch["audio"], active
+            self._one_step_estimate(x_t, t, velocity), mono_target_audio(batch["audio"]), active
         )
         self._log_control_telemetry(control_input, active)
         prediction = self.vector_field.combine(velocity, t, control_input)

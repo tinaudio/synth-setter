@@ -42,6 +42,18 @@ _SCALAR_SHAPE = ""
 
 
 @jaxtyped(typechecker=beartype)
+def mono_target_audio(
+    audio: Float[Tensor, _BATCH_AUDIO_SHAPE] | Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE],
+) -> Float[Tensor, _BATCH_AUDIO_SHAPE]:
+    """Downmix stored channel-first observations without changing flat mono batches.
+
+    :param audio: Batched waveform, optionally carrying a channel axis.
+    :returns: Mono waveform shaped ``(batch, samples)`` for renderer scoring.
+    """
+    return audio.mean(dim=1) if audio.ndim == 3 else audio
+
+
+@jaxtyped(typechecker=beartype)
 def _log_non_finite_estimate(
     theta_hat: Float[Tensor, _BATCH_PARAMS_SHAPE],
 ) -> None:
@@ -258,6 +270,4 @@ class AudioFeedbackLoss(nn.Module):
             return theta_hat.sum() * 0.0
 
         rendered = self.renderer(theta_hat)
-        if target_audio.ndim == 3:
-            target_audio = target_audio.mean(dim=1)
-        return (weight * self.distance(rendered, target_audio)).mean()
+        return (weight * self.distance(rendered, mono_target_audio(target_audio))).mean()

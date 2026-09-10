@@ -419,6 +419,42 @@ def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
     assert math.isfinite(audio_metrics["audio/pyfdn_match_impulse_response_mean"])
     assert math.isfinite(audio_metrics["audio/pyfdn_match_energy_decay_mean"])
 
+    from synth_setter.models.components.audio_distance import MultiScaleSpectralDistance
+    from synth_setter.models.vst_flow_finetune_module import VSTFlowFinetuneModule
+
+    finetune = VSTFlowFinetuneModule(
+        encoder=model.encoder,
+        vector_field=model.vector_field,
+        optimizer=torch.optim.Adam,
+        scheduler=None,
+        base_checkpoint=None,
+        num_params=cfg.model.num_params,
+        sample_rate=44_100,
+        signal_length=176_400,
+        render_batch_size=1,
+        control_t_min=0.0,
+        cfg_dropout_rate=0.0,
+        cost=MultiScaleSpectralDistance(sample_rate=44_100),
+        renderer=model.audio_loss.renderer,
+    )
+    assert batch["audio"].ndim == 3
+    finetune_step = finetune._train_step(batch)
+    finetune_step.loss.backward()
+    assert torch.isfinite(finetune_step.loss)
+    assert any(
+        parameter.grad is not None and torch.count_nonzero(parameter.grad) > 0
+        for parameter in finetune.vector_field.control.parameters()
+    )
+    for stage in ("validation", "test", "predict"):
+        getattr(finetune, f"on_{stage}_batch_start")(batch, 0)
+        with torch.inference_mode():
+            sampled = finetune._sample(
+                finetune._get_conditioning_from_batch(batch), batch["noise"], 1, 1.0
+            )
+        assert sampled.shape == batch["params"].shape
+        assert torch.isfinite(sampled).all()
+        getattr(finetune, f"on_{stage}_batch_end")(None, batch, 0)
+
 
 @pytest.mark.slow
 @pytest.mark.parametrize(

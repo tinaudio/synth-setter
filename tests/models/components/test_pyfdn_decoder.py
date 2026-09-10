@@ -65,16 +65,23 @@ def test_decoder_arbitrary_out_of_range_row_matches_offline_mapping(
     _assert_native_mapping_matches(actual, expected, dtype=dtype)
 
 
-def test_decoder_float32_delay_half_boundary_uses_offline_precision() -> None:
-    """Promotion before affine decoding preserves an unstable half boundary."""
+@pytest.mark.parametrize("prediction, delay", [(-0.90875, 437.0), (-0.9987499713897705, 401.0)])
+def test_decoder_float32_delay_half_boundary_uses_offline_precision(
+    prediction: float, delay: float
+) -> None:
+    """Promotion before affine decoding preserves an unstable half boundary.
+
+    :param prediction: Float32 model coordinate adjacent to a rounding boundary.
+    :param delay: Native delay selected by the canonical promoted calculation.
+    """
     decoder = PyFDNParameterDecoder("pyfdn_n8_mono_householder")
     row = torch.zeros(decoder.spec.encoded_width, dtype=torch.float32)
-    row[0] = -0.90875
+    row[0] = prediction
 
     actual = decoder(row)
     expected, _ = decode_model_output(row.numpy(), decoder.spec)
 
-    assert actual["delays"][0].item() == 437.0
+    assert actual["delays"][0].item() == delay
     _assert_native_mapping_matches(actual, expected, dtype=row.dtype)
 
 
