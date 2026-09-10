@@ -38,12 +38,13 @@ We compute the following metrics:
 
 import math
 import multiprocessing
+import numbers
 import os
 import shutil
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Literal
+from typing import Literal, SupportsFloat
 
 import click
 import librosa
@@ -70,6 +71,13 @@ from synth_setter.evaluation.response_losses import (
 # the write sites below still spell them literally.
 AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
 type ReverbMetricBackend = Literal["pyfdn"]
+type AudioChannelPolicy = Literal[
+    "mono-only",
+    "stereo-only",
+    "corresponding-channels",
+    "global-joint",
+    "explicit-downmix",
+]
 type AudioEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 
 # Per-sample columns holding raw octave-band parameters; they feed the dataset-level
@@ -122,6 +130,111 @@ MEL_PARAMS = [
     (25, 10, 64),
     (100, 50, 128),
 ]
+_MSS_ANALYSIS_LENGTHS_MS = tuple(
+    length
+    for window_ms, hop_ms, _n_mels in MEL_PARAMS
+    for length in (("n_fft", window_ms), ("hop_length", hop_ms))
+)
+_MFCC_WINDOW_MS = 50.0
+_MFCC_HOP_MS = 10.0
+_MFCC_ANALYSIS_LENGTHS_MS = (("n_fft", _MFCC_WINDOW_MS), ("hop_length", _MFCC_HOP_MS))
+_STFT_WINDOW_MS = 50.0
+_STFT_HOP_MS = 20.0
+_STFT_ANALYSIS_LENGTHS_MS = (("n_fft", _STFT_WINDOW_MS), ("hop_length", _STFT_HOP_MS))
+_RMS_WINDOW_MS = 50.0
+_RMS_HOP_MS = 25.0
+_RMS_ANALYSIS_LENGTHS_MS = (("frame_length", _RMS_WINDOW_MS), ("hop_length", _RMS_HOP_MS))
+
+
+def _validate_audio_pair(
+    target: np.ndarray,
+    pred: np.ndarray,
+    *,
+    channel_policy: AudioChannelPolicy,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Validate one channel-first real numeric audio pair.
+
+    Integer samples are widened to float64 without scaling; floating-point arrays retain
+    their dtype and values.
+
+    :param target: Integer or floating-point audio shaped ``(channels, samples)``.
+    :param pred: Integer or floating-point audio with exactly the same shape.
+    :param channel_policy: Metric channel contract used to constrain the channel count.
+    :returns: Validated target and prediction arrays.
+    :raises ValueError: Inputs violate the selected channel contract.
+    """
+    target_array = np.asarray(target)
+    pred_array = np.asarray(pred)
+    if target_array.ndim != 2 or pred_array.ndim != 2:
+        raise ValueError(
+            "target and pred must be channel-first (channels, samples) arrays; "
+            f"got {target_array.shape} and {pred_array.shape}"
+        )
+    if target_array.shape != pred_array.shape:
+        raise ValueError(
+            f"target and pred must have the same shape; got {target_array.shape} and {pred_array.shape}"
+        )
+    channels, samples = target_array.shape
+    if channels == 0 or samples == 0:
+        raise ValueError("target and pred must have at least one channel and one sample")
+    if channel_policy == "mono-only" and channels != 1:
+        raise ValueError(f"mono-only metric requires shape (1, samples); got {target_array.shape}")
+    if channel_policy == "stereo-only" and channels != 2:
+        raise ValueError(
+            f"stereo-only metric requires shape (2, samples); got {target_array.shape}"
+        )
+    arrays = (target_array, pred_array)
+    if any(array.dtype.kind not in "iuf" for array in arrays):
+        raise ValueError("target and pred must be real numeric arrays")
+    if np.issubdtype(target_array.dtype, np.integer):
+        target_array = target_array.astype(np.float64)
+    if np.issubdtype(pred_array.dtype, np.integer):
+        pred_array = pred_array.astype(np.float64)
+    if not (np.isfinite(target_array).all() and np.isfinite(pred_array).all()):
+        raise ValueError("target and pred must contain only finite values")
+    return target_array, pred_array
+
+
+def _normalize_sample_rate(sample_rate: SupportsFloat) -> float:
+    """Return a finite positive real sample rate as a float.
+
+    :param sample_rate: Audio sample rate in Hz.
+    :returns: Float accepted by downstream signal transforms.
+    :raises ValueError: The rate is boolean, non-real, non-finite, or non-positive.
+    """
+    if not isinstance(sample_rate, numbers.Real) or isinstance(sample_rate, (bool, np.bool_)):
+        raise ValueError("sample_rate must be a finite positive number")
+    try:
+        normalized = float(sample_rate)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("sample_rate must be a finite positive number") from exc
+    if not math.isfinite(normalized) or normalized <= 0.0:
+        raise ValueError("sample_rate must be a finite positive number")
+    return normalized
+
+
+def _validate_analysis_lengths(
+    metric_name: str,
+    sample_rate: float,
+    lengths_ms: tuple[tuple[str, float], ...],
+) -> None:
+    """Reject rates that truncate a metric's derived sample lengths to zero.
+
+    :param metric_name: Public metric name used in validation errors.
+    :param sample_rate: Validated sample rate in Hz.
+    :param lengths_ms: Derived length names and their durations in milliseconds.
+    :raises ValueError: Any derived length is not a positive sample count.
+    """
+    invalid = [
+        f"{name} ({duration_ms:g} ms)"
+        for name, duration_ms in lengths_ms
+        if int(duration_ms * sample_rate / 1000.0) <= 0
+    ]
+    if invalid:
+        raise ValueError(
+            f"{metric_name} sample_rate must produce positive analysis lengths; "
+            f"invalid {', '.join(invalid)}"
+        )
 
 
 def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0) -> list[np.ndarray]:
@@ -151,14 +264,19 @@ def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0) -> list[np.nd
     return mel_specs
 
 
-def compute_mss(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
-    """Return mean multi-scale spectrogram distance between ``target`` and ``pred``.
+def compute_mss_corresponding_channels(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return MSS distance over corresponding channels without downmixing.
 
-    :param target: Target audio, shape ``(C, T)``.
-    :param pred: Predicted audio, same shape as ``target``.
-    :param sample_rate: Sample rate in Hz; governs the mel window and hop lengths.
-    :returns: Mean absolute spectrogram difference averaged across mel scales.
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
+    :param sample_rate: Finite positive sample rate in Hz.
+    :returns: Mean absolute spectrogram difference across channels and mel scales.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="corresponding-channels")
+    sample_rate = _normalize_sample_rate(sample_rate)
+    _validate_analysis_lengths("MSS", sample_rate, _MSS_ANALYSIS_LENGTHS_MS)
     logger.info("Computing MSS...")
     target_specs = compute_mel_specs(target, sample_rate)
     pred_specs = compute_mel_specs(pred, sample_rate)
@@ -169,6 +287,9 @@ def compute_mss(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100
 
     dist = dist / len(target_specs)
     return dist
+
+
+compute_mss = compute_mss_corresponding_channels
 
 
 scatter = None
@@ -192,15 +313,18 @@ def compute_jtfs(y: np.ndarray, J: int = 10, Q: int = 12) -> np.ndarray:
     return scatter(y)
 
 
-def compute_jtfs_distance(target: np.ndarray, pred: np.ndarray, J: int = 10, Q: int = 12) -> float:
-    """Return mean L1 JTFS distance between ``target`` and ``pred``.
+def compute_jtfs_distance_corresponding_channels(
+    target: np.ndarray, pred: np.ndarray, J: int = 10, Q: int = 12
+) -> float:
+    """Return JTFS distance over corresponding channels without downmixing.
 
-    :param target: Target audio, shape ``(C, T)``.
-    :param pred: Predicted audio, same shape as ``target``.
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
     :param J: Log-scale resolution forwarded to :func:`compute_jtfs`.
     :param Q: Quality factor forwarded to :func:`compute_jtfs`.
-    :returns: Mean absolute difference of scattering coefficients.
+    :returns: Mean absolute difference across channel scattering coefficients.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="corresponding-channels")
     logger.info("Computing JTFS...")
 
     target_jtfs = compute_jtfs(target, J, Q)
@@ -208,6 +332,9 @@ def compute_jtfs_distance(target: np.ndarray, pred: np.ndarray, J: int = 10, Q: 
 
     dist = np.mean(np.abs(target_jtfs - pred_jtfs))
     return dist
+
+
+compute_jtfs_distance = compute_jtfs_distance_corresponding_channels
 
 
 def compute_mfcc(target: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray:
@@ -218,8 +345,8 @@ def compute_mfcc(target: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray
     :param sample_rate: Sample rate in Hz; governs window and hop lengths.
     :returns: MFCC array; shape ``(20, frames)`` for 1-D input, ``(C, 20, frames)`` for 2-D.
     """
-    window_length = int(0.05 * sample_rate)
-    hop_length = int(0.01 * sample_rate)
+    window_length = int(_MFCC_WINDOW_MS * sample_rate / 1000.0)
+    hop_length = int(_MFCC_HOP_MS * sample_rate / 1000.0)
 
     mfcc = librosa.feature.mfcc(
         y=target,
@@ -243,14 +370,22 @@ def _l1_distance(a: np.ndarray, b: np.ndarray) -> float:
     return np.mean(np.abs(a - b))
 
 
-def compute_wmfcc(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
-    """Return DTW-normalised MFCC distance between ``target`` and ``pred``.
+def compute_wmfcc_global_joint(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return wMFCC after joining channel and coefficient dimensions.
 
-    :param target: Target audio, shape ``(C, T)``.
-    :param pred: Predicted audio, same shape as ``target``.
-    :param sample_rate: Sample rate in Hz; governs the MFCC window and hop lengths.
-    :returns: DTW-normalised L1 distance between MFCC sequences.
+    Multichannel DTW joins channel and coefficient dimensions; it does not downmix or
+    score channels independently.
+
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
+    :param sample_rate: Finite positive sample rate in Hz.
+    :returns: DTW-normalised L1 distance between joint MFCC sequences.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="global-joint")
+    sample_rate = _normalize_sample_rate(sample_rate)
+    _validate_analysis_lengths("wMFCC", sample_rate, _MFCC_ANALYSIS_LENGTHS_MS)
     logger.info("Computing wMFCC...")
 
     target_mfcc = compute_mfcc(target, sample_rate)
@@ -261,6 +396,9 @@ def compute_wmfcc(target: np.ndarray, pred: np.ndarray, sample_rate: float = 441
 
     dist = dtw(target_mfcc.T, pred_mfcc.T, dist_method=_l1_distance, distance_only=True)
     return dist.normalizedDistance
+
+
+compute_wmfcc = compute_wmfcc_global_joint
 
 
 pesto_model = None
@@ -295,16 +433,24 @@ def get_pesto_activations(
     return target_f0[mask].numpy(), pred_f0[mask].numpy()
 
 
-def compute_f0(target: np.ndarray, pred: np.ndarray) -> float:
-    """Return mean absolute F0 error at high-confidence PESTO frames.
+def compute_f0_downmix(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return PESTO F0 error after explicit channel-mean downmixing.
 
-    :param target: Target audio, shape ``(C, T)``.
-    :param pred: Predicted audio, same shape as ``target``.
-    :returns: Mean Hz error at frames where both signals exceed the 0.85 confidence threshold.
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
+    :param sample_rate: Finite positive sample rate in Hz.
+    :returns: Mean Hz error at frames where both signals exceed the confidence threshold.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="explicit-downmix")
+    sample_rate = _normalize_sample_rate(sample_rate)
     logger.info("Computing f0...")
-    target_f0, pred_f0 = get_pesto_activations(target, pred)
+    target_f0, pred_f0 = get_pesto_activations(target, pred, sample_rate)
     return np.mean(np.abs(target_f0 - pred_f0))
+
+
+compute_f0 = compute_f0_downmix
 
 
 def get_stft(y: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray:
@@ -314,8 +460,8 @@ def get_stft(y: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray:
     :param sample_rate: Sample rate in Hz; governs window and hop lengths.
     :returns: Magnitude spectrogram, shape ``(frames, n_fft // 2 + 1)``.
     """
-    win_length = int(0.05 * sample_rate)
-    hop_length = int(0.02 * sample_rate)
+    win_length = int(_STFT_WINDOW_MS * sample_rate / 1000.0)
+    hop_length = int(_STFT_HOP_MS * sample_rate / 1000.0)
     stft = librosa.stft(
         y.mean(axis=0),
         n_fft=win_length,
@@ -344,14 +490,19 @@ def batched_wasserstein_distance_np(
     return distance
 
 
-def compute_sot(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
-    """Return mean Sliced Optimal Transport distance between spectrograms.
+def compute_sot_downmix(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return SOT after explicitly downmixing each waveform by channel mean.
 
-    :param target: Target audio, shape ``(C, T)``.
-    :param pred: Predicted audio, same shape as ``target``.
-    :param sample_rate: Sample rate in Hz; governs the STFT window and hop lengths.
-    :returns: Mean Wasserstein distance across frequency bins.
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
+    :param sample_rate: Finite positive sample rate in Hz.
+    :returns: Mean Wasserstein distance across frequency bins after downmixing.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="explicit-downmix")
+    sample_rate = _normalize_sample_rate(sample_rate)
+    _validate_analysis_lengths("SOT", sample_rate, _STFT_ANALYSIS_LENGTHS_MS)
     logger.info("Computing SOT...")
     target_stft = get_stft(target, sample_rate)
     pred_stft = get_stft(pred, sample_rate)
@@ -363,10 +514,13 @@ def compute_sot(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100
     return dists.mean()
 
 
-def compute_octave_rt60_log_rmse(
-    target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0
+compute_sot = compute_sot_downmix
+
+
+def compute_octave_rt60_log_rmse_mono_only(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
 ) -> float:
-    """Return log-RMSE between valid paired octave-band RT60 estimates.
+    """Return mono-only log-RMSE between valid paired octave-band RT60 estimates.
 
     pyFDN returns zero when a band's decay cannot be fitted. Such bands and any
     non-finite estimates are excluded jointly so logarithms cannot contaminate logs.
@@ -377,6 +531,8 @@ def compute_octave_rt60_log_rmse(
     :returns: Root mean squared natural-log RT60 ratio across valid octave bands.
     :raises ValueError: Shapes, centre frequencies, or fitted bands are invalid.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="mono-only")
+    sample_rate = _normalize_sample_rate(sample_rate)
     target_ir, pred_ir = validate_mono_impulse_response_pair(target, pred)
     target_rt, target_centres = estimate_rt_bands(target_ir, sample_rate)
     pred_rt, pred_centres = estimate_rt_bands(pred_ir, sample_rate)
@@ -390,8 +546,11 @@ def compute_octave_rt60_log_rmse(
     return float(np.sqrt(np.mean(log_error**2)))
 
 
-def compute_octave_edc_rmse_db(
-    target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0
+compute_octave_rt60_log_rmse = compute_octave_rt60_log_rmse_mono_only
+
+
+def compute_octave_edc_rmse_db_mono_only(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
 ) -> float:
     """Return pyFDN's octave-band energy-decay-curve RMSE in dB.
 
@@ -402,11 +561,16 @@ def compute_octave_edc_rmse_db(
     :param sample_rate: Sample rate in Hz.
     :returns: RMS dB difference over target-valid octave-band decay frames.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="mono-only")
+    sample_rate = _normalize_sample_rate(sample_rate)
     return compute_pyfdn_match_energy_decay(target, pred, sample_rate)
 
 
-def compute_acoustic_parameter_metrics(
-    target: np.ndarray, pred: np.ndarray, sample_rate: float
+compute_octave_edc_rmse_db = compute_octave_edc_rmse_db_mono_only
+
+
+def compute_acoustic_parameter_metrics_mono_only(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat
 ) -> dict[str, float]:
     """Return Götz et al. T30/C50 errors plus the raw per-band parameters of both sides.
 
@@ -417,6 +581,8 @@ def compute_acoustic_parameter_metrics(
         parameter, octave band and side; unfittable T30 bands read ``NaN``. Invalid
         shapes and a T30 that fits on no band on both sides raise ``ValueError``.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="mono-only")
+    sample_rate = _normalize_sample_rate(sample_rate)
     target_ir, pred_ir = validate_mono_impulse_response_pair(target, pred)
     target_t30, _ = acoustic_parameters.octave_band_t30(target_ir, sample_rate)
     pred_t30, _ = acoustic_parameters.octave_band_t30(pred_ir, sample_rate)
@@ -433,6 +599,9 @@ def compute_acoustic_parameter_metrics(
             metrics[_acoustic_parameter_column(name, centre, "target")] = float(target_value)
             metrics[_acoustic_parameter_column(name, centre, "pred")] = float(pred_value)
     return metrics
+
+
+compute_acoustic_parameter_metrics = compute_acoustic_parameter_metrics_mono_only
 
 
 def compute_acoustic_parameter_pcc(per_sample: pd.DataFrame) -> dict[str, float]:
@@ -483,17 +652,22 @@ def compute_fad(audio_dirs: list[Path], encode: AudioEncodeFn) -> float:
     )
 
 
-def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
-    """Return the cosine similarity of the RMS amplitude envelopes of ``target`` and ``pred``.
+def compute_rms_downmix(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return RMS-envelope cosine similarity after explicit channel-mean downmixing.
 
-    :param target: Target audio, shape ``(C, T)``.
-    :param pred: Predicted audio, same shape as ``target``.
-    :param sample_rate: Sample rate in Hz; governs window and hop lengths.
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
+    :param sample_rate: Finite positive sample rate in Hz.
     :returns: Cosine similarity in ``[-1, 1]``, or ``0.0`` when either envelope is silent.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="explicit-downmix")
+    sample_rate = _normalize_sample_rate(sample_rate)
+    _validate_analysis_lengths("RMS", sample_rate, _RMS_ANALYSIS_LENGTHS_MS)
     logger.info("Computing amp env...")
-    win_length = int(0.05 * sample_rate)
-    hop_length = int(0.025 * sample_rate)
+    win_length = int(_RMS_WINDOW_MS * sample_rate / 1000.0)
+    hop_length = int(_RMS_HOP_MS * sample_rate / 1000.0)
 
     target_rms = librosa.feature.rms(
         y=target.mean(axis=0), frame_length=win_length, hop_length=hop_length
@@ -520,6 +694,9 @@ def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100
     cosine_sim = np.dot(target_rms[0], pred_rms[0]) / denom
 
     return cosine_sim.mean()
+
+
+compute_rms = compute_rms_downmix
 
 
 # (short, long) integration times in ms — DiffVox's ``s_taus``/``l_taus`` for the MLDR loss.
@@ -565,23 +742,22 @@ def _loudness_dynamic_range(
     return np.log(short_env) - np.log(long_env)
 
 
-def compute_mldr(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
-    """Return the multi-scale loudness dynamic range distance between ``target`` and ``pred``.
+def compute_mldr_corresponding_channels(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return MLDR averaged over corresponding channels without downmixing.
 
     Sums, over ``LDR_SCALES_MS``, the mean absolute difference of the two signals' log
     short-to-long energy-envelope ratios (DiffVox eq. 15). Gain-invariant by construction.
 
-    :param target: Target audio, shape ``(C, T)``; channels are scored as independent rows.
-    :param pred: Predicted audio, same shape as ``target``.
-    :param sample_rate: Sample rate in Hz; governs the envelope time constants.
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
+    :param sample_rate: Finite positive sample rate in Hz.
     :returns: Non-negative distance in natural-log units.
-    :raises ValueError: ``target`` and ``pred`` are not two-dimensional arrays of one shape.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="corresponding-channels")
+    sample_rate = _normalize_sample_rate(sample_rate)
     logger.info("Computing MLDR...")
-    if target.ndim != 2 or target.shape != pred.shape:
-        raise ValueError(
-            f"target and pred must share one (C, T) shape; got {target.shape} and {pred.shape}"
-        )
     target_energy = np.maximum(np.square(target, dtype=np.float64), _LDR_ENERGY_FLOOR)
     pred_energy = np.maximum(np.square(pred, dtype=np.float64), _LDR_ENERGY_FLOOR)
 
@@ -593,8 +769,11 @@ def compute_mldr(target: np.ndarray, pred: np.ndarray, sample_rate: float = 4410
     return dist
 
 
-def compute_mldr_mid_side(
-    target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0
+compute_mldr = compute_mldr_corresponding_channels
+
+
+def compute_mldr_mid_side_stereo_only(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
 ) -> float:
     """Return MLDR after an energy-preserving stereo mid/side transform.
 
@@ -604,16 +783,8 @@ def compute_mldr_mid_side(
     :returns: Non-negative mid/side distance in natural-log units.
     :raises ValueError: Inputs are not finite, matching, nonempty stereo arrays.
     """
-    if (
-        target.ndim != 2
-        or target.shape[0] != 2
-        or target.shape[-1] == 0
-        or target.shape != pred.shape
-    ):
-        raise ValueError(
-            "target and pred must have matching nonempty stereo (2, T) shapes; "
-            f"got {target.shape} and {pred.shape}"
-        )
+    target, pred = _validate_audio_pair(target, pred, channel_policy="stereo-only")
+    sample_rate = _normalize_sample_rate(sample_rate)
     scale = math.sqrt(2.0)
     target_float = np.asarray(target, dtype=np.float64)
     pred_float = np.asarray(pred, dtype=np.float64)
@@ -640,7 +811,10 @@ def compute_mldr_mid_side(
     if peak > safe_energy_peak:
         target_mid_side /= peak
         pred_mid_side /= peak
-    return compute_mldr(target_mid_side, pred_mid_side, sample_rate)
+    return compute_mldr_corresponding_channels(target_mid_side, pred_mid_side, sample_rate)
+
+
+compute_mldr_mid_side = compute_mldr_mid_side_stereo_only
 
 
 def compute_metrics_on_dir(
@@ -663,14 +837,16 @@ def compute_metrics_on_dir(
     if target_sample_rate != pred_sample_rate:
         raise ValueError("target and predicted audio must have the same sample rate")
     metrics = {
-        "mss": compute_mss(target, pred, target_sample_rate),
-        "wmfcc": compute_wmfcc(target, pred, target_sample_rate),
-        "sot": compute_sot(target, pred, target_sample_rate),
-        "rms": compute_rms(target, pred, target_sample_rate),
-        "mldr": compute_mldr(target, pred, target_sample_rate),
+        "mss": compute_mss_corresponding_channels(target, pred, target_sample_rate),
+        "wmfcc": compute_wmfcc_global_joint(target, pred, target_sample_rate),
+        "sot": compute_sot_downmix(target, pred, target_sample_rate),
+        "rms": compute_rms_downmix(target, pred, target_sample_rate),
+        "mldr": compute_mldr_corresponding_channels(target, pred, target_sample_rate),
     }
     if target.shape[0] == 2 and pred.shape[0] == 2:
-        metrics["mldr_mid_side"] = compute_mldr_mid_side(target, pred, target_sample_rate)
+        metrics["mldr_mid_side"] = compute_mldr_mid_side_stereo_only(
+            target, pred, target_sample_rate
+        )
     if renderer_backend == "pyfdn":
         response_losses = compute_pyfdn_response_losses(target, pred, target_sample_rate)
         metrics.update(response_losses)
@@ -680,12 +856,14 @@ def compute_metrics_on_dir(
                     target, pred, target_sample_rate
                 ),
                 "octave_edc_rmse_db": response_losses["pyfdn_match_energy_decay"],
-                "octave_rt60_log_rmse": compute_octave_rt60_log_rmse(
+                "octave_rt60_log_rmse": compute_octave_rt60_log_rmse_mono_only(
                     target, pred, target_sample_rate
                 ),
             }
         )
-        metrics.update(compute_acoustic_parameter_metrics(target, pred, target_sample_rate))
+        metrics.update(
+            compute_acoustic_parameter_metrics_mono_only(target, pred, target_sample_rate)
+        )
     return metrics
 
 
