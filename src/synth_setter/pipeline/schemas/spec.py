@@ -431,8 +431,8 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         synth = normalized.get("synth")
         is_explicit_contract = (
             "render_contract_version" in normalized
-            or isinstance(synth, dict)
-            and "format" in synth
+            or isinstance(synth, SynthSpec)
+            or (isinstance(synth, dict) and "format" in synth)
         )
         if not is_explicit_contract:
             normalized["render_contract_version"] = 1

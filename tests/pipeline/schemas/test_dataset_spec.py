@@ -290,6 +290,30 @@ class TestRenderConfig:
         assert cfg.plugin_path == ""
         assert cfg.plugin_state_path == ""
 
+    def test_explicit_synth_object_and_dict_use_same_render_contract(self) -> None:
+        """Canonical synth input shapes retain identical provenance in shard identity."""
+        synth = SYNTHS[SynthName("faust_bright_organ")]
+        values: dict[str, Any] = {
+            "renderer_backend": "dawdreamer",
+            "backend_version": "0.8.3",
+            "gui_toggle_cadence": "never",
+            "sample_rate": 44100,
+            "channels": 2,
+            "velocity": 100,
+            "signal_duration_seconds": 4.0,
+            "min_loudness": -55.0,
+            "samples_per_shard": 1,
+        }
+
+        from_object = RenderConfig(synth=synth, **values)
+        from_dict = RenderConfig.model_validate({"synth": synth.model_dump(), **values})
+
+        assert from_object.render_contract_version == from_dict.render_contract_version == 2
+        assert (
+            from_object.shard_metadata().render_contract_digest
+            == from_dict.shard_metadata().render_contract_digest
+        )
+
     @pytest.mark.parametrize(
         ("overrides", "message"),
         [
