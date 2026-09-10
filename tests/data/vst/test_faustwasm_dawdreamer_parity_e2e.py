@@ -67,6 +67,7 @@ _PARITY_LIMITS = {
         "sot_max": 0.0001,
         "wmfcc_max": 0.06,
     },
+    # Faust 2.70.3 A/B/A maxima were 3.109090, 1.170763, 0.997801, 0.001048, and 1.901054.
     ("faustcpp", "faustwasm"): {
         "mel_rmse_max": 3.75,
         "mss_max": 1.5,

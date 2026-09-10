@@ -101,8 +101,13 @@ class FaustCppRenderer(AudioRenderer):
             or not float(self.sample_rate).is_integer()
         ):
             raise ValueError("sample_rate must be a positive whole number")
+        if self.sample_rate > _CPP_INT_MAX:
+            raise ValueError("sample_rate exceeds native int range")
         if not math.isfinite(self.signal_duration_seconds) or self.signal_duration_seconds <= 0:
             raise ValueError("signal_duration_seconds must be finite and positive")
+        frames = self.sample_rate * self.signal_duration_seconds
+        if not math.isfinite(frames) or frames > _CPP_INT_MAX:
+            raise ValueError("sample_rate * signal_duration_seconds exceeds native int range")
         if type(self.channels) is not int or self.channels < 1:
             raise ValueError("channels must be a positive integer")
 

@@ -170,6 +170,35 @@ def test_faustcpp_block_size_above_cpp_int_range_raises() -> None:
         make_audio_renderer(config)
 
 
+@pytest.mark.parametrize(
+    ("updates", "match"),
+    [
+        pytest.param(
+            {"sample_rate": 2_147_483_648.0},
+            "sample_rate exceeds native int range",
+            id="sample-rate",
+        ),
+        pytest.param(
+            {"signal_duration_seconds": 50_000.0},
+            "sample_rate \\* signal_duration_seconds exceeds native int range",
+            id="frame-count",
+        ),
+    ],
+)
+def test_faustcpp_render_geometry_above_cpp_int_range_raises(
+    updates: dict[str, float], match: str
+) -> None:
+    """Native request dimensions reject values C++ cannot represent.
+
+    :param updates: Render geometry override beyond the C++ integer range.
+    :param match: Required validation diagnostic.
+    """
+    config = _config().model_copy(update=updates)
+
+    with pytest.raises(ValueError, match=match):
+        make_audio_renderer(config)
+
+
 def test_faustcpp_missing_toolchain_reports_install_command(monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing compiler provenance fails with an actionable dependency message.
 

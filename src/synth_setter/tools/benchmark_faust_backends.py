@@ -260,6 +260,7 @@ def run_benchmark(output: Path, *, rows: int, trials: int, seed: int, block_size
         raise ValueError("rows, trials, and block_size must be positive")
     if output.exists() and any(output.iterdir()):
         raise ValueError(f"benchmark output directory is not empty: {output}")
+    source = _git_provenance()
     output.mkdir(parents=True, exist_ok=True)
     versions = {backend: extract_backend_version(backend) for backend in _BACKENDS}
     synth_params, note_params = _fixed_corpus(rows, seed)
@@ -301,7 +302,7 @@ def run_benchmark(output: Path, *, rows: int, trials: int, seed: int, block_size
         },
         "versions": versions,
         "host": {"platform": platform.platform(), "python": sys.version},
-        "source": _git_provenance(),
+        "source": source,
         "parameter_rows_sha256": hashlib.sha256(reference_params.tobytes()).hexdigest(),
         "samples": [asdict(sample) for sample in samples],
         "summary": {
