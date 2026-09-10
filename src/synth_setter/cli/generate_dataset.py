@@ -177,7 +177,7 @@ def _run_oracle_eval_subprocess(
     backend_version_override = (
         []
         if render.backend_version is None
-        else [f"render.backend_version={render.backend_version}"]
+        else [f"++render.backend_version={render.backend_version}"]
     )
     argv = [
         sys.executable,
@@ -193,14 +193,14 @@ def _run_oracle_eval_subprocess(
         "render=vst",
         f"synth={render.synth.name}",
         *(
-            f"synth.{field}={value}"
+            f"++synth.{field}={value}"
             for field, value in render.synth.model_dump(
                 exclude={"name"}, exclude_none=True
             ).items()
         ),
         f"render.renderer_backend={render.renderer_backend}",
         *backend_version_override,
-        f"render.render_contract_version={render.render_contract_version}",
+        f"++render.render_contract_version={render.render_contract_version}",
         f"render.plugin_reload_cadence={render.plugin_reload_cadence}",
         f"render.gui_toggle_cadence={render.gui_toggle_cadence}",
         f"render.sample_rate={render.sample_rate}",
