@@ -503,11 +503,6 @@ def test_finetune_train_step_unequal_column_errors_remain_distinct(tmp_path: Pat
     for parameter in base.parameters():
         torch.nn.init.zeros_(parameter)
     module = _finetune(_base_checkpoint(tmp_path, base), control_mode="null")
-
-    def fixed_time(batch_size: int, device: torch.device) -> torch.Tensor:
-        return torch.full((batch_size, 1), 0.5, device=device)
-
-    module._sample_time = fixed_time  # pyright: ignore[reportAttributeAccessIssue]
     noise = torch.zeros(_BATCH, _WIDTH)
     noise[:, :3] = torch.tensor([1.0, 2.0, 3.0])
     batch = {
@@ -519,7 +514,6 @@ def test_finetune_train_step_unequal_column_errors_remain_distinct(tmp_path: Pat
     outputs = module._train_step(batch)
 
     assert torch.equal(outputs.per_param_flow_mse[:4], torch.tensor([1.0, 4.0, 9.0, 0.0]))
-    assert torch.equal(outputs.per_param_endpoint_mse[:4], torch.tensor([0.25, 1.0, 2.25, 0.0]))
 
 
 @pytest.mark.slow
