@@ -12,7 +12,7 @@ import click
 import torch
 from pydantic import BaseModel, Field, FiniteFloat
 
-from synth_setter.models.flow_onnx import export_flow_onnx
+from synth_setter.models.flow_onnx import branch_weights, export_flow_onnx
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
 _WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
@@ -100,13 +100,14 @@ def sample_in_browser(
         {
             "noise": noise.flatten().tolist(),
             "steps": sample_steps,
-            "guidance": guidance.tolist(),
+            "branch_weights": list(branch_weights("both", *guidance.tolist())),
             "token": token,
         }
     )
     (output_dir / "input.json").write_text(json.dumps(payload, allow_nan=False))
     routes = {
-        f"/{name}": _WEB_ROOT / name for name in ("index.html", "app.mjs", "flow.mjs", "rk4.mjs")
+        f"/{name}": _WEB_ROOT / name
+        for name in ("index.html", "app.mjs", "flow.mjs", "guidance.mjs", "rk4.mjs")
     }
     routes["/"] = _WEB_ROOT / "index.html"
     routes.update(

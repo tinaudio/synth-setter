@@ -22,6 +22,7 @@ from synth_setter.cli.sketch_render import cfg_arm_name, cfg_grid, load_audio_fi
 from synth_setter.conditioning import SketchControlSpec
 from synth_setter.data.third_party_datamodule import AudioDecodeError, decode_clip
 from synth_setter.data.vst.core import write_wav
+from synth_setter.features import profile_controls
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
 _CLI_HELP_TIMEOUT_SECONDS = 120
@@ -515,11 +516,7 @@ def test_prepare_inputs_normalizes_mel_and_zeros_weak_pitch(
     controls[2, 0] = 0.1
     controls[2, 13] = 0.11
     monkeypatch.setattr(sketch_render, "make_spectrogram", lambda *args: np.full(shape, 4.0))
-    monkeypatch.setattr(
-        sketch_render,
-        "extract_sketch_controls",
-        lambda *args: controls,
-    )
+    monkeypatch.setattr(profile_controls, "extract_sketch_controls", lambda *args: controls)
     model = cast(
         VSTFlowMatchingModule,
         SimpleNamespace(
