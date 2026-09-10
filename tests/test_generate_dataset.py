@@ -36,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -88,13 +89,13 @@ from tests.helpers.wandb_offline import read_history_rows, read_run_labels, read
 # only keys in ``metrics.json`` (see ``synth_setter.evaluation.compute_audio_metrics``).
 _ORACLE_AUDIO_METRICS = ("mss", "wmfcc", "sot", "rms", "mldr")
 _ORACLE_EVAL_SUBPROCESS_TIMEOUT_SECONDS = 1200
+_WANDB_RUN_DISCOVERY_TIMEOUT_SECONDS = 10.0
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _REAL_PLUGIN_VST3 = (
     Path(PLUGIN_PATH) if Path(PLUGIN_PATH).is_absolute() else _REPO_ROOT / PLUGIN_PATH
 ).resolve()
 _KR106_PLUGIN_VST3 = _REPO_ROOT / "plugins" / "Ultramaster KR-106.vst3"
-_KR106_PRESET = _REPO_ROOT / "presets" / "ultramaster_kr106-base.vstpreset"
 
 # Moduleinfo-only VST3 bundle: extract_renderer_version reads its
 # Contents/moduleinfo.json and returns the pinned version without loading any
@@ -433,9 +434,12 @@ def test_from_hydra_renders_every_shard_to_fake_r2_then_resume_skips(
     ):
         from_hydra(cfg_dataset)
 
-    wandb_binaries = list(
-        Path(cfg_dataset.paths.output_dir).glob("wandb/offline-run-*/run-*.wandb")
-    )
+    wandb_pattern = "wandb/offline-run-*/run-*.wandb"
+    wandb_binaries = list(Path(cfg_dataset.paths.output_dir).glob(wandb_pattern))
+    deadline = time.monotonic() + _WANDB_RUN_DISCOVERY_TIMEOUT_SECONDS
+    while not wandb_binaries and time.monotonic() < deadline:
+        time.sleep(0.05)
+        wandb_binaries = list(Path(cfg_dataset.paths.output_dir).glob(wandb_pattern))
     wandb_run_missing = not wandb_binaries
     if wandb_binaries:
         assert len(wandb_binaries) == 1, f"expected one offline W&B run, got {wandb_binaries}"
@@ -912,12 +916,14 @@ def test_from_hydra_real_kr106_smoke_writes_finite_consumable_lance_shard(
 
     monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
     monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    synth_name = str(cfg_dataset_kr106_smoke.synth.name)
+    preset = _REPO_ROOT / str(cfg_dataset_kr106_smoke.synth.plugin_state_path)
     with open_dict(cfg_dataset_kr106_smoke):
         cfg_dataset_kr106_smoke.train_val_test_sizes = [2, 0, 0]
         cfg_dataset_kr106_smoke.synth.plugin_path = str(_KR106_PLUGIN_VST3)
-        cfg_dataset_kr106_smoke.synth.plugin_state_path = str(_KR106_PRESET)
+        cfg_dataset_kr106_smoke.synth.plugin_state_path = str(preset)
         cfg_dataset_kr106_smoke.render.samples_per_shard = 2
-        cfg_dataset_kr106_smoke.r2.prefix = "fake-r2/ultramaster-kr106-e2e/"
+        cfg_dataset_kr106_smoke.r2.prefix = f"fake-r2/{synth_name}-e2e/"
         cfg_dataset_kr106_smoke.logger = None
 
     spec = spec_from_cfg(cfg_dataset_kr106_smoke)

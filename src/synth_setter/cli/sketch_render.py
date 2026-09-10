@@ -23,7 +23,6 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from synth_setter.cli.clap_render import (
     _render_wav,
     _resolve_device,
-    _workspace_render_config,
     resolve_inverse_checkpoint,
 )
 from synth_setter.conditioning import conditioning_batch_key, resolve_sketch_controls
@@ -43,6 +42,7 @@ from synth_setter.model_cache import synth_setter_cache_dir
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.renderer_factory import anchor_render_preset
 from synth_setter.sketch import pool_sketch_controls
 from synth_setter.workspace import operator_workspace
 
@@ -231,7 +231,7 @@ def load_render_config() -> RenderConfig:
 
     :returns: Workspace-resolved render configuration.
     """
-    return _workspace_render_config(_load_settings().render)
+    return anchor_render_preset(_load_settings().render)
 
 
 def _path_sha256(path: Path) -> str:

@@ -14,6 +14,7 @@ from pydantic import (
     StrictStr,
 )
 
+from synth_setter.feature_flags import ResolvedFeatureFlags
 from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
 __all__ = ["TrainConfig"]
@@ -53,6 +54,10 @@ class TrainConfig(StrictAllowExtraModel):
     .. attribute :: ckpt_path
 
         Path to a Lightning checkpoint to resume from.
+
+    .. attribute :: feature_flags
+
+        Integer IDs resolved to registered runtime feature-flag records.
 
     .. attribute :: estimate_normalization_stats
 
@@ -101,6 +106,13 @@ class TrainConfig(StrictAllowExtraModel):
         description=(
             "Path to a Lightning checkpoint. If set, ``trainer.fit`` resumes from "
             "this checkpoint and ``trainer.test`` loads it as the test weights."
+        ),
+    )
+    feature_flags: ResolvedFeatureFlags = Field(
+        default_factory=list,
+        description=(
+            "Integer feature-flag IDs resolved to their registered number, full "
+            "environment-variable name, and description."
         ),
     )
     estimate_normalization_stats: StrictBool = Field(

@@ -459,6 +459,92 @@ def test_real_pyfdn_sketch_profile_with_mis_shaped_child_raises(
         module.setup("validate")
 
 
+def test_tiv_online_projects_audio_without_stored_sketch(tmp_path: Path) -> None:
+    """Online TIV reads waveform audio and never requests a sketch column.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    module = LanceVSTDataModule(
+        dataset_root=tmp_path,
+        batch_size=2,
+        sketch=SketchControlSpec(
+            profile="tiv", source="online", sample_rate=44_100, num_frames=32
+        ),
+        fake=True,
+        use_saved_mean_and_variance=False,
+        num_workers=0,
+        pin_memory=False,
+        param_spec_name=ParamSpecName("surge_xt"),
+    )
+
+    assert module.projection["train"] == ["param_array", "mel_spec", "audio"]
+    assert module.projection["val"] == ["param_array", "mel_spec", "audio"]
+    assert module.projection["test"] == ["param_array", "mel_spec", "audio"]
+
+
+def test_tiv_online_after_transfer_extracts_finite_controls(tmp_path: Path) -> None:
+    """Transferred waveform batches gain model-ready online TIV controls.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    module = LanceVSTDataModule(
+        dataset_root=tmp_path,
+        batch_size=2,
+        sketch=SketchControlSpec(
+            profile="tiv", source="online", sample_rate=44_100, num_frames=32
+        ),
+        fake=True,
+        use_saved_mean_and_variance=False,
+        num_workers=0,
+        pin_memory=False,
+        param_spec_name=ParamSpecName("surge_xt"),
+    )
+    batch = {
+        "audio": torch.zeros(2, 2, 4096),
+        "params": torch.zeros(2, 2),
+        "noise": torch.zeros(2, 2),
+    }
+
+    prepared = module.on_after_batch_transfer(batch, 0)
+
+    controls = prepared["sketch_ctrl"]
+    assert controls is not None
+    assert controls.shape == (2, 12, 32)
+    assert torch.isfinite(controls).all()
+    assert torch.count_nonzero(controls) == 0
+
+
+def test_tiv_cpu_after_transfer_preserves_reference_a4_coordinates(tmp_path: Path) -> None:
+    """The CPU datamodule route uses peak-based HPCP rather than STFT-bin chroma.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    pytest.importorskip("essentia")
+    module = LanceVSTDataModule(
+        dataset_root=tmp_path,
+        batch_size=1,
+        sketch=SketchControlSpec(
+            profile="tiv", source="online", sample_rate=44_100,
+            tiv_backend="essentia", num_frames=32,
+        ),
+        fake=True,
+        use_saved_mean_and_variance=False,
+        num_workers=0,
+        param_spec_name=ParamSpecName("surge_xt"),
+    )
+    samples = torch.arange(4096, dtype=torch.float32)
+    audio = torch.sin(2.0 * torch.pi * 440.0 * samples / 44_100)[None, None]
+
+    prepared = module.on_after_batch_transfer({"audio": audio}, 0)
+
+    controls = prepared["sketch_ctrl"]
+    assert controls is not None
+    expected = torch.tensor(
+        [0.0, 3.0, -8.0, 0.0, 0.0, -11.5, 15.0, 0.0, 0.0, 14.5, -7.5, 0.0]
+    )
+    torch.testing.assert_close(controls[0, :, 16], expected)
+
+
 def test_real_lance_split_with_legacy_flat_sketch_column_raises(tmp_path: Path) -> None:
     """A flat tensor in the configured column fails with a rewrite instruction.
 

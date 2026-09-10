@@ -18,6 +18,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
 from synth_setter.evaluation.audio_probe import run_audio_probe
+from synth_setter.feature_flags import apply_feature_flags
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
     dataset_artifact_ref,
@@ -500,6 +501,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     :raises SystemExit: With status 143 after Lightning handles SIGTERM during fit.
     :raises ValueError: If an evaluation-only experiment reaches the training entrypoint.
     """
+    apply_feature_flags(cfg)
     if cfg.get("evaluation_only", False):
         raise ValueError("evaluation-only experiment cannot run through training entrypoint")
     normalization_callback = _normalization_stats_callback(cfg)

@@ -66,12 +66,13 @@ class PyFDNParameterDecoder(nn.Module):
     @staticmethod
     @jaxtyped(typechecker=beartype)
     def _unit(values: Float[Tensor, _ANY_SHAPE]) -> Float[Tensor, _ANY_SHAPE]:
-        """Map ordinary model coordinates to their saturated unit domain.
+        """Clip ordinary coordinates in the forward pass with an affine surrogate gradient.
 
-        :param values: Model-space coordinates.
-        :returns: Coordinates affinely mapped and clipped to ``[0, 1]``.
+        :param values: Unconstrained model-space coordinates.
+        :returns: Exact unit-domain values with straight-through clipping gradients.
         """
-        return ((values + 1.0) / 2.0).clamp(0.0, 1.0)
+        unit = (values + 1.0) / 2.0
+        return unit.clamp(0.0, 1.0).detach() + (unit - unit.detach())
 
     @staticmethod
     @jaxtyped(typechecker=beartype)

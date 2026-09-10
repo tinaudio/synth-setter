@@ -52,6 +52,9 @@ task_name: "train"
 # overwrite from command line with `python train.py tags="[first_tag, second_tag]"`
 tags: ["dev"]
 
+# Integer IDs resolved through the runtime feature-flag registry.
+feature_flags: []
+
 # set False to skip model training
 train: True
 

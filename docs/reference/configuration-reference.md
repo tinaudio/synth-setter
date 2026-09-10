@@ -17,7 +17,7 @@ ______________________________________________________________________
 ### Why These Boundaries
 
 - **Pydantic strict** at trust boundaries — where data enters from external sources (user config YAML, JSON from R2, worker reports). Catches type errors, missing fields, and invalid values at parse time.
-- **Hydra DictConfig** for training — composable experiment configs validated by class constructors at instantiation. Hydra handles defaults, overrides, and interpolation natively.
+- **Hydra DictConfig** for training — composable experiment configs validated by class constructors at instantiation. Hydra handles defaults, overrides, and interpolation natively. The shared `feature_flags` list is an exception: train and eval resolve its integer IDs through a strict Pydantic registry before setup begins.
 - **Plain YAML for cloud infrastructure** — consumed by a launcher script that calls provider APIs before the training job starts. Different program, different time, no Hydra composition needed.
 - **No training input spec** — training is a single long-running job with no distributed coordination. The data pipeline's spec exists for reconciliation across hundreds of parallel workers; training has no equivalent need. Provenance is captured by W&B run metadata + frozen `config.yaml` in R2.
 
@@ -86,6 +86,7 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
 ```
 
 - No intermediate spec — Hydra instantiates directly to Python objects
+- `feature_flags` defaults to `[]`; each integer ID resolves to a registered number, full environment-variable name, and description before training setup, then exports that name with value `1`
 - Provenance: W&B config (hyperparams, `github_sha`) + frozen `config.yaml` in R2
 - Resume: Lightning native `ckpt_path=` with W&B artifact download
 - Single-job model — no reconciliation, no distributed coordination
@@ -125,6 +126,7 @@ eval.yaml + experiment config (pins model + data + checkpoint)
 ```
 
 - Experiment config pins everything: model checkpoint (W&B artifact ref), data config, eval settings
+- `feature_flags` follows the training contract: integer IDs resolve before checkpoint access and selected full names are exported with value `1`
 - `evaluation:` block (in `src/synth_setter/configs/eval.yaml`) gates the in-process render and metrics phases — both default off so `mode=test`/`mode=validate` runs are unchanged
 - `render:` composes a backend-knob group and the root `synth:` group supplies the VST plugin/preset/param-spec (`synth=surge_xt render=vst`); `_run_predict_postprocessing` joins the two and forwards them to the render subprocess
 - No eval spec — configs are the source of truth

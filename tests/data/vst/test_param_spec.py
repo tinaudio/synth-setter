@@ -9,9 +9,11 @@ import pytest
 import torch
 
 from synth_setter.data.vst.param_spec import (
+    AngleArrayParameter,
     CategoricalParameter,
     ContinuousArrayParameter,
     ContinuousParameter,
+    DirectionArrayParameter,
     DiscreteArrayParameter,
     DiscreteLiteralParameter,
     NoteDurationParameter,
@@ -386,6 +388,33 @@ def test_array_encoded_names_follow_c_order_coordinates() -> None:
         "feedback_matrix.1.1",
         "feedback_matrix.1.2",
     )
+
+
+@pytest.mark.parametrize(
+    ("parameter", "expected"),
+    [
+        (ContinuousParameter(name="gain"), ("gain",)),
+        (
+            ContinuousArrayParameter(name="matrix", shape=(2, 1), min=-1.0, max=1.0),
+            ("matrix.0.0", "matrix.1.0"),
+        ),
+        (AngleArrayParameter(name="phase", shape=(2,)), ("phase.0", "phase.1")),
+        (DirectionArrayParameter(name="axis", shape=(2,)), ("axis.0", "axis.1")),
+    ],
+)
+def test_parameter_native_names_match_renderer_coordinates(
+    parameter: ContinuousParameter
+    | ContinuousArrayParameter
+    | AngleArrayParameter
+    | DirectionArrayParameter,
+    expected: tuple[str, ...],
+) -> None:
+    """Native labels describe renderer values rather than encoded columns.
+
+    :param parameter: Parameter implementation under test.
+    :param expected: Renderer-native coordinate labels.
+    """
+    assert parameter.native_names() == expected
 
 
 def test_require_scalar_synth_params_normalizes_real_values() -> None:

@@ -4,7 +4,6 @@ import math
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import cast
 
 import hydra
 import jaxtyping
@@ -498,7 +497,7 @@ def test_normalized_online_and_stored_mel_paths_match_ast_outputs() -> None:
         patch_size=4,
         patch_stride=2,
         input_channels=1,
-        spec_shape=cast(tuple[int], (128, 11)),
+        spec_shape=(128, 11),
     ).eval()
     online_encoder = SpecEncoder(
         frontend=_frontend(normalization_mean=mean.tolist(), normalization_std=std.tolist()),

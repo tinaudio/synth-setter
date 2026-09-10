@@ -346,6 +346,10 @@ class BasicFDNParamSpec(PyFDNParamSpec):
         expected = {parameter.name for parameter in self.synth_params} | {"feedback_matrix"}
         if set(params) != expected:
             raise ValueError(f"basic FDN params must contain exactly {sorted(expected)}")
+        for parameter in self.synth_params:
+            encoded = np.asarray(parameter.encode(params[parameter.name]))
+            if not np.isfinite(encoded).all() or np.any((encoded < 0.0) | (encoded > 1.0)):
+                raise ValueError(f"{parameter.name} is outside its declared parameter domain")
         native_fields = (
             "feedback_matrix", "input_matrix", "output_matrix", "direct_matrix", "delays",
             PYFDN_RT_DC_NAME, PYFDN_RT_NYQUIST_NAME,

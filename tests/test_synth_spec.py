@@ -165,6 +165,7 @@ class TestSynthsTable:
                 "surge_xt",
                 "ultramaster_kr106",
                 "ultramaster_kr106_onehot",
+                "ultramaster_kr106_single_note",
             }
         )
 

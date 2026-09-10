@@ -39,6 +39,7 @@ rectified_sigma_min: 0.0
 parameterization: velocity
 
 # sampling
+seeded_evaluation: false
 validation_sample_steps: 50
 validation_cfg_strength: 2.0
 test_sample_steps: 200

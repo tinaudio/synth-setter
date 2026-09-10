@@ -245,6 +245,22 @@ def test_decoder_basic_build_fields_match_canonical_offline_build(name: str) -> 
         np.testing.assert_allclose(actual.detach().numpy(), getattr(canonical, name), atol=1e-11)
 
 
+@pytest.mark.parametrize("value", [-2.0, 2.0])
+def test_decoder_saturated_continuous_controls_keep_training_gradients(value: float) -> None:
+    """Physical clipping must not strand unconstrained flow predictions outside their bounds.
+
+    :param value: Model-space value outside the ordinary control domain.
+    """
+    decoder = PyFDNParameterDecoder("pyfdn_n8_mono_householder")
+    row = torch.full((decoder.spec.encoded_width,), value, requires_grad=True)
+    native = decoder(row)
+
+    native["input_matrix"].sum().backward()
+
+    assert row.grad is not None
+    assert torch.all(row.grad[_span(decoder, "input_matrix")] != 0)
+
+
 @pytest.mark.parametrize("width_delta", [-1, 1])
 def test_decoder_wrong_width_raises(width_delta: int) -> None:
     """Malformed rows fail before positional decoding.

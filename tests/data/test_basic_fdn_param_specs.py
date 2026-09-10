@@ -4,7 +4,12 @@ import numpy as np
 import pytest
 
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
-from synth_setter.data.pyfdn_param_spec import BasicFDNParamSpec
+from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_KRONECKER_ANGLES_NAME,
+    PYFDN_KRONECKER_REFLECT_NAME,
+    BasicFDNParamSpec,
+    kronecker_feedback_matrix,
+)
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.param_spec_name import ParamSpecName
 
@@ -45,6 +50,43 @@ def test_advanced_spec_does_not_claim_complete_basic_build(name: str) -> None:
     :param name: Registered advanced FDN effect.
     """
     assert not isinstance(resolve_param_spec(ParamSpecName(name)), BasicFDNParamSpec)
+
+
+def test_basic_spec_missing_control_rejected() -> None:
+    """A partial native mapping cannot construct a basic FDN."""
+    spec = resolve_param_spec(ParamSpecName("pyfdn_n8_mono_householder"))
+    assert isinstance(spec, BasicFDNParamSpec)
+    native, _ = spec.sample(np.random.default_rng(3))
+    del native["delays"]
+
+    with pytest.raises(ValueError, match="exactly"):
+        spec.to_basic_fdn(native)
+
+
+def test_basic_spec_unexpected_control_rejected() -> None:
+    """An unknown native field cannot be silently ignored."""
+    spec = resolve_param_spec(ParamSpecName("pyfdn_n8_mono_householder"))
+    assert isinstance(spec, BasicFDNParamSpec)
+    native, _ = spec.sample(np.random.default_rng(3))
+    native["delayz"] = native["delays"]
+
+    with pytest.raises(ValueError, match="exactly"):
+        spec.to_basic_fdn(native)
+
+
+def test_basic_spec_out_of_domain_control_rejected_when_feedback_matches() -> None:
+    """A matching derived matrix cannot legitimize an invalid declared control."""
+    spec = resolve_param_spec(ParamSpecName("pyfdn_n8_mono_kronecker"))
+    assert isinstance(spec, BasicFDNParamSpec)
+    native, _ = spec.sample(np.random.default_rng(3))
+    native[PYFDN_KRONECKER_REFLECT_NAME] = np.full(3, 2)
+    native["feedback_matrix"] = kronecker_feedback_matrix(
+        np.asarray(native[PYFDN_KRONECKER_ANGLES_NAME]),
+        np.asarray(native[PYFDN_KRONECKER_REFLECT_NAME]),
+    )
+
+    with pytest.raises(ValueError, match=PYFDN_KRONECKER_REFLECT_NAME):
+        spec.to_basic_fdn(native)
 
 
 def test_basic_spec_feedback_controls_disagree_with_matrix_rejected() -> None:

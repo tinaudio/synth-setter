@@ -24,6 +24,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Essentia HPCP is needed only by sketch=tiv_online_cpu.
+tiv-cpu = ["essentia==2.1b6.dev1389"]
 # Backend selector for `uv sync` / `uv lock` on Linux/Win — mutually exclusive
 # (see [tool.uv].conflicts). The cpu/cu128 extras themselves are NOT platform-
 # gated; the `sys_platform == 'linux' or sys_platform == 'win32'` markers
@@ -236,6 +238,8 @@ runtime = [
   { include-group = "util" },
 ]
 dev = [
+  # Exercise optional CPU HPCP in Linux coverage without requiring it at runtime.
+  "essentia; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "hypothesis",
   "mutmut==3.5.*",
   "nflows",

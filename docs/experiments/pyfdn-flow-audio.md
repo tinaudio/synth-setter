@@ -20,7 +20,9 @@ flow prediction / endpoint estimate
 registered ParamSpec. It reproduces offline `decode_model_output`: clipping for
 ordinary controls, whole-vector projection for directions, periodic angle-pair
 decoding, and the declared integer rounding rules. Feedback matrices are derived
-in PyTorch, not replaced with a fixed Householder matrix.
+in PyTorch, not replaced with a fixed Householder matrix. Ordinary clipping uses
+an affine straight-through gradient so out-of-range flow predictions are not
+stranded at physical bounds; forward values still match offline decoding exactly.
 
 `BasicFDNParamSpec.to_basic_fdn()` converts a native template into a
 `BasicFDN(build: pyFDN.FDNBuild)` describing the **entire** effect. Offline
@@ -81,6 +83,12 @@ Device-only `.to(device)`, `.float()`, `.double()`, and same-dtype
 `.to(dtype=torch.float32)` are exercised. The adapter rebuilds FLAMO's recursion
 buffers after recursive tensor conversions to contain the pinned dependency defect
 tracked in #3380. Compiled and distributed feedback retain the existing runtime guards.
+
+Importing pinned `torchsynth.util` mutates global `torch.pi` to a float32
+approximation (#3402). This makes subsequent float64 FLAMO construction lose
+precision, including strict MIMO parity tests when run after TorchSynth training
+tests. Isolated parity runs pass; mixed-backend float64 parity remains blocked.
+No tolerance relaxation or local DSP workaround masks this defect.
 
 Importing pinned `torchsynth.util` mutates global `torch.pi` to a float32
 approximation (#3402). This makes subsequent float64 FLAMO construction lose

@@ -110,6 +110,22 @@ def test_basic_fdn_invalid_build_rejected_at_construction(
         BasicFDN(replace(build, **changes))
 
 
+@pytest.mark.parametrize("hook_name", ["post_delay", "post_matrix", "post_output"])
+def test_basic_fdn_nonnormalized_filter_hook_rejected(
+    build: FDNBuild, hook_name: str
+) -> None:
+    """Every optional filter hook requires a unit denominator coefficient.
+
+    :param build: Otherwise valid FDN.
+    :param hook_name: Filter hook made nonnormalized.
+    """
+    hook = np.array(getattr(build, hook_name), copy=True)
+    hook[:, 3, :] = 2.0
+
+    with pytest.raises(ValueError, match="normalized"):
+        BasicFDN(replace(build, **{hook_name: hook}))
+
+
 @pytest.mark.parametrize("length", [0, -1])
 def test_basic_fdn_nonpositive_render_length_rejected(build: FDNBuild, length: int) -> None:
     """Invalid render geometry fails before upstream allocation.
