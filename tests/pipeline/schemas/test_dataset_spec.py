@@ -215,23 +215,14 @@ class TestRenderConfig:
         assert cfg.plugin_reload_cadence == "once"
         assert cfg.gui_toggle_cadence == "always_on"
 
-    def test_kr106_single_note_accepts_per_render_plugin_reload(self) -> None:
-        """A fresh plugin instance satisfies the single-note baseline contract."""
+    def test_kr106_single_note_accepts_shard_lifetime_plugin(self) -> None:
+        """The curated parameter space does not constrain plugin reload cadence."""
         kwargs = _valid_render_kwargs()
         kwargs["synth"] = SYNTHS[SynthName("ultramaster_kr106_single_note")]
-        kwargs["plugin_reload_cadence"] = "render"
 
         config = RenderConfig(**kwargs)
 
-        assert config.plugin_reload_cadence == "render"
-
-    def test_kr106_single_note_rejects_shard_lifetime_plugin(self) -> None:
-        """Reusing state could reactivate controls omitted from the single-note spec."""
-        kwargs = _valid_render_kwargs()
-        kwargs["synth"] = SYNTHS[SynthName("ultramaster_kr106_single_note")]
-
-        with pytest.raises(ValidationError, match='requires plugin_reload_cadence="render"'):
-            RenderConfig(**kwargs)
+        assert config.plugin_reload_cadence == "once"
 
     def test_once_reload_with_never_warmup_accepted(self) -> None:
         """``("once", "never")`` — the "load once, skip warm-up" mode — constructs cleanly."""

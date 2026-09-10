@@ -496,23 +496,6 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         return self
 
     @model_validator(mode="after")
-    def _kr106_single_note_requires_fresh_plugin(self) -> RenderConfig:
-        """Require per-render plugin reloads for the curated KR-106 identity.
-
-        :returns: This configuration after fresh-instance isolation is validated.
-        :raises ValueError: ``plugin_reload_cadence`` is not ``"render"`` for
-            ``ultramaster_kr106_single_note``.
-        """
-        if (
-            self.param_spec_name == "ultramaster_kr106_single_note"
-            and self.plugin_reload_cadence != "render"
-        ):
-            raise ValueError(
-                'ultramaster_kr106_single_note requires plugin_reload_cadence="render"'
-            )
-        return self
-
-    @model_validator(mode="after")
     def _dawdreamer_forbids_gui_toggle(self) -> RenderConfig:
         """Reject editor cadences that DawDreamer's blocking API cannot implement.
 

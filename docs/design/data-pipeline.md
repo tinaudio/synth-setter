@@ -1278,11 +1278,6 @@ Schema for the frozen input specification described in [§7.1](#71-storage-as-th
 
 See `src/synth_setter/pipeline/schemas/spec.py` for the authoritative definition. The model is `DatasetSpec` (unifies the previous `DatasetConfig` + `DatasetPipelineSpec` split; the constructed Pydantic instance **is** the artifact on R2 — `model.model_dump_json()` is the JSON).
 
-The `ultramaster_kr106_single_note` identity requires
-`plugin_reload_cadence="render"`: each row starts from its hashed baseline, so
-controls omitted from that curated parameter space cannot leak state between
-renders.
-
 ```python
 class ShardSpec(BaseModel):
     """Per-shard identity and pre-computed derived values."""
