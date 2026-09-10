@@ -7,7 +7,11 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.data.torchsynth_datamodule import _make_renderer, render_torchsynth
+from synth_setter.data.torchsynth_datamodule import (
+    _make_renderer,
+    _torchsynth_types,
+    render_torchsynth,
+)
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
@@ -339,6 +343,7 @@ def clipping_voice(monkeypatch: pytest.MonkeyPatch) -> None:
 
     :param monkeypatch: Pytest patcher, restored on teardown.
     """
+    _torchsynth_types()
     import torchsynth.util
 
     monkeypatch.setattr(torchsynth.util, "normalize_if_clipping", lambda signal: signal)
@@ -416,6 +421,7 @@ def test_grad_render_leaves_the_torchsynth_module_class_unmutated_mid_render() -
 
     Sampled from inside the render, where a monkeypatch would still be installed.
     """
+    _torchsynth_types()
     from torchsynth.module import SynthModule
 
     stock_p = SynthModule.p

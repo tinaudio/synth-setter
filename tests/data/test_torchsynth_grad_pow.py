@@ -1,11 +1,23 @@
 """Regression tests for the tensor-exponent pow singularity in torchsynth's ADSR ramp."""
 
+from __future__ import annotations
+
+from importlib import import_module
+from typing import TYPE_CHECKING
+
 import pytest
 import torch
-from torchsynth.config import SynthConfig
-from torchsynth.module import ADSR
 
+from synth_setter.data.torchsynth_datamodule import _torchsynth_types
 from synth_setter.data.torchsynth_grad_render import finite_tensor_exponent_pow
+
+if TYPE_CHECKING:
+    from torchsynth.config import SynthConfig
+    from torchsynth.module import ADSR
+else:
+    # Runtime TorchSynth imports must cross the production compatibility boundary.
+    SynthConfig, _ = _torchsynth_types()
+    ADSR = import_module("torchsynth.module").ADSR
 
 _BATCH = 2
 
