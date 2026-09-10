@@ -2,6 +2,7 @@
 
 import hashlib
 from pathlib import Path
+from typing import Literal
 
 import torch
 from beartype import beartype
@@ -37,6 +38,8 @@ class LanguageParameterProjection(GroupedParameterProjection):
         *,
         embedding_dim: int = 128,
         embedding_path: str | None = None,
+        embedding_source: Literal["language", "random", "learned"] = "language",
+        embedding_seed: int = 0,
     ) -> None:
         """Build grouped numeric heads and shared residual language fusion.
 
@@ -45,6 +48,8 @@ class LanguageParameterProjection(GroupedParameterProjection):
         :param synth_name: Dataset synth identity.
         :param embedding_dim: Finalized metadata width.
         :param embedding_path: Local artifact consumed by explicit initialization before forward.
+        :param embedding_source: Language vectors or matched frozen/trainable identity controls.
+        :param embedding_seed: Independent control-vector seed, without changing backbone RNG.
         :raises ValueError: Embedding width is unsupported.
         """
         super().__init__(d_model, param_spec_name)
@@ -54,13 +59,28 @@ class LanguageParameterProjection(GroupedParameterProjection):
         self.synth_name = synth_name
         self.embedding_dim = embedding_dim
         self.embedding_path = embedding_path
-        self.register_buffer("language_embeddings", torch.zeros(self.num_tokens, embedding_dim))
-        self._language_ready = False
-        self.text_adapter = nn.Linear(embedding_dim, d_model)
-        residual_output = nn.Linear(d_model, d_model)
-        nn.init.zeros_(residual_output.weight)
-        nn.init.zeros_(residual_output.bias)
-        self.fusion = nn.Sequential(nn.Linear(2 * d_model, d_model), nn.GELU(), residual_output)
+        self.embedding_source = embedding_source
+        self.embedding_seed = embedding_seed
+        vectors = torch.zeros(self.num_tokens, embedding_dim)
+        if embedding_source != "language":
+            generator = torch.Generator().manual_seed(embedding_seed)
+            vectors = nn.functional.normalize(
+                torch.randn(vectors.shape, generator=generator), dim=-1
+            )
+        if embedding_source == "learned":
+            self.language_embeddings = nn.Parameter(vectors)
+        else:
+            self.register_buffer("language_embeddings", vectors)
+        self._language_ready = embedding_source != "language"
+        # Preserve identical downstream backbone initialization across ablation treatments.
+        with torch.random.fork_rng(devices=[]):
+            self.text_adapter = nn.Linear(embedding_dim, d_model)
+            residual_output = nn.Linear(d_model, d_model)
+            nn.init.zeros_(residual_output.weight)
+            nn.init.zeros_(residual_output.bias)
+            self.fusion = nn.Sequential(
+                nn.Linear(2 * d_model, d_model), nn.GELU(), residual_output
+            )
 
     @jaxtyped(typechecker=beartype)
     def get_extra_state(self) -> dict[str, str]:
@@ -75,6 +95,8 @@ class LanguageParameterProjection(GroupedParameterProjection):
             "model": EMBEDDING_MODEL,
             "revision": EMBEDDING_REVISION,
             "initialized": str(self._language_ready),
+            "embedding_source": self.embedding_source,
+            "embedding_seed": str(self.embedding_seed),
         }
 
     @jaxtyped(typechecker=beartype)

@@ -654,7 +654,7 @@ tests_dir = [
 # (e.g. `synth_setter.cli`, `synth_setter.pipeline.r2_io`) fail with
 # ImportError during stats collection. Copy the whole package so the sandbox
 # can resolve them.
-also_copy = ["src/synth_setter/"]
+also_copy = ["src/synth_setter/", "scripts/dev/"]
 pytest_add_cli_args = [
     "-m",
     "not slow and not requires_vst and not r2 and not gpu and not benchmark",
