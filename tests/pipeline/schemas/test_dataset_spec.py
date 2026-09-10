@@ -145,6 +145,33 @@ class TestRenderConfig:
             == "611848f43224078da8d98f866b0428d7c7a24eac7aa472bc537193ac7c9a1abb"
         )
 
+    def test_v1_omitted_gui_cadence_transport_preserves_darwin_value(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """V1 worker JSON carries effective cadence and omission provenance.
+
+        :param monkeypatch: Pytest fixture used to change platforms across transport.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        cfg = RenderConfig(**(_valid_render_kwargs() | {"render_contract_version": 1}))
+        serialized = cfg.model_dump_json()
+
+        assert json.loads(serialized)["v1_gui_toggle_cadence_omitted"] is True
+
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+        )
+        restored = RenderConfig.model_validate_json(serialized)
+
+        assert restored.gui_toggle_cadence == "never"
+        assert restored.v1_gui_toggle_cadence_omitted is True
+        assert (
+            restored.shard_metadata().render_contract_digest
+            == "611848f43224078da8d98f866b0428d7c7a24eac7aa472bc537193ac7c9a1abb"
+        )
+
     def test_non_faust_historical_digest_preserves_explicit_gui_cadence(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
