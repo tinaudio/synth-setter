@@ -51,6 +51,11 @@ than `subprocess.run([sys.executable, "-m", …])`. The reference test is
 `test_cli_help_advertises_mask_degenerate_bins_flag` in
 `tests/pipeline/data/test_stats.py`.
 
+Spawn-only tests also reimport the `mutmut` executable in each worker, where
+mutmut's forced `fork` context conflicts with spawn initialization. Such tests
+may skip only during mutmut's embedded stats run; the real multiprocessing path
+remains required in normal CI ([#3435](https://github.com/tinaudio/synth-setter/issues/3435)).
+
 ## macOS gotcha
 
 On macOS, the parent process imports `torch` / `h5py` / `hydra` from
