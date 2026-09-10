@@ -119,6 +119,98 @@ def test_producer_revision_without_source_checkout_reports_unavailable(
     assert sketch_render._producer_revision() == "git-unavailable"
 
 
+@pytest.fixture
+def producer_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
+    """Create a real source checkout independent of the operator's working directory.
+
+    :param tmp_path: Parent of the temporary Git repository.
+    :param monkeypatch: Points source discovery at the fixture checkout.
+    :returns: Tracked source file and its actual committed Git SHA.
+    """
+    root = tmp_path / "producer"
+    source = root / "src/synth_setter/cli/sketch_render.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = 1\n")
+    git = sh.Command("git")
+    git(["init", "-q"], _cwd=root)
+    git(["add", "--", str(source)], _cwd=root)
+    git(
+        [
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "test: seed provenance fixture",
+        ],
+        _cwd=root,
+    )
+    revision = str(git(["rev-parse", "HEAD"], _cwd=root)).strip()
+    monkeypatch.setattr(sketch_render, "__file__", str(source))
+    return source, revision
+
+
+def test_producer_revision_uses_source_checkout_not_operator_directory(
+    producer_checkout: tuple[Path, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provenance follows the imported source rather than an unrelated operator directory.
+
+    :param producer_checkout: Real clean source repository and expected revision.
+    :param tmp_path: Operator directory outside the source repository.
+    :param monkeypatch: Changes the operator's working directory only.
+    """
+    monkeypatch.chdir(tmp_path)
+    assert sketch_render._producer_revision() == producer_checkout[1]
+
+
+@pytest.mark.parametrize("stage", [False, True])
+def test_producer_revision_modified_source_is_marked_dirty(
+    producer_checkout: tuple[Path, str],
+    stage: bool,
+) -> None:
+    """Both staged and unstaged source modifications prevent clean-revision claims.
+
+    :param producer_checkout: Real checkout whose tracked source will change.
+    :param stage: Whether the modification is staged before recording provenance.
+    """
+    source, revision = producer_checkout
+    source.write_text("value = 2\n")
+    if stage:
+        sh.Command("git")(["add", "--", str(source)], _cwd=source.parent)
+    assert sketch_render._producer_revision() == f"{revision}-dirty"
+
+
+def test_producer_revision_untracked_source_is_marked_dirty(
+    producer_checkout: tuple[Path, str],
+) -> None:
+    """Untracked source cannot masquerade as the clean committed producer.
+
+    :param producer_checkout: Real checkout receiving an untracked module.
+    """
+    source, revision = producer_checkout
+    source.with_name("new_module.py").write_text("value = 3\n")
+    assert sketch_render._producer_revision() == f"{revision}-dirty"
+
+
+def test_producer_revision_without_source_checkout_reports_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Installed source without its own Git checkout does not borrow an enclosing repository.
+
+    :param tmp_path: Source location without repository metadata.
+    :param monkeypatch: Changes only the imported source location.
+    """
+    monkeypatch.setattr(
+        sketch_render, "__file__", str(tmp_path / "src/synth_setter/cli/module.py")
+    )
+    assert sketch_render._producer_revision() == "git-unavailable"
+
+
 def test_noise_source_device_mps_uses_supported_cpu_generator() -> None:
     """MPS sampling draws seeded noise on CPU before device transfer."""
     assert sketch_render._noise_source_device(torch.device("mps")) == torch.device("cpu")
