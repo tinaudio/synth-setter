@@ -3,21 +3,19 @@
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
+import math
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Mapping
-from typing import Literal
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict
 
-from synth_setter.data.vst.faust_sources import resolve_faust_dsp
-from synth_setter.data.vst.faustwasm_contract import (
-    faustwasm_parameter_contract,
-    faustwasm_reserved_addresses,
+from synth_setter.data.vst.faustwasm_artifacts import (
+    FAUSTWASM_VERSION,
+    ArtifactManifest,
+    compile_faustwasm_artifact,
+    run_faustwasm_render_worker,
 )
 from synth_setter.data.vst.renderers import (
     AudioRenderer,
@@ -26,72 +24,44 @@ from synth_setter.data.vst.renderers import (
     require_scalar_synth_params,
 )
 from synth_setter.param_spec_name import ParamSpecName
-
-FAUSTWASM_VERSION = "0.18.3"
-_NODE_TIMEOUT_SECONDS = 60
+from synth_setter.synth_spec import SYNTHS, SynthName
 
 
-class _ArtifactFile(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
+def _quantize_note_window(
+    note_start_and_end: tuple[float, float],
+    *,
+    sample_rate: float,
+    frames: int,
+    signal_duration_seconds: float,
+) -> tuple[int, int]:
+    """Map a valid half-open time window to every intersecting output frame.
 
-    path: str
-    sha256: str
-
-
-class _ArtifactFiles(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-
-    dsp: _ArtifactFile
-    mixer: _ArtifactFile | None = None
-    effect: _ArtifactFile | None = None
-
-
-class _ArtifactParameter(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-
-    canonicalAddress: str
-    wasmAddress: str
-    min: float
-    max: float
-    kind: str
-
-
-class _ArtifactManifest(BaseModel):
-    model_config = ConfigDict(strict=True, extra="allow")
-
-    schemaVersion: Literal[1]
-    identity: str
-    faustwasmVersion: str
-    libfaustVersion: str
-    compileOptions: str
-    sourceSha256: str
-    mode: Literal["mono", "poly"]
-    voices: int
-    outputs: int
-    parameters: list[_ArtifactParameter]
-    files: _ArtifactFiles
-
-
-def _repository_script(name: str) -> Path:
-    """Resolve a checkout-only Node entrypoint with an actionable install error.
-
-    :param name: Entry-point filename under ``scripts/faustwasm``.
-    :returns: Absolute entry-point path.
-    :raises RuntimeError: The script, dependency, or Node.js executable is unavailable.
+    :param note_start_and_end: Note-on and note-off times in seconds.
+    :param sample_rate: Output sample rate in Hz.
+    :param frames: Fixed output frame count.
+    :param signal_duration_seconds: Configured render duration in seconds.
+    :returns: Half-open integer frame window clamped to the fixed output.
+    :raises ValueError: Times are malformed, out of bounds, or only cover a discarded tail.
     """
-    root = Path(__file__).resolve().parents[4]
-    script = root / "scripts" / "faustwasm" / name
-    package = root / "node_modules" / "@grame" / "faustwasm" / "package.json"
-    if not script.is_file():
-        raise RuntimeError(
-            "FaustWasm Node assets are unavailable outside a synth-setter checkout; "
-            "run from the repository containing scripts/faustwasm"
-        )
-    if not package.is_file():
-        raise RuntimeError("FaustWasm runtime is not installed; run `npm ci` at the repository root")
-    if shutil.which("node") is None:
-        raise RuntimeError("FaustWasm rendering requires Node.js on PATH")
-    return script
+    start, end = note_start_and_end
+    if (
+        isinstance(start, bool)
+        or isinstance(end, bool)
+        or not isinstance(start, (int, float))
+        or not isinstance(end, (int, float))
+        or not math.isfinite(start)
+        or not math.isfinite(end)
+        or not 0.0 <= start < end <= signal_duration_seconds
+    ):
+        raise ValueError("note times must satisfy 0 <= start < end <= signal duration")
+    if isinstance(frames, bool) or not isinstance(frames, int) or frames < 1:
+        raise ValueError("frames must be a positive integer")
+
+    start_frame = min(math.floor(start * sample_rate), frames)
+    end_frame = min(math.ceil(end * sample_rate), frames)
+    if start_frame >= end_frame:
+        raise ValueError("note times do not overlap any output frame")
+    return start_frame, end_frame
 
 
 @dataclass(kw_only=True)
@@ -121,9 +91,13 @@ class FaustWasmRenderer(AudioRenderer):
     backend_version: str = field(kw_only=True)
     block_size: int = 128
     _temporary_directory: tempfile.TemporaryDirectory[str] = field(init=False, repr=False)
-    _manifest: _ArtifactManifest = field(init=False, repr=False)
+    _manifest: ArtifactManifest = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        """Validate renderer dimensions before compiling the shared artifact.
+
+        :raises ValueError: Renderer provenance or dimensions violate the backend contract.
+        """
         if self.backend_version != FAUSTWASM_VERSION:
             raise ValueError(
                 f"FaustWasm backend version {self.backend_version!r} does not match "
@@ -131,68 +105,25 @@ class FaustWasmRenderer(AudioRenderer):
             )
         if self.plugin_path or self.plugin_state_path:
             raise ValueError("FaustWasm renderer accepts no plugin or preset path")
-        self._temporary_directory = tempfile.TemporaryDirectory(prefix="synth-setter-faustwasm-")
-        self._compile_artifact()
+        if isinstance(self.block_size, bool) or not isinstance(self.block_size, int) or self.block_size < 1:
+            raise ValueError("block_size must be a positive integer")
+        if not math.isfinite(self.sample_rate) or self.sample_rate <= 0:
+            raise ValueError("sample_rate must be finite and positive")
+        if not math.isfinite(self.signal_duration_seconds) or self.signal_duration_seconds <= 0:
+            raise ValueError("signal_duration_seconds must be finite and positive")
+        frames = int(self.sample_rate * self.signal_duration_seconds)
+        if frames < 1:
+            raise ValueError("render duration must contain at least one output frame")
 
-    def _compile_artifact(self) -> None:
-        dsp = resolve_faust_dsp(self.param_spec_name)
-        parameters = [
-            {
-                "canonicalAddress": item.canonical_address,
-                "wasmAddress": item.wasm_address,
-                "min": item.minimum,
-                "max": item.maximum,
-                "kind": item.kind,
-            }
-            for item in faustwasm_parameter_contract(self.param_spec_name)
-        ]
-        directory = Path(self._temporary_directory.name)
-        request_path = directory / "compile-request.json"
-        request_path.write_text(
-            json.dumps(
-                {
-                    "identity": self.param_spec_name,
-                    "source": dsp.source,
-                    "sourceSha256": self.source_sha256,
-                    "mode": "poly" if dsp.num_voices else "mono",
-                    "voices": dsp.num_voices,
-                    "outputs": self.channels,
-                    "parameters": parameters,
-                    "reservedWasmAddresses": faustwasm_reserved_addresses(
-                        self.param_spec_name
-                    ),
-                }
-            )
+        synth = SYNTHS[SynthName(self.param_spec_name)]
+        if synth.source_sha256 != self.source_sha256:
+            raise ValueError("source_sha256 does not match the registered Faust source")
+        self._temporary_directory = tempfile.TemporaryDirectory(prefix="synth-setter-faustwasm-")
+        self._manifest = compile_faustwasm_artifact(
+            synth,
+            Path(self._temporary_directory.name),
+            expected_outputs=self.channels,
         )
-        subprocess.run(  # noqa: S603
-            ["node", str(_repository_script("export-artifacts.mjs")), str(request_path), str(directory)],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=_NODE_TIMEOUT_SECONDS,
-        )
-        self._manifest = _ArtifactManifest.model_validate_json(
-            (directory / "manifest.json").read_text()
-        )
-        expected_parameters = [
-            (item["canonicalAddress"], item["wasmAddress"], item["min"], item["max"], item["kind"])
-            for item in parameters
-        ]
-        actual_parameters = [
-            (item.canonicalAddress, item.wasmAddress, item.min, item.max, item.kind)
-            for item in self._manifest.parameters
-        ]
-        expected_mode = "poly" if dsp.num_voices else "mono"
-        if (
-            self._manifest.identity != self.param_spec_name
-            or self._manifest.faustwasmVersion != self.backend_version
-            or self._manifest.sourceSha256 != self.source_sha256
-            or self._manifest.mode != expected_mode
-            or self._manifest.voices != dsp.num_voices
-            or self._manifest.outputs != self.channels
-            or actual_parameters != expected_parameters
-        ):
-            raise ValueError("compiled FaustWasm artifact provenance does not match the render config")
 
     def _validate_patch(self, params: dict[str, float]) -> None:
         """Reject incomplete, unknown, non-finite, or out-of-domain values.
@@ -212,6 +143,10 @@ class FaustWasmRenderer(AudioRenderer):
             parameter = parameters[address]
             if not np.isfinite(value) or not parameter.min <= value <= parameter.max:
                 raise ValueError(f"parameter outside native domain: {address}")
+            if parameter.kind == "discrete" and (
+                parameter.values is None or value not in parameter.values
+            ):
+                raise ValueError(f"parameter outside discrete native domain: {address}")
 
     def render(
         self,
@@ -235,9 +170,12 @@ class FaustWasmRenderer(AudioRenderer):
         scalar_params = require_scalar_synth_params(params)
         self._validate_patch(scalar_params)
         frames = int(self.sample_rate * self.signal_duration_seconds)
-        start, end = note_start_and_end
-        start_frame = round(start * self.sample_rate)
-        end_frame = round(end * self.sample_rate)
+        start_frame, end_frame = _quantize_note_window(
+            note_start_and_end,
+            sample_rate=self.sample_rate,
+            frames=frames,
+            signal_duration_seconds=self.signal_duration_seconds,
+        )
         request = {
             "sampleRate": self.sample_rate,
             "blockSize": self.block_size,
@@ -252,18 +190,10 @@ class FaustWasmRenderer(AudioRenderer):
         request_path = directory / "render-request.json"
         output_path = directory / "audio.f32"
         request_path.write_text(json.dumps(request))
-        subprocess.run(  # noqa: S603
-            [
-                "node",
-                str(_repository_script("render-worker.mjs")),
-                str(directory / "manifest.json"),
-                str(request_path),
-                str(output_path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=_NODE_TIMEOUT_SECONDS,
-        )
+        run_faustwasm_render_worker(directory, request_path, output_path)
         audio = np.fromfile(output_path, dtype="<f4").reshape(self.channels, frames)
-        return _validate_rendered_audio(audio, channels=self.channels, samples=frames)
+        return _validate_rendered_audio(
+            audio,
+            channels=self.channels,
+            samples=frames,
+        )

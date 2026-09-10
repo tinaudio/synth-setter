@@ -1,0 +1,333 @@
+"""Compile registry-backed FaustWasm artifacts for rendering or persistent export."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
+
+from synth_setter.data.vst.faust_sources import resolve_faust_dsp
+from synth_setter.data.vst.faustwasm_contract import (
+    faustwasm_parameter_contract,
+    faustwasm_reserved_addresses,
+)
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.synth_spec import SYNTHS, SynthName, SynthSpec
+
+FAUSTWASM_VERSION = "0.18.3"
+_NODE_TIMEOUT_SECONDS = 60
+
+
+class _ArtifactFile(BaseModel):
+    """One relative artifact path and its content digest.
+
+    .. attribute :: model_config
+
+        Strict manifest validation settings.
+    .. attribute :: path
+
+        Path relative to the manifest.
+    .. attribute :: sha256
+
+        Lowercase SHA-256 digest of the file bytes.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    path: str
+    sha256: str
+
+
+class _ArtifactFiles(BaseModel):
+    """Compiled DSP modules referenced by a manifest.
+
+    .. attribute :: model_config
+
+        Strict manifest validation settings.
+    .. attribute :: dsp
+
+        Required signal processor module.
+    .. attribute :: mixer
+
+        Polyphonic voice mixer module when present.
+    .. attribute :: effect
+
+        Polyphonic effect module when present.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    dsp: _ArtifactFile
+    mixer: _ArtifactFile | None = None
+    effect: _ArtifactFile | None = None
+
+
+class _ArtifactParameter(BaseModel):
+    """Canonical parameter identity and exact native domain.
+
+    .. attribute :: model_config
+
+        Strict manifest validation settings.
+    .. attribute :: canonicalAddress
+
+        Stable dataset parameter address.
+    .. attribute :: wasmAddress
+
+        Address emitted by the pinned Faust compiler.
+    .. attribute :: min
+
+        Native lower bound.
+    .. attribute :: max
+
+        Native upper bound.
+    .. attribute :: kind
+
+        Continuous or discrete domain kind.
+    .. attribute :: values
+
+        Exact discrete values, otherwise ``None``.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    canonicalAddress: str
+    wasmAddress: str
+    min: float
+    max: float
+    kind: str
+    values: list[float] | None
+
+
+class _ArtifactManifest(BaseModel):
+    """Validated manifest consumed by Python and JavaScript runtimes.
+
+    .. attribute :: model_config
+
+        Strict known-field validation with compiler metadata passthrough.
+    .. attribute :: schemaVersion
+
+        Artifact schema version.
+    .. attribute :: identity
+
+        Registered synth identity.
+    .. attribute :: faustwasmVersion
+
+        FaustWasm package version.
+    .. attribute :: libfaustVersion
+
+        Native Faust compiler version.
+    .. attribute :: compileOptions
+
+        Compiler options used for every module.
+    .. attribute :: sourceSha256
+
+        Digest of the compiled source.
+    .. attribute :: mode
+
+        Monophonic or polyphonic runtime mode.
+    .. attribute :: voices
+
+        Polyphonic voice count, or zero for mono.
+    .. attribute :: outputs
+
+        Native output channel count.
+    .. attribute :: parameters
+
+        Complete canonical parameter map.
+    .. attribute :: files
+
+        Compiled module paths and digests.
+    """
+
+    model_config = ConfigDict(strict=True, extra="allow")
+
+    schemaVersion: Literal[1]
+    identity: str
+    faustwasmVersion: str
+    libfaustVersion: str
+    compileOptions: str
+    sourceSha256: str
+    mode: Literal["mono", "poly"]
+    voices: int
+    outputs: int
+    parameters: list[_ArtifactParameter]
+    files: _ArtifactFiles
+
+
+type ArtifactManifest = _ArtifactManifest
+
+
+def repository_faustwasm_script(name: str) -> Path:
+    """Resolve a checkout-only Node entrypoint with an actionable install error.
+
+    :param name: Entry-point filename under ``scripts/faustwasm``.
+    :returns: Absolute entry-point path.
+    :raises RuntimeError: The script, dependency, or Node.js executable is unavailable.
+    """
+    root = Path(__file__).resolve().parents[4]
+    script = root / "scripts" / "faustwasm" / name
+    package = root / "node_modules" / "@grame" / "faustwasm" / "package.json"
+    if not script.is_file():
+        raise RuntimeError(
+            "FaustWasm Node assets are unavailable outside a synth-setter checkout; "
+            "run from the repository containing scripts/faustwasm"
+        )
+    if not package.is_file():
+        raise RuntimeError("FaustWasm runtime is not installed; run `npm ci` at the repository root")
+    if shutil.which("node") is None:
+        raise RuntimeError("FaustWasm rendering requires Node.js on PATH")
+    return script
+
+
+def _compile_request(synth: SynthSpec, expected_outputs: int | None) -> dict[str, object]:
+    """Build the single registry-backed request accepted by the Node compiler.
+
+    :param synth: Registered digest-pinned Faust synth identity.
+    :param expected_outputs: Optional renderer-owned channel-count pin.
+    :returns: JSON-compatible compile request.
+    """
+    identity = ParamSpecName(synth.param_spec_name)
+    dsp = resolve_faust_dsp(identity)
+    parameters = [
+        {
+            "canonicalAddress": item.canonical_address,
+            "wasmAddress": item.wasm_address,
+            "min": item.minimum,
+            "max": item.maximum,
+            "kind": item.kind,
+            "values": list(item.values) if item.values is not None else None,
+        }
+        for item in faustwasm_parameter_contract(identity)
+    ]
+    return {
+        "identity": identity,
+        "source": dsp.source,
+        "sourceSha256": synth.source_sha256,
+        "mode": "poly" if dsp.num_voices else "mono",
+        "voices": dsp.num_voices,
+        "expectedOutputs": expected_outputs,
+        "parameters": parameters,
+        "reservedWasmAddresses": faustwasm_reserved_addresses(identity),
+    }
+
+
+def compile_faustwasm_artifact(
+    synth: SynthSpec,
+    output_directory: Path,
+    *,
+    expected_outputs: int | None = None,
+) -> ArtifactManifest:
+    """Compile one registered Faust synth into ``output_directory``.
+
+    :param synth: Registered digest-pinned Faust synth identity.
+    :param output_directory: Existing or new directory for compiled modules and manifest.
+    :param expected_outputs: Required channel count for renderer-owned compilation.
+    :returns: Validated manifest whose paths are relative to ``output_directory``.
+    :raises ValueError: The synth or compiled provenance differs from the registry contract.
+    """
+    if synth.format != "faust" or synth.source_sha256 is None:
+        raise ValueError("FaustWasm artifacts require a registered Faust source")
+    if expected_outputs is not None and (
+        isinstance(expected_outputs, bool) or not isinstance(expected_outputs, int) or expected_outputs < 1
+    ):
+        raise ValueError("expected_outputs must be a positive integer")
+
+    output_directory.mkdir(parents=True, exist_ok=True)
+    request = _compile_request(synth, expected_outputs)
+    request_path = output_directory / ".compile-request.json"
+    request_path.write_text(json.dumps(request))
+    try:
+        subprocess.run(  # noqa: S603
+            [
+                "node",
+                str(repository_faustwasm_script("export-artifacts.mjs")),
+                str(request_path),
+                str(output_directory),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=_NODE_TIMEOUT_SECONDS,
+        )
+    finally:
+        request_path.unlink(missing_ok=True)
+
+    manifest = _ArtifactManifest.model_validate_json(
+        (output_directory / "manifest.json").read_text()
+    )
+    expected_parameters = request["parameters"]
+    actual_parameters = [parameter.model_dump() for parameter in manifest.parameters]
+    if (
+        manifest.identity != synth.param_spec_name
+        or manifest.faustwasmVersion != FAUSTWASM_VERSION
+        or manifest.sourceSha256 != synth.source_sha256
+        or manifest.mode != request["mode"]
+        or manifest.voices != request["voices"]
+        or (expected_outputs is not None and manifest.outputs != expected_outputs)
+        or actual_parameters != expected_parameters
+    ):
+        raise ValueError("compiled FaustWasm artifact provenance does not match the synth registry")
+    return manifest
+
+
+def run_faustwasm_render_worker(
+    artifact_directory: Path,
+    request_path: Path,
+    output_path: Path,
+) -> None:
+    """Render one request through persisted modules without recompiling Faust.
+
+    :param artifact_directory: Directory containing ``manifest.json`` and its modules.
+    :param request_path: JSON render request path.
+    :param output_path: Destination for channel-major little-endian float32 samples.
+    """
+    subprocess.run(  # noqa: S603
+        [
+            "node",
+            str(repository_faustwasm_script("render-worker.mjs")),
+            str(artifact_directory / "manifest.json"),
+            str(request_path),
+            str(output_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=_NODE_TIMEOUT_SECONDS,
+    )
+
+
+def export_faustwasm_artifact(
+    synth_name: SynthName,
+    output_directory: Path,
+) -> ArtifactManifest:
+    """Atomically publish one registry-backed artifact to an absent destination.
+
+    :param synth_name: Key of a registered Faust synth.
+    :param output_directory: Destination directory, which must not exist.
+    :returns: Validated manifest for the published artifact.
+    :raises FileExistsError: The destination already exists.
+    """
+    if output_directory.exists():
+        raise FileExistsError(f"output destination already exists: {output_directory}")
+    synth = SYNTHS[synth_name]
+    output_directory.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(
+            prefix=f".{output_directory.name}.",
+            dir=output_directory.parent,
+        )
+    )
+    try:
+        manifest = compile_faustwasm_artifact(synth, staging)
+        if output_directory.exists():
+            raise FileExistsError(f"output destination already exists: {output_directory}")
+        os.rename(staging, output_directory)
+        return manifest
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)

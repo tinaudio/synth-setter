@@ -34,6 +34,10 @@ class FaustWasmParameter:
        :type: str
 
        ``continuous`` or ``discrete`` domain kind.
+    .. attribute :: values
+       :type: tuple[float, ...] | None
+
+       Exact native values for discrete controls.
     """
 
     canonical_address: str
@@ -41,6 +45,7 @@ class FaustWasmParameter:
     minimum: float
     maximum: float
     kind: str
+    values: tuple[float, ...] | None
 
 
 _RESERVED_WASM_ADDRESSES = MappingProxyType(
@@ -125,8 +130,9 @@ def faustwasm_parameter_contract(identity: ParamSpecName) -> tuple[FaustWasmPara
     for parameter, wasm_address in zip(parameters, wasm_addresses, strict=True):
         if isinstance(parameter, ContinuousParameter):
             minimum, maximum, kind = parameter.min, parameter.max, "continuous"
+            values = None
         elif isinstance(parameter, CategoricalParameter):
-            values = [float(value) for value in parameter.raw_values]
+            values = tuple(float(value) for value in parameter.raw_values)
             minimum, maximum, kind = min(values), max(values), "discrete"
         else:
             raise TypeError(f"unsupported FaustWasm parameter {type(parameter).__name__}")
@@ -137,6 +143,7 @@ def faustwasm_parameter_contract(identity: ParamSpecName) -> tuple[FaustWasmPara
                 minimum=float(minimum),
                 maximum=float(maximum),
                 kind=kind,
+                values=values,
             )
         )
     return tuple(contract)
