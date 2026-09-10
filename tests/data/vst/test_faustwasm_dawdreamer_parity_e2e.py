@@ -75,7 +75,7 @@ def _config(backend: FaustBackend) -> RenderConfig:
         sample_rate=44_100,
         channels=2,
         velocity=100,
-        signal_duration_seconds=0.5,
+        signal_duration_seconds=4.0,
         min_loudness=-100.0,
         samples_per_render_batch=1,
         samples_per_shard=3,
