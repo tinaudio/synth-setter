@@ -24,6 +24,7 @@ type RendererBackend = Literal[
 # place of a plugin-bundle path (see ``core.extract_renderer_version``).
 TORCHSYNTH_PLUGIN_NAME = "torchsynth"
 FAUST_PLUGIN_NAME = "faust"
+FAUST_REGISTRY_PREFIX = "registry://faust/"
 PYFDN_PLUGIN_NAME = "pyfdn"
 SURGEPY_PLUGIN_NAME = "surgepy"
 
@@ -127,7 +128,8 @@ def missing_render_artifacts(plugin_path: str, plugin_state_path: str) -> tuple[
         backend takes no preset.
     :returns: The unresolvable paths as declared, bundle before preset.
     """
-    declared = [] if plugin_path in IN_PROCESS_PLUGIN_NAMES else [plugin_path]
+    logical_source = plugin_path.startswith(FAUST_REGISTRY_PREFIX)
+    declared = [] if logical_source or plugin_path in IN_PROCESS_PLUGIN_NAMES else [plugin_path]
     if plugin_state_path:
         declared.append(plugin_state_path)
     return tuple(path for path in declared if not Path(path).expanduser().exists())

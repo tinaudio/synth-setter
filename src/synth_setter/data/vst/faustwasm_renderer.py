@@ -12,7 +12,6 @@ from pathlib import Path
 import numpy as np
 
 from synth_setter.data.vst.faustwasm_artifacts import (
-    FAUSTWASM_VERSION,
     ArtifactManifest,
     compile_faustwasm_artifact,
     run_faustwasm_render_worker,
@@ -102,11 +101,6 @@ class FaustWasmRenderer(AudioRenderer):
 
         :raises ValueError: Renderer provenance or dimensions violate the backend contract.
         """
-        if self.backend_version != FAUSTWASM_VERSION:
-            raise ValueError(
-                f"FaustWasm backend version {self.backend_version!r} does not match "
-                f"installed {FAUSTWASM_VERSION!r}"
-            )
         if self.plugin_state_path:
             raise ValueError("FaustWasm renderer accepts no preset path")
         source_identity = self.param_spec_name
@@ -132,7 +126,7 @@ class FaustWasmRenderer(AudioRenderer):
         self._manifest = compile_faustwasm_artifact(
             synth,
             Path(self._temporary_directory.name),
-            expected_outputs=self.channels,
+            backend_version=self.backend_version,
         )
 
     def _validate_patch(self, params: dict[str, float]) -> None:
@@ -187,6 +181,7 @@ class FaustWasmRenderer(AudioRenderer):
             signal_duration_seconds=self.signal_duration_seconds,
         )
         request = {
+            "expectedFaustWasmVersion": self.backend_version,
             "sampleRate": self.sample_rate,
             "blockSize": self.block_size,
             "frames": frames,

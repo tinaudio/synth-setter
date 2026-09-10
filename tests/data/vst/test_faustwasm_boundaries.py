@@ -7,12 +7,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from synth_setter.data.vst.core import extract_backend_version
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
-from synth_setter.data.vst.faustwasm_renderer import (
-    FAUSTWASM_VERSION,
-    FaustWasmRenderer,
-    _quantize_note_window,
-)
+from synth_setter.data.vst.faustwasm_renderer import FaustWasmRenderer, _quantize_note_window
 from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.synth_spec import SYNTHS, SynthName
@@ -65,7 +62,7 @@ def _renderer(
         signal_duration_seconds=duration,
         param_spec_name=synth.param_spec_name,
         source_sha256=synth.source_sha256 or "",
-        backend_version=FAUSTWASM_VERSION,
+        backend_version=extract_backend_version("faustwasm"),
         block_size=1,
     )
 
@@ -141,7 +138,7 @@ def test_faustwasm_renderer_invalid_block_size_fails_before_compile(block_size: 
             signal_duration_seconds=0.1,
             param_spec_name=synth.param_spec_name,
             source_sha256=synth.source_sha256 or "",
-            backend_version=FAUSTWASM_VERSION,
+            backend_version=extract_backend_version("faustwasm"),
             block_size=block_size,  # type: ignore[arg-type]
         )
 

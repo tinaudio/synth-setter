@@ -3,8 +3,6 @@ import {
     FaustPolyDspGenerator,
 } from '../../node_modules/@grame/faustwasm/dist/esm/index.js';
 
-const PACKAGE_VERSION = '0.18.3';
-
 const verifyBytes = async (entry, loadBytes) => {
     const bytes = await loadBytes(entry.path);
     const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -24,9 +22,9 @@ const makeFactory = async (bytes, meta, poly) => ({
     soundfiles: {},
 });
 
-export const loadFaustArtifact = async (manifest, loadBytes) => {
+export const loadFaustArtifact = async (manifest, loadBytes, packageVersion) => {
     if (manifest.schemaVersion !== 1) throw new Error('unsupported Faust artifact schema');
-    if (manifest.faustwasmVersion !== PACKAGE_VERSION) throw new Error('FaustWasm version mismatch');
+    if (manifest.faustwasmVersion !== packageVersion) throw new Error('FaustWasm version mismatch');
     const dspBytes = await verifyBytes(manifest.files.dsp, loadBytes);
     const dspFactory = await makeFactory(dspBytes, manifest.dspMeta, manifest.mode === 'poly');
     const artifact = { manifest, dspFactory };

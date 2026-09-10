@@ -6,6 +6,8 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
+from hydra import compose, initialize_config_module
+
 from synth_setter.data.vst.faustwasm_artifacts import export_faustwasm_artifact
 from synth_setter.synth_spec import SYNTHS, SynthName
 
@@ -25,6 +27,16 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configured_backend_version() -> str:
+    """Resolve the authored FaustWasm package pin through Hydra.
+
+    :returns: Configured backend version.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(config_name="render/faustwasm")
+    return str(cfg.render.backend_version)
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Compile and atomically publish one registry-backed FaustWasm artifact.
 
@@ -32,7 +44,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     """
     args = _parser().parse_args(argv)
     output = args.output.expanduser().resolve()
-    export_faustwasm_artifact(SynthName(args.synth), output)
+    export_faustwasm_artifact(
+        SynthName(args.synth),
+        output,
+        backend_version=_configured_backend_version(),
+    )
 
 
 if __name__ == "__main__":

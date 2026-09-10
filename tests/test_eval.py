@@ -793,23 +793,21 @@ def test_evaluate_pyfdn_sketch_experiment_uses_temporal_profile(
 
 
 @pytest.mark.parametrize(
-    ("render_group", "backend", "version", "block_size"),
+    ("render_group", "backend", "block_size"),
     [
-        pytest.param("faust", "dawdreamer", "0.8.3", None, id="dawdreamer"),
-        pytest.param("faustwasm", "faustwasm", "0.18.3", 128, id="faustwasm"),
+        pytest.param("faust", "dawdreamer", None, id="dawdreamer"),
+        pytest.param("faustwasm", "faustwasm", 128, id="faustwasm"),
     ],
 )
 def test_eval_faust_render_group_resolves_production_renderer_contract(
     render_group: str,
     backend: str,
-    version: str,
     block_size: int | None,
 ) -> None:
     """The eval operator config accepts each production brightOrgan render group.
 
     :param render_group: Hydra render group under test.
     :param backend: Expected rendering backend.
-    :param version: Expected rendering runtime version.
     :param block_size: Expected optional offline-processing block size.
     """
     try:
@@ -830,7 +828,7 @@ def test_eval_faust_render_group_resolves_production_renderer_contract(
         GlobalHydra.instance().clear()
 
     assert render.renderer_backend == backend
-    assert render.backend_version == version
+    assert render.backend_version == str(cfg.render.backend_version)
     assert render.block_size == block_size
     assert render.plugin_path == "registry://faust/faust_bright_organ"
     assert render.synth.format == "faust"

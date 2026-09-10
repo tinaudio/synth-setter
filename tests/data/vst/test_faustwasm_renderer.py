@@ -21,7 +21,7 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 from synth_setter.synth_spec import SYNTHS, SynthName
 
-_FAUSTWASM_VERSION = "0.18.3"
+_FAUSTWASM_VERSION = extract_backend_version("faustwasm")
 _ROOT = Path(__file__).parents[3]
 _NODE_MODULE = _ROOT / "node_modules/@grame/faustwasm/package.json"
 _EXPECTED_PARAMETER_ADDRESSES = {
@@ -77,7 +77,7 @@ def _config(identity: str = "faust_bright_organ", channels: int = 2) -> RenderCo
         sample_rate=44_100,
         channels=channels,
         velocity=100,
-        signal_duration_seconds=0.5,
+        signal_duration_seconds=4.0,
         min_loudness=-100.0,
         samples_per_render_batch=1,
         samples_per_shard=1,
@@ -163,7 +163,7 @@ def test_faustwasm_factory_renders_real_source(identity: str, channels: int) -> 
 
     assert isinstance(renderer, FaustWasmRenderer)
     assert renderer.block_size == 64
-    assert audio.shape == (channels, 22_050)
+    assert audio.shape == (channels, 176_400)
     assert audio.dtype == np.float32
     assert np.isfinite(audio).all()
     assert float(np.max(np.abs(audio))) > 1e-4

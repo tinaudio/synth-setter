@@ -732,6 +732,15 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             if self.block_size is not None:
                 raise ValueError("block_size is supported only for faustwasm")
             return self
+        from synth_setter.data.vst.faust_param_spec import FAUST_NOTE_DURATION_SECONDS
+        from synth_setter.data.vst.faust_sources import resolve_faust_dsp
+
+        source_identity = (
+            self.param_spec_name
+            if not self.plugin_path
+            else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
+        )
+        source = resolve_faust_dsp(source_identity)
         if self.renderer_backend == "faustwasm":
             if self.render_contract_version == 1:
                 raise ValueError(
@@ -739,6 +748,13 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
                 )
             if self.block_size is None:
                 raise ValueError("faustwasm requires an explicit block_size")
+            expected_channels = source.outputs
+            if self.channels != expected_channels:
+                raise ValueError(f"faustwasm requires channels={expected_channels}")
+            if self.signal_duration_seconds < FAUST_NOTE_DURATION_SECONDS:
+                raise ValueError(
+                    f"faustwasm requires signal_duration_seconds>={FAUST_NOTE_DURATION_SECONDS}"
+                )
             if self.plugin_reload_cadence != "render":
                 raise ValueError(
                     'faustwasm requires plugin_reload_cadence="render": '
@@ -760,15 +776,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             historical_provenance = _historical_faust_v1_provenance(self.param_spec_name)
             if actual_provenance != historical_provenance:
                 raise ValueError(_FAUST_V1_PROVENANCE_ERROR)
-        from synth_setter.data.vst.faust_sources import resolve_faust_dsp
-
-        source_identity = (
-            self.param_spec_name
-            if not self.plugin_path
-            else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
-        )
-        source = resolve_faust_dsp(source_identity).source
-        actual_digest = hashlib.sha256(source.encode()).hexdigest()
+        actual_digest = hashlib.sha256(source.source.encode()).hexdigest()
         if actual_digest != self.synth.source_sha256:
             raise ValueError("registered Faust source does not match synth.source_sha256")
         return self
