@@ -17,8 +17,9 @@ workers, and the models are all driven by a `ParamSpec` (parameter schema) and a
 `RenderConfig` (backend and synth identity) looked up from a registry by name.
 Surge XT is the default and can render through Pedalboard, DawDreamer, or the
 pinned in-process SurgePy engine. OB-Xf and Ultramaster KR-106 are registered
-VST3 synths, while Faust identities compile checked-in source through
-DawDreamer. SurgePy
+VST3 synths; KR-106 also provides the `ultramaster_kr106_single_note` identity,
+which removes controls that cannot affect one fresh isolated note. Faust
+identities compile checked-in source through DawDreamer. SurgePy
 recreates the native synth for every row and accepts only
 `plugin_reload_cadence: render`. VST3 plugins can be
 onboarded with **no edits to core pipeline, storage, or model code**. See
