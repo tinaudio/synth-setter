@@ -278,6 +278,7 @@ def test_faustwasm_hydra_version_matches_pinned_node_dependency() -> None:
         ("faust_bright_organ", 2, "faustwasm"),
         ("faust_bubble", 2, "faustwasm"),
         ("faust_church_organ", 2, "faustwasm"),
+        ("faust_fdn_n8_mono_householder", 1, "faustwasm_fdn"),
         ("faust_filter_osc", 1, "faustwasm_filter_osc"),
     ],
 )
