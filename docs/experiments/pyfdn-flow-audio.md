@@ -90,12 +90,6 @@ precision, including strict MIMO parity tests when run after TorchSynth training
 tests. Isolated parity runs pass; mixed-backend float64 parity remains blocked.
 No tolerance relaxation or local DSP workaround masks this defect.
 
-Importing pinned `torchsynth.util` mutates global `torch.pi` to a float32
-approximation (#3402). This makes subsequent float64 FLAMO construction lose
-precision, including strict MIMO parity tests when run after TorchSynth training
-tests. Isolated parity runs pass; mixed-backend float64 parity remains blocked.
-No tolerance relaxation or local DSP workaround masks this defect.
-
 ## Reproducible integration experiment
 
 This creates a tiny real local pyFDN Lance dataset, trains the configured flow

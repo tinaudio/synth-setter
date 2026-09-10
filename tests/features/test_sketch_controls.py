@@ -75,6 +75,35 @@ def test_pool_sketch_controls_uses_track_means_and_pitch_maxima() -> None:
     torch.testing.assert_close(pooled[0, SKETCH_PITCH_SLICE.start], torch.ones(32), rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("input_frames,output_frames", [(0, 0), (0, 32), (32, 0), (32, -1)])
+def test_pool_sketch_controls_invalid_temporal_grid_rejected(
+    input_frames: int, output_frames: int
+) -> None:
+    """Reject empty inputs and nonpositive output grids before pooling.
+
+    :param input_frames: Source grid length, including an empty grid.
+    :param output_frames: Requested grid length, including nonpositive lengths.
+    """
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, input_frames)
+    with pytest.raises(ValueError, match="nonempty input and positive output frames"):
+        pool_sketch_controls(controls, output_frames=output_frames)
+
+
+def test_pool_sketch_controls_equal_frames_preserves_exact_tensor() -> None:
+    """An unchanged grid preserves values, shape, and dtype exactly."""
+    controls = torch.randn(2, NUM_SKETCH_CONTROLS, 32, dtype=torch.float64)
+    pooled = pool_sketch_controls(controls)
+    torch.testing.assert_close(pooled, controls, rtol=0, atol=0)
+
+
+def test_pool_sketch_controls_equal_frames_keeps_input_storage_independent() -> None:
+    """Editing pooled controls must not overwrite the source controls."""
+    controls = torch.ones(1, NUM_SKETCH_CONTROLS, 32)
+    pooled = pool_sketch_controls(controls)
+    pooled.zero_()
+    torch.testing.assert_close(controls, torch.ones_like(controls), rtol=0, atol=0)
+
+
 def test_pool_sketch_controls_nondivisible_windows_overlap_at_boundaries() -> None:
     """Adaptive pooling covers every source frame when windows do not divide evenly."""
     controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 5)

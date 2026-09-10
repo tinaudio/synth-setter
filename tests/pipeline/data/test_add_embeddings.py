@@ -40,6 +40,7 @@ from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
+    CQT_FIELD,
     M2L_FIELD,
     MEANAUDIO_16K_FIELD,
     PARAM_ARRAY_FIELD,
@@ -67,6 +68,7 @@ from synth_setter.model_cache import checkpoint_tree_sha256
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
+    CQT_EMBEDDING_DIM,
     DEFAULT_CLAP_CHECKPOINT,
     DEFAULT_LANCE_BATCH_SIZE,
     EMBEDDING_REGISTRY,
@@ -411,6 +413,7 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     """The registry is the single source of truth for all supported embeddings."""
     assert set(EMBEDDING_REGISTRY) == {
         "clap",
+        "cqt",
         "m2l",
         "param_shift",
         "pupujepa_large",
@@ -434,6 +437,10 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(
         pool="none", vector_dim=CLAP_EMBEDDING_DIM
     )
+    assert EMBEDDING_REGISTRY["cqt"].index == IndexSpec(
+        pool="mean", vector_column=f"{CQT_FIELD}_vec", vector_dim=CQT_EMBEDDING_DIM
+    )
+    assert EMBEDDING_REGISTRY["cqt"].co_resident is False
     assert EMBEDDING_REGISTRY["m2l"].index == IndexSpec(
         pool="mean", vector_column=f"{M2L_FIELD}_vec"
     )

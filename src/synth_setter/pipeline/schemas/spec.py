@@ -907,6 +907,10 @@ class DatasetSpec(BaseModel):
         Whether finalize substitutes ``std=1.0`` at zero-variance mel bins
         instead of raising; ``False`` is the strict production default.
 
+    .. attribute :: param_language_dimension
+
+        Optional EmbeddingGemma width; finalize publishes one embedding per logical field.
+
     .. attribute :: use_shard_queue
 
         Whether workers claim shard IDs dynamically from the run's Lance
@@ -977,6 +981,11 @@ class DatasetSpec(BaseModel):
             "Smoke configs override to ``True`` because tiny renders have constant "
             "attack-time frames and channels below the source's active bandwidth."
         ),
+    )
+
+    param_language_dimension: Literal[128, 256, 512, 768] | None = Field(
+        default=None,
+        description="Optional Matryoshka width for finalized per-field EmbeddingGemma metadata.",
     )
 
     use_shard_queue: bool = Field(

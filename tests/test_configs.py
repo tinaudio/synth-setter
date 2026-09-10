@@ -388,6 +388,7 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
 @pytest.mark.parametrize(
     ("profile", "input_shape"),
     [
+        pytest.param("cqt", (256, 401), id="cqt"),
         pytest.param("same_s", (256, 44), id="same-s"),
         pytest.param("same_l", (256, 44), id="same-l"),
         pytest.param("t5gemma", (T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH), id="t5gemma"),

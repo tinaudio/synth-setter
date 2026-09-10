@@ -48,7 +48,7 @@ from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
 from synth_setter.data.vst import param_specs, plugin_state_paths
-from synth_setter.data.vst.shapes import AUDIO_FIELD
+from synth_setter.data.vst.shapes import AUDIO_FIELD, CQT_FIELD
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_encoder import (
     ClapAudioEncoder,
@@ -61,6 +61,7 @@ from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_ram_module import VSTFlowRAMModule
+from synth_setter.pipeline.data.cqt import CQT_EMBEDDING_DIM, cqt_num_frames
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import write_spec_to_path
@@ -2637,6 +2638,77 @@ def test_train_eval_embedding_conditioning_real_e2e(
     dataset_root = augment_lance_splits_with_embeddings(surge_xt_smoke_datasets)
     _assert_conditioning_train_validate_finite(
         tmp_path, dataset_root, param_spec_name, conditioning
+    )
+
+
+@RunIf(min_gpus=1)
+@pytest.mark.gpu
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_train_eval_cqt_conditioning_gpu_real_e2e(
+    tmp_path: Path,
+    surge_xt_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Extract CQT on CUDA, then train and validate through the stored feature.
+
+    :param tmp_path: Shared train/eval output directory.
+    :param surge_xt_smoke_datasets: Real-VST Lance dataset root.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    train_uri = surge_xt_smoke_datasets / "train.lance"
+    source_audio = (
+        lance.dataset(train_uri)
+        .to_table(columns=[AUDIO_FIELD])
+        .column(AUDIO_FIELD)
+        .combine_chunks()
+        .to_numpy_ndarray()
+        .copy()
+    )
+    subprocess.run(  # noqa: S603 -- executes the project CLI with test-owned paths
+        [
+            sys.executable,
+            "-m",
+            "synth_setter.pipeline.data.add_embeddings",
+            "logger=[]",
+            f"lance_uri={train_uri}",
+            "embeddings=[cqt]",
+            "device=cuda",
+            "lance_batch_size=1",
+            "build_index=false",
+        ],
+        check=True,
+        timeout=600,
+    )
+
+    dataset = lance.dataset(train_uri)
+    table = dataset.to_table(columns=[AUDIO_FIELD, CQT_FIELD, f"{CQT_FIELD}_vec"])
+    np.testing.assert_array_equal(
+        table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray(), source_audio
+    )
+    features = table.column(CQT_FIELD).combine_chunks().to_numpy_ndarray()
+    expected_frames = cqt_num_frames(source_audio.shape[-1], 44_100)
+    assert features.shape == (len(source_audio), CQT_EMBEDDING_DIM, expected_frames)
+    assert features.dtype == np.float32
+    assert np.isfinite(features).all()
+    assert np.count_nonzero(features) > 0
+    assert not np.allclose(features[0], features[-1])
+    vectors = np.asarray(table.column(f"{CQT_FIELD}_vec").to_pylist(), dtype=np.float32)
+    np.testing.assert_allclose(vectors, features.mean(axis=-1), rtol=1e-5, atol=1e-6)
+    metadata = dataset.schema.field(CQT_FIELD).metadata
+    assert metadata is not None
+    assert metadata[b"synth_setter.embedding.name"] == b"cqt"
+    assert CQT_FIELD.encode() in metadata[b"synth_setter.embedding.artifact"]
+
+    for split in ("val", "test"):
+        destination = surge_xt_smoke_datasets / f"{split}.lance"
+        shutil.rmtree(destination)
+        shutil.copytree(train_uri, destination)
+    _assert_conditioning_train_validate_finite(
+        tmp_path,
+        surge_xt_smoke_datasets,
+        param_spec_name,
+        "cqt",
     )
 
 

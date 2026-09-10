@@ -29,6 +29,9 @@ jobs:
           - name: evaluation-audio
             patterns:
               - synth_setter.evaluation.a*
+          - name: evaluation-browser
+            patterns:
+              - synth_setter.evaluation.browser_flow.*
           - name: evaluation-metrics
             patterns:
               - synth_setter.evaluation.compute_audio_metrics.*
@@ -75,6 +78,9 @@ jobs:
           - name: pipeline-add-private-n-z
             patterns:
               - synth_setter.pipeline.data.add_*.x__[n-z]*
+          - name: pipeline-cqt
+            patterns:
+              - synth_setter.pipeline.data.cqt.*
           - name: pipeline-slap-export
             patterns:
               - synth_setter.pipeline.data.export_slap.*

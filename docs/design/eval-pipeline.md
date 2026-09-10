@@ -399,7 +399,7 @@ Behavior:
 
 The best checkpoint is stored in **R2** and referenced by a W&B artifact — `log_model: False` keeps checkpoint files out of W&B (5 GB total budget). See [§10](#10-alternatives-considered) for the full analysis.
 
-**Upload** (training): at train end `train.py` uploads the best checkpoint to `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt`, then the `model-{config_id}` artifact references it as an `s3://` URI (`checksum=False`).
+**Upload** (training): at train end `train.py` uploads the best checkpoint to `r2://{r2.bucket}/checkpoints/{training_config_id}/{training_run_id}/model.ckpt`, then the `model-{config_id}` artifact references it as an `s3://` URI (`checksum=False`).
 
 **Download** (eval): Checkpoints are resolved lazily via a custom OmegaConf resolver. Evaluation
 call sites pass the W&B artifact reference separately from the shared `surge/<id>` experiment, so
@@ -659,11 +659,11 @@ hands Lightning a resolved local path transparently.
 
 Each system handles what it's best at:
 
-| System                                 | What it stores                                                                                                                                                                                                               | Why                                                       |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| **W&B**                                | Training metrics, model artifacts (an `s3://` reference to the best checkpoint in R2 — `log_model: False`, no checkpoint files), eval summary metrics, per-sample eval Tables (`audio/per_sample_metrics`), artifact lineage | UI for browsing/comparing, lineage graphs, model registry |
-| **R2**                                 | Datasets (generated shards, train/val/test splits), the best checkpoint (`checkpoints/{config_id}/model.ckpt`), eval bulk artifacts (predictions, audio, spectrograms, per-sample metrics CSV file)                          | Too large for W&B, cheaper per GB, fast rclone egress     |
-| **Hydra config** (`config.yaml` in R2) | Full frozen config at eval time — every parameter, override, and version                                                                                                                                                     | Exact reproducibility without querying W&B                |
+| System                                 | What it stores                                                                                                                                                                                                                 | Why                                                       |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| **W&B**                                | Training metrics, model artifacts (an `s3://` reference to the best checkpoint in R2 — `log_model: False`, no checkpoint files), eval summary metrics, per-sample eval Tables (`audio/per_sample_metrics`), artifact lineage   | UI for browsing/comparing, lineage graphs, model registry |
+| **R2**                                 | Datasets (generated shards, train/val/test splits), the best checkpoint (`checkpoints/{training_config_id}/{training_run_id}/model.ckpt`), eval bulk artifacts (predictions, audio, spectrograms, per-sample metrics CSV file) | Too large for W&B, cheaper per GB, fast rclone egress     |
+| **Hydra config** (`config.yaml` in R2) | Full frozen config at eval time — every parameter, override, and version                                                                                                                                                       | Exact reproducibility without querying W&B                |
 
 **Provenance is recorded in three places:**
 
