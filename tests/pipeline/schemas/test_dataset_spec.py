@@ -272,6 +272,18 @@ class TestRenderConfig:
         )
         assert cfg.gui_toggle_cadence == "never"
 
+    def test_non_faust_format_rejects_unverified_backend_version(self) -> None:
+        """Host provenance cannot be persisted where no runtime verifier exists."""
+        with pytest.raises(ValidationError, match="backend_version is supported only"):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "renderer_backend": "dawdreamer",
+                    "backend_version": "9.9.9",
+                    "gui_toggle_cadence": "never",
+                }
+            )
+
     def test_faust_format_dispatches_registry_source_through_dawdreamer(self) -> None:
         """Faust selects a checked-in registry source independently from its host."""
         cfg = RenderConfig(

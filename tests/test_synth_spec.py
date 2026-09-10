@@ -82,6 +82,16 @@ class TestSynthSpecValidation:
 
         assert spec.plugin_state_path == "presets/obxf-base.vstpreset"
 
+    def test_missing_plugin_path_is_rejected(self) -> None:
+        """A plugin-hosted identity cannot omit its runtime artifact location."""
+        with pytest.raises(ValidationError, match="plugin_path"):
+            SynthSpec(  # type: ignore[call-arg]
+                name=SynthName("obxf"),
+                param_spec_name=ParamSpecName("obxf"),
+                plugin_state_path="presets/obxf-base.vstpreset",
+                synth_version="1.0.3",
+            )
+
     def test_missing_synth_version_is_rejected(self) -> None:
         """A synth identity without an artifact version is incomplete."""
         with pytest.raises(ValidationError, match="synth_version"):
