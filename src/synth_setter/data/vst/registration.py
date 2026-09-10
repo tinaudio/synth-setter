@@ -317,6 +317,8 @@ def identity_group_yaml(spec: SynthSpec) -> str:
         f"name: {json.dumps(spec.name)}",
         f"param_spec_name: {json.dumps(spec.param_spec_name)}",
     ]
+    if spec.format != "faust":
+        fields.append(f"format: {json.dumps(spec.format)}")
     if spec.plugin_path:
         fields.append(f"plugin_path: {json.dumps(spec.plugin_path)}")
     fields.extend(
