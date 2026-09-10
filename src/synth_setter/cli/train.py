@@ -112,14 +112,13 @@ def _derive_checkpoint_uri(cfg: DictConfig, run_id: str, launch_uuid: str) -> st
     return f"{_default_checkpoint_prefix_uri(cfg)}/{run_id}/{launch_uuid}/model.ckpt"
 
 
-def _make_launch_namespace(run_id: str, launch_uuid: str | None = None) -> str:
+def _make_launch_namespace(run_id: str) -> str:
     """Return a collision-resistant namespace for one training launch.
 
     :param run_id: Canonical W&B run ID retained as the human-readable prefix.
-    :param launch_uuid: Optional UUID; generated when the caller has not already made one.
     :returns: The run ID plus a UUID used for launch-scoped R2 artifacts.
     """
-    return f"{run_id}-{launch_uuid or uuid4().hex}"
+    return f"{run_id}-{uuid4().hex}"
 
 
 def _checkpoint_prefix_uri(cfg: DictConfig, launch_namespace: str) -> str:
@@ -531,8 +530,8 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     config_id = resolve_run_config_id(cfg)
     recovered_run_id = _apply_auto_resume(cfg, config_id)
     run_id = recovered_run_id or make_wandb_run_id(config_id)
-    launch_uuid = uuid4().hex
-    launch_namespace = _make_launch_namespace(run_id, launch_uuid)
+    launch_namespace = _make_launch_namespace(run_id)
+    launch_uuid = launch_namespace.removeprefix(f"{run_id}-")
 
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)

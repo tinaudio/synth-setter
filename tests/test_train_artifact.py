@@ -48,6 +48,7 @@ from tests.helpers.wandb_offline import read_run_binary
 _CKPT_URI = "r2://models/model-flow-simple/best.ckpt"
 _CKPT_S3_REF = "s3://models/model-flow-simple/best.ckpt"
 _LAUNCH_UUID = "7ac31b3ff42c4f13a21997adb4a74e86"
+_SECOND_LAUNCH_UUID = "f52af7e63eaa41048599080186b92b5d"
 _TRAINING_RUN_ID = "flow-simple-20260908T170724945Z"
 
 # `cfg_train` composes no Hydra experiment, so `resolve_run_config_id` falls back
@@ -254,15 +255,15 @@ def test_log_model_artifact_forwards_checkpoint_metadata() -> None:
     assert logger.logged[0].metadata["epoch"] == 9
 
 
-def test_upload_best_checkpoint_reachable_uploads_to_derived_uri(
+def test_upload_best_checkpoint_same_run_launches_keep_distinct_objects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When R2 is reachable, the best ckpt uploads to the derived URI (renamed model.ckpt).
+    """Two launches of one run upload readable checkpoints without overwriting.
 
     Drives the real ``rclone`` binary against a local-backed ``r2:`` remote, so
-    the assertion is the object materializing on disk — not a mocked call.
+    the assertions read the materialized objects instead of mocked calls.
 
-    :param tmp_path: Backs the ``r2:`` remote; the uploaded object lands under it.
+    :param tmp_path: Backs the ``r2:`` remote; the uploaded objects land under it.
     :param monkeypatch: Points rclone at the local fs and forces R2 reachable.
     """
     if shutil.which("rclone") is None:
@@ -270,27 +271,34 @@ def test_upload_best_checkpoint_reachable_uploads_to_derived_uri(
     monkeypatch.setenv("RCLONE_CONFIG_R2_TYPE", "local")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
-    ckpt = tmp_path / "epoch=3.ckpt"
-    ckpt.write_bytes(b"weights")
+    first_ckpt = tmp_path / "epoch=3.ckpt"
+    second_ckpt = tmp_path / "epoch=4.ckpt"
+    first_ckpt.write_bytes(b"first weights")
+    second_ckpt.write_bytes(b"second weights")
 
-    uri = _upload_best_checkpoint(
-        _cfg(task_name="flow-simple"), str(ckpt), _TRAINING_RUN_ID, _LAUNCH_UUID
+    first_uri = _upload_best_checkpoint(
+        _cfg(task_name="flow-simple"), str(first_ckpt), _TRAINING_RUN_ID, _LAUNCH_UUID
+    )
+    second_uri = _upload_best_checkpoint(
+        _cfg(task_name="flow-simple"),
+        str(second_ckpt),
+        _TRAINING_RUN_ID,
+        _SECOND_LAUNCH_UUID,
     )
 
-    assert uri == (
-        "r2://intermediate-data/checkpoints/flow-simple/"
-        "flow-simple-20260908T170724945Z/7ac31b3ff42c4f13a21997adb4a74e86/model.ckpt"
-    )
-    landed = (
+    assert first_uri != second_uri
+    first_object = (
         tmp_path
         / "intermediate-data"
         / "checkpoints"
         / "flow-simple"
         / "flow-simple-20260908T170724945Z"
-        / "7ac31b3ff42c4f13a21997adb4a74e86"
+        / _LAUNCH_UUID
         / "model.ckpt"
     )
-    assert landed.read_bytes() == b"weights"
+    second_object = first_object.parents[1] / _SECOND_LAUNCH_UUID / "model.ckpt"
+    assert first_object.read_bytes() == b"first weights"
+    assert second_object.read_bytes() == b"second weights"
 
 
 def test_upload_best_checkpoint_unreachable_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
