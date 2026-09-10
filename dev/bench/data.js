@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789050363575,
+  "lastUpdate": 1789050367395,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -27777,6 +27777,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.72754257329998,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "25710edda8c4fa5b81251a776d037b9e005bd781",
+          "message": "internal-feat(data-pipeline): separate synth format and render backend (#3419)\n\n* internal-feat(pipeline): add explicit synth format contract\n\n* internal-fix(data-pipeline): preserve explicit synth render contract\n\n* internal-fix(data-pipeline): validate legacy Faust provenance\n\n* chore: refresh PR checks after title correction\n\n* internal-fix(data-pipeline): register canonical Faust source URIs\n\n* internal-fix(data-pipeline): preserve oracle render provenance\n\n* internal-fix(data-pipeline): reject legacy Faust VST sentinel\n\n* internal-fix(data-pipeline): compose oracle render identity\n\n* internal-fix(data-pipeline): omit derived synth format from YAML\n\n* internal-fix(data-pipeline): tighten render provenance validation\n\n* internal-fix(data-pipeline): refresh persisted spec fixture\n\n* internal-fix(data-pipeline): label SurgePy parity identity\n\n* test(data-pipeline): cover Faust provenance failures",
+          "timestamp": "2026-09-10T09:02:16-04:00",
+          "tree_id": "e13d5eb56193b83387677d277bb332a2e45431bc",
+          "url": "https://github.com/tinaudio/synth-setter/commit/25710edda8c4fa5b81251a776d037b9e005bd781"
+        },
+        "date": 1789050366988,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 9.969195365905762,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.264044715426863,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.10402283817529678,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.006053328514099121,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.4344871044158936,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.897517967600015,
             "unit": "seconds"
           }
         ]
