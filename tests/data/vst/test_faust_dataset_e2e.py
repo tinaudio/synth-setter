@@ -15,6 +15,8 @@ from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, Render
 from synth_setter.synth_spec import SYNTHS, SynthName
 from tests._vst import VST_SUBPROCESS_TIMEOUT_SECONDS
 
+_NODE_MODULE = Path(__file__).parents[3] / "node_modules/@grame/faustwasm/package.json"
+
 
 @pytest.mark.slow
 def test_faust_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
@@ -85,3 +87,60 @@ def test_faust_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
     assert np.all((params >= 0.0) & (params <= 1.0))
     assert float(np.max(np.abs(audio))) > 1e-4
     assert float(np.max(np.abs(audio))) <= 1.0
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+def test_faustwasm_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
+    """The production CLI drives Python through Node into a consumable Lance row.
+
+    :param tmp_path: Isolated Lance shard destination.
+    """
+    config = RenderConfig(
+        synth=SYNTHS[SynthName("faust_bright_organ")],
+        renderer_backend="faustwasm",
+        backend_version="0.18.3",
+        render_contract_version=2,
+        sample_rate=44100,
+        channels=2,
+        velocity=100,
+        signal_duration_seconds=4.0,
+        min_loudness=-100.0,
+        samples_per_render_batch=1,
+        samples_per_shard=1,
+        attempts_per_sample=5,
+        base_seed=1808,
+        plugin_reload_cadence="render",
+        gui_toggle_cadence="never",
+    )
+    spec = DatasetSpec(
+        task_name="faustwasm-e2e",
+        output_format=OutputFormat.LANCE,
+        train_val_test_sizes=(1, 0, 0),
+        base_seed=config.base_seed,
+        r2={"bucket": "unused"},  # type: ignore[arg-type]
+        render=config,
+    )
+    args = build_generate_args(spec, spec.shards[0], tmp_path)
+    shard = Path(args[2])
+
+    result = subprocess.run(  # noqa: S603
+        args,
+        cwd=Path(__file__).parents[3],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=VST_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+
+    assert result.returncode == 0, result.stderr
+    table = lance.dataset(str(shard)).to_table(
+        columns=[AUDIO_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD]
+    )
+    audio = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()[0]
+    params = table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()[0]
+    assert table.num_rows == 1
+    assert audio.shape == (2, 176400)
+    assert params.shape == (13,)
+    assert np.isfinite(audio).all()
+    assert float(np.max(np.abs(audio))) > 1e-4

@@ -351,6 +351,20 @@ class TestRenderConfig:
         with pytest.raises(ValidationError, match=message):
             RenderConfig(**values)
 
+    def test_faustwasm_backend_accepts_explicit_v2_faust_contract(self) -> None:
+        """FaustWasm consumes checked-in Faust source only under the v2 projection."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values["synth"] = SYNTHS[SynthName("faust_bright_organ")]
+        values["renderer_backend"] = "faustwasm"
+        values["backend_version"] = "0.18.3"
+        values["render_contract_version"] = 2
+        values["plugin_reload_cadence"] = "render"
+        values["gui_toggle_cadence"] = "never"
+
+        config = RenderConfig(**values)
+
+        assert config.renderer_backend == "faustwasm"
+
     def test_faust_format_rejects_pedalboard_backend(self) -> None:
         """A source program cannot be passed to a VST3-only host."""
         values = _valid_render_kwargs(plugin_path="faust")

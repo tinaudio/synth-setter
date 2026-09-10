@@ -1,4 +1,5 @@
 import importlib.metadata
+import json
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -51,9 +52,24 @@ def extract_backend_version(renderer_backend: str) -> str:
     :param renderer_backend: Rendering host whose distribution version is required.
     :returns: Installed host distribution version.
     :raises ValueError: The backend has no separate version contract.
+    :raises RuntimeError: FaustWasm package metadata is unavailable or malformed.
     """
     if renderer_backend == "dawdreamer":
         return importlib.metadata.version("dawdreamer")
+    if renderer_backend == "faustwasm":
+        package = (
+            Path(__file__).resolve().parents[4]
+            / "node_modules"
+            / "@grame"
+            / "faustwasm"
+            / "package.json"
+        )
+        if not package.is_file():
+            raise RuntimeError("FaustWasm runtime is not installed; run `npm ci` at the repository root")
+        version = json.loads(package.read_text()).get("version")
+        if not isinstance(version, str):
+            raise RuntimeError("@grame/faustwasm package metadata has no version")
+        return version
     raise ValueError(f"renderer backend has no separate version contract: {renderer_backend!r}")
 
 
