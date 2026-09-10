@@ -28,6 +28,15 @@ if TYPE_CHECKING:
     from pedalboard import VST3Plugin
 
 
+class TestExtractBackendVersion:
+    """Rendering-host package version extractor."""
+
+    def test_unversioned_backend_rejects_separate_version_lookup(self) -> None:
+        """A host without an independent version contract fails closed."""
+        with pytest.raises(ValueError, match="no separate version contract"):
+            core.extract_backend_version("pedalboard")
+
+
 class TestExtractRendererVersion:
     """Static-metadata + pedalboard-fallback VST3 plugin version extractor."""
 

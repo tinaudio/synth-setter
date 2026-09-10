@@ -302,6 +302,55 @@ class TestRenderConfig:
         assert cfg.plugin_path == "registry://faust/faust_bright_organ"
         assert cfg.plugin_state_path == ""
 
+    def test_legacy_faust_backend_rejects_non_faust_registry_identity(self) -> None:
+        """The legacy sentinel cannot promote a registered VST identity."""
+        with pytest.raises(ValidationError, match="legacy Faust identity"):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "synth": {
+                        **SYNTHS[SynthName("surge_xt")].model_dump(exclude={"format"}),
+                        "plugin_path": "faust",
+                    },
+                    "renderer_backend": "dawdreamer_faust",
+                    "gui_toggle_cadence": "never",
+                }
+            )
+
+    def test_faust_format_rejects_blank_backend_version(self) -> None:
+        """Faust requires a concrete rendering-host version."""
+        with pytest.raises(ValidationError, match="non-blank backend_version"):
+            RenderConfig(
+                **{
+                    **_valid_render_kwargs(),
+                    "synth": SYNTHS[SynthName("faust_bright_organ")],
+                    "renderer_backend": "dawdreamer",
+                    "backend_version": " ",
+                    "gui_toggle_cadence": "never",
+                }
+            )
+
+    @pytest.mark.parametrize("param_spec_name", [None, "faust_unknown"])
+    def test_faust_v1_invalid_source_identity_requires_v2(self, param_spec_name: object) -> None:
+        """Legacy provenance cannot project an invalid source identity.
+
+        :param param_spec_name: Non-string or unknown checked-in source identity.
+        """
+        synth = SYNTHS[SynthName("faust_bright_organ")].model_dump()
+        synth["param_spec_name"] = param_spec_name
+
+        with pytest.raises(ValidationError, match="render_contract_version=2"):
+            RenderConfig.model_validate(
+                {
+                    **_valid_render_kwargs(),
+                    "synth": synth,
+                    "renderer_backend": "dawdreamer",
+                    "backend_version": "0.8.3",
+                    "render_contract_version": 1,
+                    "gui_toggle_cadence": "never",
+                }
+            )
+
     def test_registry_uri_without_authored_format_is_modern_v2(self) -> None:
         """A canonical generated identity is not mistaken for historical Faust input."""
         synth = SYNTHS[SynthName("faust_bright_organ")].model_dump(exclude={"format"})
