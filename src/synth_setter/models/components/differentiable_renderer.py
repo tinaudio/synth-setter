@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 import numpy as np
 import torch
 from beartype import beartype
-from jaxtyping import Float, jaxtyped
+from flamo.processor import system
+from jaxtyping import Float, Shaped, jaxtyped
 from torch import Tensor, nn
 
 from synth_setter.data.basic_fdn import BasicFDN
@@ -161,6 +163,25 @@ class FlamoFDNDifferentiableRenderer(nn.Module):
         self._graph = fdn.to_flamo(nfft=self.fft_size, device="cpu", dtype=dtype)
         self.sample_rate = fdn.build.fs
         self.signal_length = signal_length
+
+    @jaxtyped(typechecker=beartype)
+    def _apply(
+        self,
+        fn: Callable[[Shaped[Tensor, ...]], Shaped[Tensor, ...]],
+        recurse: bool = True,
+    ) -> FlamoFDNDifferentiableRenderer:
+        """Apply a tensor conversion while preserving FLAMO graph invariants.
+
+        :param fn: PyTorch tensor conversion applied recursively.
+        :param recurse: Whether to convert child modules.
+        :returns: This renderer after conversion.
+        """
+        super()._apply(fn, recurse)
+        # FLAMO 0.2.18 skips same-dtype complex-buffer repair; remove with #3380.
+        for module in self._graph.modules():
+            if isinstance(module, system.Recursion):
+                module._rebuild_buffers()
+        return self
 
     @classmethod
     @jaxtyped(typechecker=beartype)

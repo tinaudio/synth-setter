@@ -90,6 +90,22 @@ def test_flamo_householder_supported_controls_have_finite_nonzero_gradients(devi
     assert torch.count_nonzero(row.grad[:8]).item() == 0
 
 
+def test_flamo_renderer_same_dtype_conversion_preserves_output() -> None:
+    """An explicit same-dtype conversion leaves the FLAMO graph executable."""
+    row, _ = _model_row(5)
+    renderer = FlamoFDNDifferentiableRenderer.from_param_spec(
+        param_spec="pyfdn_n8_mono_householder",
+        sample_rate=44_100,
+        signal_length=4096,
+        fft_size=8192,
+    )
+    expected = renderer(row.unsqueeze(0))
+
+    renderer.to(dtype=torch.float32)
+
+    torch.testing.assert_close(renderer(row.unsqueeze(0)), expected)
+
+
 def test_flamo_audio_feedback_unclipped_target_has_zero_loss() -> None:
     """FLAMO feedback must not inherit TorchSynth's stored-audio clipping."""
     from synth_setter.models.components.audio_distance import MultiScaleSpectralDistance
