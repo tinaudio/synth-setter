@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789000454959,
+  "lastUpdate": 1789000457810,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -34150,6 +34150,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.0000045299530029296875,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f6916a8582cfcdbda1ecc3c6baeb0cbb8ada6426",
+          "message": "internal-feat(training): add per-parameter mixed endpoint CE loss (#3295)\n\n* internal-feat(training): add KR-106 onehot voices identity\n\nPreserve the legacy 246-column artifact while adding an opt-in selector.\n\nRefs #3270\n\n* internal-feat(training): add mixed endpoint loss\n\nTrain one-hot endpoint spans with cross entropy while retaining per-parameter\nregression for numerical spans.\n\nConvert logits to deterministic model-space endpoints for diagnostics, CFG,\nsampling, and audio feedback. Guard checkpoint output semantics.\n\nRefs #3270\n\n* internal-fix(models): guide endpoint logits before conversion\n\n* test(models): cover mixed endpoint multi-guidance\n\n* internal-fix(ci): restore merged medium test contracts",
+          "timestamp": "2026-09-09T18:56:40-04:00",
+          "tree_id": "a5c2491d56992faaeb92e132aad1e7eeda2e5b9f",
+          "url": "https://github.com/tinaudio/synth-setter/commit/f6916a8582cfcdbda1ecc3c6baeb0cbb8ada6426"
+        },
+        "date": 1789000457321,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/repeated-patch/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard/dataset-seconds-per-render",
+            "value": 12.530031355866663,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard/dataset-realtime-factor",
+            "value": 3.132507838966666,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer/dataset-seconds-per-render",
+            "value": 5.772940824633338,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer/dataset-realtime-factor",
+            "value": 1.4432352061583344,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/surgepy/dataset-seconds-per-render",
+            "value": 0.29103440256666696,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/surgepy/dataset-realtime-factor",
+            "value": 0.07275860064166674,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 2.091948986053467,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/mss-max",
+            "value": 0.5878918170928955,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.0061390888877213,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 1.209761051380483,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.000008046627044677734,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 2.03827166557312,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/mss-max",
+            "value": 0.5702866911888123,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/sot-max",
+            "value": 0.006132866255939007,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 1.2431438316160348,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.000010013580322265625,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 2.1118218898773193,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/mss-max",
+            "value": 0.593350887298584,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.0061483802273869514,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 1.288990362113109,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.000005245208740234375,
             "unit": "1-cos"
           }
         ]
