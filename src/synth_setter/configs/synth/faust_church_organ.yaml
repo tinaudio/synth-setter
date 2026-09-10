@@ -1,7 +1,7 @@
 # Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
 name: "faust_church_organ"
 param_spec_name: "faust_church_organ"
-format: "faust"
+plugin_path: "registry://faust/faust_church_organ"
 plugin_state_path: ""
 synth_version: "1"
 source_sha256: "c753731f4053210d42757acb179010185e91d37fb56a8b45e093222be688b512"

@@ -33,8 +33,8 @@ def test_synth_group_files_mirror_registry_identity() -> None:
     for name, spec in SYNTHS.items():
         content = yaml.safe_load((_SYNTH_CONFIG_DIR / f"{name}.yaml").read_text())
         expected = spec.model_dump(exclude_none=True)
-        if not expected["plugin_path"]:
-            expected.pop("plugin_path")
+        if expected["format"] == "faust":
+            expected.pop("format")
         assert content == expected, name
 
 

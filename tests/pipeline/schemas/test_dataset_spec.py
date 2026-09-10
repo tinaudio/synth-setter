@@ -272,8 +272,8 @@ class TestRenderConfig:
         )
         assert cfg.gui_toggle_cadence == "never"
 
-    def test_faust_format_dispatches_through_dawdreamer_without_plugin_path(self) -> None:
-        """Faust selects checked-in source independently from its rendering backend."""
+    def test_faust_format_dispatches_registry_source_through_dawdreamer(self) -> None:
+        """Faust selects a checked-in registry source independently from its host."""
         cfg = RenderConfig(
             **{
                 **_valid_render_kwargs(plugin_path="faust"),
@@ -287,8 +287,59 @@ class TestRenderConfig:
         assert cfg.renderer_backend == "dawdreamer"
         assert cfg.backend_version == "0.8.3"
         assert cfg.synth.format == "faust"
-        assert cfg.plugin_path == ""
+        assert cfg.plugin_path == "registry://faust/faust_bright_organ"
         assert cfg.plugin_state_path == ""
+
+    def test_registry_uri_without_authored_format_is_modern_v2(self) -> None:
+        """A canonical generated identity is not mistaken for historical Faust input."""
+        synth = SYNTHS[SynthName("faust_bright_organ")].model_dump(exclude={"format"})
+        cfg = RenderConfig.model_validate(
+            {
+                "synth": synth,
+                "renderer_backend": "dawdreamer",
+                "backend_version": "0.8.3",
+                "gui_toggle_cadence": "never",
+                "sample_rate": 44100,
+                "channels": 2,
+                "velocity": 100,
+                "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "samples_per_shard": 1,
+            }
+        )
+
+        assert cfg.render_contract_version == 2
+        assert cfg.synth.format == "faust"
+        assert cfg.plugin_path == "registry://faust/faust_bright_organ"
+
+    def test_pathless_faust_v2_round_trip_preserves_historical_digest(self) -> None:
+        """Existing explicit v2 pathless specs retain their serialized identity."""
+        synth = SYNTHS[SynthName("faust_bright_organ")].model_dump()
+        synth["plugin_path"] = ""
+        cfg = RenderConfig.model_validate(
+            {
+                "synth": synth,
+                "renderer_backend": "dawdreamer",
+                "backend_version": "0.8.3",
+                "render_contract_version": 2,
+                "gui_toggle_cadence": "never",
+                "sample_rate": 44100,
+                "channels": 2,
+                "velocity": 100,
+                "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "samples_per_shard": 1,
+            }
+        )
+
+        restored = RenderConfig.model_validate_json(cfg.model_dump_json())
+
+        assert restored.plugin_path == ""
+        assert restored == cfg
+        assert (
+            restored.shard_metadata().render_contract_digest
+            == "301df39954fe95e9a1661a54fe8e03c62afc6ccd5caeffd3574023070ac52aa8"
+        )
 
     def test_explicit_synth_object_and_dict_use_same_render_contract(self) -> None:
         """Canonical synth input shapes retain identical provenance in shard identity."""

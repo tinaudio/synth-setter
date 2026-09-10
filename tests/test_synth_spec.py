@@ -26,6 +26,7 @@ from synth_setter.synth_spec import (
     SynthName,
     SynthSpec,
     resolve_synth,
+    validate_faust_registry_reference,
     validate_synth_identity,
 )
 
@@ -116,16 +117,70 @@ class TestSynthSpecValidation:
         with pytest.raises(KeyError):
             resolve_synth(SynthName("not_a_synth"))
 
+    def test_faust_registry_reference_returns_registered_identity(self) -> None:
+        """A canonical reference resolves to its checked-in source identity."""
+        identity = validate_faust_registry_reference(
+            "registry://faust/faust_bright_organ", "faust_bright_organ"
+        )
+
+        assert identity == "faust_bright_organ"
+
+    @pytest.mark.parametrize(
+        "reference",
+        [
+            "registry:/faust/faust_bright_organ",
+            "registry://other/faust_bright_organ",
+            "registry://faust/faust_bright_organ/extra",
+            "registry://faust/faust_bright_organ?version=1",
+        ],
+    )
+    def test_malformed_faust_registry_reference_raises(self, reference: str) -> None:
+        """Only the exact registry scheme, namespace, and one-part identity are accepted.
+
+        :param reference: Malformed registry reference under test.
+        """
+        with pytest.raises(ValueError, match="registry://faust/<registered-source-name>"):
+            validate_faust_registry_reference(reference, "faust_bright_organ")
+
+    def test_unknown_faust_registry_reference_raises(self) -> None:
+        """A canonical-looking reference cannot select an unregistered source."""
+        with pytest.raises(ValueError, match="not registered"):
+            validate_faust_registry_reference("registry://faust/faust_unknown", "faust_unknown")
+
+    def test_mismatched_faust_registry_reference_raises(self) -> None:
+        """The reference identity must agree with the selected parameter specification."""
+        with pytest.raises(ValueError, match="faust_bubble.*faust_bright_organ"):
+            validate_faust_registry_reference(
+                "registry://faust/faust_bubble", "faust_bright_organ"
+            )
+
+    def test_registry_reference_without_format_derives_faust(self) -> None:
+        """A recognized registry URI supplies its non-filesystem representation format."""
+        values = SYNTHS[SynthName("faust_bright_organ")].model_dump(exclude={"format"})
+
+        spec = SynthSpec.model_validate(values)
+
+        assert spec.format == "faust"
+
+    def test_registry_reference_with_mismatched_explicit_format_raises(self) -> None:
+        """An explicitly authored format cannot contradict a Faust registry URI."""
+        values = SYNTHS[SynthName("faust_bright_organ")].model_dump()
+        values["format"] = "vst3"
+        values["source_sha256"] = None
+
+        with pytest.raises(ValidationError, match="requires format='faust'"):
+            SynthSpec.model_validate(values)
+
 
 class TestSynthsTable:
     """Cross-registry invariants that previously had no enforcement."""
 
-    def test_faust_identity_declares_source_without_plugin_sentinel(self) -> None:
-        """Faust source identity is independent from any host implementation."""
+    def test_faust_identity_declares_registered_source_reference(self) -> None:
+        """Faust source identity uses the in-process registry rather than a file path."""
         synth = SYNTHS[SynthName("faust_bright_organ")]
 
         assert synth.format == "faust"
-        assert synth.plugin_path == ""
+        assert synth.plugin_path == "registry://faust/faust_bright_organ"
         assert synth.synth_version == "1"
         assert synth.source_sha256 == (
             "a1bf9f6e45ebbf78dd11fc18603cda048a91a778af1ad79683339b1951813465"
@@ -238,8 +293,8 @@ class TestSynthConfigGroup:
             group = compose(config_name=f"synth/{name}").synth
 
         expected = SYNTHS[SynthName(name)].model_dump(exclude_none=True)
-        if not expected["plugin_path"]:
-            expected.pop("plugin_path")
+        if expected["format"] == "faust":
+            expected.pop("format")
         assert OmegaConf.to_container(group) == expected
 
     def test_ultramaster_onehot_selector_resolves_configured_width(self) -> None:

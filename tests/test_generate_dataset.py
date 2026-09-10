@@ -256,7 +256,7 @@ def test_cfg_dataset_faust_resolves_production_renderer_contract(
 
     assert spec.render.renderer_backend == "dawdreamer"
     assert spec.render.backend_version == "0.8.3"
-    assert spec.render.plugin_path == ""
+    assert spec.render.plugin_path == "registry://faust/faust_bright_organ"
     assert spec.render.synth.format == "faust"
     assert spec.render.plugin_reload_cadence == "render"
     assert spec.render.gui_toggle_cadence == "never"
