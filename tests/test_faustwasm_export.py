@@ -200,6 +200,49 @@ def test_real_runtime_rejects_configured_backend_version_mismatch(tmp_path: Path
 
 
 @pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
+def test_real_runtime_rejects_persisted_manifest_version_mismatch(tmp_path: Path) -> None:
+    """The Node consumer compares persisted provenance with its installed package.
+
+    :param tmp_path: Isolated persistent artifact and render destination.
+    """
+    output_dir = tmp_path / "artifact"
+    main(["--synth", "faust_filter_osc", "--output", str(output_dir)])
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    patch = {
+        parameter["canonicalAddress"]: (
+            parameter["values"][0]
+            if parameter["kind"] == "discrete"
+            else (parameter["min"] + parameter["max"]) / 2.0
+        )
+        for parameter in manifest["parameters"]
+    }
+    manifest["faustwasmVersion"] = "999.0.0"
+    manifest_path.write_text(json.dumps(manifest))
+    request_path = tmp_path / "render.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "expectedFaustWasmVersion": _configured_backend_version(),
+                "sampleRate": 44_100,
+                "blockSize": 128,
+                "frames": 128,
+                "note": 60,
+                "velocity": 100,
+                "startFrame": 0,
+                "endFrame": 64,
+                "params": patch,
+            }
+        )
+    )
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        run_faustwasm_render_worker(output_dir, request_path, tmp_path / "audio.f32")
+
+    assert "artifact 999.0.0, installed" in exc_info.value.stderr
+
+
+@pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
 def test_real_runtime_rejects_corrupted_persisted_module(tmp_path: Path) -> None:
     """The Node consumer rejects module bytes that drift from the manifest digest.
 
