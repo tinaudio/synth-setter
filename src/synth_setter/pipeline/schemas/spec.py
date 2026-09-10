@@ -25,8 +25,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     computed_field,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -889,6 +891,20 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             )
         return self
 
+    @model_serializer(mode="wrap")
+    def _serialize_preserving_v1_defaults(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        """Keep omitted V1 cadence fields omitted across worker transport.
+
+        :param handler: Pydantic's standard serializer for this model.
+        :returns: Serialized config retaining the caller's V1 omission.
+        """
+        serialized: dict[str, object] = handler(self)
+        if self.render_contract_version == 1 and "gui_toggle_cadence" not in self.model_fields_set:
+            serialized.pop("gui_toggle_cadence", None)
+        return serialized
+
     def shard_metadata(self) -> ShardMetadata:
         """Project this config onto the per-shard sidecar metadata fields.
 
@@ -905,6 +921,9 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         if self.render_contract_version == 1:
             contract.pop("backend_version", None)
             contract.pop("render_contract_version")
+            # Canonicalize an omitted V1 cadence to its legacy render value.
+            if "gui_toggle_cadence" not in self.model_fields_set:
+                contract["gui_toggle_cadence"] = "render"
             synth = contract["synth"]
             synth.pop("format")
             synth.pop("source_sha256", None)
