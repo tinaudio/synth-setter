@@ -1,6 +1,7 @@
 # Mel settings must match the dataset writers' stored-mel front end, so every
 # spectrogram-in encoder shares this one definition rather than restating it.
 _target_: synth_setter.models.components.spec_encoder.LogMelFrontend
+_convert_: all
 in_dim: ${datamodule.signal_length}
 sample_rate: ${datamodule.sample_rate}
 n_mels: 128
@@ -10,3 +11,7 @@ window: hamming
 power: 2.0
 top_db: 80.0
 amin: 1.0e-10
+# Keep the artifact path null when reconstructing from a checkpoint; saved buffers restore stats.
+normalization_mean: null
+normalization_std: null
+normalization_stats_path: null

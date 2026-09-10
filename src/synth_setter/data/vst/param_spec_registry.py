@@ -47,6 +47,7 @@ from synth_setter.data.vst.torchsynth_param_spec import (
 from synth_setter.data.vst.ultramaster_kr106_param_spec import (
     ULTRAMASTER_KR106_ONEHOT_PARAM_SPEC,
     ULTRAMASTER_KR106_PARAM_SPEC,
+    ULTRAMASTER_KR106_SINGLE_NOTE_PARAM_SPEC,
 )
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.synth_spec import SYNTHS
@@ -87,6 +88,7 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("torchsynth_simple"): TORCHSYNTH_SIMPLE_PARAM_SPEC,
     ParamSpecName("ultramaster_kr106"): ULTRAMASTER_KR106_PARAM_SPEC,
     ParamSpecName("ultramaster_kr106_onehot"): ULTRAMASTER_KR106_ONEHOT_PARAM_SPEC,
+    ParamSpecName("ultramaster_kr106_single_note"): ULTRAMASTER_KR106_SINGLE_NOTE_PARAM_SPEC,
 }
 param_specs = cast(Mapping[str, ParamSpec], MappingProxyType(_param_specs))
 
