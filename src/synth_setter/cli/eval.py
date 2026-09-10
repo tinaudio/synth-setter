@@ -15,10 +15,10 @@ from typing import Any, cast
 import hydra
 import pandas as pd
 import wandb
-from lightning import Callback, LightningDataModule, LightningModule, Trainer
+from lightning import Callback, LightningDataModule, LightningModule, Trainer, seed_everything
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 from pydantic_settings import CliApp
 
 from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
@@ -67,6 +67,8 @@ operator_workspace()
 register_resolvers()
 
 log = RankedLogger(__name__, rank_zero_only=True)
+
+_DEFAULT_EVALUATION_SEED = 42
 
 
 def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:  # noqa: DOC502 — raised by load_aggregated_metrics
@@ -474,6 +476,14 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         metrics from :func:`_run_predict_postprocessing` (Python ``float``),
         so callers iterating values must handle both.
     """
+    seeded_evaluation = cfg.get("seeded_evaluation", False)
+    if "seeded_evaluation" in cfg.model:
+        with open_dict(cfg.model):
+            cfg.model.seeded_evaluation = seeded_evaluation
+    if seeded_evaluation:
+        configured_seed = cfg.get("seed", _DEFAULT_EVALUATION_SEED)
+        evaluation_seed = _DEFAULT_EVALUATION_SEED if configured_seed is None else configured_seed
+        seed_everything(evaluation_seed, workers=True)
     apply_feature_flags(cfg)
     checkpoint_path = _localize_eval_checkpoint(cfg.ckpt_path, cfg.get("ckpt_sha256"))
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterator, MutableMapping
+from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
@@ -35,6 +35,7 @@ _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_TIME_SHAPE = "batch 1"
 _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 _PARAM_SHAPE = "params"
+_SampleBatch = Mapping[str, Shaped[torch.Tensor, _BATCH_ANY_SHAPE] | None]
 # Stored outside hyper_parameters because Lightning replaces those with load-time kwargs
 # before the hook runs; missing keys retain their legacy velocity/MSE meanings.
 _ENDPOINT_LOSS_KEY = "endpoint_loss"
@@ -46,6 +47,9 @@ EndpointLoss = Literal["mse", "mixed"]
 Parameterization = Literal["velocity", "endpoint"]
 _ENDPOINT_LOSSES: frozenset[str] = frozenset(("mixed", "mse"))
 _PARAMETERIZATIONS: frozenset[str] = frozenset(("endpoint", "velocity"))
+_EVAL_BATCH_SEED_STRIDE = 2**16
+_EVAL_SEED_MODULUS = 2**63 - 1
+_EVAL_TEST_SEED_OFFSET = 1_000_003
 
 if TYPE_CHECKING:
     from synth_setter.models.components.audio_feedback import (
@@ -458,6 +462,7 @@ class VSTFlowMatchingModule(LightningModule):
         rectified_sigma_min: float = 0.0,
         parameterization: Parameterization = "velocity",
         endpoint_loss: EndpointLoss = "mse",
+        seeded_evaluation: bool = False,
         validation_sample_steps: int = 50,
         validation_cfg_strength: float = 4.0,
         validation_sketch_cfg_strength: float | None = None,
@@ -492,6 +497,7 @@ class VSTFlowMatchingModule(LightningModule):
         :param parameterization: What the field predicts: the velocity ``x1 - x0`` or the
             clean endpoint ``x1``; the sampler converts an endpoint to a velocity.
         :param endpoint_loss: Flat endpoint MSE, or per-parameter MSE/CE for one-hot spans.
+        :param seeded_evaluation: Whether validation and test use seed-derived local noise.
         :param validation_sample_steps: RK4 integration steps used at validation.
         :param validation_cfg_strength: Content guidance strength at validation.
         :param validation_sketch_cfg_strength: Sketch guidance strength at validation;
@@ -558,6 +564,7 @@ class VSTFlowMatchingModule(LightningModule):
             # trainer in on_train_start. Must fail before setup() compiles (#2585).
             validate_audio_feedback_runtime(compiled=True, world_size=1)
         self._conditioning_key = conditioning_batch_key(conditioning)
+        self._evaluation_seed = torch.initial_seed()
 
         self.val_param_mse_best_swap = BestSwapParamMSE()
         self.test_param_mse_best_swap = BestSwapParamMSE()
@@ -686,8 +693,12 @@ class VSTFlowMatchingModule(LightningModule):
             return x1
         return self._rectified_vector_field(x0, x1)
 
-    def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    def _get_conditioning_from_batch(self, batch: _SampleBatch) -> torch.Tensor:
         conditioning = batch[self._conditioning_key]
+        if conditioning is None:
+            raise ValueError(
+                f"batch conditioning field {self._conditioning_key!r} must contain a tensor"
+            )
         if (
             self._conditioning_key == "audio"
             and conditioning.ndim == 3
@@ -760,16 +771,19 @@ class VSTFlowMatchingModule(LightningModule):
 
     @jaxtyped(typechecker=beartype)
     def _control_token_branches_from_batch(
-        self, batch: dict[str, Shaped[torch.Tensor, ...] | None]
+        self, batch: _SampleBatch
     ) -> ControlTokenBranches | None:
         """Build complete full-sketch and PE-only control branches for inference.
 
         :param batch: Model batch carrying sketch controls when configured.
         :returns: Both control-token branches, or ``None`` without sketch support.
+        :raises ValueError: The active sketch-control field is ``None``.
         """
         if self.sketch_tokens is None:
             return None
         controls = batch["sketch_ctrl"]
+        if controls is None:
+            raise ValueError("batch sketch_ctrl field must contain a tensor")
         keep = torch.ones(
             controls.shape[0],
             len(self.sketch_tokens.layout.group_names),
@@ -1051,7 +1065,7 @@ class VSTFlowMatchingModule(LightningModule):
     @jaxtyped(typechecker=beartype)
     def sample_batch(
         self,
-        batch: dict[str, Shaped[torch.Tensor, "batch ..."]],
+        batch: _SampleBatch,
         *,
         noise: Float[torch.Tensor, "batch params"],
         content_cfg_strength: float,
@@ -1122,6 +1136,29 @@ class VSTFlowMatchingModule(LightningModule):
             )
 
     @jaxtyped(typechecker=beartype)
+    def _evaluation_noise(
+        self,
+        params: Float[torch.Tensor, "batch params"],
+        batch_idx: int,
+        stage: Literal["test", "val"],
+    ) -> Float[torch.Tensor, "batch params"]:
+        """Generate stage-local sampling noise without advancing global RNG state.
+
+        :param params: Target rows defining output shape and device; noise is float32.
+        :param batch_idx: Stable loader batch position within the current rank.
+        :param stage: Evaluation split namespace.
+        :returns: Deterministic noise for a fixed seed and loader topology.
+        """
+        rank = 0 if self._trainer is None else self.trainer.global_rank
+        stage_offset = 0 if stage == "val" else _EVAL_TEST_SEED_OFFSET
+        seed = (
+            self._evaluation_seed + stage_offset + batch_idx * _EVAL_BATCH_SEED_STRIDE + rank
+        ) % _EVAL_SEED_MODULUS
+        generator = torch.Generator(device="cpu").manual_seed(seed)
+        noise = torch.randn(params.shape, dtype=torch.float32, generator=generator)
+        return noise.to(params.device)
+
+    @jaxtyped(typechecker=beartype)
     def _per_param_mse_outputs(
         self,
         predicted: Float[torch.Tensor, "batch params"],
@@ -1151,15 +1188,29 @@ class VSTFlowMatchingModule(LightningModule):
         return outputs
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        conditioning = self._get_conditioning_from_batch(batch)
-        pred_params = self._sample(
-            conditioning,
-            torch.randn_like(batch["params"]),
-            self.hparams.validation_sample_steps,
-            self.hparams.validation_cfg_strength,
-            sketch_cfg_strength=self.hparams.validation_sketch_cfg_strength,
-            control_tokens=self._control_token_branches_from_batch(batch),
-        )
+        if self.hparams.seeded_evaluation:
+            noise = self._evaluation_noise(batch["params"], batch_idx, "val")
+            pred_params = self.sample_batch(
+                batch,
+                noise=noise,
+                content_cfg_strength=self.hparams.validation_cfg_strength,
+                sketch_cfg_strength=(
+                    self.hparams.validation_cfg_strength
+                    if self.hparams.validation_sketch_cfg_strength is None
+                    else self.hparams.validation_sketch_cfg_strength
+                ),
+                sample_steps=self.hparams.validation_sample_steps,
+            )
+        else:
+            conditioning = self._get_conditioning_from_batch(batch)
+            pred_params = self._sample(
+                conditioning,
+                torch.randn_like(batch["params"]),
+                self.hparams.validation_sample_steps,
+                self.hparams.validation_cfg_strength,
+                sketch_cfg_strength=self.hparams.validation_sketch_cfg_strength,
+                control_tokens=self._control_token_branches_from_batch(batch),
+            )
 
         self._log_validation_pitch_residuals(pred_params, batch["params"])
         outputs = self._per_param_mse_outputs(
@@ -1192,15 +1243,29 @@ class VSTFlowMatchingModule(LightningModule):
         pass
 
     def test_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        conditioning = self._get_conditioning_from_batch(batch)
-        pred_params = self._sample(
-            conditioning,
-            torch.randn_like(batch["params"]),
-            self.hparams.test_sample_steps,
-            self.hparams.test_cfg_strength,
-            sketch_cfg_strength=self.hparams.test_sketch_cfg_strength,
-            control_tokens=self._control_token_branches_from_batch(batch),
-        )
+        if self.hparams.seeded_evaluation:
+            noise = self._evaluation_noise(batch["params"], batch_idx, "test")
+            pred_params = self.sample_batch(
+                batch,
+                noise=noise,
+                content_cfg_strength=self.hparams.test_cfg_strength,
+                sketch_cfg_strength=(
+                    self.hparams.test_cfg_strength
+                    if self.hparams.test_sketch_cfg_strength is None
+                    else self.hparams.test_sketch_cfg_strength
+                ),
+                sample_steps=self.hparams.test_sample_steps,
+            )
+        else:
+            conditioning = self._get_conditioning_from_batch(batch)
+            pred_params = self._sample(
+                conditioning,
+                torch.randn_like(batch["params"]),
+                self.hparams.test_sample_steps,
+                self.hparams.test_cfg_strength,
+                sketch_cfg_strength=self.hparams.test_sketch_cfg_strength,
+                control_tokens=self._control_token_branches_from_batch(batch),
+            )
 
         outputs = self._per_param_mse_outputs(
             pred_params,

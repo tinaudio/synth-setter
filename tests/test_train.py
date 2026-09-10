@@ -813,11 +813,14 @@ def test_train_torchsynth_flow_endpoint_one_step_writes_stamped_checkpoint(
     :param cfg_torchsynth_flow_endpoint_train: Composed tiny endpoint flow config.
     :param tmp_path: Output root containing the checkpoint and evaluation artifacts.
     """
+    with open_dict(cfg_torchsynth_flow_endpoint_train):
+        cfg_torchsynth_flow_endpoint_train.model.seeded_evaluation = True
     HydraConfig().set_config(cfg_torchsynth_flow_endpoint_train)
 
     metric_dict, object_dict = train(cfg_torchsynth_flow_endpoint_train)
 
     assert object_dict["trainer"].global_step == 1
+    assert object_dict["model"].hparams.seeded_evaluation is True
     for key in ("train/loss", "val/param_mse"):
         values = [value for name, value in metric_dict.items() if name.startswith(key)]
         assert values, f"no {key} metric in {sorted(metric_dict)}"
