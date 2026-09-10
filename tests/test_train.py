@@ -33,7 +33,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning.pytorch import Trainer
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, OmegaConf, open_dict
 from omegaconf.errors import InterpolationKeyError
 from PIL import Image
 
@@ -1950,6 +1950,51 @@ def test_train_flow_sketch_cfg_ablation_returns_finite_loss(
     assert object_dict["trainer"].global_step == 1
     assert object_dict["model"].sketch_tokens is not None
     assert cfg_train_sketch_lance.consumed_train_config_id == "flow_sketch_prelim"
+
+
+@pytest.mark.parametrize("profile", ["tiv_online_gpu", "tiv_online_cpu"])
+def test_train_fast_dev_run_tiv_online_extracts_audio_controls(
+    cfg_train_sketch_lance: DictConfig,
+    profile: str,
+) -> None:
+    """Run both online TIV configurations through real training on Lance audio.
+
+    :param cfg_train_sketch_lance: Tiny real Lance flow-training configuration.
+    :param profile: User-selectable sketch configuration to train.
+    """
+    if profile == "tiv_online_cpu":
+        pytest.importorskip("essentia")
+    sketch_config = OmegaConf.load(
+        Path(__file__).parents[1] / "src/synth_setter/configs/sketch" / f"{profile}.yaml"
+    )
+    cfg_train_sketch_lance.model.sketch_controls = sketch_config.model.sketch_controls
+    HydraConfig().set_config(cfg_train_sketch_lance)
+
+    metric_dict, object_dict = train(cfg_train_sketch_lance)
+
+    datamodule = object_dict["datamodule"]
+    model = object_dict["model"]
+    trainer = object_dict["trainer"]
+    assert datamodule.sketch_controls.profile == "tiv"
+    assert "audio" in datamodule.projection["train"]
+    assert "audio" in datamodule.projection["val"]
+    assert "audio" in datamodule.projection["test"]
+    assert "sketch" not in datamodule.projection["train"]
+    assert "sketch" not in datamodule.projection["val"]
+    assert "sketch" not in datamodule.projection["test"]
+    assert model.sketch_tokens.layout.num_controls == 12
+    assert torch.count_nonzero(model.sketch_tokens.projections["tiv"].weight) > 0
+    assert torch.isfinite(metric_dict["train/loss"])
+
+    datamodule.setup("fit")
+    try:
+        batch = next(iter(datamodule.train_dataloader()))
+        transferred = trainer.strategy.batch_to_device(batch)
+    finally:
+        datamodule.teardown("fit")
+    controls = transferred["sketch_ctrl"]
+    assert isinstance(controls, torch.Tensor)
+    assert torch.count_nonzero(controls) > 0
 
 
 def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(

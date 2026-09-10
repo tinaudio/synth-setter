@@ -1,6 +1,7 @@
 """Zero-initialized sketch-control tokenizer for concat conditioning (#2612)."""
 
 import torch
+import torch.nn.functional as F
 from beartype import beartype
 from jaxtyping import Bool, Float, jaxtyped
 from torch import nn
@@ -88,11 +89,12 @@ class SketchControlTokens(nn.Module):
         """
         self._validate_inputs(controls, keep)
         keep_values = keep.to(controls.dtype)
-        temporal_controls = (
-            pool_sketch_controls(controls, self.positional_encoding.shape[1])
-            if self.layout.profile == "music"
-            else controls
-        )
+        if self.layout.profile == "music":
+            temporal_controls = pool_sketch_controls(controls, self.positional_encoding.shape[1])
+        elif self.layout.profile == "tiv":
+            temporal_controls = F.adaptive_avg_pool1d(controls, self.positional_encoding.shape[1])
+        else:
+            temporal_controls = controls
         tokens = self.unconditional(controls.shape[0])
         for group_index, (group, channel_slice) in enumerate(
             zip(self.layout.group_names, self.layout.group_slices, strict=True)

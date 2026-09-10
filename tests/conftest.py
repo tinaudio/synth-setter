@@ -3106,6 +3106,7 @@ def _write_sketch_lance_root(dataset_root: Path) -> None:
         write_lance_shard_with_sketch(
             dataset_root / f"{split}.lance",
             {
+                "audio": rng.uniform(-1.0, 1.0, (4, 2, 4096)).astype(np.float32),
                 "param_array": rng.random((4, len(param_specs["surge_4"]))).astype(np.float32),
                 "m2l": rng.standard_normal((4, 128, 42)).astype(np.float32),
             },

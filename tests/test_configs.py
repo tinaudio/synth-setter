@@ -437,6 +437,36 @@ def test_sequence_conditioning_profile_fake_batch_routes_through_encoder(
     assert cfg.model.conditioning.column == profile
 
 
+@pytest.mark.parametrize(
+    ("profile", "backend"), [("tiv_online_gpu", "torch"), ("tiv_online_cpu", "essentia")]
+)
+def test_tiv_online_profile_wires_audio_extraction_to_data_and_model(
+    profile: str, backend: str
+) -> None:
+    """Both online profiles opt data and model into the same TIV backend.
+
+    :param profile: User-selectable sketch configuration.
+    :param backend: Expected chroma extraction implementation.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_4",
+            "model=vst_flow",
+            f"sketch={profile}",
+            "trainer=cpu",
+            "+trainer.max_steps=1",
+        ],
+    )
+
+    assert cfg.model.sketch_controls.profile == "tiv"
+    assert cfg.model.sketch_controls.source == "online"
+    assert cfg.model.sketch_controls.sample_rate == 44_100
+    assert cfg.model.sketch_controls.tiv_backend == backend
+    assert cfg.datamodule.sketch == cfg.model.sketch_controls
+
+
 def test_sketch_on_profile_composes_with_m2l_and_trains_one_step() -> None:
     """``sketch=on`` composes over ``conditioning=m2l`` and drives a train step."""
     cfg = _compose(
