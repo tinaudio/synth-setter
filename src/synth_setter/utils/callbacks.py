@@ -1010,9 +1010,14 @@ class LogPerParamMSE(Callback):
             if metric_name.startswith("per_param_abs_cosine_distance/"):
                 metrics[f"{stage}/{metric_name}"] = mean.item()
                 continue
+            metric_namespace = (
+                f"{stage}_{metric_name}"
+                if metric_name == "per_param_mse_best_swap"
+                else f"{stage}/{metric_name}"
+            )
             metrics.update(
                 {
-                    f"{stage}/{metric_name}/{param.name}": mean[span].mean()
+                    f"{metric_namespace}/{param.name}": mean[span].mean()
                     for param, span in self.param_spec.encoded_slices()
                 }
             )

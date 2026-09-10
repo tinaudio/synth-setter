@@ -758,7 +758,7 @@ def test_log_per_param_mse_emits_optional_best_swap_metrics() -> None:
     callback.on_validation_batch_end(trainer, pl_module, outputs, None, 0)
     callback.on_validation_epoch_end(trainer, pl_module)
 
-    assert module.logged["val/per_param_mse_best_swap/note_start_and_end"] == pytest.approx(5.5)
+    assert module.logged["val_per_param_mse_best_swap/note_start_and_end"] == pytest.approx(5.5)
 
 
 def test_log_per_param_mse_emits_test_metrics_in_separate_namespace() -> None:

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import wandb_workspaces.workspaces as ws
 from click.testing import CliRunner
 
 from synth_setter.tools import wandb_parameter_workspace
@@ -35,7 +37,7 @@ def test_parameter_workspace_serializes_dynamic_metric_regexes() -> None:
     assert [config["metricRegex"] for config in panel_configs] == [
         "^train/per_param_(flow|endpoint)_mse/.+$",
         "^val/per_param_mse/.+$",
-        "^val/per_param_mse_best_swap/.+$",
+        "^val[/_]per_param_mse_best_swap/.+$",
         "^val/per_param_mse_number_group_swap/.+$",
         "^val/per_param_mse_spec_quantized/.+$",
     ]
@@ -43,20 +45,20 @@ def test_parameter_workspace_serializes_dynamic_metric_regexes() -> None:
     assert spec["runSets"][0]["search"]["query"] == ""
 
 
-def test_main_with_explicit_entity_saves_workspace_and_prints_url(
+def test_main_with_explicit_entity_builds_saves_workspace_and_prints_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The CLI reports the URL returned by the W&B save boundary.
+    """The CLI builds the real workspace before crossing the W&B save boundary.
 
     :param monkeypatch: Pytest fixture that isolates the W&B save boundary.
     """
-    workspace = MagicMock()
-    workspace.save.return_value.url = "https://wandb.ai/team/project?nw=view"
-    monkeypatch.setattr(
-        wandb_parameter_workspace,
-        "build_parameter_workspace",
-        MagicMock(return_value=workspace),
-    )
+    saved_workspaces: list[ws.Workspace] = []
+
+    def save(workspace: ws.Workspace) -> SimpleNamespace:
+        saved_workspaces.append(workspace)
+        return SimpleNamespace(url="https://wandb.ai/team/project?nw=view")
+
+    monkeypatch.setattr(wandb_parameter_workspace.ws.Workspace, "save", save)
 
     result = CliRunner().invoke(
         wandb_parameter_workspace.main,
@@ -65,6 +67,7 @@ def test_main_with_explicit_entity_saves_workspace_and_prints_url(
 
     assert result.exit_code == 0
     assert result.output == "https://wandb.ai/team/project?nw=view\n"
+    assert saved_workspaces[0].name == "Synth parameter metrics"
 
 
 def test_main_without_configured_entity_reports_actionable_error(

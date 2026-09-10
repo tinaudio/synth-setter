@@ -324,7 +324,7 @@ def test_train_pyfdn_derived_feedback_one_step_predicts_widened_row(
     assert 0.0 <= metrics[f"val/per_param_abs_cosine_distance/{control}"].item() <= 1.0
     assert 0.0 <= metrics["val/per_param_abs_cosine_distance/delays"].item() <= 1.0
     assert torch.isfinite(metrics[f"val/per_param_mse/{control}"])
-    assert torch.isfinite(metrics[f"val/per_param_mse_best_swap/{control}"])
+    assert torch.isfinite(metrics[f"val_per_param_mse_best_swap/{control}"])
     assert torch.isfinite(metrics[f"val/per_param_mse_number_group_swap/{control}"])
 
 

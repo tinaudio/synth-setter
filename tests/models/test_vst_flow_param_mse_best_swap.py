@@ -225,7 +225,7 @@ def test_validation_loop_logs_per_param_best_swap() -> None:
 
     metrics = trainer.validate(module, dataloaders=loader)[0]
 
-    assert "val/per_param_mse_best_swap/note_start_and_end" in metrics
+    assert "val_per_param_mse_best_swap/note_start_and_end" in metrics
 
 
 def test_validation_loop_logs_spec_quantized_metrics() -> None:
@@ -311,7 +311,7 @@ def test_pyfdn_loop_persists_abs_cosine_for_array_parameters_without_losing_metr
 
     expected_existing_keys = {
         f"{stage}/per_param_mse/{geometric_name}",
-        f"{stage}/per_param_mse_best_swap/{geometric_name}",
+        f"{stage}_per_param_mse_best_swap/{geometric_name}",
         f"{stage}/per_param_mse_number_group_swap/{geometric_name}",
         f"{stage}/per_param_mse_spec_quantized/{geometric_name}",
     }
@@ -337,7 +337,7 @@ def test_pyfdn_validation_loop_logs_all_per_param_metric_families() -> None:
     )[0]
 
     assert "val/per_param_mse/delays" in metrics
-    assert "val/per_param_mse_best_swap/delays" in metrics
+    assert "val_per_param_mse_best_swap/delays" in metrics
     assert "val/per_param_mse_number_group_swap/delays" in metrics
     assert "val/per_param_mse_spec_quantized/delays" in metrics
 
@@ -354,7 +354,7 @@ def test_pyfdn_test_loop_logs_all_per_param_metric_families() -> None:
     )[0]
 
     assert "test/per_param_mse/delays" in metrics
-    assert "test/per_param_mse_best_swap/delays" in metrics
+    assert "test_per_param_mse_best_swap/delays" in metrics
     assert "test/per_param_mse_number_group_swap/delays" in metrics
     assert "test/per_param_mse_spec_quantized/delays" in metrics
 
@@ -370,7 +370,7 @@ def test_test_loop_logs_number_group_swap() -> None:
 
     assert "test/param_mse_number_group_swap" in metrics
     assert "test/per_param_mse/a_osc_1_pitch" in metrics
-    assert "test/per_param_mse_best_swap/a_osc_1_pitch" in metrics
+    assert "test_per_param_mse_best_swap/a_osc_1_pitch" in metrics
     assert "test/per_param_mse_number_group_swap/a_osc_1_pitch" in metrics
     assert "test/per_param_mse_spec_quantized/a_osc_1_pitch" in metrics
     assert "test/param_mse_spec_quantized" in metrics
