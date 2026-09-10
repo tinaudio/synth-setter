@@ -181,6 +181,24 @@ unintended shell expansion. A `PreToolUse` hook
 
 ## PRs
 
+### Keep auxiliary work in separate PRs
+
+- **Separate helpful but non-core changes from the main PR.** Extract
+  independently useful refactors, cleanup, and fixes for pre-existing bugs into
+  auxiliary PRs, even when they are necessary prerequisites for the main work.
+  Fix regressions introduced by the current PR in that PR; keep directly
+  supporting tests and docs with their behavior change.
+- **Stack prerequisites below the main PR.** Open the auxiliary PR against
+  `main`, then base the dependent main PR on the auxiliary branch so its diff
+  contains only the core change. Link the dependency in both PR bodies, merge
+  the prerequisite first, then rebase and retarget the main PR to `main`.
+  For multiple prerequisites, repeat in dependency order.
+- Non-core work that is not a prerequisite belongs in an independent PR, not
+  in the stack. Continue to file out-of-scope bugs via `/github-taxonomy`;
+  separating a prerequisite fix does not replace its tracking issue.
+
+### Submission and readiness
+
 - **Every PR body links a taxonomy-compliant issue** via `Closes #N`,
   `Fixes #N`, `Refs #N`, or `Part of #N`. Use `Refs #N` for partial fixes
   (`Fixes` auto-closes). Every issue traces to an Epic via Phase → Task /
