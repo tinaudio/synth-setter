@@ -278,6 +278,39 @@ def test_finetune_module_records_sanitized_base_checkpoint_identity(
     assert module.base_checkpoint_sha256 == hashlib.sha256(checkpoint.read_bytes()).hexdigest()
 
 
+def test_finetune_module_redacts_opaque_rclone_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On-the-fly rclone credentials never enter retained provenance.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param monkeypatch: Pytest environment isolation fixture.
+    """
+    monkeypatch.setenv(
+        "SYNTH_SETTER_BASE_CHECKPOINT_SOURCE",
+        ":s3,access_key_id=AKIA,secret_access_key=SECRET:bucket/base.ckpt?token=x#part",
+    )
+
+    module = _finetune(_base_checkpoint(tmp_path))
+
+    assert module.base_checkpoint_source == ":s3:bucket/base.ckpt"
+
+
+def test_finetune_module_preserves_rclone_object_key_characters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Named rclone remotes retain object-key characters that resemble URL data.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param monkeypatch: Pytest environment isolation fixture.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_BASE_CHECKPOINT_SOURCE", "r2:checkpoints/base#1?x.ckpt")
+
+    module = _finetune(_base_checkpoint(tmp_path))
+
+    assert module.base_checkpoint_source == "r2:checkpoints/base#1?x.ckpt"
+
+
 def test_finetune_module_preserves_file_uri_form(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -293,11 +326,15 @@ def test_finetune_module_preserves_file_uri_form(
     assert module.base_checkpoint_source == "file:///tmp/base.ckpt"
 
 
-def test_finetune_checkpoint_retains_the_sanitized_base_source(tmp_path: Path) -> None:
+def test_finetune_checkpoint_retains_the_sanitized_base_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A saved finetune carries its original source beside the digest.
 
     :param tmp_path: Directory for the base and finetune checkpoints.
+    :param monkeypatch: Pytest environment isolation fixture.
     """
+    monkeypatch.delenv("SYNTH_SETTER_BASE_CHECKPOINT_SOURCE", raising=False)
     checkpoint = _base_checkpoint(tmp_path)
     saved = _fit_with_checkpointing(_finetune(checkpoint, control_mode="null"), tmp_path / "run")
 
@@ -1268,6 +1305,28 @@ def test_finetune_resume_adopts_the_saved_base_source(tmp_path: Path) -> None:
     )
 
     assert restored.base_checkpoint_source == trained.base_checkpoint_source
+
+
+def test_finetune_resume_logs_the_saved_base_identity(tmp_path: Path) -> None:
+    """Checkpoint restoration updates attached W&B provenance after startup logging.
+
+    :param tmp_path: Directory for the base and finetune checkpoints.
+    """
+    from lightning import Trainer
+
+    from tests.helpers.recording_wandb_logger import RecordingWandbLogger
+
+    trained = _finetune(_base_checkpoint(tmp_path), control_mode="null")
+    saved = _fit_with_checkpointing(trained, tmp_path / "run")
+    logger = RecordingWandbLogger()
+    restored = _finetune(None, control_mode="null")  # pyright: ignore[reportArgumentType]
+
+    Trainer(accelerator="cpu", logger=logger, enable_progress_bar=False).validate(
+        restored, datamodule=_data(), ckpt_path=saved, weights_only=False
+    )
+
+    assert logger.recorded_config["base_checkpoint_source"] == trained.base_checkpoint_source
+    assert logger.recorded_config["base_checkpoint_sha256"] == trained.base_checkpoint_sha256
 
 
 def test_finetune_fit_without_base_or_resume_checkpoint_raises(tmp_path: Path) -> None:

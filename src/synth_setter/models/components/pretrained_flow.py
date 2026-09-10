@@ -23,6 +23,28 @@ _FROZEN_BACKBONE_PREFIX = "encoder.backbone."
 
 
 @jaxtyped(typechecker=beartype)
+def sanitize_checkpoint_source(source: str) -> str:
+    """Remove credentials and request-specific URL data from a checkpoint source.
+
+    :param source: Original local, URI, or on-the-fly rclone source.
+    :returns: Source URI without user info, query parameters, or a fragment.
+    """
+    if source.startswith(":"):
+        remote, separator, path = source[1:].partition(":")
+        backend = remote.partition(",")[0]
+        sanitized_path = path.partition("?")[0].partition("#")[0]
+        return f":{backend}:{sanitized_path}" if separator else f":{backend}:"
+    remote, separator, _ = source.partition(":")
+    if separator and "/" not in remote and "\\" not in remote and "://" not in source:
+        return source
+    parsed = urlsplit(source)
+    if not parsed.scheme:
+        return Path(source).expanduser().absolute().as_uri()
+    authority = parsed.netloc.rsplit("@", maxsplit=1)[-1]
+    return urlunsplit((parsed.scheme, authority, parsed.path, "", ""))
+
+
+@jaxtyped(typechecker=beartype)
 def checkpoint_source_uri(checkpoint: str | Path) -> str:
     """Return a credential-free source URI for a materialized checkpoint.
 
@@ -32,11 +54,7 @@ def checkpoint_source_uri(checkpoint: str | Path) -> str:
     source = os.getenv(_BASE_CHECKPOINT_SOURCE_ENV)
     if source is None:
         return Path(checkpoint).expanduser().resolve(strict=True).as_uri()
-    parsed = urlsplit(source)
-    if not parsed.scheme:
-        return Path(source).expanduser().absolute().as_uri()
-    authority = parsed.netloc.rsplit("@", maxsplit=1)[-1]
-    return urlunsplit((parsed.scheme, authority, parsed.path, "", ""))
+    return sanitize_checkpoint_source(source)
 
 
 @jaxtyped(typechecker=beartype)
@@ -146,4 +164,13 @@ class PretrainedBaseMixin:
             )
         saved_source = checkpoint.get("base_checkpoint_source")
         if isinstance(saved_source, str):
-            self.base_checkpoint_source = saved_source
+            self.base_checkpoint_source = sanitize_checkpoint_source(saved_source)
+        trainer: Any = getattr(self, "_trainer", None)
+        if trainer is None:
+            return
+        identity = {
+            "base_checkpoint_source": self.base_checkpoint_source,
+            "base_checkpoint_sha256": self.base_checkpoint_sha256,
+        }
+        for run_logger in trainer.loggers:
+            run_logger.log_hyperparams(identity)

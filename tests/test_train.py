@@ -905,6 +905,46 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
 
 
 @pytest.mark.slow
+def test_train_finetune_logs_sanitized_base_checkpoint_identity(
+    cfg_torchsynth_flow_train: DictConfig,
+    cfg_torchsynth_flow_finetune_train: DictConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The train entrypoint publishes the loaded base identity to W&B.
+
+    :param cfg_torchsynth_flow_train: Composed tiny production flow config.
+    :param cfg_torchsynth_flow_finetune_train: Matching null-control finetune config.
+    :param tmp_path: Output root for both runs.
+    :param monkeypatch: Supplies the original remote source to the worker process.
+    """
+    with open_dict(cfg_torchsynth_flow_train):
+        cfg_torchsynth_flow_train.paths.output_dir = str(tmp_path / "base")
+        cfg_torchsynth_flow_train.paths.log_dir = str(tmp_path / "base")
+    HydraConfig().set_config(cfg_torchsynth_flow_train)
+    train(cfg_torchsynth_flow_train)
+    base_checkpoint = tmp_path / "base" / "checkpoints" / "last.ckpt"
+
+    monkeypatch.setenv(
+        "SYNTH_SETTER_BASE_CHECKPOINT_SOURCE",
+        "https://user:secret@example.test/base.ckpt?token=x#part",
+    )
+    with open_dict(cfg_torchsynth_flow_finetune_train):
+        cfg_torchsynth_flow_finetune_train.paths.output_dir = str(tmp_path / "finetune")
+        cfg_torchsynth_flow_finetune_train.paths.log_dir = str(tmp_path / "finetune")
+        cfg_torchsynth_flow_finetune_train.model.base_checkpoint = str(base_checkpoint)
+    HydraConfig().set_config(cfg_torchsynth_flow_finetune_train)
+    logger = _RecordingWandbLogger()
+    with patch("synth_setter.cli.train.instantiate_loggers", return_value=[logger]):
+        _, objects = train(cfg_torchsynth_flow_finetune_train)
+
+    assert logger.recorded_config["base_checkpoint_source"] == "https://example.test/base.ckpt"
+    assert logger.recorded_config["base_checkpoint_sha256"] == (
+        objects["model"].base_checkpoint_sha256
+    )
+
+
+@pytest.mark.slow
 def test_train_torchsynth_flow_ram_post_trains_a_trained_flow_checkpoint(
     cfg_torchsynth_flow_train: DictConfig,
     cfg_torchsynth_flow_ram_train: DictConfig,
