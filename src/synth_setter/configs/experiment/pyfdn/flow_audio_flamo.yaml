@@ -19,7 +19,7 @@ model:
       sample_rate: 44100
     # Tensor decoding and supported topologies: docs/experiments/pyfdn-flow-audio.md.
     renderer:
-      _target_: synth_setter.models.components.differentiable_renderer.FlamoFDNDifferentiableRenderer
+      _target_: synth_setter.models.components.differentiable_renderer.FlamoFDNDifferentiableRenderer.from_param_spec
       param_spec: ${synth.param_spec_name}
       sample_rate: 44100
       signal_length: 176400

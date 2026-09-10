@@ -2,52 +2,47 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from typing import Protocol, runtime_checkable
 
 import numpy as np
 import torch
 from beartype import beartype
-from flamo.processor import system
 from jaxtyping import Float, jaxtyped
-from pyFDN import dss_to_flamo
-from pyFDN.auxiliary.flamo import delay_module, sos_filter_module
 from torch import Tensor, nn
 
-from synth_setter.data.pyfdn_param_spec import (
-    PYFDN_DIRECT_DELAY_SAMPLES,
-    PYFDN_GEQ_BAND_GAIN_DB_NAME,
-    PYFDN_GEQ_GAIN_DB_NAME,
-    PYFDN_GEQ_SECTIONS,
-    PYFDN_RT_DC_NAME,
-    PYFDN_RT_NYQUIST_NAME,
-    PYFDN_TONE_GEQ_GAIN_DB_NAME,
-)
+from synth_setter.data.basic_fdn import BasicFDN
+from synth_setter.data.pyfdn_param_spec import BasicFDNParamSpec
 from synth_setter.data.pyfdn_source import PYFDN_SOURCE_SAMPLE_RATE_HZ
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
     validate_torchsynth_params,
 )
-from synth_setter.data.vst.param_spec import DiscreteArrayParameter, decode_model_output
+from synth_setter.data.vst.param_spec import decode_model_output
 from synth_setter.models.components.pyfdn_decoder import PyFDNParameterDecoder
-from synth_setter.models.components.pyfdn_filters import attenuation_sos, command_geq_sos
 
 _BATCH_PARAMS = "batch params"
-_BATCH_AUDIO = "batch samples"
+_BATCH_AUDIO = "batch *channels samples"
 _ROW_PARAMS = "params"
-_ROW_AUDIO = "samples"
-_SUPPORTED_FLAMO_SPECS = frozenset(
-    {
-        "pyfdn_n8_mono_householder",
-        "pyfdn_n8_mono_householder_vector",
-        "pyfdn_n8_mono_kronecker",
-        "pyfdn_gotz_n8_mono_fixed_delays",
-        "pyfdn_gotz_n8_mono_learned_delays",
-        "pyfdn_gotz_n8_mono_fixed_delays_givens",
-        "pyfdn_gotz_n8_mono_learned_delays_givens",
-    }
-)
+_ROW_AUDIO = "channels samples"
+_BUILD_FIELD = "..."
+
+
+@runtime_checkable
+class FDNBuildDecoder(Protocol):
+    """Translate model coordinates into tensor counterparts of a complete build's fields."""
+
+    @jaxtyped(typechecker=beartype)
+    def decode_build_fields(
+        self, params: Float[Tensor, _ROW_PARAMS], *, sample_rate: float
+    ) -> dict[str, Float[Tensor, _BUILD_FIELD]]:
+        """Decode matrices, delays and every declared SOS bank without crossing NumPy.
+
+        :param params: One model-space parameter row.
+        :param sample_rate: Canonical build's fixed processing rate.
+        :returns: Field-name mapping with the build's native array shapes.
+        """
+        ...
 
 
 @runtime_checkable
@@ -66,7 +61,7 @@ class DifferentiableRenderer(Protocol):
         """Render audio in the backend's dataset amplitude convention.
 
         :param params: Model-space parameter rows.
-        :returns: Batched mono audio with gradients to supported controls.
+        :returns: Batched audio retaining the backend's channels and supported gradients.
         """
         ...
 
@@ -115,90 +110,94 @@ class TorchSynthDifferentiableRenderer(nn.Module):
 
 
 class FlamoFDNDifferentiableRenderer(nn.Module):
-    """Bind decoded predictions to an upstream FLAMO mono, time-invariant FDN graph."""
+    """Bind model predictions to a complete BasicFDN's upstream FLAMO graph."""
 
     @jaxtyped(typechecker=beartype)
     def __init__(
         self,
         *,
-        param_spec: str,
-        sample_rate: int,
+        fdn: BasicFDN,
+        decoder: nn.Module,
+        parameter_width: int,
         signal_length: int,
         fft_size: int | None = None,
+        dtype: torch.dtype = torch.float32,
     ) -> None:
-        """Construct the selected FDN topology once, independently of model predictions.
+        """Construct the complete graph with channel geometry taken from its build.
 
-        :param param_spec: Registered plain or Götz mono FDN parameterization.
-        :param sample_rate: Must match the pyFDN source sample rate.
-        :param signal_length: Positive number of output samples.
-        :param fft_size: FFT period, at least twice the output length; defaults to the next power
-            of two. Longer periods reduce circular tail aliasing.
-        :raises ValueError: Unsupported topology, sample rate, or render geometry.
+        :param fdn: Complete template whose delays reserve maximum prediction capacity.
+        :param decoder: Module implementing tensor-native ``decode_build_fields`` for every
+            matrix, delay and present SOS hook; sample rate remains fixed by the build.
+        :param parameter_width: Number of model-space coordinates consumed by the decoder.
+        :param signal_length: Positive output length in samples.
+        :param fft_size: FFT period, at least twice the output length; defaults to the next
+            power of two. Longer periods reduce circular tail aliasing.
+        :param dtype: Construction precision for parameters and frequency-grid buffers.
+        :raises ValueError: Render geometry or parameter width is invalid.
+        :raises TypeError: The decoder does not implement the tensor build contract.
         """
         super().__init__()
-        if param_spec not in _SUPPORTED_FLAMO_SPECS:
-            raise ValueError(f"unsupported FLAMO topology: {param_spec}")
-        if sample_rate != PYFDN_SOURCE_SAMPLE_RATE_HZ:
-            raise ValueError(
-                f"FLAMO pyFDN parity requires sample_rate={PYFDN_SOURCE_SAMPLE_RATE_HZ}"
-            )
-        if signal_length <= 0:
-            raise ValueError("signal_length must be positive")
+        if signal_length <= 0 or parameter_width <= 0:
+            raise ValueError("signal_length and parameter_width must be positive")
         minimum_fft_size = 2 * signal_length
         self.fft_size = (
             fft_size if fft_size is not None else 1 << (minimum_fft_size - 1).bit_length()
         )
         if self.fft_size < minimum_fft_size:
             raise ValueError("fft_size must be at least twice signal_length")
-        self.sample_rate = sample_rate
+        if not isinstance(decoder, FDNBuildDecoder):
+            raise TypeError("decoder must implement decode_build_fields")
+        self.fdn = fdn
+        self.decoder = decoder
+        self._decode_build_fields = decoder.decode_build_fields
+        self.parameter_width = parameter_width
+        self.input_channels = fdn.build.B.shape[1]
+        self.output_channels = fdn.build.C.shape[0]
+        self._field_shapes = {
+            name: tuple(value.shape)
+            for name in ("A", "B", "C", "D", "delays", "post_delay", "post_matrix", "post_output")
+            if (value := getattr(fdn.build, name)) is not None
+        }
+        self._graph = fdn.to_flamo(nfft=self.fft_size, device="cpu", dtype=dtype)
+        self.sample_rate = fdn.build.fs
         self.signal_length = signal_length
-        self.decoder = PyFDNParameterDecoder(param_spec)
-        self._is_gotz = PYFDN_GEQ_GAIN_DB_NAME in self.decoder.spec.synth_param_names
-        self._core = self._build_flamo_core()
 
+    @classmethod
     @jaxtyped(typechecker=beartype)
-    def _build_flamo_core(self) -> nn.Module:
-        """Use a native template only to establish graph shapes and delay capacity.
+    def from_param_spec(
+        cls,
+        *,
+        param_spec: str,
+        sample_rate: int,
+        signal_length: int,
+        fft_size: int | None = None,
+    ) -> FlamoFDNDifferentiableRenderer:
+        """Adapt a registered model encoding without constraining the renderer geometry.
 
-        :returns: Frequency-domain graph accepting FLAMO's external parameter mapping.
+        :param param_spec: Registered BasicFDNParamSpec identity.
+        :param sample_rate: Must match the registered pyFDN dataset sample rate.
+        :param signal_length: Positive output length in samples.
+        :param fft_size: Optional FFT period forwarded to the renderer.
+        :returns: Renderer with a canonical build and its model-specific tensor decoder.
+        :raises ValueError: The spec is advanced or the dataset rate is incompatible.
         """
-        spec = self.decoder.spec
-        native, _ = decode_model_output(np.zeros(spec.encoded_width), spec)
-        delays = np.asarray(native["delays"])
-        for parameter in spec.synth_params:
-            if parameter.name == "delays" and isinstance(parameter, DiscreteArrayParameter):
-                delays = np.full(parameter.shape, parameter.max)
-        sections = PYFDN_GEQ_SECTIONS if self._is_gotz else 1
-        sos = np.zeros((sections, 6, len(delays)))
-        sos[:, 0, :] = sos[:, 3, :] = 1.0
-        core = dss_to_flamo(
-            np.asarray(native["feedback_matrix"]),
-            np.asarray(native["input_matrix"]),
-            np.asarray(native["output_matrix"]),
-            np.asarray(native["direct_matrix"]),
-            delays,
-            self.sample_rate,
-            nfft=self.fft_size,
-            device="cpu",
-            shell=False,
-            post_delay=sos,
-        )
-        if not self._is_gotz:
-            return core
-        # Götz tone correction precedes both branches; only its direct branch is delayed.
-        core.branchB = system.Series(
-            OrderedDict(
-                delay=delay_module(
-                    np.array([PYFDN_DIRECT_DELAY_SAMPLES / self.sample_rate]),
-                    self.fft_size,
-                    fs=self.sample_rate,
-                    device="cpu",
-                ),
-                gain=core.branchB,
+        decoder = PyFDNParameterDecoder(param_spec)
+        spec = decoder.spec
+        if not isinstance(spec, BasicFDNParamSpec):
+            raise ValueError(f"unsupported FLAMO topology: {param_spec} is not a BasicFDN spec")
+        if sample_rate != PYFDN_SOURCE_SAMPLE_RATE_HZ:
+            raise ValueError(
+                f"FLAMO pyFDN parity requires sample_rate={PYFDN_SOURCE_SAMPLE_RATE_HZ}"
             )
+        # The upper endpoint reserves enough delay capacity for every decoded prediction.
+        template, _ = decode_model_output(np.ones(spec.encoded_width), spec)
+        return cls(
+            fdn=spec.to_basic_fdn(template),
+            decoder=decoder,
+            parameter_width=spec.encoded_width,
+            signal_length=signal_length,
+            fft_size=fft_size,
         )
-        tone = sos_filter_module(sos[:, :, :1], self.fft_size, device="cpu")
-        return system.Series(OrderedDict(tone=tone, fdn=core))
 
     @jaxtyped(typechecker=beartype)
     def validate(self, params: Float[Tensor, _BATCH_PARAMS]) -> None:
@@ -207,7 +206,7 @@ class FlamoFDNDifferentiableRenderer(nn.Module):
         :param params: Model-space rows for the selected ParamSpec.
         :raises ValueError: A row has the wrong width or a non-finite value.
         """
-        width = self.decoder.spec.encoded_width
+        width = self.parameter_width
         if params.shape[-1] != width:
             raise ValueError(f"pyFDN rows must have width {width}, got {params.shape[-1]}")
         if not torch.isfinite(params).all():
@@ -218,60 +217,59 @@ class FlamoFDNDifferentiableRenderer(nn.Module):
         """Bind one prediction because FLAMO shares DSP parameters across its batch.
 
         :param params: Validated model-space row.
-        :returns: Truncated mono impulse response including the direct path.
+        :returns: All transfer paths, channel index ``output * input_channels + input``.
+        :raises ValueError: The decoder changes field geometry or exceeds delay capacity.
         """
-        native = self.decoder(params)
-        delays = native["delays"]
-        if self._is_gotz:
-            sos = command_geq_sos(
-                torch.cat(
-                    (native[PYFDN_GEQ_GAIN_DB_NAME][None, :], native[PYFDN_GEQ_BAND_GAIN_DB_NAME])
-                ),
-                sample_rate=self.sample_rate,
+        fields = self._decode_build_fields(params, sample_rate=self.sample_rate)
+        if fields.keys() != self._field_shapes.keys():
+            raise ValueError(
+                "decoded fields must cover the complete build, including every SOS hook"
             )
-        else:
-            sos = attenuation_sos(
-                delays,
-                native[PYFDN_RT_DC_NAME],
-                native[PYFDN_RT_NYQUIST_NAME],
-                sample_rate=self.sample_rate,
-            )
-        external = {
-            "branchA": {
-                "input_gain": native["input_matrix"],
-                "feedback_loop": {
-                    "feedforward": {"delay": delays / self.sample_rate, "post_delay": sos},
-                    "feedback": native["feedback_matrix"],
-                },
-                "output_gain": native["output_matrix"],
-            },
-            "branchB": native["direct_matrix"],
+        for name, shape in self._field_shapes.items():
+            if tuple(fields[name].shape) != shape or not torch.isfinite(fields[name]).all():
+                raise ValueError(f"decoded {name} must be finite with shape {shape}")
+        if (fields["delays"] <= 0).any() or (fields["delays"] > self.fdn.build.delays.max()).any():
+            raise ValueError("decoded delays must be positive and within template capacity")
+        delays = fields["delays"] / self.sample_rate
+        feedforward = (
+            {"delay": delays, "post_delay": fields["post_delay"]}
+            if "post_delay" in fields
+            else delays
+        )
+        feedback = (
+            {"mixing_matrix": fields["A"], "post_matrix": fields["post_matrix"]}
+            if "post_matrix" in fields
+            else fields["A"]
+        )
+        branch = {
+            "input_gain": fields["B"],
+            "feedback_loop": {"feedforward": feedforward, "feedback": feedback},
+            "output_gain": fields["C"],
         }
-        if self._is_gotz:
-            external["branchB"] = {"gain": native["direct_matrix"]}
-            external = {
-                "tone": command_geq_sos(
-                    native[PYFDN_TONE_GEQ_GAIN_DB_NAME][:, None], sample_rate=self.sample_rate
-                ),
-                "fdn": external,
-            }
-        impulse = params.new_zeros((1, self.fft_size, 1))
-        impulse[:, 0, 0] = 1.0
-        spectrum = torch.fft.rfft(impulse, n=self.fft_size, dim=1)
-        rendered = torch.fft.irfft(self._core(spectrum, external), n=self.fft_size, dim=1)
-        return rendered[0, : self.signal_length, 0]
+        if "post_output" in fields:
+            branch["post_output"] = fields["post_output"]
+        impulse = params.new_zeros((self.input_channels, self.fft_size, self.input_channels))
+        impulse[:, 0, :] = torch.eye(self.input_channels, device=params.device, dtype=params.dtype)
+        response = self._graph(impulse, {"branchA": branch, "branchB": fields["D"]})
+        return (
+            response[:, : self.signal_length, :]
+            .permute(2, 0, 1)
+            .reshape(self.output_channels * self.input_channels, self.signal_length)
+        )
 
     @jaxtyped(typechecker=beartype)
     def forward(self, params: Float[Tensor, _BATCH_PARAMS]) -> Float[Tensor, _BATCH_AUDIO]:
         """Decode and render model predictions with gradients to continuous controls.
 
         :param params: Selected pyFDN rows in model space; discrete controls are rounded.
-        :returns: Mono impulse responses in pyFDN's unnormalized amplitude convention.
+        :returns: Unnormalized ``(batch, outputs * inputs, samples)`` transfer responses.
         :raises ValueError: A row is malformed or produces non-finite audio.
         """
         self.validate(params)
         if params.shape[0] == 0:
-            return params.new_empty((0, self.signal_length))
+            return params.new_empty(
+                (0, self.output_channels * self.input_channels, self.signal_length)
+            )
         rendered = torch.stack([self._render_row(row) for row in params])
         if not torch.isfinite(rendered).all():
             raise ValueError("FLAMO rendered non-finite audio")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 from beartype import beartype
 from jaxtyping import Float, Int, jaxtyped
+from pyFDN import decay_to_first_order_shelf
 from torch import Tensor, nn
 
 from synth_setter.data.pyfdn_param_spec import (
@@ -14,6 +15,10 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_HOUSEHOLDER_VECTOR_NAME,
     PYFDN_KRONECKER_ANGLES_NAME,
     PYFDN_KRONECKER_REFLECT_NAME,
+    PYFDN_RT_CROSSOVER_HZ,
+    PYFDN_RT_DC_NAME,
+    PYFDN_RT_NYQUIST_NAME,
+    BasicFDNParamSpec,
     PyFDNParamSpec,
 )
 from synth_setter.data.vst.param_spec import (
@@ -248,6 +253,35 @@ class PyFDNParameterDecoder(nn.Module):
             rotation = identity + (torch.cos(angle) - 1.0) * plane + torch.sin(angle) * orientation
             feedback = feedback @ rotation
         return feedback
+
+    @jaxtyped(typechecker=beartype)
+    def decode_build_fields(
+        self, params: Float[Tensor, _PARAM_AXIS], *, sample_rate: float
+    ) -> dict[str, Float[Tensor, _ANY_SHAPE]]:
+        """Translate a basic model parameterization into the graph's varying build fields.
+
+        :param params: One model-space row for a BasicFDNParamSpec.
+        :param sample_rate: Canonical build's processing rate in Hz.
+        :returns: Tensor counterparts of A/B/C/D, delays and the post-delay SOS bank.
+        :raises ValueError: This parameterization does not represent a complete BasicFDN.
+        """
+        if not isinstance(self.spec, BasicFDNParamSpec):
+            raise ValueError("parameterization does not represent a complete BasicFDN")
+        native = self(params)
+        return {
+            "A": native["feedback_matrix"],
+            "B": native["input_matrix"],
+            "C": native["output_matrix"],
+            "D": native["direct_matrix"],
+            "delays": native["delays"],
+            "post_delay": decay_to_first_order_shelf(
+                native[PYFDN_RT_DC_NAME],
+                native[PYFDN_RT_NYQUIST_NAME],
+                PYFDN_RT_CROSSOVER_HZ,
+                native["delays"],
+                sample_rate,
+            ),
+        }
 
     @jaxtyped(typechecker=beartype)
     def forward(self, params: Float[Tensor, _PARAM_AXIS]) -> dict[str, Float[Tensor, _ANY_SHAPE]]:

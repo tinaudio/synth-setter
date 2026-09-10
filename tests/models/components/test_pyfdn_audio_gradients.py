@@ -5,7 +5,9 @@ import pytest
 import torch
 
 from synth_setter.data.vst.param_spec import DiscreteArrayParameter
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.models.components.differentiable_renderer import FlamoFDNDifferentiableRenderer
+from synth_setter.param_spec_name import ParamSpecName
 
 
 @pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
@@ -15,10 +17,6 @@ from synth_setter.models.components.differentiable_renderer import FlamoFDNDiffe
         "pyfdn_n8_mono_householder",
         "pyfdn_n8_mono_householder_vector",
         "pyfdn_n8_mono_kronecker",
-        "pyfdn_gotz_n8_mono_fixed_delays",
-        "pyfdn_gotz_n8_mono_learned_delays",
-        "pyfdn_gotz_n8_mono_fixed_delays_givens",
-        "pyfdn_gotz_n8_mono_learned_delays_givens",
     ],
 )
 def test_audio_gradient_continuous_controls_affect_only_their_own_row(
@@ -29,10 +27,10 @@ def test_audio_gradient_continuous_controls_affect_only_their_own_row(
     :param param_spec: Feedback and attenuation topology to exercise.
     :param device: Device hosting the prediction and FLAMO solve.
     """
-    renderer = FlamoFDNDifferentiableRenderer(
+    renderer = FlamoFDNDifferentiableRenderer.from_param_spec(
         param_spec=param_spec, sample_rate=44_100, signal_length=4096, fft_size=8192
     ).to(device)
-    spec = renderer.decoder.spec
+    spec = resolve_param_spec(ParamSpecName(param_spec))
     rows = torch.tensor(
         np.random.default_rng(19).uniform(-0.8, 0.8, (2, spec.encoded_width)),
         dtype=torch.float32,

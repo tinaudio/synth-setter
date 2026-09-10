@@ -222,6 +222,29 @@ def test_decoder_zero_angle_pairs_use_zero_radians_with_zero_gradients() -> None
     assert torch.count_nonzero(gradient).item() == 0
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["pyfdn_n8_mono_householder", "pyfdn_n8_mono_householder_vector", "pyfdn_n8_mono_kronecker"],
+)
+def test_decoder_basic_build_fields_match_canonical_offline_build(name: str) -> None:
+    """Model decoding supplies the same build fields that the upstream graph consumes.
+
+    :param name: Basic FDN parameterization to decode.
+    """
+    from synth_setter.data.pyfdn_param_spec import BasicFDNParamSpec
+
+    decoder = PyFDNParameterDecoder(name)
+    assert isinstance(decoder.spec, BasicFDNParamSpec)
+    row = torch.linspace(-0.7, 0.9, decoder.spec.encoded_width, dtype=torch.float64)
+    native, _ = decode_model_output(row.numpy(), decoder.spec)
+    canonical = decoder.spec.to_basic_fdn(native).build
+
+    fields = decoder.decode_build_fields(row, sample_rate=canonical.fs)
+
+    for name, actual in fields.items():
+        np.testing.assert_allclose(actual.detach().numpy(), getattr(canonical, name), atol=1e-11)
+
+
 @pytest.mark.parametrize("width_delta", [-1, 1])
 def test_decoder_wrong_width_raises(width_delta: int) -> None:
     """Malformed rows fail before positional decoding.

@@ -42,15 +42,42 @@ _SCALAR_SHAPE = ""
 
 
 @jaxtyped(typechecker=beartype)
-def mono_target_audio(
+def canonical_target_audio(
     audio: Float[Tensor, _BATCH_AUDIO_SHAPE] | Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE],
-) -> Float[Tensor, _BATCH_AUDIO_SHAPE]:
-    """Downmix stored channel-first observations without changing flat mono batches.
+) -> Float[Tensor, _BATCH_AUDIO_SHAPE] | Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE]:
+    """Remove only a singleton channel axis, preserving every multichannel observation.
 
     :param audio: Batched waveform, optionally carrying a channel axis.
-    :returns: Mono waveform shaped ``(batch, samples)`` for renderer scoring.
+    :returns: The unchanged channels, or a flat batch when exactly one channel is present.
     """
-    return audio.mean(dim=1) if audio.ndim == 3 else audio
+    return audio[:, 0] if audio.ndim == 3 and audio.shape[1] == 1 else audio
+
+
+@jaxtyped(typechecker=beartype)
+def channelwise_distance(
+    distance: nn.Module,
+    rendered: Float[Tensor, _BATCH_AUDIO_SHAPE] | Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE],
+    target: Float[Tensor, _BATCH_AUDIO_SHAPE] | Float[Tensor, _BATCH_CHANNEL_AUDIO_SHAPE],
+) -> Float[Tensor, _BATCH_SHAPE]:
+    """Compare corresponding waveform channels before averaging their scalar distances.
+
+    :param distance: Independent per-waveform distance returning one score per row.
+    :param rendered: Predicted audio with an optional channel axis.
+    :param target: Observed audio with matching batch, channel and sample dimensions.
+    :returns: Mean channel distance for each batch row, without waveform downmixing.
+    :raises ValueError: Channel geometry differs or either waveform axis is empty.
+    """
+    rendered = rendered.unsqueeze(1) if rendered.ndim == 2 else rendered
+    target = target.unsqueeze(1) if target.ndim == 2 else target
+    if rendered.shape != target.shape or rendered.shape[1] == 0 or rendered.shape[2] == 0:
+        raise ValueError(
+            "rendered and target audio must have matching nonempty channel/sample shapes"
+        )
+    batch, channels, samples = rendered.shape
+    scores = distance(
+        rendered.reshape(batch * channels, samples), target.reshape(batch * channels, samples)
+    )
+    return scores.reshape(batch, channels).mean(dim=1)
 
 
 @jaxtyped(typechecker=beartype)
@@ -270,4 +297,4 @@ class AudioFeedbackLoss(nn.Module):
             return theta_hat.sum() * 0.0
 
         rendered = self.renderer(theta_hat)
-        return (weight * self.distance(rendered, mono_target_audio(target_audio))).mean()
+        return (weight * channelwise_distance(self.distance, rendered, target_audio)).mean()
