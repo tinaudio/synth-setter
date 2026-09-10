@@ -372,8 +372,13 @@ def test_evaluate_pyfdn_derived_feedback_checkpoint_preserves_parameter_metrics(
     assert torch.isfinite(metrics[f"test/per_param_mse_spec_quantized/{control}"])
 
 
-def test_evaluate_unknown_feature_flag_raises_before_checkpoint_resolution() -> None:
-    """Feature-flag validation precedes evaluation setup and checkpoint access."""
+def test_evaluate_legacy_config_does_not_seed_before_feature_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A legacy default-off config leaves the process-global RNG untouched.
+
+    :param monkeypatch: Scoped replacement for the Lightning seeding boundary.
+    """
     GlobalHydra.instance().clear()
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -381,10 +386,44 @@ def test_evaluate_unknown_feature_flag_raises_before_checkpoint_resolution() -> 
             return_hydra_config=True,
             overrides=["experiment=surge/eval_flow_sketch_nsynth", "feature_flags=[9999]"],
         )
+    with open_dict(cfg):
+        del cfg["seed"]
+        del cfg["seeded_evaluation"]
     HydraConfig().set_config(cfg)
+    seed_everything_mock = MagicMock()
+    monkeypatch.setattr("synth_setter.cli.eval.seed_everything", seed_everything_mock)
 
     with pytest.raises(ValidationError, match="unknown feature flag number: 9999"):
         evaluate(cfg)
+
+    seed_everything_mock.assert_not_called()
+
+
+def test_evaluate_seeded_config_without_seed_uses_documented_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Seeded evaluation uses seed 42 when a legacy config omits ``seed``.
+
+    :param monkeypatch: Scoped replacement for the Lightning seeding boundary.
+    """
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/eval_flow_sketch_nsynth", "feature_flags=[9999]"],
+        )
+    with open_dict(cfg):
+        del cfg["seed"]
+        cfg.seeded_evaluation = True
+    HydraConfig().set_config(cfg)
+    seed_everything_mock = MagicMock()
+    monkeypatch.setattr("synth_setter.cli.eval.seed_everything", seed_everything_mock)
+
+    with pytest.raises(ValidationError, match="unknown feature flag number: 9999"):
+        evaluate(cfg)
+
+    seed_everything_mock.assert_called_once_with(42, workers=True)
 
 
 def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -> None:
@@ -1392,8 +1431,10 @@ def test_train_eval(tmp_path: Path, cfg_train: DictConfig, cfg_eval: DictConfig)
 
 
 @pytest.mark.slow
-def test_evaluate_loads_weighted_mixed_endpoint_checkpoint_and_samples(tmp_path: Path) -> None:
-    """Evaluation loads a weighted mixed-endpoint checkpoint and runs the production sampler.
+def test_evaluate_seeded_override_repeats_weighted_mixed_endpoint_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """Evaluation opts a weighted mixed-endpoint checkpoint into repeatable sampling.
 
     :param tmp_path: Checkpoint and evaluation output directory.
     """
@@ -1406,6 +1447,7 @@ def test_evaluate_loads_weighted_mixed_endpoint_checkpoint_and_samples(tmp_path:
                 "synth=cardinal",
                 "trainer=cpu",
                 "model=vst_flow",
+                "seeded_evaluation=true",
             ],
         )
     checkpoint_path = tmp_path / "mixed.ckpt"
@@ -1449,12 +1491,14 @@ def test_evaluate_loads_weighted_mixed_endpoint_checkpoint_and_samples(tmp_path:
     trainer.strategy.connect(instantiate(cfg.model))
     trainer.save_checkpoint(checkpoint_path)
 
+    with open_dict(cfg):
+        del cfg["seed"]
     HydraConfig().set_config(cfg)
     seed_everything(999, workers=True)
     metric_dict, object_dict = evaluate(cfg)
     repeated_metric_dict, _ = evaluate(cfg)
     with open_dict(cfg):
-        cfg.seed += 1
+        cfg.seed = 43
     seed_everything(999, workers=True)
     changed_seed_metric_dict, _ = evaluate(cfg)
 
@@ -1470,6 +1514,7 @@ def test_evaluate_loads_weighted_mixed_endpoint_checkpoint_and_samples(tmp_path:
     )
     assert object_dict["model"].hparams.endpoint_loss == "mixed"
     assert object_dict["model"].hparams.endpoint_time_weighting == "flowmol3"
+    assert object_dict["model"].hparams.seeded_evaluation is True
 
 
 def test_evaluate_loads_compiled_cpu_training_checkpoint(

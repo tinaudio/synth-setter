@@ -121,18 +121,25 @@ a model-space diagnostic; with `endpoint_loss=mixed`, `train/loss` remains the o
 CE/MSE objective. These training diagnostics remain distinct from `{val,test}/per_param_mse/{name}`,
 the primary final sampled parameter-space comparison.
 
-### Reproducible flow evaluation protocol
+### Seeded flow evaluation
 
-Flow validation and test sampling derive local noise from `cfg.seed`, stage, loader batch index,
-and distributed rank without advancing global RNG state. The ten fixed-time diagnostics reuse that
-same noise at centers 0.05 through 0.95, run fully conditional (no CFG dropout), report unweighted
-endpoint-space MSE per bin, and average the ten bins equally. Direct endpoint predictions use the
-`endpoint_mse` namespace; one-step estimates from velocity use `velocity_endpoint_mse`.
+Set `seeded_evaluation=true` on the evaluation CLI, or `model.seeded_evaluation=true` during
+training, to derive validation and test noise from the seed, stage, loader batch index, and
+distributed rank without advancing the global RNG stream. Standalone evaluation seeds model and
+datamodule construction only in this mode; it uses seed 42 when an enabled legacy config omits or
+nulls `seed`. The default `false` preserves fresh `torch.randn_like` sampling and does not seed the
+evaluation entrypoint.
 
-A comparison must record the dataset artifact/version, `cfg.seed`, loader batch size and worker
-count, rank/world-size topology, sampler steps, and content/sketch CFG strengths. Reproducibility
-requires the same ordered dataset and loader topology; changing batching, world size, model,
-checkpoint, device kernels, or dependency versions may change results. `val/param_mse` and
+The ten fixed-time diagnostics reuse the sampling noise at centers 0.05 through 0.95, run fully
+conditional (no CFG dropout), report unweighted endpoint-space MSE per bin, and average the bins
+equally. Direct endpoint predictions use the `endpoint_mse` namespace; one-step estimates from
+velocity use `velocity_endpoint_mse`. In the default mode these diagnostics vary with the fresh
+sampling noise; enabling seeded evaluation makes them repeatable under the same topology.
+
+A comparison must record the dataset artifact/version, seed, loader batch size and worker count,
+rank/world-size topology, sampler steps, and content/sketch CFG strengths. Repeatability requires
+the same ordered dataset and loader topology; changing batching, world size, model, checkpoint,
+device kernels, or dependency versions may change results. `val/param_mse` and
 `test/param_mse` remain the primary sampled-output parameter metrics, and rendered `audio/*`
 metrics remain available in predict mode. Fixed diagnostics establish comparability, not model
 quality; quality claims still require matched checkpoints, compute, seeds, and representative data.

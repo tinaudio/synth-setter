@@ -63,6 +63,7 @@ endpoint_loss: mse
 endpoint_time_weighting: uniform
 
 # sampling
+seeded_evaluation: false
 validation_sample_steps: 50
 validation_cfg_strength: 2.0
 validation_sketch_cfg_strength: ${model.validation_cfg_strength}
