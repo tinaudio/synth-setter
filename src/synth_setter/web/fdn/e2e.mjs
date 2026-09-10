@@ -15,7 +15,7 @@ const types = { ".html": "text/html", ".mjs": "text/javascript", ".js": "text/ja
 const root = path.resolve(siteDirectory);
 const server = createServer(async (request, response) => {
   const target = path.resolve(root, `.${decodeURIComponent(new URL(request.url, "http://127.0.0.1").pathname)}`);
-  if (!target.startsWith(root)) return response.writeHead(403).end();
+  if (target !== root && !target.startsWith(root + path.sep)) return response.writeHead(403).end();
   try {
     const body = await readFile(target);
     response.writeHead(200, { "Content-Type": types[path.extname(target)] ?? "application/octet-stream" });
