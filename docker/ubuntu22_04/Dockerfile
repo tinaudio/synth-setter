@@ -498,7 +498,11 @@ ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq
+    apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      faust \
+      git \
+      jq
 
 WORKDIR /home/build/synth-setter
 

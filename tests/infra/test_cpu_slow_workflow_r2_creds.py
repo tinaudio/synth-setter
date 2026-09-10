@@ -103,6 +103,23 @@ def _load_pull_request_paths(project_root: Path) -> list[str]:
 
 
 @pytest.mark.infra
+def test_cpu_slow_pins_production_faust_toolchain(project_root: Path) -> None:
+    """The native parity lane verifies the worker image's Faust version.
+
+    :param project_root: Session fixture rooted at the repository checkout.
+    """
+    job = _load_run_slow_tests_job(project_root)
+    version_step = next(
+        step
+        for step in _load_workflow_steps(project_root)
+        if step.get("name") == "Verify production Faust version"
+    )
+
+    assert job["runs-on"] == "ubuntu-22.04"
+    assert version_step["run"] == 'faust --version 2>&1 | grep -F "FAUST Version 2.37.3"'
+
+
+@pytest.mark.infra
 def test_install_rclone_action_remains_secret_free(project_root: Path) -> None:
     """The shared rclone installer never reads or configures storage credentials.
 
