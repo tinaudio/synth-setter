@@ -42,7 +42,9 @@ const writeArtifactFile = async (outputDir, name, bytes) => {
 export const compileFaustArtifact = async (request, outputDir) => {
     const packageVersion = await readFaustWasmPackageVersion();
     if (request.expectedFaustWasmVersion !== packageVersion) {
-        throw new Error('FaustWasm version mismatch');
+        throw new Error(
+            `FaustWasm version mismatch: expected ${request.expectedFaustWasmVersion}, installed ${packageVersion}`,
+        );
     }
     const modulePath = join(FAUSTWASM_PACKAGE_ROOT, 'libfaust-wasm/libfaust-wasm.js');
     const faustModule = await instantiateFaustModuleFromFile(modulePath);

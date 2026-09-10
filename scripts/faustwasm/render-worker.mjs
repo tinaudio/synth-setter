@@ -18,7 +18,9 @@ const main = async () => {
     const request = JSON.parse(await readFile(requestPath, 'utf8'));
     const packageVersion = await readFaustWasmPackageVersion();
     if (request.expectedFaustWasmVersion !== packageVersion) {
-        throw new Error('FaustWasm version mismatch');
+        throw new Error(
+            `FaustWasm version mismatch: expected ${request.expectedFaustWasmVersion}, installed ${packageVersion}`,
+        );
     }
     const baseDir = dirname(resolve(manifestPath));
     const artifact = await loadFaustArtifact(

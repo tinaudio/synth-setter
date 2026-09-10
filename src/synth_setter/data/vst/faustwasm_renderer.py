@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from synth_setter.data.vst.faust_sources import resolve_faust_dsp
 from synth_setter.data.vst.faustwasm_artifacts import (
     ArtifactManifest,
     compile_faustwasm_artifact,
@@ -120,6 +121,9 @@ class FaustWasmRenderer(AudioRenderer):
             raise ValueError("render duration must contain at least one output frame")
 
         synth = SYNTHS[SynthName(source_identity)]
+        expected_channels = resolve_faust_dsp(source_identity).outputs
+        if self.channels != expected_channels:
+            raise ValueError(f"FaustWasm source requires channels={expected_channels}")
         if synth.source_sha256 != self.source_sha256:
             raise ValueError("source_sha256 does not match the registered Faust source")
         self._temporary_directory = tempfile.TemporaryDirectory(prefix="synth-setter-faustwasm-")

@@ -24,7 +24,11 @@ const makeFactory = async (bytes, meta, poly) => ({
 
 export const loadFaustArtifact = async (manifest, loadBytes, packageVersion) => {
     if (manifest.schemaVersion !== 1) throw new Error('unsupported Faust artifact schema');
-    if (manifest.faustwasmVersion !== packageVersion) throw new Error('FaustWasm version mismatch');
+    if (manifest.faustwasmVersion !== packageVersion) {
+        throw new Error(
+            `FaustWasm version mismatch: artifact ${manifest.faustwasmVersion}, installed ${packageVersion}`,
+        );
+    }
     const dspBytes = await verifyBytes(manifest.files.dsp, loadBytes);
     const dspFactory = await makeFactory(dspBytes, manifest.dspMeta, manifest.mode === 'poly');
     const artifact = { manifest, dspFactory };

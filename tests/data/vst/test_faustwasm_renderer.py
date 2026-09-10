@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from hydra import compose, initialize_config_module
 
 from synth_setter.data.vst.core import extract_backend_version
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
@@ -21,7 +22,6 @@ from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 from synth_setter.synth_spec import SYNTHS, SynthName
 
-_FAUSTWASM_VERSION = extract_backend_version("faustwasm")
 _ROOT = Path(__file__).parents[3]
 _NODE_MODULE = _ROOT / "node_modules/@grame/faustwasm/package.json"
 _EXPECTED_PARAMETER_ADDRESSES = {
@@ -67,11 +67,20 @@ _EXPECTED_PARAMETER_ADDRESSES = {
 }
 
 
+def _configured_backend_version() -> str:
+    """Return the authored FaustWasm package pin.
+
+    :returns: Configured backend version.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        return str(compose(config_name="render/faustwasm").render.backend_version)
+
+
 def _config(identity: str = "faust_bright_organ", channels: int = 2) -> RenderConfig:
     return RenderConfig(
         synth=SYNTHS[SynthName(identity)],
         renderer_backend="faustwasm",
-        backend_version=_FAUSTWASM_VERSION,
+        backend_version=_configured_backend_version(),
         block_size=64,
         render_contract_version=2,
         sample_rate=44_100,
@@ -124,7 +133,7 @@ def test_faustwasm_contract_covers_every_canonical_parameter_once() -> None:
 @pytest.mark.skipif(not _NODE_MODULE.is_file(), reason="run `npm ci` to install @grame/faustwasm")
 def test_faustwasm_backend_version_reads_pinned_node_package() -> None:
     """Backend provenance matches the installed lockfile dependency."""
-    assert extract_backend_version("faustwasm") == "0.18.3"
+    assert extract_backend_version("faustwasm") == _configured_backend_version()
 
 
 def test_faustwasm_legacy_digest_projection_is_rejected() -> None:
