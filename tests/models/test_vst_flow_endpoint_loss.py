@@ -471,8 +471,8 @@ def test_fixed_time_endpoint_mse_uses_direct_endpoint_namespace() -> None:
     torch.testing.assert_close(metrics["endpoint_mse/equal_bin_mean"], torch.tensor(1.0))
 
 
-def test_train_step_flowmol3_mse_weights_objective_not_diagnostic() -> None:
-    """FlowMol3 changes loss gradients while preserving comparable diagnostic MSE."""
+def test_train_step_flowmol3_mse_weights_objective_metric_not_endpoint_diagnostic() -> None:
+    """FlowMol3 weights model-space MSE while endpoint diagnostics stay unweighted."""
     field = _ConstantField(torch.zeros(_WIDTH))
     module = _module(
         endpoint_time_weighting="flowmol3",
@@ -488,7 +488,8 @@ def test_train_step_flowmol3_mse_weights_objective_not_diagnostic() -> None:
     outputs.loss.backward()
 
     assert outputs.loss.item() == pytest.approx(3.5)
-    torch.testing.assert_close(outputs.per_param_flow_mse, torch.full((_WIDTH,), 2.5))
+    torch.testing.assert_close(outputs.per_param_flow_mse, torch.full((_WIDTH,), 3.5))
+    torch.testing.assert_close(outputs.per_param_endpoint_mse, torch.full((_WIDTH,), 2.5))
     assert field.row.grad is not None
     torch.testing.assert_close(field.row.grad, torch.full((_WIDTH,), -4.0 / _WIDTH))
 
