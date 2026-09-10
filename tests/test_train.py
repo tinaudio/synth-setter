@@ -2414,6 +2414,24 @@ def test_train_wandb_config_resolves_scheduler_max_steps(
     assert logger.recorded_config["model"]["scheduler"]["T_max"] == 1
 
 
+def test_train_lance_rejects_legacy_dataset_for_onset_duration_config(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """Training rejects equal-width dataset rows with legacy timing semantics.
+
+    :param cfg_train_lance: Composed onset-duration Lance configuration.
+    """
+    dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
+    input_spec_path = dataset_root / "input_spec.json"
+    input_spec_path.write_text(
+        json.dumps({"render": {"synth": {"name": "surge_simple"}}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="note_timing_parameterization"):
+        train(cfg_train_lance)
+
+
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_lance_records_dataset_lineage_from_legacy_local_spec(
@@ -2430,6 +2448,9 @@ def test_train_lance_records_dataset_lineage_from_legacy_local_spec(
     }
     dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
     (dataset_root / "input_spec.json").write_text(json.dumps(legacy_spec), encoding="utf-8")
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.synth.note_timing_parameterization = "legacy_endpoints"
+        cfg_train_lance.datamodule.note_timing_parameterization = "legacy_endpoints"
     HydraConfig().set_config(cfg_train_lance)
     logger = _RecordingWandbLogger()
     with patch("synth_setter.cli.train.instantiate_loggers", return_value=[logger]):

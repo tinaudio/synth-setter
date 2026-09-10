@@ -11,6 +11,10 @@ import numpy as np
 import structlog
 from pydantic import BaseModel, ConfigDict
 
+from synth_setter.data.vst.param_spec import (
+    LegacyEndpointNoteDurationParameter,
+    NoteDurationParameter,
+)
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.model_cache import retry_external_io
 from synth_setter.param_spec_name import (
@@ -43,13 +47,23 @@ def describe_fields(
     )
     descriptions = []
     for field, span in spec.encoded_slices():
+        field_type = (
+            "NoteDurationParameter"
+            if isinstance(field, LegacyEndpointNoteDurationParameter)
+            else type(field).__name__
+        )
         metadata = {
             "synth": synth_name,
             "spec": param_spec_name,
             "name": field.name,
-            "type": type(field).__name__,
+            "type": field_type,
             "encoded_span": [span.start, span.stop],
         }
+        if (
+            isinstance(field, NoteDurationParameter)
+            and note_timing_parameterization != LEGACY_NOTE_TIMING
+        ):
+            metadata["coordinates"] = ["onset", "duration_fraction"]
         for attribute in ("encoding", "values", "min", "max", "shape"):
             if hasattr(field, attribute):
                 metadata[attribute] = getattr(field, attribute)

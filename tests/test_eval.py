@@ -2600,6 +2600,32 @@ def test_evaluate_validate_mode_onset_duration_runs_oracle(
     assert metric_dict["val/per_param_mse/a_amp_eg_attack"].item() == 0.0
 
 
+def test_evaluate_rejects_legacy_dataset_for_onset_duration_config(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+) -> None:
+    """Evaluation rejects equal-width dataset rows with legacy timing semantics.
+
+    :param tmp_path: Pinned Hydra output directory.
+    :param fake_surge_smoke_datasets: Natively-generated Lance smoke dataset.
+    """
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        mode="validate",
+        param_spec_name="surge_4",
+        datamodule="surge_lance",
+    )
+    input_spec_path = fake_surge_smoke_datasets / "input_spec.json"
+    input_spec_path.write_text(
+        json.dumps({"render": {"synth": {"name": "surge_4"}}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="note_timing_parameterization"):
+        evaluate(cfg)
+
+
 def test_evaluate_test_mode_partial_lance_root_returns_metric(
     cfg_train_lance: DictConfig,
 ) -> None:

@@ -187,7 +187,7 @@ def test_discrete_array_mismatch_counts_one_vote_per_native_element() -> None:
 
 def test_note_duration_semantic_distance_reports_onset_and_hold_seconds() -> None:
     """Onset and held-duration errors remain independently interpretable."""
-    spec = ParamSpec([], [NoteDurationParameter("timing", 10.0)])
+    spec = ParamSpec([], [NoteDurationParameter("timing", 10.0, 0.001)])
 
     metrics = semantic_parameter_distances(_model(-1.0, -1.0), _model(-1.0, 1.0), spec)
 
@@ -214,7 +214,7 @@ def test_semantic_distance_mixed_spec_preserves_spans_and_finite_inventory() -> 
             ContinuousArrayParameter("curve", (2,), -1.0, 1.0),
             DiscreteLiteralParameter("steps", 0, 2),
         ],
-        [NoteDurationParameter("timing", 4.0)],
+        [NoteDurationParameter("timing", 4.0, 0.001)],
     )
     predicted = _model(0.9, 1.0, 0.0, 1.0, -0.7, 0.8, 0.9, -1.0, 1.0)
     target = _model(-0.9, -1.0, 1.0, 0.0, 0.7, -0.8, -0.9, 1.0, -1.0)

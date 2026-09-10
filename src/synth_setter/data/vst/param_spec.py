@@ -671,7 +671,7 @@ def _numeric_endpoints(name: str, raw_value: object) -> tuple[float, float]:
 class LegacyEndpointNoteDurationParameter(Parameter):
     """Legacy note timing encoded as two independent endpoint coordinates."""
 
-    def __init__(self, name: str, max_note_duration_seconds: float):
+    def __init__(self, name: str, max_note_duration_seconds: float) -> None:
         """Initialize endpoint timing bounds.
 
         :param name: Raw parameter name.
@@ -694,6 +694,11 @@ class LegacyEndpointNoteDurationParameter(Parameter):
         return np.array(endpoints, dtype=np.float64) / self.max_note_duration_seconds
 
     def decode(self, encoded: np.ndarray) -> tuple[float, ...]:
+        """Decode endpoint coordinates without changing the legacy width behavior.
+
+        :param encoded: Endpoint fractions, conventionally shaped ``(2,)``.
+        :returns: Endpoint times in seconds.
+        """
         return tuple(float(value) for value in encoded * self.max_note_duration_seconds)
 
 
@@ -766,6 +771,12 @@ class NoteDurationParameter(Parameter):
         )
 
     def decode(self, encoded: np.ndarray) -> tuple[float, float]:
+        """Decode bounded onset and duration coordinates into endpoint seconds.
+
+        :param encoded: Finite unit-domain coordinates shaped ``(2,)``.
+        :returns: Ordered onset and end times within the render horizon.
+        :raises ValueError: The coordinates have the wrong shape or leave the unit domain.
+        """
         values = np.asarray(encoded)
         if values.shape != (2,):
             raise ValueError(f"encoded {self.name} must have shape (2,), got {values.shape}")

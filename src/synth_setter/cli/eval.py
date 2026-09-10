@@ -493,11 +493,13 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             )
         seed_everything(evaluation_seed, workers=True)
     apply_feature_flags(cfg)
-    validate_dataset_note_timing(
-        cfg.datamodule.get("dataset_root"),
-        cfg.datamodule.get("download_dataset_root_uri"),
-        cfg.synth.note_timing_parameterization,
-    )
+    synth = cfg.get("synth")
+    if synth is not None:
+        validate_dataset_note_timing(
+            cfg.datamodule.get("dataset_root"),
+            cfg.datamodule.get("download_dataset_root_uri"),
+            synth.note_timing_parameterization,
+        )
     checkpoint_path = _localize_eval_checkpoint(cfg.ckpt_path, cfg.get("ckpt_sha256"))
 
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")

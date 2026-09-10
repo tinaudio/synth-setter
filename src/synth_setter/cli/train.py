@@ -521,11 +521,13 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if cfg.get("evaluation_only", False):
         raise ValueError("evaluation-only experiment cannot run through training entrypoint")
     normalization_callback = _normalization_stats_callback(cfg)
-    validate_dataset_note_timing(
-        cfg.datamodule.get("dataset_root"),
-        cfg.datamodule.get("download_dataset_root_uri"),
-        cfg.synth.note_timing_parameterization,
-    )
+    synth = cfg.get("synth")
+    if synth is not None:
+        validate_dataset_note_timing(
+            cfg.datamodule.get("dataset_root"),
+            cfg.datamodule.get("download_dataset_root_uri"),
+            synth.note_timing_parameterization,
+        )
 
     # set seed for random number generators in pytorch, numpy and python.random
     if cfg.get("seed"):

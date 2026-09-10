@@ -27,6 +27,7 @@ from synth_setter.data.vst.renderers import (
     AudioRenderer,
     DawDreamerRenderer,
     PedalboardRenderer,
+    TorchSynthRenderer,
 )
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.renderer_backend import FlushBlocks
@@ -139,6 +140,40 @@ def test_generate_sample_uses_common_renderer_backend() -> None:
     persisted_audio = np.asarray(sample.audio.T, dtype=np.float16)
     assert sample.audio_uuid == audio_uuid(persisted_audio)
     assert sample.audio_mp3
+
+
+def test_torchsynth_renderer_expands_short_window_at_horizon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sub-millisecond boundary note reaches TorchSynth as a valid interval.
+
+    :param monkeypatch: Replaces voice setup and the TorchSynth render boundary.
+    """
+    import torch
+
+    from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
+
+    captured: dict[str, np.ndarray] = {}
+
+    def fake_render(params: torch.Tensor, **_: object) -> torch.Tensor:
+        captured["params"] = params.numpy()
+        return torch.zeros((1, 4), dtype=torch.float32)
+
+    monkeypatch.setattr(TorchSynthRenderer, "__post_init__", lambda self: None)
+    monkeypatch.setattr(
+        "synth_setter.data.torchsynth_datamodule.render_torchsynth", fake_render
+    )
+    renderer = TorchSynthRenderer(
+        plugin_path="torchsynth",
+        sample_rate=4,
+        channels=1,
+        signal_duration_seconds=1.0,
+    )
+
+    renderer.render({}, 60, 100, (4.0, 4.0))
+
+    _, note = TORCHSYNTH_FULL_PARAM_SPEC.decode(captured["params"][0])
+    assert note["note_start_and_end"] == pytest.approx((3.999, 4.0), abs=1e-6)
 
 
 def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.MonkeyPatch) -> None:

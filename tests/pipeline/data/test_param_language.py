@@ -34,8 +34,12 @@ def test_describe_fields_uses_persisted_note_timing_semantics() -> None:
     legacy = describe_fields("surge_4", "surge_4")
     current = describe_fields("surge_4", "surge_4", "onset_duration")
 
-    assert json.loads(legacy[-1])["type"] == "LegacyEndpointNoteDurationParameter"
-    assert json.loads(current[-1])["type"] == "NoteDurationParameter"
+    legacy_timing = json.loads(legacy[-1])
+    current_timing = json.loads(current[-1])
+    assert legacy_timing["type"] == "NoteDurationParameter"
+    assert "coordinates" not in legacy_timing
+    assert current_timing["type"] == "NoteDurationParameter"
+    assert current_timing["coordinates"] == ["onset", "duration_fraction"]
 
 
 def test_matryoshka_truncation_renormalizes_prefix() -> None:
@@ -79,6 +83,55 @@ def test_artifact_round_trip_preserves_vectors(tmp_path: Path) -> None:
     actual, metadata = load_param_language(path, "surge_simple", "surge_xt")
     np.testing.assert_array_equal(actual, embeddings)
     assert metadata.descriptions == descriptions
+
+
+def test_legacy_artifact_without_timing_discriminator_still_loads(tmp_path: Path) -> None:
+    """Pre-discriminator language artifacts preserve their endpoint descriptions.
+
+    :param tmp_path: Temporary directory for the artifact.
+    """
+    descriptions = describe_fields("surge_simple", "surge_xt")
+    embeddings = np.full((len(descriptions), 128), 1 / np.sqrt(128), dtype=np.float32)
+    path = tmp_path / "language.npz"
+    save_param_language(path, embeddings, "surge_simple", "surge_xt")
+    with np.load(path, allow_pickle=False) as archive:
+        metadata = json.loads(str(archive["metadata"].item()))
+    metadata.pop("note_timing_parameterization")
+    np.savez(path, embeddings=embeddings, metadata=json.dumps(metadata))
+
+    actual, restored_metadata = load_param_language(path, "surge_simple", "surge_xt")
+
+    np.testing.assert_array_equal(actual, embeddings)
+    assert restored_metadata.note_timing_parameterization == "legacy_endpoints"
+
+
+def test_onset_duration_artifact_round_trip_rejects_legacy_timing(tmp_path: Path) -> None:
+    """Persisted onset-duration vectors cannot be loaded with legacy semantics.
+
+    :param tmp_path: Temporary directory for the artifact.
+    """
+    descriptions = describe_fields("surge_simple", "surge_xt", "onset_duration")
+    embeddings = np.full((len(descriptions), 128), 1 / np.sqrt(128), dtype=np.float32)
+    path = tmp_path / "language.npz"
+
+    save_param_language(
+        path,
+        embeddings,
+        "surge_simple",
+        "surge_xt",
+        "onset_duration",
+    )
+
+    actual, metadata = load_param_language(
+        path,
+        "surge_simple",
+        "surge_xt",
+        "onset_duration",
+    )
+    np.testing.assert_array_equal(actual, embeddings)
+    assert metadata.note_timing_parameterization == "onset_duration"
+    with pytest.raises(ValueError, match="spec"):
+        load_param_language(path, "surge_simple", "surge_xt")
 
 
 def test_artifact_wrong_spec_rejected(tmp_path: Path) -> None:
