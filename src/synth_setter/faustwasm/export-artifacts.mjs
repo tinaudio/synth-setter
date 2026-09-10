@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,7 +37,12 @@ const writeArtifactFile = async (outputDir, name, bytes) => {
 };
 
 export const compileFaustArtifact = async (request, outputDir) => {
-    const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), 'vendor');
+    const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+    const packagedRoot = resolve(moduleDirectory, 'vendor');
+    const packagedCompiler = join(packagedRoot, 'libfaust-wasm/libfaust-wasm.wasm');
+    const packageRoot = existsSync(packagedCompiler)
+        ? packagedRoot
+        : resolve(moduleDirectory, '../../../node_modules/@grame/faustwasm');
     const modulePath = join(packageRoot, 'libfaust-wasm/libfaust-wasm.js');
     const faustModule = await instantiateFaustModuleFromFile(modulePath);
     const libFaust = new LibFaust(faustModule);
