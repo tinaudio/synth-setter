@@ -51,6 +51,7 @@ __all__ = [
     "to_s3_uri",
     "upload",
     "upload_dir",
+    "upload_dir_immutable",
     "upload_to_uri",
 ]
 
@@ -564,8 +565,32 @@ def upload_dir(local_dir: Path, r2_uri: str, exclude: str | None = None) -> None
         subtree last by excluding it from a first pass.
     """
     operands = [f"--exclude={exclude}"] if exclude is not None else []
-    operands += [str(local_dir), _to_rclone_path(r2_uri)]
-    args = _rclone_argv("copy", *operands, timeout=_UPLOAD_DIR_TIMEOUT)
+    _upload_dir(local_dir, r2_uri, operands)
+
+
+def upload_dir_immutable(local_dir: Path, r2_uri: str) -> None:
+    """Copy a local tree into an R2 prefix without replacing changed objects.
+
+    :param local_dir: Local directory whose contents land beneath ``r2_uri``.
+    :param r2_uri: Immutable ``r2://`` destination prefix.
+    """
+    _upload_dir(local_dir, r2_uri, ["--immutable"])
+
+
+def _upload_dir(local_dir: Path, r2_uri: str, operands: list[str]) -> None:
+    """Run one directory upload with caller-selected rclone operands.
+
+    :param local_dir: Local source directory.
+    :param r2_uri: Validated ``r2://`` destination prefix.
+    :param operands: Flags inserted before the source and destination.
+    """
+    args = _rclone_argv(
+        "copy",
+        *operands,
+        str(local_dir),
+        _to_rclone_path(r2_uri),
+        timeout=_UPLOAD_DIR_TIMEOUT,
+    )
     subprocess.check_call(args)  # noqa: S603 — args from validated URI
 
 

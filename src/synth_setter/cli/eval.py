@@ -9,8 +9,10 @@ import sys
 import tempfile
 from collections.abc import Callable
 from contextlib import ExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 import hydra
 import pandas as pd
@@ -69,6 +71,46 @@ register_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)
 
 _MAX_EVALUATION_SEED = 2**32 - 1
+_PUBLICATION_POINTER_FILENAME = "latest.json"
+_PUBLISHED_OUTPUT_DIRECTORIES = ("audio", "metrics", "predictions")
+
+
+@dataclass(frozen=True)
+class _OutputPublicationAttempt:
+    """Identify one evaluation invocation's publication namespace.
+
+    .. attribute :: attempt_id
+
+        Collision-resistant immutable payload path segment.
+    """
+
+    attempt_id: str
+
+
+def _start_output_publication_attempt(output_dir: Path) -> _OutputPublicationAttempt:
+    """Remove stale semantic roots and create an identity for one invocation.
+
+    :param output_dir: Reused Hydra directory whose generated semantic roots are reset.
+    :returns: Attempt identity used for the immutable remote payload.
+    """
+    for directory_name in _PUBLISHED_OUTPUT_DIRECTORIES:
+        semantic_root = output_dir / directory_name
+        if semantic_root.exists():
+            shutil.rmtree(semantic_root)
+    (output_dir / "predictions").mkdir(parents=True, exist_ok=True)
+    return _OutputPublicationAttempt(uuid4().hex)
+
+
+def _stage_attempt_outputs(output_dir: Path, staging_dir: Path) -> None:
+    """Copy this invocation's semantic output roots into an isolated tree.
+
+    :param output_dir: Hydra directory containing attempt-owned generated roots.
+    :param staging_dir: Empty local payload directory populated by this function.
+    """
+    for directory_name in _PUBLISHED_OUTPUT_DIRECTORIES:
+        source_dir = output_dir / directory_name
+        if source_dir.is_dir():
+            shutil.copytree(source_dir, staging_dir / directory_name)
 
 
 def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:  # noqa: DOC502 — raised by load_aggregated_metrics
@@ -513,6 +555,11 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, logger=logger, callbacks=callbacks)
 
+    publication_attempt = None
+    if trainer.is_global_zero:
+        publication_attempt = _start_output_publication_attempt(Path(cfg.paths.output_dir))
+    trainer.strategy.barrier("eval-attempt-output-reset")
+
     object_dict = {
         "cfg": cfg,
         "datamodule": datamodule,
@@ -577,8 +624,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     # upload + artifact log below) to avoid concurrent writers corrupting metrics.json.
     if trainer.is_global_zero:
         _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
-    _maybe_upload_output_dir(cfg, trainer.is_global_zero)
-    upload_uri = _upload_output_dir_uri(cfg)
+    upload_uri = _maybe_upload_output_dir(cfg, trainer.is_global_zero, attempt=publication_attempt)
     # _get_git_sha() shells out, so only invoke it on the path that actually logs
     # the artifact (global-zero with a configured R2 prefix).
     if trainer.is_global_zero and upload_uri:
@@ -715,41 +761,62 @@ def _upload_output_dir_uri(cfg: DictConfig) -> str | None:
     return OmegaConf.select(cfg, "evaluation.upload_output_dir_uri")
 
 
-def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> None:
-    """Mirror the whole Hydra run dir to R2 when ``evaluation.upload_output_dir_uri`` is set.
+def _maybe_upload_output_dir(
+    cfg: DictConfig, is_global_zero: bool, *, attempt: _OutputPublicationAttempt | None
+) -> str | None:
+    """Publish one successful attempt beneath the configured R2 suite root.
 
-    Opt-in: a null URI is a no-op. Runs last so every artifact — metrics,
-    predictions, rendered audio, config logs — is on disk before the copy. The
-    configured URI is the exact destination prefix; the run dir's contents land
-    directly beneath it. Credential validation is delegated to
-    :func:`r2_io.ensure_r2_env_loaded`, matching the datamodule's R2 prefetch.
+    The immutable payload lands at ``<root>/attempts/<attempt_id>/``. Only after
+    that upload succeeds is ``<root>/latest.json`` replaced with a pointer to the
+    payload. Files predating the invocation and W&B operational state are not
+    staged, so a reused Hydra workspace cannot contaminate a successful retry.
 
-    Only the global-zero rank uploads: under DDP ``main`` runs on every rank
-    against the one shared ``output_dir``, so an ungated copy would race N
-    redundant uploads — the same rank gate :func:`evaluate` puts on predict
-    postprocessing.
-
-    :param cfg: Reads ``cfg.evaluation.upload_output_dir_uri`` (``r2://`` prefix or
-        null) and ``cfg.paths.output_dir`` (the local tree to copy).
-    :param is_global_zero: Whether this is the global-zero rank; non-zero ranks
-        return without touching R2.
-    :raises ValueError: ``upload_output_dir_uri`` is set but not an ``r2://`` URI;
-        checked before the credential ping so a misconfigured destination is
-        attributed to the URI rather than surfacing as an auth failure.
+    :param cfg: Reads the optional suite root and local Hydra output directory.
+    :param is_global_zero: Whether this is the sole rank allowed to publish.
+    :param attempt: Global-zero attempt identity created after stale semantic roots were reset.
+    :returns: Published immutable payload URI, or ``None`` when publication is disabled.
+    :raises RuntimeError: Global zero did not initialize an attempt identity.
+    :raises ValueError: The configured suite root is not an ``r2://`` URI.
     """
     if not is_global_zero:
-        return
-    dest_uri = _upload_output_dir_uri(cfg)
-    if not dest_uri:
-        return
-    if not r2_io.is_r2_uri(dest_uri):
+        return None
+    if attempt is None:
+        raise RuntimeError("global-zero eval publication requires an attempt identity")
+    publication_root_uri = _upload_output_dir_uri(cfg)
+    if not publication_root_uri:
+        return None
+    if not r2_io.is_r2_uri(publication_root_uri):
         raise ValueError(
-            f"evaluation.upload_output_dir_uri must be an r2:// URI; got {dest_uri!r}."
+            f"evaluation.upload_output_dir_uri must be an r2:// URI; got {publication_root_uri!r}."
         )
+
+    publication_root_uri = publication_root_uri.rstrip("/")
+    payload_uri = f"{publication_root_uri}/attempts/{attempt.attempt_id}"
     output_dir = Path(cfg.paths.output_dir)
-    log.info(f"Uploading eval output dir {output_dir} to {dest_uri}")
+    log.info(f"Publishing eval output attempt {attempt.attempt_id} to {payload_uri}")
     r2_io.ensure_r2_env_loaded()
-    r2_io.upload_dir(output_dir, dest_uri)
+    with tempfile.TemporaryDirectory(prefix="synth-setter-eval-publication-") as temp_dir:
+        staging_dir = Path(temp_dir) / "payload"
+        staging_dir.mkdir()
+        _stage_attempt_outputs(output_dir, staging_dir)
+        r2_io.upload_dir_immutable(staging_dir, payload_uri)
+
+        pointer_path = Path(temp_dir) / _PUBLICATION_POINTER_FILENAME
+        pointer_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "attempt_id": attempt.attempt_id,
+                    "payload_uri": payload_uri,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        r2_io.upload_to_uri(
+            pointer_path, f"{publication_root_uri}/{_PUBLICATION_POINTER_FILENAME}"
+        )
+    return payload_uri
 
 
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="eval.yaml")
@@ -766,7 +833,7 @@ def main(cfg: DictConfig) -> None:
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
 
-    # evaluate() persists metrics, mirrors the output dir to R2, and logs the
+    # evaluate() persists metrics, publishes the output suite to R2, and logs the
     # eval-results artifact internally (before @task_wrapper closes the run).
     evaluate(cfg)
 
