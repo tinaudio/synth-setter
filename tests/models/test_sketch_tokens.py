@@ -322,6 +322,21 @@ class TestSketchControlTokens:
 class TestTIVSketchControlTokens:
     """Validate temporal TIV pooling and channel contracts."""
 
+    @pytest.mark.gpu
+    def test_forward_tiv_cpu_and_cuda_outputs_are_numerically_equivalent(self) -> None:
+        """TIV pooling and projection preserve outputs across CPU and CUDA."""
+        if not torch.cuda.is_available():
+            pytest.skip("requires CUDA")
+        module = _tokens_module(seed=19, profile="tiv")
+        controls = torch.randn(2, 12, 47, generator=torch.Generator().manual_seed(23))
+        keep = torch.ones(2, 1, dtype=torch.bool)
+
+        with torch.no_grad():
+            expected = module(controls, keep)
+            actual = module.cuda()(controls.cuda(), keep.cuda()).cpu()
+
+        torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
+
     def test_forward_pools_tiv_coordinates_by_mean(self) -> None:
         """TIV coordinates use average pooling rather than music pitch maxima."""
         module = SketchControlTokens(d_model=1, num_control_tokens=2, profile="tiv")
