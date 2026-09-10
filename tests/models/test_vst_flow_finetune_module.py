@@ -293,7 +293,23 @@ def test_finetune_module_redacts_opaque_rclone_credentials(
 
     module = _finetune(_base_checkpoint(tmp_path))
 
-    assert module.base_checkpoint_source == ":s3:bucket/base.ckpt"
+    assert module.base_checkpoint_source == ":s3:bucket/base.ckpt?token=x#part"
+
+
+def test_finetune_module_empty_source_uses_materialized_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty launcher override falls back to the checkpoint that was loaded.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    :param monkeypatch: Pytest environment isolation fixture.
+    """
+    checkpoint = _base_checkpoint(tmp_path)
+    monkeypatch.setenv("SYNTH_SETTER_BASE_CHECKPOINT_SOURCE", "")
+
+    module = _finetune(checkpoint)
+
+    assert module.base_checkpoint_source == checkpoint.as_uri()
 
 
 def test_finetune_module_preserves_rclone_object_key_characters(

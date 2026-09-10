@@ -32,8 +32,7 @@ def sanitize_checkpoint_source(source: str) -> str:
     if source.startswith(":"):
         remote, separator, path = source[1:].partition(":")
         backend = remote.partition(",")[0]
-        sanitized_path = path.partition("?")[0].partition("#")[0]
-        return f":{backend}:{sanitized_path}" if separator else f":{backend}:"
+        return f":{backend}:{path}" if separator else f":{backend}:"
     remote, separator, _ = source.partition(":")
     if separator and "/" not in remote and "\\" not in remote and "://" not in source:
         return source
@@ -52,7 +51,7 @@ def checkpoint_source_uri(checkpoint: str | Path) -> str:
     :returns: Source URI without user info, query parameters, or a fragment.
     """
     source = os.getenv(_BASE_CHECKPOINT_SOURCE_ENV)
-    if source is None:
+    if not source:
         return Path(checkpoint).expanduser().resolve(strict=True).as_uri()
     return sanitize_checkpoint_source(source)
 
