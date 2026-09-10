@@ -187,6 +187,10 @@ The eval config declares `seed: null` so Hydra accepts `seed=...`; it supplies n
 `model.seeded_evaluation=false` (the default), evaluation ignores the seed and retains fresh
 sampling.
 
+Train-end R2 checkpoint names end in `-<sha256>.ckpt`. Set
+`validate_chekpoint_sha=true` to derive the integrity pin from that filename; the flag defaults to
+`false` during rollout, so existing paths and explicit `ckpt_sha256` pins remain supported.
+
 ## Create a synth-parameter W&B workspace
 
 Create a shared workspace whose regex-backed panels discover each synth's parameter names:

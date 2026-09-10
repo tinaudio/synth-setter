@@ -19,6 +19,7 @@ every cfg-level train test no-ops past with ``logger=None``) fails here.
 from __future__ import annotations
 
 import glob
+import hashlib
 import json
 import os
 import re
@@ -50,6 +51,7 @@ _CKPT_S3_REF = "s3://models/model-flow-simple/best.ckpt"
 _LAUNCH_UUID = "7ac31b3ff42c4f13a21997adb4a74e86"
 _SECOND_LAUNCH_UUID = "f52af7e63eaa41048599080186b92b5d"
 _TRAINING_RUN_ID = "flow-simple-20260908T170724945Z"
+_CHECKPOINT_SHA256 = "a" * 64
 
 # `cfg_train` composes no Hydra experiment, so `resolve_run_config_id` falls back
 # to `task_name` ("train") — the config_id the e2e artifact name is built from.
@@ -109,21 +111,30 @@ class _RecordingWandbLogger(WandbLogger):
         self.logged.append(artifact)
 
 
-def test_derive_checkpoint_uri_default_uses_config_run_and_launch_ids() -> None:
-    """A null override derives a launch-scoped checkpoint URI."""
-    uri = _derive_checkpoint_uri(_cfg(task_name="flow-simple"), _TRAINING_RUN_ID, _LAUNCH_UUID)
+def test_derive_checkpoint_uri_default_includes_checkpoint_digest() -> None:
+    """A null override derives a digest-bearing launch-scoped checkpoint URI."""
+    uri = _derive_checkpoint_uri(
+        _cfg(task_name="flow-simple"),
+        _TRAINING_RUN_ID,
+        _LAUNCH_UUID,
+        _CHECKPOINT_SHA256,
+    )
     assert uri == (
         "r2://intermediate-data/checkpoints/flow-simple/"
-        "flow-simple-20260908T170724945Z/7ac31b3ff42c4f13a21997adb4a74e86/model.ckpt"
+        "flow-simple-20260908T170724945Z/7ac31b3ff42c4f13a21997adb4a74e86/"
+        f"model-{_CHECKPOINT_SHA256}.ckpt"
     )
 
 
-def test_derive_checkpoint_uri_override_is_used_verbatim() -> None:
-    """A set ``upload_checkpoints_uri`` overrides the derived path verbatim."""
+def test_derive_checkpoint_uri_override_preserves_stem_and_ckpt_suffix() -> None:
+    """An override gains the digest before its existing ``.ckpt`` suffix."""
     uri = _derive_checkpoint_uri(
-        _cfg(upload_checkpoints_uri=_CKPT_URI), _TRAINING_RUN_ID, _LAUNCH_UUID
+        _cfg(upload_checkpoints_uri=_CKPT_URI),
+        _TRAINING_RUN_ID,
+        _LAUNCH_UUID,
+        _CHECKPOINT_SHA256,
     )
-    assert uri == _CKPT_URI
+    assert uri == f"r2://models/model-flow-simple/best-{_CHECKPOINT_SHA256}.ckpt"
 
 
 def test_build_model_artifact_name_is_model_prefixed_config_id() -> None:
@@ -287,6 +298,8 @@ def test_upload_best_checkpoint_same_run_launches_keep_distinct_objects(
     )
 
     assert first_uri != second_uri
+    first_digest = hashlib.sha256(b"first weights").hexdigest()
+    second_digest = hashlib.sha256(b"second weights").hexdigest()
     first_object = (
         tmp_path
         / "intermediate-data"
@@ -294,9 +307,9 @@ def test_upload_best_checkpoint_same_run_launches_keep_distinct_objects(
         / "flow-simple"
         / "flow-simple-20260908T170724945Z"
         / _LAUNCH_UUID
-        / "model.ckpt"
+        / f"model-{first_digest}.ckpt"
     )
-    second_object = first_object.parents[1] / _SECOND_LAUNCH_UUID / "model.ckpt"
+    second_object = first_object.parents[1] / _SECOND_LAUNCH_UUID / f"model-{second_digest}.ckpt"
     assert first_object.read_bytes() == b"first weights"
     assert second_object.read_bytes() == b"second weights"
 
@@ -329,11 +342,12 @@ def test_upload_best_checkpoint_empty_path_returns_none(monkeypatch: pytest.Monk
 
 
 def test_upload_best_checkpoint_upload_failure_returns_none(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """An rclone upload failure degrades to lineage-only (None) instead of aborting the run.
 
     :param monkeypatch: Stubs R2 env-load as available and makes ``upload_to_uri`` raise.
+    :param tmp_path: Holds the readable checkpoint that reaches the upload boundary.
     """
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
 
@@ -341,10 +355,12 @@ def test_upload_best_checkpoint_upload_failure_returns_none(
         raise RuntimeError("rclone boom")
 
     monkeypatch.setattr(r2_io, "upload_to_uri", _boom)
+    checkpoint = tmp_path / "epoch=3.ckpt"
+    checkpoint.write_bytes(b"weights")
     assert (
         _upload_best_checkpoint(
             _cfg(task_name="flow-simple"),
-            "/x/epoch=3.ckpt",
+            str(checkpoint),
             _TRAINING_RUN_ID,
             _LAUNCH_UUID,
         )
@@ -518,7 +534,10 @@ def test_train_uploaded_checkpoint_is_launch_scoped_and_described_by_artifact(
         metadata = json.loads(payload[start : payload.find(b"}", start) + 1])
 
         ckpt_uri = metadata["ckpt_uri"]
-        assert re.fullmatch(rf"r2://{bucket}/{prefix}[0-9a-f]{{32}}/model\.ckpt", ckpt_uri)
+        assert re.fullmatch(
+            rf"r2://{bucket}/{prefix}[0-9a-f]{{32}}/model-[0-9a-f]{{64}}\.ckpt",
+            ckpt_uri,
+        )
         ckpt_bytes = r2_io.object_size(ckpt_uri)
         assert ckpt_bytes is not None and ckpt_bytes > 0
         assert metadata["ckpt_bytes"] == ckpt_bytes
