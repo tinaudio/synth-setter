@@ -3,9 +3,10 @@
 Loads the frozen ``DatasetSpec`` from ``input_spec.json`` under
 ``cfg.dataset_root_uri`` (the R2 run prefix the upstream generate stage's
 ``upload_spec`` wrote to) and commits its staged winner fragments into each
-``{train,val,test}.lance`` split manifest, reducing the winners' Welford
-sidecars into ``stats.npz`` — no shard row is decoded (#1776). The
-``dataset.complete`` marker is written last per ``pipeline/CLAUDE.md``.
+``{train,val,test}.lance`` split manifest. By default it reduces the winners'
+Welford sidecars into ``stats.npz`` without decoding rows (#1776); an opt-in
+mode estimates statistics from raw training waveforms. The ``dataset.complete``
+marker is written last per ``pipeline/CLAUDE.md``.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from pydantic import BaseModel, ConfigDict, Field
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import DATASET_COMPLETE_FILENAME
@@ -40,6 +42,47 @@ from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
 from synth_setter.workspace import operator_workspace
 
 _failure_logger = structlog.get_logger(__name__)
+
+
+class _EnabledNormalizationEstimation(BaseModel):
+    """Strict settings for the opt-in normalization estimator.
+
+    .. attribute :: model_config
+
+        Strict immutable Pydantic validation.
+
+    .. attribute :: estimate_normalization_stats
+
+        Strict opt-in flag.
+
+    .. attribute :: seed
+
+        Non-negative uniform-sampling seed.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    estimate_normalization_stats: bool
+    seed: int = Field(ge=0)
+
+
+def _normalization_estimation_settings(cfg: DictConfig) -> tuple[bool, int]:
+    """Validate enabled estimator settings while leaving the disabled seed unused.
+
+    :param cfg: Hydra finalize configuration.
+    :returns: Whether estimation is enabled and its validated seed, if used.
+    """
+    enabled = OmegaConf.select(cfg, "estimate_normalization_stats", default=False)
+    if enabled is False:
+        return False, 1234
+    settings = _EnabledNormalizationEstimation.model_validate(
+        {
+            "estimate_normalization_stats": enabled,
+            "seed": OmegaConf.select(cfg, "seed", default=1234),
+        }
+    )
+    return True, settings.seed
+
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
@@ -130,34 +173,48 @@ def finalize_lance(  # noqa: DOC502
     spec: DatasetSpec,
     work_dir: Path,
     progress_callback: FinalizeProgressCallback | None = None,
+    *,
+    estimate_normalization_stats: bool = False,
+    seed: int = 1234,
 ) -> None:
-    """Commit staged winner fragments into split datasets — no shard row is decoded.
+    """Commit staged winners and write the selected normalization statistics.
 
     Delegates to
     :func:`~synth_setter.pipeline.data.lance_finalize.finalize_lance_fragments`:
     winner selection over the staged attempts, structural checks, one atomic
-    ``Overwrite`` commit per split, Welford reduction of the winners'
-    ``.shard-stats.npz`` sidecars into ``stats.npz``, and the ``dataset.json``
+    ``Overwrite`` commit per split, the selected exact or estimated
+    normalization-statistics writer, and the ``dataset.json``
     audit record. Progress events surface one ``shard_processed`` per selected
-    winner and one ``artifact_uploaded`` per committed split, plus the stats
-    and card uploads.
+    winner and one ``artifact_uploaded`` per committed split or new artifact;
+    a reused statistics artifact does not increment upload progress.
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for the staged ``stats.npz`` / ``dataset.json``.
     :param progress_callback: Optional sink for completed shard and upload events.
+    :param estimate_normalization_stats: Recompute statistics from committed train audio.
+    :param seed: Random-sampling seed, ignored unless estimation is enabled.
     :raises ValueError: The train split is empty, a spec shard has no
         staged-valid attempt, or a winner fails a structural check.
     """
     from synth_setter.pipeline.data.lance_finalize import finalize_lance_fragments
 
     _require_nonempty_train(spec)
-    finalize_lance_fragments(spec, work_dir, progress_callback)
+    finalize_lance_fragments(
+        spec,
+        work_dir,
+        progress_callback,
+        estimate_normalization_stats=estimate_normalization_stats,
+        seed=seed,
+    )
 
 
 def finalize_from_spec(
     spec: DatasetSpec,
     work_dir: Path,
     progress_callback: FinalizeProgressCallback | None = None,
+    *,
+    estimate_normalization_stats: bool = False,
+    seed: int = 1234,
 ) -> None:
     """Finalize a dataset given an in-memory spec; idempotent on ``dataset.complete``.
 
@@ -171,6 +228,8 @@ def finalize_from_spec(
     :param work_dir: Writable scratch dir; created if missing; retained
         after the call.
     :param progress_callback: Optional sink for completed shard and upload events.
+    :param estimate_normalization_stats: Recompute statistics from committed train audio.
+    :param seed: Random-sampling seed, ignored unless estimation is enabled.
     :raises ValueError: Output format is unsupported or published language metadata mismatches.
     """
     marker_uri = spec.r2.dataset_complete_marker_uri()
@@ -217,7 +276,13 @@ def finalize_from_spec(
             logger.info("reused validated parameter language artifact at {}", language_uri)
 
     # Persist static language first so gated-model failures cannot replay Lance commits.
-    finalize_lance(spec, work_dir, progress_callback)
+    finalize_lance(
+        spec,
+        work_dir,
+        progress_callback,
+        estimate_normalization_stats=estimate_normalization_stats,
+        seed=seed,
+    )
     marker_local = work_dir / DATASET_COMPLETE_FILENAME
     marker_local.touch()
     r2_io.upload(marker_local, marker_uri)
@@ -359,7 +424,17 @@ def finalize_tracked(cfg: DictConfig, spec: DatasetSpec, work_dir: Path) -> None
         loggers = finalize_loggers(cfg, spec)
         started_at = perf_counter()
         report_progress, log_summary = _make_finalize_progress_logger(loggers, spec.num_shards)
-        finalize_from_spec(spec, work_dir, report_progress)
+        estimate_normalization_stats, configured_seed = _normalization_estimation_settings(cfg)
+        if estimate_normalization_stats:
+            finalize_from_spec(
+                spec,
+                work_dir,
+                report_progress,
+                estimate_normalization_stats=True,
+                seed=configured_seed,
+            )
+        else:
+            finalize_from_spec(spec, work_dir, report_progress)
         log_summary(perf_counter() - started_at)
         _log_dataset_artifact(loggers, spec)
     except BaseException as error:
@@ -384,6 +459,7 @@ def finalize(cfg: DictConfig) -> None:
         retained after the call), and an optional ``logger`` group instantiated
         for W&B progress and artifact logging.
     """
+    _normalization_estimation_settings(cfg)
     r2_io.ensure_r2_env_loaded()
     spec = load_spec_from_root(cfg.dataset_root_uri)
     finalize_tracked(cfg, spec, Path(cfg.paths.output_dir))

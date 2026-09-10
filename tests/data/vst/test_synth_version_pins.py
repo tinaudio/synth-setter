@@ -11,6 +11,7 @@ import json
 import signal
 import subprocess
 import sys
+from importlib.resources import as_file
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from hydra import compose, initialize_config_module
 
 from synth_setter.data.vst.core import extract_renderer_version
 from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME
+from synth_setter.resources import vst_headless_wrapper
 from synth_setter.synth_spec import SYNTHS, SynthName
 from tests._vst import TEST_SYNTH, TEST_SYNTH_VERSION
 
@@ -31,15 +33,20 @@ _PROBE_RESULT_PREFIX = "SYNTH_SETTER_VST_VERSION="
 _PROBE_TIMEOUT_SECONDS = 60
 
 
-def _probe_installed_plugin_version(plugin_path: Path) -> str:
+def _probe_installed_plugin_version(plugin_path: Path, *, headless: bool = False) -> str:
     """Read one VST version in a fresh process.
 
     :param plugin_path: Installed VST3 bundle to inspect.
+    :param headless: Run the child behind the shipped Linux display wrapper.
     :returns: Version reported by the child probe.
     """
     probe_script = Path(__file__).with_name("_version_probe.py")
     command = [sys.executable, str(probe_script), str(plugin_path)]
-    return _run_version_probe(command, plugin_path)
+    if not headless or not sys.platform.startswith("linux"):
+        return _run_version_probe(command, plugin_path)
+
+    with as_file(vst_headless_wrapper()) as wrapper:
+        return _run_version_probe(["bash", str(wrapper), *command], plugin_path)
 
 
 def _run_version_probe(command: list[str], plugin_path: Path) -> str:
@@ -156,6 +163,31 @@ def test_vst_version_probe_uses_fresh_process_returns_child_result(
     assert _probe_installed_plugin_version(plugin) == "9.8.7"
 
 
+def test_vst_version_probe_headless_linux_uses_shipped_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A headless Linux probe starts the child behind the shipped display wrapper.
+
+    :param tmp_path: Temporary plugin path root used in the command.
+    :param monkeypatch: Captures the child command without launching it.
+    """
+    plugin = tmp_path / "Cardinal.vst3"
+    commands: list[list[str]] = []
+
+    def _capture(command: list[str], _plugin_path: Path) -> str:
+        commands.append(command)
+        return "1.0"
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(
+        "tests.data.vst.test_synth_version_pins._run_version_probe",
+        _capture,
+    )
+
+    assert _probe_installed_plugin_version(plugin, headless=True) == "1.0"
+    assert commands[0][:2] == ["bash", str(vst_headless_wrapper())]
+
+
 def test_vst_version_probe_child_error_includes_diagnostics(tmp_path: Path) -> None:
     """A failed probe identifies the plugin and preserves its child traceback.
 
@@ -219,7 +251,11 @@ def test_vst_synth_group_pins_the_installed_plugin_version(group: str) -> None:
     """
     plugin_path, synth_version = _composed_synth(group)
 
-    assert _probe_installed_plugin_version(Path(plugin_path)) == synth_version
+    installed_version = _probe_installed_plugin_version(
+        Path(plugin_path), headless=group == "cardinal"
+    )
+
+    assert installed_version == synth_version
 
 
 @pytest.mark.parametrize("group", _TORCHSYNTH_SYNTHS)
