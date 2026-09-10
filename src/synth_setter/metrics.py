@@ -274,15 +274,17 @@ def number_group_optimal_assignment_mse_groups(
             f"got shape {tuple(per_param_mse.shape)}"
         )
 
-    return {
-        label: per_param_mse[
-            torch.tensor(
-                [index for span in spans for index in span],
-                device=per_param_mse.device,
-            )
+    grouped_mse = {}
+    for label, spans in _number_groups(param_spec):
+        if label in grouped_mse:
+            raise ValueError(f"duplicate number-group metric label {label}")
+        indices = []
+        for span in spans:
+            indices.extend(span)
+        grouped_mse[label] = per_param_mse[
+            torch.tensor(indices, device=per_param_mse.device)
         ].mean()
-        for label, spans in _number_groups(param_spec)
-    }
+    return grouped_mse
 
 
 def number_group_optimal_assignment_per_param_mse(

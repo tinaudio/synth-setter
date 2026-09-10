@@ -96,6 +96,21 @@ def test_number_group_optimal_assignment_mse_groups_preserves_labels_and_widths(
     assert result["voice_2"].item() == 8.0
 
 
+def test_number_group_optimal_assignment_mse_groups_duplicate_label_raises() -> None:
+    """A literal ``N`` field cannot silently overwrite a collapsed numbered family."""
+    spec = ParamSpec(
+        synth_params=[
+            ContinuousParameter("osc_1_gain"),
+            ContinuousParameter("osc_2_gain"),
+            ContinuousParameter("osc_N_gain"),
+        ],
+        note_params=[],
+    )
+
+    with pytest.raises(ValueError, match="duplicate number-group metric label osc_N_gain"):
+        number_group_optimal_assignment_mse_groups(torch.ones(3), spec)
+
+
 def test_number_group_optimal_assignment_per_param_mse_non_2d_input_raises_value_error() -> None:
     """Parameter matching rejects rows without a batch dimension."""
     spec = ParamSpec(synth_params=[ContinuousParameter("osc_1")], note_params=[])
