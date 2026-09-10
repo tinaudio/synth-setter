@@ -180,11 +180,17 @@ class FaustWasmRenderer(AudioRenderer):
         scalar_params = flatten_canonical_patch(ParamSpecName(self._manifest.identity), params)
         self._validate_patch(scalar_params)
         frames = int(self.sample_rate * self.signal_duration_seconds)
-        start_frame, end_frame = _quantize_note_window(
-            note_start_and_end,
-            sample_rate=self.sample_rate,
-            frames=frames,
-            signal_duration_seconds=self.signal_duration_seconds,
+        # Mono artifacts receive no note events, so a spec's placeholder window (e.g. pyFDN's
+        # zero-length stub) must not gate the render; only polyphonic captures quantize it.
+        start_frame, end_frame = (
+            (0, frames)
+            if self._manifest.mode == "mono"
+            else _quantize_note_window(
+                note_start_and_end,
+                sample_rate=self.sample_rate,
+                frames=frames,
+                signal_duration_seconds=self.signal_duration_seconds,
+            )
         )
         request = {
             "expectedFaustWasmVersion": self.backend_version,

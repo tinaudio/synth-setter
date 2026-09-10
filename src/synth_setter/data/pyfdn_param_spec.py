@@ -432,22 +432,32 @@ def _householder_feedback(synth_params: ParameterValues) -> np.ndarray:
     return _PYFDN_N8_HOUSEHOLDER_FEEDBACK.copy()
 
 
-PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = BasicFDNParamSpec(
-    synth_params=[
-        *_fdn_matrix_parameters(delay_min=400, delay_max=1200),
-        ContinuousParameter(
-            name=PYFDN_RT_DC_NAME,
-            min=PYFDN_RT_MIN_SECONDS,
-            max=PYFDN_RT_MAX_SECONDS,
-        ),
-        ContinuousParameter(
-            name=PYFDN_RT_NYQUIST_NAME,
-            min=PYFDN_RT_MIN_SECONDS,
-            max=PYFDN_RT_MAX_SECONDS,
-        ),
-    ],
-    feedback_matrix=_householder_feedback,
-)
+def build_pyfdn_n8_mono_householder_param_spec() -> BasicFDNParamSpec:
+    """Build a fresh fixed-Householder order-8 mono specification.
+
+    Registries that must not alias each other (pyFDN and the Faust FDN) each own an instance.
+
+    :returns: New 27-coordinate spec with the all-ones Householder feedback rule.
+    """
+    return BasicFDNParamSpec(
+        synth_params=[
+            *_fdn_matrix_parameters(delay_min=400, delay_max=1200),
+            ContinuousParameter(
+                name=PYFDN_RT_DC_NAME,
+                min=PYFDN_RT_MIN_SECONDS,
+                max=PYFDN_RT_MAX_SECONDS,
+            ),
+            ContinuousParameter(
+                name=PYFDN_RT_NYQUIST_NAME,
+                min=PYFDN_RT_MIN_SECONDS,
+                max=PYFDN_RT_MAX_SECONDS,
+            ),
+        ],
+        feedback_matrix=_householder_feedback,
+    )
+
+
+PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = build_pyfdn_n8_mono_householder_param_spec()
 
 PYFDN_N8_MONO_KRONECKER_PARAM_SPEC = BasicFDNParamSpec(
     synth_params=[
