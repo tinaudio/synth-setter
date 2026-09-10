@@ -15,6 +15,7 @@ from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousArrayParameter,
     ContinuousParameter,
+    DiscreteArrayParameter,
     Parameter,
     ParameterValue,
     require_scalar_synth_params,
@@ -239,7 +240,8 @@ def flatten_canonical_patch(
     :param params: Renderer-native synth values decoded by the identity's spec.
     :returns: One float per compiled slider, keyed by canonical slider address.
     :raises KeyError: A field is neither a spec parameter nor a fixed derived value.
-    :raises ValueError: A field has the wrong shape or a fixed derived value differs.
+    :raises ValueError: A field has the wrong shape, a discrete field carries a fractional value,
+        or a fixed derived value differs.
     """
     fixed = _FIXED_DERIVED_FIELDS.get(identity, {})
     parameters = {
@@ -264,6 +266,11 @@ def flatten_canonical_patch(
             array = np.asarray(value, dtype=np.float64)
             if array.shape != parameter.shape:
                 raise ValueError(f"{name} must have shape {parameter.shape}, got {array.shape}")
+            # Integer sliders truncate in the DSP, so a fractional value must fail here, not render.
+            if isinstance(parameter, DiscreteArrayParameter) and not np.equal(
+                array, np.rint(array)
+            ).all():
+                raise ValueError(f"{name} must contain only integer values")
             flat.update(zip(parameter.native_names(), array.reshape(-1).tolist(), strict=True))
         else:
             flat.update(require_scalar_synth_params({name: value}))

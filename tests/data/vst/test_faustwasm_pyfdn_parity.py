@@ -134,6 +134,15 @@ def test_flatten_canonical_patch_rejects_a_feedback_matrix_the_source_cannot_ren
         flatten_canonical_patch(_FDN, synth_params)
 
 
+def test_flatten_canonical_patch_rejects_a_fractional_delay() -> None:
+    """A fractional delay would be truncated by the DSP's integer slider, so it fails loudly."""
+    synth_params, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(0))
+    synth_params["delays"] = np.asarray(synth_params["delays"], dtype=np.float64) + 0.7
+
+    with pytest.raises(ValueError, match="delays must contain only integer values"):
+        flatten_canonical_patch(_FDN, synth_params)
+
+
 def test_flatten_canonical_patch_rejects_unknown_fields() -> None:
     """Fields outside the spec and its fixed derived values never reach the compiler."""
     synth_params, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(0))
