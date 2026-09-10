@@ -38,7 +38,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning import Trainer, seed_everything
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, OmegaConf, open_dict
 from omegaconf.errors import InterpolationResolutionError, MissingMandatoryValue
 from pedalboard.io import AudioFile
 from pydantic import ValidationError
@@ -54,11 +54,13 @@ from synth_setter.models.components.pretrained_encoder import (
     ClapAudioEncoder,
     PretrainedConditioningEncoder,
 )
+from synth_setter.models.components.rendered_reward import SynthRenderedReward
 from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.transformer import ASTWithProjectionHead
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
+from synth_setter.models.vst_flow_ram_module import VSTFlowRAMModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import write_spec_to_path
@@ -73,6 +75,7 @@ from tests.conftest import (
     augment_lance_splits_with_same,
     augment_lance_splits_with_ssondo,
     build_surge_xt_embedding_train_cfg,
+    compose_one_step_surge_flow,
     flatten_lance_embedding_column,
 )
 from tests.helpers.eval_fakes import (
@@ -484,26 +487,31 @@ def test_evaluate_grouped_projection_checkpoint_writes_finite_predictions(
 def _compose_sketch_cfg_eval(
     cfg_train_sketch_lance: DictConfig,
     experiment: str = "surge/flow_sketch_prelim",
+    sketch_profile: str | None = None,
 ) -> DictConfig:
     """Compose the toy pooled-sketch evaluation configuration.
 
     :param cfg_train_sketch_lance: Fixture providing paths and pooled Lance splits.
     :param experiment: Experiment config group exercised by evaluation.
+    :param sketch_profile: Optional sketch config overriding the experiment default.
     :returns: Evaluation config with sketch guidance disabled initially.
     """
     GlobalHydra.instance().clear()
+    overrides = [
+        f"experiment={experiment}",
+        "datamodule=surge_lance",
+        "synth=surge_4",
+        "conditioning=m2l",
+        "trainer=cpu",
+        "callbacks=none",
+    ]
+    if sketch_profile is not None:
+        overrides.append(f"sketch={sketch_profile}")
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
-            overrides=[
-                f"experiment={experiment}",
-                "datamodule=surge_lance",
-                "synth=surge_4",
-                "conditioning=m2l",
-                "trainer=cpu",
-                "callbacks=none",
-            ],
+            overrides=overrides,
         )
     with open_dict(cfg):
         cfg.paths.root_dir = cfg_train_sketch_lance.paths.root_dir
@@ -530,6 +538,48 @@ def _compose_sketch_cfg_eval(
         cfg.trainer.fast_dev_run = True
         cfg.trainer.precision = "32-true"
     return cfg
+
+
+@pytest.mark.parametrize(
+    ("profile", "backend"),
+    [("tiv_online_gpu", "torch"), ("tiv_online_cpu", "essentia")],
+)
+def test_evaluate_tiv_online_checkpoint_extracts_audio_controls(
+    cfg_train_sketch_lance: DictConfig,
+    profile: str,
+    backend: str,
+) -> None:
+    """Train and evaluate both online TIV configs through real Lance audio.
+
+    :param cfg_train_sketch_lance: Tiny real Lance flow-training configuration.
+    :param profile: User-selectable online TIV sketch configuration.
+    :param backend: Audio frontend selected by the sketch configuration.
+    """
+    if backend == "essentia":
+        pytest.importorskip("essentia")
+    sketch_config = OmegaConf.load(
+        Path(__file__).parents[1] / "src/synth_setter/configs/sketch" / f"{profile}.yaml"
+    )
+    cfg_train_sketch_lance.model.sketch_controls = sketch_config.model.sketch_controls
+    HydraConfig().set_config(cfg_train_sketch_lance)
+    _, train_objects = train(cfg_train_sketch_lance)
+    checkpoint_path = Path(cfg_train_sketch_lance.paths.output_dir) / f"{profile}.ckpt"
+    train_objects["trainer"].save_checkpoint(checkpoint_path)
+
+    cfg = _compose_sketch_cfg_eval(cfg_train_sketch_lance, sketch_profile=profile)
+    cfg.ckpt_path = str(checkpoint_path)
+    HydraConfig().set_config(cfg)
+    try:
+        metrics, objects = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(metrics["test/param_mse"])
+    assert cfg.model.sketch_controls.tiv_backend == backend
+    assert objects["datamodule"].sketch_controls.tiv_backend == backend
+    assert "audio" in objects["datamodule"].projection["test"]
+    assert "sketch" not in objects["datamodule"].projection["test"]
+    assert torch.count_nonzero(objects["model"].sketch_tokens.projections["tiv"].weight) > 0
 
 
 def _save_nonzero_sketch_checkpoint(cfg: DictConfig, checkpoint_path: Path) -> None:
@@ -1137,6 +1187,97 @@ def test_eval_torchsynth_flow_logs_grouped_per_param_metrics_by_default(
         GlobalHydra.instance().clear()
 
     assert torch.isfinite(metric_dict["val/per_param_mse_number_group_swap/adsr_1.attack"]).all()
+
+
+@pytest.mark.slow
+def test_eval_torchsynth_flow_ram_validates_a_post_trained_checkpoint(
+    cfg_torchsynth_flow_train: DictConfig,
+    cfg_torchsynth_flow_ram_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Pretrain, post-train with RAM, then validate the post-trained checkpoint through eval.
+
+    :param cfg_torchsynth_flow_train: Composed tiny production flow config.
+    :param cfg_torchsynth_flow_ram_train: Composed tiny production RAM post-training config.
+    :param tmp_path: Output root for all three runs.
+    """
+    with open_dict(cfg_torchsynth_flow_train):
+        cfg_torchsynth_flow_train.paths.output_dir = str(tmp_path / "base")
+        cfg_torchsynth_flow_train.paths.log_dir = str(tmp_path / "base")
+    HydraConfig().set_config(cfg_torchsynth_flow_train)
+    train(cfg_torchsynth_flow_train)
+
+    with open_dict(cfg_torchsynth_flow_ram_train):
+        cfg_torchsynth_flow_ram_train.paths.output_dir = str(tmp_path / "ram")
+        cfg_torchsynth_flow_ram_train.paths.log_dir = str(tmp_path / "ram")
+        cfg_torchsynth_flow_ram_train.model.base_checkpoint = str(
+            tmp_path / "base" / "checkpoints" / "last.ckpt"
+        )
+    HydraConfig().set_config(cfg_torchsynth_flow_ram_train)
+    train(cfg_torchsynth_flow_ram_train)
+
+    with open_dict(cfg_torchsynth_flow_ram_train):
+        cfg_torchsynth_flow_ram_train.mode = "validate"
+        cfg_torchsynth_flow_ram_train.ckpt_path = str(
+            tmp_path / "ram" / "checkpoints" / "last.ckpt"
+        )
+        # The saved run holds every weight, so eval needs no base file.
+        cfg_torchsynth_flow_ram_train.model.base_checkpoint = None
+        cfg_torchsynth_flow_ram_train.logger = None
+    HydraConfig().set_config(cfg_torchsynth_flow_ram_train)
+    try:
+        metric_dict, object_dict = evaluate(cfg_torchsynth_flow_ram_train)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert isinstance(object_dict["model"], VSTFlowRAMModule)
+    assert torch.isfinite(metric_dict["val/param_mse"])
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
+@pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
+def test_eval_surge_flow_ram_validates_a_post_trained_checkpoint(
+    fake_surge_smoke_datasets: Path, tmp_path: Path
+) -> None:
+    """Pretrain, post-train with surgepy-scored RAM, then validate the checkpoint through eval.
+
+    :param fake_surge_smoke_datasets: Tiny loadable Lance train/validation/test splits.
+    :param tmp_path: Output root for all three runs.
+    """
+    base_cfg = compose_one_step_surge_flow(
+        "flow_simple", fake_surge_smoke_datasets, tmp_path / "base"
+    )
+    HydraConfig().set_config(base_cfg)
+    train(base_cfg)
+
+    ram_cfg = compose_one_step_surge_flow(
+        "flow_ram_simple",
+        fake_surge_smoke_datasets,
+        tmp_path / "ram",
+        f"model.base_checkpoint={tmp_path / 'base' / 'checkpoints' / 'last.ckpt'}",
+        "model.num_samples_per_row=2",
+        "model.num_targets_per_sample=2",
+        "model.sampling_steps=1",
+    )
+    HydraConfig().set_config(ram_cfg)
+    train(ram_cfg)
+
+    with open_dict(ram_cfg):
+        ram_cfg.mode = "validate"
+        ram_cfg.ckpt_path = str(tmp_path / "ram" / "checkpoints" / "last.ckpt")
+        # The saved run holds every weight, so eval needs no base file.
+        ram_cfg.model.base_checkpoint = None
+        ram_cfg.logger = None
+    HydraConfig().set_config(ram_cfg)
+    try:
+        metric_dict, object_dict = evaluate(ram_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert isinstance(object_dict["model"], VSTFlowRAMModule)
+    assert isinstance(object_dict["model"].reward, SynthRenderedReward)
+    assert torch.isfinite(metric_dict["val/param_mse"])
 
 
 @pytest.mark.slow

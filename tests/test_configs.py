@@ -21,6 +21,10 @@ from synth_setter.clap import (
 from synth_setter.conditioning import NUM_SKETCH_CONTROLS, resolve_sketch_controls
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
+from synth_setter.models.components.rendered_reward import (
+    RenderedAudioReward,
+    SynthRenderedReward,
+)
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.data.meanaudio import MEANAUDIO_EMBEDDING_DIM
@@ -431,6 +435,36 @@ def test_sequence_conditioning_profile_fake_batch_routes_through_encoder(
         cfg.model.vector_field.d_model,
     )
     assert cfg.model.conditioning.column == profile
+
+
+@pytest.mark.parametrize(
+    ("profile", "backend"), [("tiv_online_gpu", "torch"), ("tiv_online_cpu", "essentia")]
+)
+def test_tiv_online_profile_wires_audio_extraction_to_data_and_model(
+    profile: str, backend: str
+) -> None:
+    """Both online profiles opt data and model into the same TIV backend.
+
+    :param profile: User-selectable sketch configuration.
+    :param backend: Expected chroma extraction implementation.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_4",
+            "model=vst_flow",
+            f"sketch={profile}",
+            "trainer=cpu",
+            "+trainer.max_steps=1",
+        ],
+    )
+
+    assert cfg.model.sketch_controls.profile == "tiv"
+    assert cfg.model.sketch_controls.source == "online"
+    assert cfg.model.sketch_controls.sample_rate == 44_100
+    assert cfg.model.sketch_controls.tiv_backend == backend
+    assert cfg.datamodule.sketch == cfg.model.sketch_controls
 
 
 def test_sketch_on_profile_composes_with_m2l_and_trains_one_step() -> None:
@@ -1732,6 +1766,124 @@ def test_torchsynth_finetune_arm_instantiates_from_its_experiment(
 def test_torchsynth_finetune_without_base_checkpoint_raises() -> None:
     """The finetune arms refuse to run against an unnamed pretrained flow."""
     cfg = _compose("train.yaml", ["experiment=torchsynth/flow_finetune", "trainer=cpu"])
+
+    with pytest.raises(MissingMandatoryValue):
+        _ = cfg.model.base_checkpoint
+
+
+def test_torchsynth_flow_ram_composes_the_post_training_module() -> None:
+    """The RAM experiment swaps in the post-training module with its render reward."""
+    cfg = _compose(
+        "train.yaml",
+        ["experiment=torchsynth/flow_ram", "trainer=cpu", "model.base_checkpoint=base.ckpt"],
+    )
+
+    assert cfg.model._target_ == "synth_setter.models.vst_flow_ram_module.VSTFlowRAMModule"
+    assert cfg.model.reward.signal_length == cfg.datamodule.signal_length
+    # The reward renders through torchsynth, which graph-breaks under compile (#2585).
+    assert cfg.model.compile is False
+    # Paper appendix D: no learning-rate schedule during post-training.
+    assert cfg.model.scheduler is None
+
+
+def test_torchsynth_flow_ram_instantiates_from_a_flow_checkpoint(tmp_path: Path) -> None:
+    """The experiment builds a post-training module around a checkpoint of the flow it extends.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    small = [
+        "trainer=cpu",
+        "++trainer.max_steps=10",
+        "datamodule.sample_rate=16000",
+        "datamodule.signal_length=16384",
+        "model.vector_field.num_layers=1",
+        "model.vector_field.d_model=32",
+        "model.vector_field.d_ff=32",
+        "model.vector_field.projection.num_tokens=4",
+        "model.encoder.backbone.out_dim=32",
+        "model.encoder.backbone.hidden_dim=4",
+    ]
+    pretrained = hydra.utils.instantiate(
+        _compose("train.yaml", ["experiment=torchsynth/flow", *small]).model
+    )
+    checkpoint = tmp_path / "base.ckpt"
+    torch.save({"state_dict": pretrained.state_dict()}, checkpoint)
+
+    module = hydra.utils.instantiate(
+        _compose(
+            "train.yaml",
+            ["experiment=torchsynth/flow_ram", *small, f"model.base_checkpoint={checkpoint}"],
+        ).model
+    )
+
+    assert isinstance(module.reward, RenderedAudioReward)
+    # Only the policy trains; the anchors it regresses toward stay frozen.
+    assert any(p.requires_grad for p in module.vector_field.parameters())
+    assert not any(p.requires_grad for p in module.reference_field.parameters())
+    assert not any(p.requires_grad for p in module.encoder.parameters())
+
+
+_TINY_SURGE_FLOW = [
+    "trainer=cpu",
+    "++trainer.max_steps=10",
+    "datamodule.download_dataset_root_uri=null",
+    "model.encoder.n_layers=1",
+    "model.encoder.d_model=32",
+    "model.encoder.n_heads=1",
+    "model.vector_field.num_layers=1",
+    "model.vector_field.d_model=32",
+    "model.vector_field.d_ff=32",
+    "model.vector_field.projection.num_tokens=4",
+]
+
+
+def test_surge_flow_ram_composes_the_surgepy_render_reward() -> None:
+    """The Surge RAM experiment re-renders through surgepy with the surge_simple identity."""
+    cfg = _compose(
+        "train.yaml",
+        ["experiment=surge/flow_ram_simple", "trainer=cpu", "model.base_checkpoint=base.ckpt"],
+    )
+
+    assert cfg.model._target_ == "synth_setter.models.vst_flow_ram_module.VSTFlowRAMModule"
+    assert cfg.render.renderer_backend == "surgepy"
+    assert cfg.synth.name == "surge_simple_surgepy"
+    assert cfg.model.reward.render.renderer_backend == "surgepy"
+    assert cfg.model.reward.distance.sample_rate == cfg.render.sample_rate
+    assert cfg.model.compile is False
+
+
+@pytest.mark.requires_surgepy
+def test_surge_flow_ram_instantiates_from_a_flow_simple_checkpoint(tmp_path: Path) -> None:
+    """The experiment builds a post-training module around a surge_simple flow checkpoint.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    pretrained = hydra.utils.instantiate(
+        _compose("train.yaml", ["experiment=surge/flow_simple", *_TINY_SURGE_FLOW]).model
+    )
+    checkpoint = tmp_path / "base.ckpt"
+    torch.save({"state_dict": pretrained.state_dict()}, checkpoint)
+
+    module = hydra.utils.instantiate(
+        _compose(
+            "train.yaml",
+            [
+                "experiment=surge/flow_ram_simple",
+                *_TINY_SURGE_FLOW,
+                f"model.base_checkpoint={checkpoint}",
+            ],
+        ).model
+    )
+
+    assert isinstance(module.reward, SynthRenderedReward)
+    assert module.reward.target_key == "params"
+    assert module.reward.render_config.renderer_backend == "surgepy"
+    assert not any(p.requires_grad for p in module.reference_field.parameters())
+
+
+def test_torchsynth_flow_ram_without_base_checkpoint_raises() -> None:
+    """Post-training refuses to run against an unnamed pretrained flow."""
+    cfg = _compose("train.yaml", ["experiment=torchsynth/flow_ram", "trainer=cpu"])
 
     with pytest.raises(MissingMandatoryValue):
         _ = cfg.model.base_checkpoint
