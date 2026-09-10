@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789000464149,
+  "lastUpdate": 1789000467923,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -26776,6 +26776,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.941056845300045,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f6916a8582cfcdbda1ecc3c6baeb0cbb8ada6426",
+          "message": "internal-feat(training): add per-parameter mixed endpoint CE loss (#3295)\n\n* internal-feat(training): add KR-106 onehot voices identity\n\nPreserve the legacy 246-column artifact while adding an opt-in selector.\n\nRefs #3270\n\n* internal-feat(training): add mixed endpoint loss\n\nTrain one-hot endpoint spans with cross entropy while retaining per-parameter\nregression for numerical spans.\n\nConvert logits to deterministic model-space endpoints for diagnostics, CFG,\nsampling, and audio feedback. Guard checkpoint output semantics.\n\nRefs #3270\n\n* internal-fix(models): guide endpoint logits before conversion\n\n* test(models): cover mixed endpoint multi-guidance\n\n* internal-fix(ci): restore merged medium test contracts",
+          "timestamp": "2026-09-09T18:56:40-04:00",
+          "tree_id": "a5c2491d56992faaeb92e132aad1e7eeda2e5b9f",
+          "url": "https://github.com/tinaudio/synth-setter/commit/f6916a8582cfcdbda1ecc3c6baeb0cbb8ada6426"
+        },
+        "date": 1789000467462,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.910465240478516,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.858932069987059,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09162300080060959,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.004840970039367676,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2821342945098877,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.949036122600045,
             "unit": "seconds"
           }
         ]
