@@ -84,9 +84,19 @@ BLOCK = must fix before merge · WARN = should fix · NIT = optional preference
 that never gates. Emit NIT rather than WARN whenever a reviewer could decline
 the change without harming the codebase.
 
-Categories: `comment-hygiene`, `yaml-bash`, `python`, `shell`, `pipeline`, `security`, `commit-style`, `pr-link`, `stale-ref`, `secret-doc`.
+Categories: `comment-hygiene`, `yaml-bash`, `python`, `shell`, `pipeline`, `security`, `commit-style`, `pr-link`, `pr-scope`, `stale-ref`, `secret-doc`.
 
 ### The core checklist (sourced from AGENTS.md)
+
+**PR scope (AGENTS.md "Keep auxiliary work in separate PRs")**
+
+- WARN [pr-scope] Flag independently useful non-core refactors, cleanup, or
+  pre-existing bug fixes bundled into the main PR, even if they enable its core
+  change. Identify the added hunk and explain why it is separable; recommend an
+  auxiliary prerequisite PR with the main PR stacked above it, or an independent
+  PR when there is no dependency. Review against the declared base so already
+  separated prerequisite commits are not flagged. Do not flag fixes for
+  regressions introduced by this PR or tests/docs directly supporting its change.
 
 **Comment hygiene (AGENTS.md "Comment Hygiene" + "No Comments Inside YAML run: Block-Scalars")**
 

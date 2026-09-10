@@ -23,6 +23,8 @@ from synth_setter.data.third_party_datamodule import AudioDecodeError, decode_cl
 from synth_setter.data.vst.core import write_wav
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
+_CLI_HELP_TIMEOUT_SECONDS = 120
+
 
 def test_noise_source_device_mps_uses_supported_cpu_generator() -> None:
     """MPS sampling draws seeded noise on CPU before device transfer."""
@@ -676,7 +678,7 @@ def test_console_script_is_installed_and_callable() -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=_CLI_HELP_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr

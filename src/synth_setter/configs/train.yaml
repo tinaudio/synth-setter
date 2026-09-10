@@ -62,7 +62,10 @@ test: True
 # simply provide checkpoint path to resume training
 ckpt_path: null
 
-# seed for random number generators in pytorch, numpy and python.random
+# Estimate online log-mel normalization from at most 10,000 training waveforms.
+estimate_normalization_stats: false
+
+# Seed for all training randomness. Calibration alone defaults to 1234 when null.
 seed: null
 
 training:

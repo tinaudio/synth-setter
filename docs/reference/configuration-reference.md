@@ -106,6 +106,11 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
   (e.g. `synth=surge_xt`, usually via the experiment's defaults) that VST
   datamodules, models, callbacks, and the render pipeline all resolve —
   identity's single home (#2565)
+- `synth=ultramaster_kr106_onehot` opts into the 250-column KR-106 schema, where
+  only the five-value `voices` control changes from scalar to onehot encoding.
+  The existing `synth=ultramaster_kr106` identity remains the 246-column default.
+  Datasets and checkpoints are width-specific: regenerate them only under the
+  new identity rather than relabeling existing KR-106 artifacts.
 
 Reference: `training-pipeline.md` §4–5
 

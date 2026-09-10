@@ -271,6 +271,15 @@ def reset_hydra_config_singleton() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _isolate_wandb_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent tests from reusing a prior test's W&B service token.
+
+    :param monkeypatch: Removes the process-local service address for each test.
+    """
+    monkeypatch.delenv("WANDB_SERVICE", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _clear_hydra_config_singleton() -> Iterator[None]:
     """Reset the ``HydraConfig`` singleton after every test.
 

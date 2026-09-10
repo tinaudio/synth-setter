@@ -6,7 +6,6 @@ import errno
 import json
 import multiprocessing
 import os
-import sys
 import threading
 import traceback
 from collections.abc import Iterator
@@ -239,20 +238,7 @@ def test_renderer_construction_before_rotation_consumes_validated_old_bytes(
     assert managed_plugin_digest(bundle) != expected_digest
 
 
-@pytest.mark.parametrize(
-    "consumer",
-    [
-        "load",
-        pytest.param(
-            "version",
-            marks=pytest.mark.xfail(
-                sys.platform == "darwin",
-                reason="macOS spawn can outlive the consumer lease timeout; see #3298",
-                strict=False,
-            ),
-        ),
-    ],
-)
+@pytest.mark.parametrize("consumer", ["load", "version"])
 def test_validated_bundle_lease_blocks_same_path_reinstall_until_consumer_opens_a(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -306,7 +292,7 @@ def test_validated_bundle_lease_blocks_same_path_reinstall_until_consumer_opens_
     def _pause_after_validation(path: Path, **_kwargs: object) -> Iterator[Path]:
         with real_lease(path) as resolved:
             validated.set()
-            if not release_consumer.wait(10):
+            if not release_consumer.wait(_SPAWN_STARTUP_SECONDS):
                 raise RuntimeError("timed out waiting to release consumer")
             yield resolved
 
