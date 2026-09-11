@@ -134,10 +134,59 @@ def test_eval_checkpoint_digest_without_checkpoint_raises() -> None:
         eval_module._localize_eval_checkpoint(None, "0" * 64)
 
 
-def test_eval_checkpoint_remote_uri_without_digest_raises() -> None:
-    """Remote checkpoints require immutable content provenance."""
-    with pytest.raises(ValueError, match="requires ckpt_sha256"):
-        eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt")
+def test_eval_checkpoint_remote_uri_without_digest_downloads_checkpoint(
+    fake_r2_remote: Path,
+    storage_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unpinned remote checkpoint downloads successfully.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone remote.
+    :param storage_credentials: Dummy application credentials for the local backend.
+    :param monkeypatch: Routes the shared cache into the temporary directory.
+    """
+    source = fake_r2_remote / "bucket" / "runs" / "model.ckpt"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"unpinned checkpoint")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
+
+    localized = eval_module._localize_eval_checkpoint("r2://bucket/runs/model.ckpt")
+
+    assert localized is not None
+    assert Path(localized).read_bytes() == b"unpinned checkpoint"
+
+
+def test_eval_checkpoint_unpinned_remote_uri_refreshes_mutable_bytes(
+    fake_r2_remote: Path,
+    storage_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated unpinned reads do not reuse stale bytes from a mutable URI.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone remote.
+    :param storage_credentials: Dummy application credentials for the local backend.
+    :param monkeypatch: Routes the shared cache into the temporary directory.
+    """
+    source = fake_r2_remote / "bucket" / "runs" / "last.ckpt"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"first revision")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
+
+    first = eval_module._localize_eval_checkpoint("r2://bucket/runs/last.ckpt")
+    source.write_bytes(b"later revision")
+    second = eval_module._localize_eval_checkpoint("r2://bucket/runs/last.ckpt")
+
+    assert first is not None
+    assert second is not None
+    assert first != second
+    assert Path(first).read_bytes() == b"first revision"
+    assert Path(second).read_bytes() == b"later revision"
+
+
+def test_eval_checkpoint_unpinned_remote_uri_distributed_raises() -> None:
+    """Distributed evaluation requires every rank to use digest-pinned bytes."""
+    with pytest.raises(ValueError, match="single-process evaluation"):
+        eval_module._localize_eval_checkpoint("r2://bucket/runs/last.ckpt", world_size=2)
 
 
 def test_eval_checkpoint_non_string_path_raises() -> None:
@@ -185,6 +234,30 @@ def test_eval_checkpoint_incomplete_download_raises(
 
     with pytest.raises(RuntimeError, match="downloaded eval checkpoint is incomplete"):
         eval_module._localize_eval_checkpoint("r2://bucket/model.ckpt", "0" * 64)
+
+
+def test_eval_checkpoint_changed_during_download_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mutable remote checkpoint is retried when its size changes mid-transfer.
+
+    :param tmp_path: Isolated checkpoint cache.
+    :param monkeypatch: Simulates one concurrent remote rewrite.
+    """
+    sizes = iter((20, 5))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(eval_module.r2_io, "ensure_r2_env_loaded", lambda: None)
+    monkeypatch.setattr(eval_module.r2_io, "object_size", lambda _uri: next(sizes))
+    monkeypatch.setattr(
+        eval_module.r2_io,
+        "download_to_path",
+        lambda _uri, path: path.write_bytes(b"final"),
+    )
+
+    localized = eval_module._localize_eval_checkpoint("r2://bucket/model.ckpt")
+
+    assert localized is not None
+    assert Path(localized).read_bytes() == b"final"
 
 
 def test_eval_checkpoint_transport_failure_raises(
