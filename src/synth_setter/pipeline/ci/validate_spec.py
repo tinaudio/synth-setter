@@ -40,6 +40,7 @@ _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS = frozenset(
         "post_render_flush_blocks",
         "pyfdn_excitation",
         "retain_local_shards",
+        "v1_gui_toggle_cadence_omitted",
     }
 )
 # ``synth`` is checked shape-aware below so its required version is validated too.

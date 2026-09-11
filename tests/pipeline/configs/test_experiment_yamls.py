@@ -34,6 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/10-1k-shards": "10-1k-shards",
     "generate_dataset/ci-materialize-test": "ci-materialize-test",
+    "generate_dataset/faust-shimmer-fdn-lance-50k": "faust-shimmer-fdn-lance-50k",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
     "generate_dataset/smoke-shard": "smoke-shard",
     "generate_dataset/smoke-shard-lance": "smoke-shard-lance",
@@ -109,6 +110,17 @@ def test_dataset_experiments_use_independent_split_seed_streams() -> None:
     spec = _compose_dataset_spec("generate_dataset/smoke-shard-lance")
 
     assert spec.train_val_test_seeds == (42, 43, 44)
+
+
+def test_faust_shimmer_fdn_experiment_composes_fifty_thousand_impulse_responses() -> None:
+    """The impulse experiment schedules exactly five train-only Lance shards."""
+    spec = _compose_dataset_spec("generate_dataset/faust-shimmer-fdn-lance-50k")
+
+    assert spec.render.synth.name == "faust_shimmer_fdn"
+    assert spec.render.renderer_backend == "dawdreamer"
+    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.train_val_test_sizes == (50_000, 0, 0)
+    assert spec.split_shard_ranges == {"train": (0, 5), "val": (5, 5), "test": (5, 5)}
 
 
 def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() -> None:

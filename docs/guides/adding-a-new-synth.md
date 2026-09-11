@@ -35,7 +35,9 @@ several existing `surge*` keys use shorter legacy names (e.g. `surge_xt` →
 This workflow is specifically for VST3 plugins. Checked-in Faust programs use a
 `registry://faust/<registered-source-name>` plugin path, no state path, and the
 `dawdreamer` backend (`render=faust`); the URI derives `format: faust`. Parameter names preserve the exact
-addresses reported by Faust compilation.
+addresses reported by Faust compilation. The
+[shimmer FDN experiment](faust-shimmer-fdn.md) uses fixed impulse excitation rather
+than MIDI-conditioned synthesis.
 
 The one genuinely hard part is the `ParamSpec`: pedalboard can enumerate a
 plugin's parameters, but raw names and 0–1 ranges carry **no semantics** — which

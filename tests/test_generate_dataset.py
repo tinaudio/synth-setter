@@ -432,17 +432,47 @@ def test_cfg_dataset_default_plugin_reload_cadence_is_once(
 ) -> None:
     """A cadence-silent experiment resolves ``plugin_reload_cadence="once"`` end to end.
 
-    Pins #1999 through the ``spec_from_cfg`` entrypoint path: the composed
-    ``surge_simple`` render group (inheriting ``render/vst.yaml``'s surfaced value)
-    resolves ``"once"`` when neither experiment nor CLI overrides it. The
-    schema-level Field default is pinned separately in
-    ``tests/pipeline/schemas/test_dataset_spec.py::test_cadence_defaults_off_darwin``.
-
     :param cfg_dataset_default_cadence: Function-scoped fixture composing
         ``dataset.yaml`` with an experiment that sets no cadence keys.
     """
     spec = spec_from_cfg(cfg_dataset_default_cadence)
     assert spec.render.plugin_reload_cadence == "once"
+
+
+def test_from_hydra_historical_digest_survives_darwin_worker_serialization(
+    cfg_dataset_default_cadence: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A cadence-silent V1 spec retains its historical identity on Darwin.
+
+    :param cfg_dataset_default_cadence: Function-scoped fixture composing
+        ``dataset.yaml`` with an experiment that sets no cadence keys.
+    :param monkeypatch: Pytest fixture used to select platform defaults and capture transport.
+    :param tmp_path: Temporary directory receiving the serialized worker spec.
+    """
+    with open_dict(cfg_dataset_default_cadence):
+        del cfg_dataset_default_cadence.render.gui_toggle_cadence
+        cfg_dataset_default_cadence.render.render_contract_version = 1
+        cfg_dataset_default_cadence.logger = None
+
+    serialized_spec = tmp_path / "input_spec.json"
+
+    def _write_worker_spec(spec: DatasetSpec, _output_dir: Path, _loggers: object) -> None:
+        serialized_spec.write_text(spec.model_dump_json())
+
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin")
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.generate", _write_worker_spec)
+    from_hydra(cfg_dataset_default_cadence)
+
+    monkeypatch.setattr("synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux")
+    restored = DatasetSpec.model_validate_json(serialized_spec.read_text())
+    historical = spec_from_cfg(cfg_dataset_default_cadence)
+
+    assert restored.render.gui_toggle_cadence == "never"
+    assert restored.render.shard_metadata().render_contract_digest == (
+        historical.render.shard_metadata().render_contract_digest
+    )
 
 
 @pytest.mark.fake_vst

@@ -184,6 +184,7 @@ class TestValidateStructure:
             "post_render_flush_blocks",
             "pyfdn_excitation",
             "retain_local_shards",
+            "v1_gui_toggle_cadence_omitted",
             # Checked shape-aware so the nested identity can be validated.
             "synth",
         }
