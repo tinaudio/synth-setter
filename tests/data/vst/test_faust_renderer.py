@@ -63,6 +63,15 @@ def _render_config(
     )
 
 
+_AUDIBLE_OVERRIDES: dict[str, dict[str, float]] = {
+    # Kronecker input/output midpoints are silent zeros; voice the network instead.
+    "faust_kronecker_fdn": {
+        **{f"/kroneckerFDN/Input/b{i}": 0.5 for i in range(8)},
+        **{f"/kroneckerFDN/Output/c{i}": 0.125 for i in range(8)},
+    },
+}
+
+
 def _midpoint_params(param_spec_name: str) -> dict[str, float]:
     """Return an audible native-domain patch for one Faust identity.
 
@@ -80,6 +89,7 @@ def _midpoint_params(param_spec_name: str) -> dict[str, float]:
             params[parameter.name] = float(parameter.raw_values[-1])
         else:
             raise TypeError(type(parameter).__name__)
+    params.update(_AUDIBLE_OVERRIDES.get(param_spec_name, {}))
     return params
 
 
@@ -91,6 +101,7 @@ def _midpoint_params(param_spec_name: str) -> dict[str, float]:
         ("faust_bubble", 2),
         ("faust_church_organ", 2),
         ("faust_filter_osc", 1),
+        ("faust_kronecker_fdn", 1),
     ],
 )
 def test_factory_renders_real_checked_in_faust_source(

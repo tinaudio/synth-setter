@@ -77,6 +77,40 @@ _EXPECTED_PARAMETER_ADDRESSES = {
         ("/SINE_WAVE_OSCILLATOR_oscrs/Frequency", "/SINE_WAVE_OSCILLATOR_oscrs/Frequency"),
         ("/SINE_WAVE_OSCILLATOR_oscrs/Portamento", "/SINE_WAVE_OSCILLATOR_oscrs/Portamento"),
     ),
+    "faust_kronecker_fdn": (
+        ("/kroneckerFDN/Decay/t60", "/kroneckerFDN/Decay_t60"),
+        ("/kroneckerFDN/Delays/d0", "/kroneckerFDN/Delays_d0"),
+        ("/kroneckerFDN/Delays/d1", "/kroneckerFDN/Delays_d1"),
+        ("/kroneckerFDN/Delays/d2", "/kroneckerFDN/Delays_d2"),
+        ("/kroneckerFDN/Delays/d3", "/kroneckerFDN/Delays_d3"),
+        ("/kroneckerFDN/Delays/d4", "/kroneckerFDN/Delays_d4"),
+        ("/kroneckerFDN/Delays/d5", "/kroneckerFDN/Delays_d5"),
+        ("/kroneckerFDN/Delays/d6", "/kroneckerFDN/Delays_d6"),
+        ("/kroneckerFDN/Delays/d7", "/kroneckerFDN/Delays_d7"),
+        ("/kroneckerFDN/Input/b0", "/kroneckerFDN/Input_b0"),
+        ("/kroneckerFDN/Input/b1", "/kroneckerFDN/Input_b1"),
+        ("/kroneckerFDN/Input/b2", "/kroneckerFDN/Input_b2"),
+        ("/kroneckerFDN/Input/b3", "/kroneckerFDN/Input_b3"),
+        ("/kroneckerFDN/Input/b4", "/kroneckerFDN/Input_b4"),
+        ("/kroneckerFDN/Input/b5", "/kroneckerFDN/Input_b5"),
+        ("/kroneckerFDN/Input/b6", "/kroneckerFDN/Input_b6"),
+        ("/kroneckerFDN/Input/b7", "/kroneckerFDN/Input_b7"),
+        ("/kroneckerFDN/Kernel/a0", "/kroneckerFDN/Kernel_a0"),
+        ("/kroneckerFDN/Kernel/a1", "/kroneckerFDN/Kernel_a1"),
+        ("/kroneckerFDN/Kernel/a2", "/kroneckerFDN/Kernel_a2"),
+        ("/kroneckerFDN/Kernel/r0", "/kroneckerFDN/Kernel_r0"),
+        ("/kroneckerFDN/Kernel/r1", "/kroneckerFDN/Kernel_r1"),
+        ("/kroneckerFDN/Kernel/r2", "/kroneckerFDN/Kernel_r2"),
+        ("/kroneckerFDN/Output/c0", "/kroneckerFDN/Output_c0"),
+        ("/kroneckerFDN/Output/c1", "/kroneckerFDN/Output_c1"),
+        ("/kroneckerFDN/Output/c2", "/kroneckerFDN/Output_c2"),
+        ("/kroneckerFDN/Output/c3", "/kroneckerFDN/Output_c3"),
+        ("/kroneckerFDN/Output/c4", "/kroneckerFDN/Output_c4"),
+        ("/kroneckerFDN/Output/c5", "/kroneckerFDN/Output_c5"),
+        ("/kroneckerFDN/Output/c6", "/kroneckerFDN/Output_c6"),
+        ("/kroneckerFDN/Output/c7", "/kroneckerFDN/Output_c7"),
+        ("/kroneckerFDN/Output/dry", "/kroneckerFDN/Output_dry"),
+    ),
 }
 
 
@@ -166,6 +200,7 @@ def test_faustwasm_legacy_digest_projection_is_rejected() -> None:
         ("faust_bubble", 2),
         ("faust_church_organ", 2),
         ("faust_filter_osc", 1),
+        ("faust_kronecker_fdn", 1),
     ],
 )
 def test_faustwasm_factory_renders_real_source(identity: str, channels: int) -> None:
@@ -181,6 +216,10 @@ def test_faustwasm_factory_renders_real_source(identity: str, channels: int) -> 
     if identity == "faust_church_organ":
         params["/churchOrgan/gate"] = 1.0
         params["/churchOrgan/gain"] = 0.2
+    if identity == "faust_kronecker_fdn":
+        for line in range(8):
+            params[f"/kroneckerFDN/Input/b{line}"] = 0.5
+            params[f"/kroneckerFDN/Output/c{line}"] = 0.125
 
     audio = renderer.render(params, 60, 100, (0.05, 0.3))
 
@@ -247,6 +286,7 @@ def test_faustwasm_bright_organ_midi_octave_doubles_dominant_frequency() -> None
         ("faust_bubble", 2),
         ("faust_church_organ", 2),
         ("faust_filter_osc", 1),
+        ("faust_kronecker_fdn", 1),
     ],
 )
 def test_faustwasm_mono_source_is_independent_of_midi_pitch(
@@ -265,6 +305,10 @@ def test_faustwasm_mono_source_is_independent_of_midi_pitch(
     if identity == "faust_church_organ":
         params["/churchOrgan/gate"] = 1.0
         params["/churchOrgan/gain"] = 0.2
+    if identity == "faust_kronecker_fdn":
+        for line in range(8):
+            params[f"/kroneckerFDN/Input/b{line}"] = 0.5
+            params[f"/kroneckerFDN/Output/c{line}"] = 0.125
 
     low = renderer.render(params, 48, 100, (0.05, 0.3))
     high = renderer.render(params, 72, 100, (0.05, 0.3))

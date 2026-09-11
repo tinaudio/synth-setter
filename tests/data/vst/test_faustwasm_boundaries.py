@@ -256,23 +256,26 @@ def test_faustwasm_real_render_clamps_fractional_duration_boundary() -> None:
 
 @pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize(
-    ("identity", "address"),
+    ("identity", "address", "channels"),
     [
-        ("faust_augmentor", "/augmentor/gate"),
-        ("faust_bubble", "/bubble/drop"),
-        ("faust_church_organ", "/churchOrgan/gate"),
+        ("faust_augmentor", "/augmentor/gate", 2),
+        ("faust_bubble", "/bubble/drop", 2),
+        ("faust_church_organ", "/churchOrgan/gate", 2),
+        ("faust_kronecker_fdn", "/kroneckerFDN/Kernel/r0", 1),
     ],
 )
 def test_faustwasm_discrete_patch_rejects_fractional_value(
     identity: str,
     address: str,
+    channels: int,
 ) -> None:
     """Real button controls reject values between registered states.
 
     :param identity: Registered synth with a canonical button.
     :param address: Canonical button address under test.
+    :param channels: Native output channel count.
     """
-    renderer = _renderer(identity, sample_rate=44_100, duration=0.01, channels=2)
+    renderer = _renderer(identity, sample_rate=44_100, duration=0.01, channels=channels)
     patch = _patch(identity)
     patch[address] = 0.5
 
