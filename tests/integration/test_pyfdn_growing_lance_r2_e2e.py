@@ -112,6 +112,7 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
                 synth=SynthSpec(
                     name=SynthName("pyfdn_n8_mono_householder"),
                     param_spec_name=ParamSpecName("pyfdn_n8_mono_householder"),
+                    note_timing_parameterization="onset_duration",
                     plugin_path="pyfdn",
                     plugin_state_path="",
                     synth_version="0.4.2",

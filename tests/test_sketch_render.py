@@ -428,7 +428,7 @@ def test_load_model_matching_checkpoint_returns_evaluation_model(
             "conditioning": "mel",
             "sketch_controls": SketchControlSpec(num_frames=32),
             "param_spec": "surge_simple",
-            "note_timing_parameterization": "onset_duration",
+            "note_timing_parameterization": render.note_timing_parameterization,
             "num_params": 92,
         }
         device: torch.device | None = None
@@ -505,12 +505,17 @@ def test_load_model_matching_width_wrong_note_timing_raises(
     checkpoint = tmp_path / "model.ckpt"
     checkpoint.write_bytes(b"checkpoint")
     render = sketch_render._load_settings().render
+    mismatched_timing = (
+        "onset_duration"
+        if render.note_timing_parameterization == "legacy_endpoints"
+        else "legacy_endpoints"
+    )
     model = SimpleNamespace(
         hparams={
             "conditioning": "mel",
             "sketch_controls": SketchControlSpec(num_frames=32),
             "param_spec": "surge_simple",
-            "note_timing_parameterization": "legacy_endpoints",
+            "note_timing_parameterization": mismatched_timing,
             "num_params": 92,
         }
     )

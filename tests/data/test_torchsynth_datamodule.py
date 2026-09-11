@@ -34,7 +34,7 @@ from synth_setter.data.torchsynth_grad_render import (
 )
 from synth_setter.data.vst.param_spec import (
     DiscreteLiteralParameter,
-    LegacyEndpointNoteDurationParameter,
+    NoteDurationParameter,
     NoteParams,
 )
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
@@ -51,7 +51,7 @@ _PITCH_PARAM = next(
 _NOTE_WINDOW_PARAM = next(
     param
     for param in TORCHSYNTH_FULL_PARAM_SPEC.note_params
-    if isinstance(param, LegacyEndpointNoteDurationParameter)
+    if isinstance(param, NoteDurationParameter)
 )
 _BUFFER_SECONDS = _RENDER_KWARGS["signal_length"] / _RENDER_KWARGS["sample_rate"]
 _WORKER_PID_KEY = "worker_pid"
@@ -578,14 +578,15 @@ def test_render_torchsynth_out_of_range_note_columns_clamp_instead_of_raising() 
     assert audio.shape == (1, _RENDER_KWARGS["signal_length"])
 
 
-def test_render_torchsynth_note_window_beyond_the_spec_maximum_clamps() -> None:
-    """A window longer than the note param's range renders as the longest renderable note."""
+def test_render_torchsynth_note_window_beyond_the_spec_maximum_raises() -> None:
+    """A window longer than the note param's range fails loudly at encode time."""
     longest = _NOTE_WINDOW_PARAM.max_note_duration_seconds
 
-    assert torch.equal(
-        render_torchsynth(_encoded_row(0, 60, (0.0, 2 * longest)), **_RENDER_KWARGS),
-        render_torchsynth(_encoded_row(0, 60, (0.0, longest)), **_RENDER_KWARGS),
-    )
+    with pytest.raises(ValueError, match="end must not exceed"):
+        _encoded_row(0, 60, (0.0, 2 * longest))
+
+    longest_render = render_torchsynth(_encoded_row(0, 60, (0.0, longest)), **_RENDER_KWARGS)
+    assert torch.isfinite(longest_render).all()
 
 
 def test_render_torchsynth_synth_only_width_raises() -> None:

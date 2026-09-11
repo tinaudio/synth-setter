@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from synth_setter.pipeline.ci.validate_spec import (
+    _BACKWARD_COMPATIBLE_OPTIONAL_SYNTH_FIELDS,
     _REQUIRED_RENDER_FIELDS,
     _REQUIRED_SYNTH_FIELDS,
     _REQUIRED_TOP_LEVEL_FIELDS,
@@ -189,7 +190,12 @@ class TestValidateStructure:
 
     def test_required_synth_fields_match_synth_spec_model(self) -> None:
         """Structural validation derives synth identity fields from the schema."""
-        assert set(_REQUIRED_SYNTH_FIELDS) == set(SynthSpec.model_fields)
+        assert set(_REQUIRED_SYNTH_FIELDS) == set(SynthSpec.model_fields) - set(
+            _BACKWARD_COMPATIBLE_OPTIONAL_SYNTH_FIELDS
+        )
+        assert _BACKWARD_COMPATIBLE_OPTIONAL_SYNTH_FIELDS == frozenset(
+            {"note_timing_parameterization"}
+        )
 
     def test_other_defaulted_render_field_remains_required(self) -> None:
         """Platform-dependent defaults must be materialized in persisted specs."""
@@ -235,7 +241,7 @@ class TestValidateTestValues:
 class TestSynthIdentityShape:
     """Synth identity must use the canonical nested shape."""
 
-    @pytest.mark.parametrize("field", sorted(SynthSpec.model_fields))
+    @pytest.mark.parametrize("field", sorted(_REQUIRED_SYNTH_FIELDS))
     def test_a_spec_missing_a_required_synth_field_is_rejected(self, field: str) -> None:
         """Every schema-required identity field is enforced structurally.
 
@@ -247,6 +253,22 @@ class TestSynthIdentityShape:
         errors = validate_structure(spec)
 
         assert any("missing required synth fields" in error and field in error for error in errors)
+
+    def test_a_spec_missing_note_timing_is_accepted_as_legacy(self) -> None:
+        """Pre-migration specs without timing metadata remain structurally valid."""
+        spec = _make_valid_spec()
+        assert "note_timing_parameterization" not in spec["render"]["synth"]
+
+        assert validate_structure(spec) == []
+
+    def test_a_spec_with_an_unknown_note_timing_is_rejected(self) -> None:
+        """A present timing discriminator must name a supported parameterization."""
+        spec = _make_valid_spec()
+        spec["render"]["synth"]["note_timing_parameterization"] = "endpoints"
+
+        errors = validate_structure(spec)
+
+        assert any("note_timing_parameterization" in error for error in errors)
 
     def test_a_spec_with_no_nested_identity_is_rejected(self) -> None:
         """A missing nested synth mapping is a structural error."""

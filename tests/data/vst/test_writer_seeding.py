@@ -18,11 +18,12 @@ import pytest
 from synth_setter.cli.generate_dataset import build_generate_args
 from synth_setter.data.vst.generate_vst_dataset import SampleSeed, VSTDataSample, main
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
-from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec
 from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.data.vst.seeding import rng_for_sample, seed_for_sample
 from synth_setter.data.vst.shapes import AUDIO_FIELD, DEBUG_FIELD, MEL_SPEC_FIELD, PARAM_ARRAY_FIELD
 from synth_setter.data.vst.writers import make_lance_dataset
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.lance_shard import SHARD_METADATA_SCHEMA_KEY
 from synth_setter.pipeline.partitioning import get_my_shards
 from synth_setter.pipeline.schemas.seed_debug import SeedDebugDocument
@@ -507,7 +508,10 @@ def test_row_params_are_pure_function_of_seed_and_index(
     """
     num_samples = 4
     got = _render_param_array(tmp_path / "a.lance", base_seed=_BASE_SEED, num_samples=num_samples)
-    spec = param_specs[_SPEC_NAME]
+    timing = _fake_render_cfg(
+        num_samples=num_samples, min_loudness=float("-inf")
+    ).note_timing_parameterization
+    spec = resolve_param_spec(ParamSpecName(_SPEC_NAME), timing)
     for i in range(num_samples):
         synth, note = spec.sample(rng_for_sample(_BASE_SEED, i, 0))
         assert np.array_equal(got[i], spec.encode(synth, note))
