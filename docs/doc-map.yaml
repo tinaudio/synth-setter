@@ -706,10 +706,56 @@ docs:
   - doc: docs/reference/browser-fdn-ports.md
     description: JavaScript ports of the pyFDN sketch, decode, and IR metrics with golden fixtures
     sources:
-      - pattern: "src/synth_setter/web/fdn/**"
-        covers: "Browser-side sketch extraction, householder decode, impulse-response metrics, and synthetic-response reconstruction"
+      - pattern: "src/synth_setter/web/fdn/sketch.mjs"
+        covers: "Browser-side reverb-sketch extraction"
+      - pattern: "src/synth_setter/web/fdn/decode.mjs"
+        covers: "Householder model-row decode"
+      - pattern: "src/synth_setter/web/fdn/metrics.mjs"
+        covers: "Impulse-response metrics"
+      - pattern: "src/synth_setter/web/fdn/dsp.mjs"
+        covers: "SOS filtering, Schroeder integration, windows"
+      - pattern: "src/synth_setter/web/fdn/fft.mjs"
+        covers: "Arbitrary-length power spectrum"
+      - pattern: "src/synth_setter/web/fdn/synthetic.mjs"
+        covers: "Synthetic-response reconstruction"
+      - pattern: "src/synth_setter/web/fdn/*.test.mjs"
+        covers: "Golden-fixture and exporter contracts"
+      - pattern: "src/synth_setter/web/fdn/fixtures/*.json"
+        covers: "Golden outputs and octave-band SOS tables"
       - pattern: "src/synth_setter/tools/browser_fdn_fixtures.py"
         covers: "Golden fixture generation and the synthetic-response recipe"
+
+  - doc: docs/guides/browser-fdn-evaluation.md
+    description: Browser-native pyFDN sketch-flow evaluation playbook
+    sources:
+      - pattern: "src/synth_setter/web/fdn/index.html"
+        covers: "Page controls"
+      - pattern: "src/synth_setter/web/fdn/app.mjs"
+        covers: "Evaluation flow, results, and the window.fdnEval run record"
+      - pattern: "src/synth_setter/web/fdn/audio.mjs"
+        covers: "Upload decode and resampling to the checkpoint grid"
+      - pattern: "src/synth_setter/web/fdn/bundle.mjs"
+        covers: "Bundle loading and digest checks"
+      - pattern: "src/synth_setter/web/fdn/inference.mjs"
+        covers: "Front end, conditioning, and RK4 sampling over the ONNX graphs"
+      - pattern: "src/synth_setter/web/fdn/noise.mjs"
+        covers: "Seeded noise"
+      - pattern: "src/synth_setter/web/fdn/patch.mjs"
+        covers: "Canonical parameter addresses"
+      - pattern: "src/synth_setter/web/fdn/render.mjs"
+        covers: "Offline FaustWasm render"
+      - pattern: "src/synth_setter/web/fdn/wav.mjs"
+        covers: "WAV encoding for playback and download"
+      - pattern: "src/synth_setter/web/fdn/export-site.mjs"
+        covers: "Static site assembly from a model bundle and a Faust artifact"
+      - pattern: "src/synth_setter/web/fdn/e2e.mjs"
+        covers: "Headless Chromium driver and run record"
+      - pattern: "tests/integration/test_browser_fdn_e2e.py"
+        covers: "Parity assertions and the environment variables that enable them"
+      - pattern: ".github/workflows/browser-fdn-e2e.yml"
+        covers: "Trusted CI execution against the pinned R2 bundle"
+      - pattern: ".github/workflows/browser-fdn-site.yml"
+        covers: "On-demand site build and artifact upload"
 
   - doc: docs/guides/vst-interactive.md
     description: Interactive VST prediction audition and patch-recording guide
