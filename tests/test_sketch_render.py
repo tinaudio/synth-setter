@@ -12,6 +12,7 @@ from typing import cast
 
 import numpy as np
 import pytest
+import sh
 import torch
 from click.testing import CliRunner, Result
 from pedalboard.io import AudioFile
@@ -23,11 +24,132 @@ from synth_setter.data.third_party_datamodule import AudioDecodeError, decode_cl
 from synth_setter.data.vst.core import write_wav
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
+_CLI_HELP_TIMEOUT_SECONDS = 120
+
+
+@pytest.fixture
+def producer_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
+    """Create a real source checkout independent of the operator's working directory.
+
+    :param tmp_path: Parent of the temporary Git repository.
+    :param monkeypatch: Points source discovery at the fixture checkout.
+    :returns: Tracked source file and its actual committed Git SHA.
+    """
+    root = tmp_path / "producer"
+    source = root / "src/synth_setter/cli/sketch_render.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = 1\n")
+    git = sh.Command("git")
+    git(["init", "-q"], _cwd=root)
+    git(["add", "--", str(source)], _cwd=root)
+    git(
+        [
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "test: seed provenance fixture",
+        ],
+        _cwd=root,
+    )
+    revision = str(git(["rev-parse", "HEAD"], _cwd=root)).strip()
+    monkeypatch.setattr(sketch_render, "__file__", str(source))
+    return source, revision
+
+
+def test_producer_revision_uses_source_checkout_not_operator_directory(
+    producer_checkout: tuple[Path, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provenance follows the imported source rather than an unrelated operator directory.
+
+    :param producer_checkout: Real clean source repository and expected revision.
+    :param tmp_path: Operator directory outside the source repository.
+    :param monkeypatch: Changes the operator's working directory only.
+    """
+    monkeypatch.chdir(tmp_path)
+    assert sketch_render._producer_revision() == producer_checkout[1]
+
+
+@pytest.mark.parametrize("stage", [False, True])
+def test_producer_revision_modified_source_is_marked_dirty(
+    producer_checkout: tuple[Path, str],
+    stage: bool,
+) -> None:
+    """Both staged and unstaged source modifications prevent clean-revision claims.
+
+    :param producer_checkout: Real checkout whose tracked source will change.
+    :param stage: Whether the modification is staged before recording provenance.
+    """
+    source, revision = producer_checkout
+    source.write_text("value = 2\n")
+    if stage:
+        sh.Command("git")(["add", "--", str(source)], _cwd=source.parent)
+    assert sketch_render._producer_revision() == f"{revision}-dirty"
+
+
+def test_producer_revision_untracked_source_is_marked_dirty(
+    producer_checkout: tuple[Path, str],
+) -> None:
+    """Untracked source cannot masquerade as the clean committed producer.
+
+    :param producer_checkout: Real checkout receiving an untracked module.
+    """
+    source, revision = producer_checkout
+    source.with_name("new_module.py").write_text("value = 3\n")
+    assert sketch_render._producer_revision() == f"{revision}-dirty"
+
+
+def test_producer_revision_without_source_checkout_reports_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Installed source without its own Git checkout does not borrow an enclosing repository.
+
+    :param tmp_path: Source location without repository metadata.
+    :param monkeypatch: Changes only the imported source location.
+    """
+    monkeypatch.setattr(
+        sketch_render, "__file__", str(tmp_path / "src/synth_setter/cli/module.py")
+    )
+    assert sketch_render._producer_revision() == "git-unavailable"
+
 
 def test_noise_source_device_mps_uses_supported_cpu_generator() -> None:
     """MPS sampling draws seeded noise on CPU before device transfer."""
     assert sketch_render._noise_source_device(torch.device("mps")) == torch.device("cpu")
     assert sketch_render._noise_source_device(torch.device("cuda")) == torch.device("cuda")
+
+
+def test_write_metrics_stereo_row_preserves_optional_mid_side_score(tmp_path: Path) -> None:
+    """The sketch-render CSV writer accepts the optional stereo metric.
+
+    :param tmp_path: Pytest fixture providing a fresh output directory.
+    """
+    path = tmp_path / "metrics.csv"
+    sketch_render._write_metrics(
+        path,
+        {
+            "content_cfg": 1.0,
+            "sketch_cfg": 2.0,
+            "seed": 3,
+            "mss": 0.1,
+            "wmfcc": 0.2,
+            "sot": 0.3,
+            "rms": 0.4,
+            "mldr": 0.5,
+            "mldr_mid_side": 0.6,
+            "r2_uri": "",
+        },
+    )
+
+    with path.open(newline="", encoding="utf-8") as stream:
+        row = next(csv.DictReader(stream))
+    assert row["mldr_mid_side"] == "0.6"
 
 
 def test_cfg_grid_repeated_strengths_returns_argument_order_product() -> None:
@@ -498,6 +620,56 @@ def test_cli_inconsistent_options_fail_before_inference(
     assert message in result.output
 
 
+@pytest.mark.parametrize(
+    ("device", "message"),
+    [
+        ("cuda", "browser inference requires --device cpu or auto"),
+        ("cpu", "Install browser assets"),
+    ],
+)
+def test_cli_browser_preconditions_fail_without_creating_arm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, device: str, message: str
+) -> None:
+    """Browser prerequisites fail before loading checkpoints or decoding audio.
+
+    :param tmp_path: Unread input paths and absent output destination.
+    :param monkeypatch: Points runtime discovery at an uninstalled asset directory.
+    :param device: Explicit browser preprocessing device request.
+    :param message: Actionable prerequisite failure expected before any model work.
+    """
+    from synth_setter.evaluation import browser_flow
+
+    monkeypatch.setattr(browser_flow, "_WEB_ROOT", tmp_path / "uninstalled-web")
+    source = tmp_path / "input.wav"
+    source.touch()
+    output = tmp_path / "evaluation"
+    result = CliRunner().invoke(
+        main,
+        [
+            str(source),
+            str(source),
+            "--checkpoint",
+            str(tmp_path / "missing.ckpt"),
+            "--checkpoint-sha256",
+            "0" * 64,
+            "--stats",
+            str(tmp_path / "missing.npz"),
+            "--stats-sha256",
+            "0" * 64,
+            "--inference-runtime",
+            "browser",
+            "--device",
+            device,
+            "--output-dir",
+            str(output),
+            "--no-upload",
+        ],
+    )
+    assert result.exit_code != 0
+    assert message in result.output
+    assert not (output / "arms").exists()
+
+
 def test_cli_local_grid_writes_every_arm_with_shared_noise(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -576,7 +748,7 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
     monkeypatch.setattr(
         sketch_render,
         "compute_metrics_on_dir",
-        lambda *args: {"mss": 1.0, "wmfcc": 2.0, "sot": 3.0, "rms": 0.5},
+        lambda *args: {"mss": 1.0, "wmfcc": 2.0, "sot": 3.0, "rms": 0.5, "mldr": 0.7},
     )
 
     def invoke(seed: int, output: Path) -> Result:
@@ -649,7 +821,7 @@ def test_console_script_is_installed_and_callable() -> None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=_CLI_HELP_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr

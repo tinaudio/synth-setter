@@ -27,6 +27,8 @@ from beartype import beartype
 from jaxtyping import Float, jaxtyped
 from torch import Tensor, nn
 
+from synth_setter.models.components.audio_shape import canonical_audio
+
 # Guards the per-row gradient normalizer; render gradients span ~9 orders of magnitude, so
 # the unnormalized block would swamp the cost entry beside it.
 _GRAD_NORM_EPS: Final = 1e-12
@@ -35,7 +37,7 @@ _GRAD_NORM_EPS: Final = 1e-12
 DEFAULT_CONTROL_T_MIN: Final = 0.8
 
 _BATCH_PARAMS_SHAPE = "batch params"
-_BATCH_AUDIO_SHAPE = "batch samples"
+_BATCH_AUDIO_SHAPE = "batch *channels samples"
 _BATCH_TIME_SHAPE = "batch 1"
 _BATCH_SHAPE = "batch"
 _BATCH_ANY_SHAPE = "batch ..."
@@ -137,9 +139,13 @@ def learned_control_signal(
     :param render: Simulator over decoded parameters; its graph is discarded.
     :param encoder: Trainable module mapping the audio residual to a control vector.
     :returns: Signal shaped ``(batch, control)``, differentiable w.r.t. ``encoder`` only.
+    :raises ValueError: Renderer and target geometries differ.
     """
     with torch.no_grad():
-        rendered = _match_target_clamping(render(theta_hat.detach()))
+        rendered = canonical_audio(_match_target_clamping(render(theta_hat.detach())))
+        target_audio = canonical_audio(target_audio)
+    if rendered.shape != target_audio.shape:
+        raise ValueError("rendered and target audio must have matching channel/sample shapes")
     return encoder(rendered - target_audio.detach())
 
 

@@ -27,6 +27,50 @@ def test_midi_pitch_residuals_fractional_predictions_reports_decode_counterfactu
     torch.testing.assert_close(residuals["nearest"], torch.tensor([0.0, 1.0]))
 
 
+def test_midi_pitch_residuals_float32_half_step_neighbors_preserve_quantized_side() -> None:
+    """Nearest-note diagnostics preserve each float32 prediction's side of a tie."""
+    spec = ParamSpec(
+        synth_params=[],
+        note_params=[DiscreteLiteralParameter(name="pitch", min=48, max=72)],
+    )
+    predicted = torch.tensor(
+        [[0.041666664], [0.041666668], [0.04166667]],
+        dtype=torch.float32,
+    )
+    target = torch.zeros(3, 1, dtype=torch.float32)
+
+    residuals = midi_pitch_residuals(predicted, target, spec)
+
+    torch.testing.assert_close(
+        residuals["nearest"],
+        torch.tensor([0.0, 1.0, 1.0], dtype=residuals["nearest"].dtype),
+    )
+
+
+@pytest.mark.mps
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS is not available")
+def test_midi_pitch_residuals_mps_half_step_neighbors_return_on_mps() -> None:
+    """MPS diagnostics classify float32 boundaries without unsupported float64 ops."""
+    spec = ParamSpec(
+        synth_params=[],
+        note_params=[DiscreteLiteralParameter(name="pitch", min=48, max=72)],
+    )
+    predicted = torch.tensor(
+        [[0.041666664], [0.041666668]],
+        dtype=torch.float32,
+        device="mps",
+    )
+    target = torch.zeros(2, 1, dtype=torch.float32, device="mps")
+
+    residuals = midi_pitch_residuals(predicted, target, spec)
+
+    assert residuals["nearest"].device.type == "mps"
+    torch.testing.assert_close(
+        residuals["nearest"].cpu(),
+        torch.tensor([0.0, 1.0]),
+    )
+
+
 def test_midi_pitch_residuals_non_midpoint_target_reports_relative_semitones() -> None:
     """Residuals decode the target note instead of assuming the range midpoint."""
     spec = ParamSpec(

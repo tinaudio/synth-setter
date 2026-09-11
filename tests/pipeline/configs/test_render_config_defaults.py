@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from hydra import compose, initialize_config_module
 from omegaconf import DictConfig
 
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.renderer_backend import FlushBlocks
+from synth_setter.resources import faustwasm_dir
 from synth_setter.synth_spec import SynthName, SynthSpec
 
 _GENERIC_RENDER_FIELDS = {
@@ -20,6 +24,9 @@ _GENERIC_RENDER_FIELDS = {
     "parallel",
     "param_sample_cadence",
     "plugin_reload_cadence",
+    "post_load_flush_blocks",
+    "post_param_flush_blocks",
+    "post_render_flush_blocks",
     "renderer_backend",
     "retain_local_shards",
     "sample_rate",
@@ -40,6 +47,9 @@ _SURFACED_RENDER_DEFAULTS: dict[str, object] = {
     "plugin_reload_cadence": "render",
     "gui_toggle_cadence": "never",
     "param_sample_cadence": "shard",
+    "post_load_flush_blocks": 4,
+    "post_param_flush_blocks": 0,
+    "post_render_flush_blocks": 2,
 }
 
 # An experiment that sets none of ``_SURFACED_RENDER_DEFAULTS``, so a successful
@@ -178,6 +188,22 @@ def test_base_render_config_surfaced_defaults_compose_correctly() -> None:
     assert spec.render.param_sample_cadence == "sample"
 
 
+def test_base_render_config_null_flush_blocks_resolve_to_pedalboard_defaults() -> None:
+    """The nulls in ``vst.yaml`` leave every flush step on the Pedalboard default."""
+    spec = _spec_from_dataset_overrides([])
+
+    assert spec.render.post_load_flush_blocks is None
+    assert spec.render.flush_blocks == FlushBlocks(post_load=690, post_param=690, post_render=690)
+
+
+def test_cardinal_render_group_null_flush_blocks_resolve_to_dawdreamer_defaults() -> None:
+    """The nulls in ``cardinal.yaml`` leave every flush step on the DawDreamer default."""
+    spec = _spec_from_dataset_overrides(["synth=cardinal", "render=cardinal"])
+
+    assert spec.render.post_render_flush_blocks is None
+    assert spec.render.flush_blocks == FlushBlocks(post_load=8, post_param=0, post_render=0)
+
+
 @pytest.mark.parametrize(
     ("name", "num_params"),
     [("torchsynth_adsr", 8), ("torchsynth_simple", 19), ("torchsynth_full", 79)],
@@ -218,7 +244,7 @@ def test_render_faust_composes_into_valid_render_config(
     channels: int,
     render_group: str,
 ) -> None:
-    """Each Faust identity resolves checked-in source/spec identity without paths.
+    """Each Faust identity resolves a checked-in source through its registry URI.
 
     :param name: Synth group and Faust registry identity.
     :param num_params: Expected encoded synth-and-note width.
@@ -228,13 +254,82 @@ def test_render_faust_composes_into_valid_render_config(
     spec = _spec_from_dataset_overrides([f"synth={name}", f"render={render_group}"])
 
     assert spec.render.param_spec_name == name
-    assert spec.render.renderer_backend == "dawdreamer_faust"
-    assert spec.render.plugin_path == "faust"
+    assert spec.render.renderer_backend == "dawdreamer"
+    assert spec.render.backend_version == "0.8.3"
+    assert spec.render.plugin_path == f"registry://faust/{name}"
+    assert spec.render.synth.format == "faust"
     assert spec.render.plugin_state_path == ""
     assert spec.render.gui_toggle_cadence == "never"
     assert spec.render.plugin_reload_cadence == "render"
     assert spec.render.channels == channels
     assert spec.num_params == num_params
+
+
+def test_faustwasm_hydra_version_matches_pinned_node_dependency() -> None:
+    """The authored render contract and installed dependency pin cannot drift."""
+    package = json.loads((faustwasm_dir() / "vendor" / "package.json").read_text())
+
+    assert _compose_render_group("faustwasm").backend_version == package["version"]
+
+
+@pytest.mark.parametrize(
+    ("name", "channels", "render_group"),
+    [
+        ("faust_bright_organ", 2, "faustwasm"),
+        ("faust_bubble", 2, "faustwasm"),
+        ("faust_church_organ", 2, "faustwasm"),
+        ("faust_filter_osc", 1, "faustwasm_filter_osc"),
+    ],
+)
+def test_render_faustwasm_composes_with_explicit_v2_contract(
+    name: str,
+    channels: int,
+    render_group: str,
+) -> None:
+    """Each FaustWasm group composes with explicit backend provenance.
+
+    :param name: Faust source identity.
+    :param channels: Native output channel count.
+    :param render_group: Render group with matching channel geometry.
+    """
+    spec = _spec_from_dataset_overrides([f"synth={name}", f"render={render_group}"])
+
+    assert spec.render.renderer_backend == "faustwasm"
+    assert spec.render.backend_version == _compose_render_group("faustwasm").backend_version
+    assert spec.render.block_size == 128
+    assert spec.render.render_contract_version == 2
+    assert spec.render.channels == channels
+    assert spec.render.plugin_reload_cadence == "render"
+
+
+@pytest.mark.parametrize(
+    ("name", "channels", "render_group"),
+    [
+        ("faust_bright_organ", 2, "faustcpp"),
+        ("faust_bubble", 2, "faustcpp"),
+        ("faust_church_organ", 2, "faustcpp"),
+        ("faust_filter_osc", 1, "faustcpp_filter_osc"),
+    ],
+)
+def test_render_faustcpp_composes_with_explicit_v2_contract(
+    name: str,
+    channels: int,
+    render_group: str,
+) -> None:
+    """Each native C++ group composes with pinned compiler provenance.
+
+    :param name: Faust source identity.
+    :param channels: Native output channel count.
+    :param render_group: Render group with matching channel geometry.
+    """
+    spec = _spec_from_dataset_overrides([f"synth={name}", f"render={render_group}"])
+
+    assert spec.render.renderer_backend == "faustcpp"
+    assert spec.render.backend_version == "2.37.3"
+    assert spec.render.block_size == 128
+    assert spec.render.render_contract_version == 2
+    assert spec.render.channels == channels
+    assert spec.render.plugin_reload_cadence == "render"
 
 
 def test_render_obxf_composes_into_valid_render_config() -> None:

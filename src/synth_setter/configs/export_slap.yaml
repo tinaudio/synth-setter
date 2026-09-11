@@ -1,0 +1,21 @@
+defaults:
+  - model: slap_ast_audio_vst_ff_param
+  - synth: surge_xt
+  - _self_
+
+source_root_uri: ???
+output_root_uri: ???
+splits: [train, val, test]
+source_versions:
+  train: ???
+  val: ???
+  test: ???
+ckpt_path: ???
+use_saved_mean_and_variance: true
+mel_stats_path: null
+device: null
+batch_size: 256
+build_index: false
+metric: cosine
+num_partitions: null
+num_sub_vectors: 16

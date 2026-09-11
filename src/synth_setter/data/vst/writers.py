@@ -10,7 +10,7 @@ from __future__ import annotations
 import gc
 import shutil
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import timedelta
 from pathlib import Path
 
@@ -25,7 +25,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
     VSTDataSample,
     generate_sample,
 )
-from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.param_spec import ParameterValue, ParamSpec
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.renderers import AudioRenderer, PedalboardRenderer
 from synth_setter.data.vst.shapes import (
@@ -61,8 +61,8 @@ def _sample_batch_arrays(
 def _validate_fixed_params_lengths(
     *,
     num_samples: int,
-    fixed_synth_params_list: list[dict[str, float]] | None,
-    fixed_note_params_list: list[NoteParams] | None,
+    fixed_synth_params_list: Sequence[Mapping[str, ParameterValue]] | None,
+    fixed_note_params_list: Sequence[Mapping[str, object]] | None,
 ) -> None:
     """Raise ``ValueError`` unless each fixed-params list spans the whole shard.
 
@@ -97,8 +97,8 @@ def _render_in_batches(
     render_cfg: RenderConfig,
     param_spec: ParamSpec,
     start_idx: int,
-    fixed_synth_params_list: list[dict[str, float]] | None,
-    fixed_note_params_list: list[NoteParams] | None,
+    fixed_synth_params_list: Sequence[Mapping[str, ParameterValue]] | None,
+    fixed_note_params_list: Sequence[Mapping[str, object]] | None,
     flush_batch: Callable[[list[VSTDataSample], int], None],
 ) -> RenderRejectionMetrics:
     """Render samples from ``start_idx`` to ``render_cfg.samples_per_shard`` in fixed-size batches.
@@ -117,13 +117,14 @@ def _render_in_batches(
     :param fixed_note_params_list: Pre-set note params (or ``None``), indexed by absolute row;
         shares the synth list's shard-cadence seed-from-``start_idx``-and-reuse behavior.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
-    :returns: Counts of silent and clipped draws rejected across the shard.
+    :returns: Counts of clipped, non-finite, and silent draws rejected across the shard.
     :raises RuntimeError: ``gui_toggle_cadence="always_on"`` reaches the
         renderer without ``plugin_reload_cadence="once"`` (validator regression).
     """
     num_samples = render_cfg.samples_per_shard
     share_params = render_cfg.param_sample_cadence == "shard"
     clipped_rejections = 0
+    non_finite_rejections = 0
     silent_rejections = 0
 
     # Delayed host finalizers can clear DPF process-global state while DawDreamer is live (#2549).
@@ -142,14 +143,14 @@ def _render_in_batches(
     assert renderer is not None
 
     def _render_loop() -> None:
-        nonlocal clipped_rejections, silent_rejections
+        nonlocal clipped_rejections, non_finite_rejections, silent_rejections
         sample_batch: list[VSTDataSample] = []
         sample_batch_start = start_idx
         warmup_done = False
         # param_sample_cadence="shard": the first rendered row (start_idx) sets the shard's single
         # patch (drawn fresh, or copied from the source's same row); later renders reuse it (#489).
-        shared_synth: dict[str, float] | None = None
-        shared_note: NoteParams | None = None
+        shared_synth: Mapping[str, ParameterValue] | None = None
+        shared_note: Mapping[str, object] | None = None
         for i in trange(start_idx, num_samples):
             logger.info(f"Making sample {i}")
             warmup_this_render = render_cfg.gui_toggle_cadence == "render" or (
@@ -157,8 +158,8 @@ def _render_in_batches(
             )
             # Fixed params are indexed by absolute row ``i`` (full-shard lists),
             # so a resumed run still reads the source row matching each output row.
-            fixed_synth: dict[str, float] | None
-            fixed_note: NoteParams | None
+            fixed_synth: Mapping[str, ParameterValue] | None
+            fixed_note: Mapping[str, object] | None
             if share_params and shared_synth is not None:
                 fixed_synth, fixed_note = shared_synth, shared_note
             else:
@@ -188,6 +189,7 @@ def _render_in_batches(
                 shared_synth = sample.synth_params
                 shared_note = sample.note_params
             clipped_rejections += sample.clipped_rejections
+            non_finite_rejections += sample.non_finite_rejections
             silent_rejections += sample.silent_rejections
             sample_batch.append(sample)
             if warmup_this_render and render_cfg.gui_toggle_cadence == "once":
@@ -214,6 +216,7 @@ def _render_in_batches(
 
         return RenderRejectionMetrics(
             clipped=clipped_rejections,
+            non_finite=non_finite_rejections,
             silent=silent_rejections,
         )
     finally:
@@ -229,8 +232,8 @@ def make_lance_dataset(
     render_cfg: RenderConfig,
     *,
     shard_id: int | None = None,
-    fixed_synth_params_list: list[dict[str, float]] | None = None,
-    fixed_note_params_list: list[NoteParams] | None = None,
+    fixed_synth_params_list: Sequence[Mapping[str, ParameterValue]] | None = None,
+    fixed_note_params_list: Sequence[Mapping[str, object]] | None = None,
 ) -> RenderRejectionMetrics:
     """Render ``render_cfg.samples_per_shard`` samples to a Lance dataset directory.
 
@@ -252,7 +255,7 @@ def make_lance_dataset(
         shard's single patch); rows 1..N are required but unused.
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
-    :returns: Counts of silent and clipped draws rejected across the shard.
+    :returns: Counts of clipped, non-finite, and silent draws rejected across the shard.
     """
     validate_mp3_sample_rate(render_cfg.sample_rate)
 

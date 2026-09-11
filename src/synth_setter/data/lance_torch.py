@@ -129,15 +129,29 @@ class LanceMapDataset(SafeLanceDataset):
         *,
         columns: Sequence[str] | None = None,
         storage_options: dict[str, str] | None = None,
-    ):
+        version: int | None = None,
+        include_sample_id: bool = False,
+    ) -> None:
         """Open the dataset lazily for map-style access.
 
         :param uri: Dataset directory (local path or ``s3://`` URI).
         :param columns: Columns each item carries; ``None`` reads all.
         :param storage_options: Object-store config for a cloud ``uri`` (see
             :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
+        :param version: Exact local Lance version retained across worker reopens.
+        :param include_sample_id: Add int64 row offsets scoped to this pinned split version.
+        :raises ValueError: If the source already contains the reserved ``sample_id`` column.
         """
-        super().__init__(str(uri), dataset_options=_dataset_options(storage_options))
+        options: dict[str, Any] = _dataset_options(storage_options) or {}
+        if version is not None:
+            options["version"] = version
+        if include_sample_id:
+            snapshot = lance.dataset(str(uri), **options)
+            if "sample_id" in snapshot.schema.names:
+                raise ValueError("sample_id is reserved for transient source row identities")
+            options["version"] = snapshot.version
+        super().__init__(str(uri), dataset_options=options)
+        self._include_sample_id = include_sample_id
         self._columns = list(columns) if columns is not None else None
         self._opening_pid: int | None = None
 
@@ -161,6 +175,8 @@ class LanceMapDataset(SafeLanceDataset):
         tensors: dict[str, torch.Tensor] = {}
         for name in table.column_names:
             _expand_column(table[name], name, tensors)
+        if self._include_sample_id:
+            tensors["sample_id"] = torch.tensor(indices, dtype=torch.int64)
         return tensors
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:

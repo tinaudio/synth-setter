@@ -26,7 +26,11 @@ defaults:
 task_name: "eval"
 
 tags: ["dev"]
+# Integer IDs resolved through the runtime feature-flag registry.
+feature_flags: []
 mode: test
+# Required explicitly when model.seeded_evaluation=true; ignored otherwise.
+seed: null
 
 # Predict-mode post-processing; gated off so `mode: test`/`validate` stay unchanged.
 evaluation:

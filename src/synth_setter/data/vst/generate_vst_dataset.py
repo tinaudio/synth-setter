@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -13,8 +14,8 @@ from synth_setter.data.vst.audio_preview import (
     encode_audio_to_mp3,
 )
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
-from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
-from synth_setter.data.vst.renderers import AudioRenderer
+from synth_setter.data.vst.param_spec import ParameterValue, ParamSpec, require_note_params
+from synth_setter.data.vst.renderers import AudioRenderer, NonFiniteAudioError
 from synth_setter.data.vst.seeding import seed_for_sample
 from synth_setter.data.vst.shapes import make_spectrogram as make_spectrogram
 from synth_setter.pipeline.schemas.render_metrics import render_metrics_path
@@ -52,8 +53,8 @@ class SampleSeed:
 
 @dataclass
 class VSTDataSample:
-    synth_params: dict[str, float]
-    note_params: NoteParams
+    synth_params: Mapping[str, ParameterValue]
+    note_params: Mapping[str, object]
 
     sample_rate: float
     channels: int
@@ -72,6 +73,7 @@ class VSTDataSample:
     attempt: int = 0
     # Per-draw rejection counts carried to the shard writer for aggregation.
     clipped_rejections: int = 0
+    non_finite_rejections: int = 0
     silent_rejections: int = 0
 
     def __post_init__(self) -> None:
@@ -104,8 +106,8 @@ def generate_sample(
     velocity: int,
     min_loudness: float,
     param_spec: ParamSpec,
-    fixed_synth_params: dict[str, float] | None = None,
-    fixed_note_params: NoteParams | None = None,
+    fixed_synth_params: Mapping[str, ParameterValue] | None = None,
+    fixed_note_params: Mapping[str, object] | None = None,
     *,
     warmup: bool = False,
     seed: SampleSeed | None = None,
@@ -145,13 +147,15 @@ def generate_sample(
         ``fixed_synth_params`` render fell below ``min_loudness``.
     :raises AudioAmplitudeError: A ``fixed_synth_params`` render clipped outside
         [-1, 1]; on the sampling path clipping rejects the draw and retries.
-    :raises RuntimeError: The sampling path produced no accepted render (silent
-        or clipped) for the whole attempt budget.
+    :raises NonFiniteAudioError: A ``fixed_synth_params`` render contains NaN or infinity.
+    :raises RuntimeError: The sampling path produced no accepted render for the whole
+        attempt budget.
     """
     max_attempts = seed.max_attempts if seed is not None else DEFAULT_MAX_ATTEMPTS
     if max_attempts < 1:
         raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
     clipped_rejections = 0
+    non_finite_rejections = 0
     silent_rejections = 0
     for attempt in range(max_attempts):
         sampler_seed = None
@@ -169,12 +173,13 @@ def generate_sample(
             synth_params = fixed_synth_params
             note_params = fixed_note_params
 
+        midi_params = require_note_params(note_params)
         try:
             output = renderer.render(
                 synth_params,
-                note_params["pitch"],
+                midi_params["pitch"],
                 velocity,
-                note_params["note_start_and_end"],
+                midi_params["note_start_and_end"],
                 warmup=warmup,
             )
             _reject_clipped_audio(output)
@@ -187,6 +192,13 @@ def generate_sample(
             warmup = False
             clipped_rejections += 1
             logger.debug("rendered audio clipped outside [-1, 1], skipping")
+            continue
+        except NonFiniteAudioError:
+            if fixed_synth_params is not None:
+                raise
+            warmup = False
+            non_finite_rejections += 1
+            logger.debug("rendered audio contained non-finite samples, skipping")
             continue
         warmup = False
 
@@ -222,6 +234,7 @@ def generate_sample(
             sampler_seed=sampler_seed,
             attempt=attempt,
             clipped_rejections=clipped_rejections,
+            non_finite_rejections=non_finite_rejections,
             silent_rejections=silent_rejections,
         )
 
@@ -234,7 +247,8 @@ def generate_sample(
     raise RuntimeError(
         f"sample {failed_idx} produced no accepted render after {max_attempts} attempts "
         f"(silent rejections: {silent_rejections}; clipped rejections: "
-        f"{clipped_rejections}). {seed_hint}Raise the per-sample attempt budget "
+        f"{clipped_rejections}; non-finite rejections: {non_finite_rejections}). "
+        f"{seed_hint}Raise the per-sample attempt budget "
         f"(``attempts_per_sample`` / ``SampleSeed.max_attempts``) or lower min_loudness."
     )
 

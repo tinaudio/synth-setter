@@ -11,7 +11,7 @@ import pytest
 from workflow_fixtures import load_workflow
 
 _CITEST_PROJECT = "synth-setter-citest"
-_PRODUCTION_PROJECT = "synth-setter"
+_PRODUCTION_PROJECT = "synth-setter-generate-dataset"
 _PRODUCTION_WANDB_WORKFLOWS = frozenset({"eval.yml", "train.yml"})
 _EXPECTED_CI_WANDB_PROJECTS: Mapping[str, str] = MappingProxyType(
     {

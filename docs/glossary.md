@@ -26,7 +26,7 @@ Project terminology for synth-setter. Grouped by domain.
 | Term                                | Definition                                                                                                                                                      |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **VST (Virtual Studio Technology)** | Plugin format for audio synthesizers and effects. Surge XT is loaded as a VST plugin via Spotify's [pedalboard](https://github.com/spotify/pedalboard) library. |
-| **Surge XT**                        | The open-source VST synthesizer used for audio rendering. See [surge-synthesizer.github.io](https://surge-synthesizer.github.io/).                              |
+| **Surge XT**                        | The default open-source VST synthesizer used for audio rendering. See [surge-synthesizer.github.io](https://surge-synthesizer.github.io/).                      |
 | **Mel spectrogram**                 | Frequency-domain audio representation used as neural network input. 128 mel bands, ~100 frames/sec.                                                             |
 | **pedalboard**                      | Spotify's Python library for loading and running VST plugins programmatically.                                                                                  |
 | **Xvfb**                            | X Virtual Framebuffer. Provides a virtual display server on headless Linux machines, required because VST plugins expect a display.                             |
@@ -52,9 +52,10 @@ Project terminology for synth-setter. Grouped by domain.
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Predict** | Evaluation stage 1: load a trained checkpoint, run inference on test data, output predicted parameter tensors.                              |
 | **Render**  | Evaluation stage 2: feed predicted parameters into the VST plugin to produce audio waveforms for both predictions and ground-truth targets. |
-| **Metrics** | Evaluation stage 3: compute distance metrics (MSS, wMFCC, SOT, RMS) between predicted and target audio.                                     |
+| **Metrics** | Evaluation stage 3: compute distance metrics (MSS, wMFCC, SOT, RMS, MLDR) between predicted and target audio.                               |
 | **MSS**     | Multi-Scale Spectrogram distance. Captures temporal characteristics at three mel-scale windows (fine, mid, coarse).                         |
 | **SOT**     | Spectral Optimal Transport. Wasserstein distance on normalized STFT bins.                                                                   |
+| **MLDR**    | Multi-scale Loudness Dynamic Range. L1 distance of log short/long energy-envelope ratios at two scales (DiffVox, arXiv:2504.14735).         |
 
 ## IDs & Provenance
 

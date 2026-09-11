@@ -498,7 +498,11 @@ ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq
+    apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      faust \
+      git \
+      jq
 
 WORKDIR /home/build/synth-setter
 
@@ -531,8 +535,8 @@ RUN ln -s /artifacts/studiorack/node_modules node_modules
 # needed here; the `devcontainer-tools` stage adds them for the Codex CLI.
 COPY --from=node:22-bullseye-slim /usr/local/bin/node /usr/local/bin/node
 
-# Run not-slow unit tests after the managed plugins pass their load checks.
-RUN pytest -k "not slow" -v
+# Run CPU unit tests after the managed plugins pass their load checks.
+RUN pytest -m "not slow and not gpu and not mps" -v
 
 # No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with
 # `dockerArgs: "bash -c '<base64-setup>'"`, and a baked-in ENTRYPOINT would
@@ -602,22 +606,20 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && codex --version
 
 # Zellij terminal multiplexer (https://github.com/zellij-org/zellij) — not in
-# the Ubuntu 22.04 apt repos, so install the upstream static musl binary,
-# verified against a pinned per-arch SHA256 (run `sha256sum` on the release
-# tarballs to refresh these when bumping ZELLIJ_VERSION).
-ARG ZELLIJ_VERSION=v0.44.3
-ARG ZELLIJ_SHA256_X86_64=0f7c346788627f506c0a28296517768633cff24fc822a739f8264b640ecad751
-ARG ZELLIJ_SHA256_AARCH64=15e6534d42644d66973d136c590c49739dcfd6a1a2a0d3d917973f16c81b45fb
+# the Ubuntu 22.04 apt repos, so install the latest upstream static musl binary
+# and verify it against the release's per-architecture checksum.
 RUN case "${TARGETARCH:-}" in \
-      amd64) zellij_arch=x86_64;  zellij_sha=${ZELLIJ_SHA256_X86_64}  ;; \
-      arm64) zellij_arch=aarch64; zellij_sha=${ZELLIJ_SHA256_AARCH64} ;; \
+      amd64) zellij_arch=x86_64 ;; \
+      arm64) zellij_arch=aarch64 ;; \
       *) echo "ERROR: unsupported TARGETARCH for zellij: ${TARGETARCH:-<unset>}" >&2; exit 1 ;; \
     esac && \
-    url="https://github.com/zellij-org/zellij/releases/download/${ZELLIJ_VERSION}/zellij-${zellij_arch}-unknown-linux-musl.tar.gz" && \
-    wget -q -O /tmp/zellij.tar.gz "$url" && \
-    echo "${zellij_sha}  /tmp/zellij.tar.gz" | sha256sum -c - && \
+    base_url="https://github.com/zellij-org/zellij/releases/latest/download" && \
+    wget -q -O /tmp/zellij.tar.gz "${base_url}/zellij-${zellij_arch}-unknown-linux-musl.tar.gz" && \
+    wget -q -O /tmp/zellij.sha256 "${base_url}/zellij-${zellij_arch}-unknown-linux-musl.sha256sum" && \
     tar -xzf /tmp/zellij.tar.gz -C /usr/local/bin zellij && \
-    rm /tmp/zellij.tar.gz && \
+    zellij_sha=$(cut -d ' ' -f 1 /tmp/zellij.sha256) && \
+    echo "${zellij_sha}  /usr/local/bin/zellij" | sha256sum -c - && \
+    rm /tmp/zellij.tar.gz /tmp/zellij.sha256 && \
     chmod +x /usr/local/bin/zellij && \
     zellij --version
 

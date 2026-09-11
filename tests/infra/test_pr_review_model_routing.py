@@ -12,6 +12,7 @@ import re
 import runpy
 import shutil
 import signal
+import subprocess
 import sys
 import time
 import tomllib
@@ -25,6 +26,7 @@ from agent._shared.run_pi_review_follow_up import FollowUpManifest
 from tests.helpers.package_available import _SH_AVAILABLE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+_DETACHED_FOLLOW_UP_TIMEOUT_SECONDS = 10.0
 
 
 def _process_state(pid: int) -> str | None:
@@ -201,11 +203,12 @@ def test_pi_project_settings_pin_review_pool_providers_only() -> None:
 
     assert settings["defaultProvider"] == "openai-codex"
     assert settings["defaultModel"] == "gpt-5.6-sol"
-    assert settings["enabledModels"]
-    assert all("anthropic" not in pattern.lower() for pattern in settings["enabledModels"])
-    assert any(pattern.startswith("openai-codex/") for pattern in settings["enabledModels"])
-    assert "kimi-coding/k3" in settings["enabledModels"]
-    assert any(pattern.startswith("openrouter/") for pattern in settings["enabledModels"])
+    assert settings["enabledModels"] == [
+        "openai-codex/gpt-5.6-terra",
+        "openai-codex/gpt-5.6-sol",
+        "openai-codex/gpt-6-astra",
+        "meta/muse-spark-1.3-contributor",
+    ]
 
 
 def test_pi_project_subagents_enforce_model_scope_with_twenty_workers() -> None:
@@ -232,8 +235,8 @@ def test_pi_project_append_system_scopes_subagent_model_selectors() -> None:
     assert "Do not launch subagents" in text
     assert "openai-codex/gpt-5.6-sol" in text
     assert "Never pass the provider-only `openai-codex`" in text
-    assert "kimi-coding" in text
-    assert "openrouter" in text
+    assert "Muse-Spark-1.3" in text
+    assert "`meta`" in text
 
 
 def _assert_referenced_subcommands_exist(runbook_text: str) -> None:
@@ -259,6 +262,161 @@ def _assert_referenced_subcommands_exist(runbook_text: str) -> None:
         f"runbook references unknown subcommands {sorted(referenced - registered)}; "
         f"the CLI registers {sorted(registered)}"
     )
+
+
+def test_pr_review_skills_fetch_base_sha_with_supported_gh_metadata() -> None:
+    """Keep PR review metadata compatible with the installed gh CLI."""
+    skill_paths = (
+        "agent/skills/_shared/repo-review-full-analysis.md",
+        "agent/skills/correctness-review/SKILL.md",
+        "agent/skills/lance-review/SKILL.md",
+        "agent/skills/repo-review-full-no-comments/SKILL.md",
+        "agent/skills/repo-review/SKILL.md",
+    )
+    skills = {path: (REPO_ROOT / path).read_text() for path in skill_paths}
+    metadata_paths = (
+        "agent/skills/_shared/repo-review-full-analysis.md",
+        "agent/skills/repo-review-full-no-comments/SKILL.md",
+        "agent/skills/repo-review/SKILL.md",
+    )
+    for path, text in skills.items():
+        assert "baseRefOid" not in text, path
+        assert "pulls/<n>" not in text, path
+    for path in metadata_paths:
+        assert "number,headRefOid,baseRefName,files,title,headRefName" in skills[path]
+        assert 'gh api "repos/${repo}/pulls/<N>" --jq .base.sha' in skills[path]
+        assert skills[path].count("|| exit $?") >= 3
+        assert "printf 'base_sha=%s\\n' \"$base_sha\"" in skills[path]
+
+
+_PR_METADATA_COMMANDS = (
+    ("agent/skills/_shared/repo-review-full-analysis.md", "Fetch metadata once:"),
+    (
+        "agent/skills/repo-review-full-no-comments/SKILL.md",
+        "never run the command with the literal `<N>` placeholder:",
+    ),
+    ("agent/skills/repo-review/SKILL.md", "remember it:"),
+)
+
+
+def _extract_pr_metadata_command(skill_path: str, metadata_marker: str) -> str:
+    """Extract an executable PR metadata command from a runbook.
+
+    :param skill_path: Runbook containing a PR metadata command.
+    :param metadata_marker: Text immediately preceding the command's Bash fence.
+    :returns: Bash command with block-quote prefixes removed.
+    """
+    skill = (REPO_ROOT / skill_path).read_text()
+    assert metadata_marker in skill, f"missing metadata marker in {skill_path}: {metadata_marker}"
+    metadata_section = skill.split(metadata_marker, maxsplit=1)[1]
+    unquoted_section = "\n".join(line.removeprefix("> ") for line in metadata_section.splitlines())
+    return unquoted_section.split("```bash\n", maxsplit=1)[1].split("\n```", maxsplit=1)[0]
+
+
+def _fake_gh_environment(tmp_path: Path) -> dict[str, str]:
+    """Install a controlled gh executable for metadata command tests.
+
+    :param tmp_path: Temporary directory in which to install the executable.
+    :returns: Process environment preferring the controlled executable.
+    """
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ $1 == repo && $2 == view ]]; then
+  if [[ ${FAIL_GH_COMMAND:-} == repo ]]; then
+    exit 69
+  fi
+  printf '%s\\n' 'tinaudio/synth-setter'
+elif [[ $1 == pr && $2 == view ]]; then
+  if [[ ${FAIL_GH_COMMAND:-} == pr ]]; then
+    exit 66
+  fi
+  if [[ $* != *"--repo tinaudio/synth-setter"* || $* != *baseRefName* || $* == *baseRefOid* ]]; then
+    printf '%s\\n' "unsupported PR metadata arguments: $*" >&2
+    exit 65
+  fi
+  printf '%s\\n' '{"headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}'
+elif [[ $1 == api && $2 == repos/tinaudio/synth-setter/pulls/123 ]]; then
+  if [[ ${FAIL_GH_COMMAND:-} == api ]]; then
+    exit 67
+  fi
+  if [[ $* != *"--jq .base.sha"* ]]; then
+    printf '%s\\n' "incorrect base SHA query: $*" >&2
+    exit 68
+  fi
+  printf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+else
+  exit 64
+fi
+"""
+    )
+    fake_gh.chmod(0o755)
+    return os.environ | {"PATH": f"{tmp_path}:{os.environ['PATH']}"}
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+@pytest.mark.parametrize(("skill_path", "metadata_marker"), _PR_METADATA_COMMANDS)
+def test_pr_review_metadata_command_returns_base_sha_with_supported_gh_fields(
+    tmp_path: Path,
+    skill_path: str,
+    metadata_marker: str,
+) -> None:
+    """Execute each metadata command through a controlled gh boundary.
+
+    :param tmp_path: Temporary directory containing the controlled ``gh`` executable.
+    :param skill_path: Runbook containing a PR metadata command.
+    :param metadata_marker: Text immediately preceding the command's Bash fence.
+    """
+    command = _extract_pr_metadata_command(skill_path, metadata_marker)
+    sh = importlib.import_module("sh")
+
+    result = sh.bash(
+        "-c",
+        command.replace("<N>", "123"),
+        _cwd=REPO_ROOT,
+        _env=_fake_gh_environment(tmp_path),
+    )
+
+    assert str(result).splitlines() == [
+        '{"headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}',
+        "base_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ]
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+@pytest.mark.parametrize(("skill_path", "metadata_marker"), _PR_METADATA_COMMANDS)
+@pytest.mark.parametrize(
+    ("failed_command", "expected_status"), (("repo", 69), ("pr", 66), ("api", 67))
+)
+def test_pr_review_metadata_command_failure_preserves_status(
+    tmp_path: Path,
+    skill_path: str,
+    metadata_marker: str,
+    failed_command: str,
+    expected_status: int,
+) -> None:
+    """Stop the canonical metadata command when either gh lookup fails.
+
+    :param tmp_path: Temporary directory containing the controlled ``gh`` executable.
+    :param skill_path: Runbook containing a PR metadata command.
+    :param metadata_marker: Text immediately preceding the command's Bash fence.
+    :param failed_command: gh command that must return a failure.
+    :param expected_status: Exit status that Bash must preserve.
+    """
+    command = _extract_pr_metadata_command(skill_path, metadata_marker)
+    environment = _fake_gh_environment(tmp_path) | {"FAIL_GH_COMMAND": failed_command}
+    sh = importlib.import_module("sh")
+
+    with pytest.raises(sh.ErrorReturnCode) as exc_info:
+        sh.bash(
+            "-c",
+            command.replace("<N>", "123"),
+            _cwd=REPO_ROOT,
+            _env=environment,
+        )
+
+    assert exc_info.value.exit_code == expected_status
 
 
 def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
@@ -322,10 +480,10 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "review_failure.py deliver" in text
     assert re.search(r"every terminal failure.*delivery helper", text, re.DOTALL)
     assert re.search(r"never merely print the audit\s+and stop", text)
-    assert re.search(r"both Codex\s+and the selected free-pool tier pass provider", text)
+    assert re.search(r"both Codex and the secondary-review pass provider", text)
     assert "fallback_candidates" in text
-    assert "skip remaining candidates from that provider" in text
-    assert "authentication never triggers Codex fallback" in text
+    assert re.search(r"secondary attempt fails\s+authentication", text)
+    assert re.search(r"authentication never triggers\s+Codex fallback", text)
     assert "Codex fallback" in text
     assert "Free-pool review failed; only Codex ran." in text
     assert "## Provider incidents" in text
@@ -412,7 +570,7 @@ def test_pi_review_launcher_manifest_starts_detached_follow_up(tmp_path: Path) -
         '"pr_number":2174,"base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
         '"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","target":"PR #2174",'
         '"deferred_passes":[{"skill":"correctness-review","pass_name":"free-pool",'
-        '"origin":"primary","model":"kimi-coding/k3",'
+        '"origin":"primary","model":"meta/muse-spark-1.3-contributor",'
         '"verification_model":"openai-codex/gpt-5.6-sol","thinking":"high"}],'
         '"foreground_fingerprints":[]}\n'
         "JSON\n"
@@ -441,9 +599,9 @@ def test_pi_review_launcher_manifest_starts_detached_follow_up(tmp_path: Path) -
     assert transcript_match is not None
     transcript = Path(transcript_match.group(1))
     try:
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + _DETACHED_FOLLOW_UP_TIMEOUT_SECONDS
         while not marker.exists() and time.monotonic() < deadline:
-            pass
+            time.sleep(0.01)
         assert str(result).strip() == "foreground-complete"
         assert marker.exists()
     finally:
@@ -482,7 +640,7 @@ def _follow_up_success_payload() -> str:
                 {
                     "skill": "correctness-review",
                     "pass_name": "free-pool",
-                    "model": "kimi-coding/k3",
+                    "model": "meta/muse-spark-1.3-contributor",
                     "status": "success",
                     "agent_id": "agent-follow-up",
                     "output_path": ".pi/output/agent-follow-up.jsonl",
@@ -518,7 +676,7 @@ def _deferred_manifest_payload() -> str:
                     "skill": "correctness-review",
                     "pass_name": "free-pool",
                     "origin": "primary",
-                    "model": "kimi-coding/k3",
+                    "model": "meta/muse-spark-1.3-contributor",
                     "verification_model": "openai-codex/gpt-5.6-sol",
                     "thinking": "high",
                 }
@@ -851,7 +1009,7 @@ def test_pi_review_follow_up_launcher_runs_detached_pinned_process(tmp_path: Pat
                         "skill": "correctness-review",
                         "pass_name": "free-pool",
                         "origin": "primary",
-                        "model": "kimi-coding/k3",
+                        "model": "meta/muse-spark-1.3-contributor",
                         "verification_model": "openai-codex/gpt-5.6-sol",
                         "thinking": "high",
                     }
@@ -880,9 +1038,9 @@ def test_pi_review_follow_up_launcher_runs_detached_pinned_process(tmp_path: Pat
             _env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
         )
         pid = int(str(result))
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + _DETACHED_FOLLOW_UP_TIMEOUT_SECONDS
         while not marker.exists() and time.monotonic() < deadline:
-            pass
+            time.sleep(0.01)
         assert marker.exists()
         _assert_process_terminated(pid, timeout=2)
     finally:
@@ -992,13 +1150,11 @@ def test_codex_review_launcher_resolves_runtime_model_policy() -> None:
             assert "<N>" not in brief
 
 
-@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_codex_review_python_launcher_executes_resolved_command(tmp_path: Path) -> None:
     """Protect direct-entrypoint execution parity with the shell wrapper.
 
     :param tmp_path: Directory for the fake Codex executable.
     """
-    sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
     codex = tmp_path / "codex"
     codex.write_text(
@@ -1012,25 +1168,32 @@ def test_codex_review_python_launcher_executes_resolved_command(tmp_path: Path) 
     shadowed_python.write_text("#!/bin/bash\nexit 1\n")
     shadowed_python.chmod(0o755)
 
-    result = sh.Command(sys.executable)(
-        str(launcher),
-        "pr-review-worker-fast",
-        "--prompt",
-        "routing probe",
-        _cwd=REPO_ROOT,
-        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    environment = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    result = subprocess.run(  # noqa: S603 — fixed interpreter, launcher, and arguments
+        [
+            sys.executable,
+            str(launcher),
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+        ],
+        check=False,
+        capture_output=True,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
     )
 
-    assert str(result) == "structured report"
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == "structured report"
 
 
-@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_codex_review_python_launcher_ignores_blank_ndjson_lines(tmp_path: Path) -> None:
     """Preserve valid reports around blank NDJSON records.
 
     :param tmp_path: Directory for the fake Codex executable.
     """
-    sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
     codex = tmp_path / "codex"
     codex.write_text(
@@ -1043,16 +1206,25 @@ def test_codex_review_python_launcher_ignores_blank_ndjson_lines(tmp_path: Path)
     )
     codex.chmod(0o755)
 
-    result = sh.Command(sys.executable)(
-        str(launcher),
-        "pr-review-worker-fast",
-        "--prompt",
-        "routing probe",
-        _cwd=REPO_ROOT,
-        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    environment = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    result = subprocess.run(  # noqa: S603 — fixed interpreter, launcher, and arguments
+        [
+            sys.executable,
+            str(launcher),
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+        ],
+        check=False,
+        capture_output=True,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
     )
 
-    assert str(result) == "structured report"
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == "structured report"
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")

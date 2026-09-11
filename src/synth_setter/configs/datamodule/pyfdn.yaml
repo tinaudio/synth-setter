@@ -1,11 +1,5 @@
-_target_: synth_setter.data.pyfdn_datamodule.PyFDNDataModule
-param_spec_name: ${synth.param_spec_name}
-synth_version: ${synth.synth_version}
-sample_rate: 48_000
-train_val_test_sizes: [100_000, 10_000, 10_000]
-train_val_test_seeds: [123, 456, 789]
+defaults:
+  - vst
+  - _self_
+
 batch_size: 32
-num_workers: 4
-val_num_workers: 0
-conditioning: audio
-persistent_workers: true

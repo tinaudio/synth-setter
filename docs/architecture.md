@@ -16,8 +16,12 @@ The pipeline is **synth-agnostic**: rendering, storage, features, distributed
 workers, and the models are all driven by a `ParamSpec` (parameter schema) and a
 `RenderConfig` (backend and synth identity) looked up from a registry by name.
 Surge XT is the default and can render through Pedalboard, DawDreamer, or the
-pinned in-process SurgePy engine; OB-Xf is registered as a second VST3 synth,
-and Faust identities compile checked-in source through DawDreamer. SurgePy
+pinned in-process SurgePy engine. OB-Xf and Ultramaster KR-106 are registered
+VST3 synths; KR-106 also provides the `ultramaster_kr106_single_note` identity,
+which removes controls that cannot affect one fresh isolated note. Faust
+identities compile checked-in source through DawDreamer. Separately,
+`synth-setter-export-fdn-faust` converts one BasicFDN build into a fixed-value `.dsp` artifact
+and compile-checks it without registering a synth. SurgePy
 recreates the native synth for every row and accepts only
 `plugin_reload_cadence: render`. VST3 plugins can be
 onboarded with **no edits to core pipeline, storage, or model code**. See
@@ -63,10 +67,12 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
    `src/synth_setter/cli/generate_dataset.py`) builds the unified `DatasetSpec`.
 
 2. **Generate** -- Workers render audio samples through the configured synth
-   backend, producing Lance
-   shards uploaded to R2. Each shard contains audio waveforms, mel spectrograms,
-   and ground-truth parameter arrays. Workers are fully parallel with no shared
-   state.
+   backend, producing Lance shards uploaded to R2. Each shard contains audio
+   waveforms, mel spectrograms, and ground-truth parameter arrays. Offline pyFDN
+   rows deterministically retry complete patches after clipped or quiet renders;
+   native impulse responses are the default, with an in-process canonical chirp
+   available by explicit configuration, so R2 is destination-only.
+   Workers are fully parallel with no shared state.
    Design: [data-pipeline.md](design/data-pipeline.md)
 
 3. **Finalize** -- Downloads validated shards, commits their Lance fragments
@@ -185,6 +191,29 @@ crashing does not affect others. See
 of W&B (5 GB total budget); at train end the best checkpoint is uploaded to R2
 and the `model-{config_id}` W&B artifact references it as an `s3://` URI. See
 [training-pipeline.md](design/training-pipeline.md) section 6.
+
+**Growing Lance train snapshots.** Long-running offline training can append to
+a native branch without mutating the finalized baseline. The
+`synth-setter-growing-lance init` contract pins the baseline transaction, its
+train-shard count, the producer spec, the total train-shard maximum, and the
+per-refresh request size. The `grow` driver loops enqueue (freezing
+`[high_watermark, min(H + N, max))`), waits for parallel polling `generate`
+workers to stage every position through branch-isolated claims, and finalizes
+each range as a native Lance `Append`. Cumulative Welford state
+and derived statistics are hash-bound before the `<branch>-ready` tag advances.
+At capacity all producer commands are safe no-ops and the daemons exit.
+Copy-paste commands and failure behavior:
+[operations/growing-lance-runbook.md](operations/growing-lance-runbook.md).
+
+`materialize` serializes writers with a file lock and incrementally appends new
+remote fragments to one local `train.lance`; version directories contain only
+remote identity and statistics metadata. `active.json` binds exact remote and
+local transactions and cannot regress. Set `training.growing_active_record` and
+`training.growing_refresh_epoch_interval=1` to rebuild only the train loader at
+epoch boundaries. Validation and test remain on baseline rows and statistics.
+DDP adopts only an exact identity available to every rank, while checkpoint
+resume validates and restores its exact local Lance version before considering
+a newer ready snapshot. Growing jobs require `persistent_workers=false`.
 
 **Storage conventions are shared.** All pipelines (data, training, eval) follow
 the same R2 path structure and ID conventions defined in

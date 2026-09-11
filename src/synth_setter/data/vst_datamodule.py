@@ -16,6 +16,7 @@ from synth_setter.conditioning import (
     Conditioning,
     EmbeddingConditioningSpec,
     SketchControls,
+    SketchControlProfile,
     SketchControlSpec,
     resolve_embedding_conditioning,
     resolve_sketch_controls,
@@ -52,10 +53,13 @@ class RawBatch(TypedDict):  # noqa: DOC601, DOC603
     audio: NotRequired[np.ndarray | None]
 
 
-def _raw_batch_validation_error(raw: RawBatch) -> str | None:
+def _raw_batch_validation_error(
+    raw: RawBatch, sketch_profile: SketchControlProfile
+) -> str | None:
     """Return the first stored-value contract violation, if any.
 
     :param raw: Read shard columns to validate.
+    :param sketch_profile: Numeric contract for an optional sketch tensor.
     :returns: Validation message, or ``None`` when every stored value is valid.
     """
     arrays = {
@@ -75,19 +79,26 @@ def _raw_batch_validation_error(raw: RawBatch) -> str | None:
     audio = raw.get("audio")
     if audio is not None and np.any((audio < -1) | (audio > 1)):
         return "audio values must be within [-1, 1]"
-    return _sketch_range_validation_error(raw.get("sketch_ctrl"))
+    return _sketch_range_validation_error(raw.get("sketch_ctrl"), sketch_profile)
 
 
-def _sketch_range_validation_error(sketch: np.ndarray | None) -> str | None:
+def _sketch_range_validation_error(
+    sketch: np.ndarray | None, profile: SketchControlProfile
+) -> str | None:
     """Return the first sketch-control range violation, if any.
 
     Row-group bounds are the storage contract in :mod:`synth_setter.conditioning`;
     ``_validate_sketch_column`` only samples row 0, so every row is checked here.
 
     :param sketch: Stored ``sketch_ctrl`` rows, or ``None`` when unread.
+    :param profile: Selected sketch-control numeric contract.
     :returns: Validation message, or ``None`` when every row is in range.
     """
     if sketch is None:
+        return None
+    if profile == "pyfdn_reverb":
+        if np.any((sketch < -1) | (sketch > 1)):
+            return "sketch_ctrl pyfdn_reverb values must be within [-1, 1]"
         return None
     tracks = sketch[:, :NUM_SKETCH_TRACK_ROWS]
     if np.any((tracks < -1) | (tracks > 1)):
@@ -125,6 +136,7 @@ def prepare_batch(
     rescale_params: bool,
     ot: bool,
     generator: torch.Generator,
+    sketch_profile: SketchControlProfile = "music",
     sketch_pitch_zero_threshold: float | None = None,
     param_jitter_amount: float = 0.0,
 ) -> dict[str, torch.Tensor | None]:
@@ -136,6 +148,7 @@ def prepare_batch(
     :param rescale_params: Whether to map parameters from ``[0, 1]`` to ``[-1, 1]``.
     :param ot: Whether to Hungarian-match noise to parameters.
     :param generator: RNG for the noise draw.
+    :param sketch_profile: Numeric and channel-group contract for ``sketch_ctrl``.
     :param sketch_pitch_zero_threshold: Zero-bin ``sketch_ctrl`` pitch
         activations below this value (#2614), or ``None`` to skip.
     :param param_jitter_amount: Maximum absolute uniform offset in the encoded
@@ -145,7 +158,7 @@ def prepare_batch(
         as ``music2latent`` is under ``m2l``.
     :raises ValueError: If stored or transformed values violate the numeric contract.
     """
-    validation_error = _raw_batch_validation_error(raw)
+    validation_error = _raw_batch_validation_error(raw, sketch_profile)
     if validation_error is not None:
         raise ValueError(validation_error)
     _validate_param_jitter_amount(param_jitter_amount)
@@ -181,7 +194,7 @@ def prepare_batch(
     sketch_raw = raw.get(SKETCH_CTRL_FIELD)
     if sketch_raw is not None:
         sketch = torch.from_numpy(sketch_raw).to(dtype=torch.float32)
-        if sketch_pitch_zero_threshold is not None:
+        if sketch_profile == "music" and sketch_pitch_zero_threshold is not None:
             # Clone: from_numpy shares storage, and binning must not mutate the
             # caller's stored batch.
             sketch = sketch.clone()
@@ -367,6 +380,7 @@ class VSTDataModule(LightningDataModule):
         conditioning: Conditioning = "mel",
         sketch: SketchControls = None,
         pin_memory: bool = True,
+        include_audio: bool = False,
         *,
         param_spec_name: ParamSpecName,
         download_dataset_txids: dict[str, str] | None = None,
@@ -389,9 +403,9 @@ class VSTDataModule(LightningDataModule):
         :param predict_file: Prediction split; defaults to ``test.lance``. A path
             naming the configured ``dataset_root`` rebases onto the subset directory.
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
-        :param sketch: Optional sketch-control spec adding its stored column to
-            every split's read set (#2612).
+        :param sketch: Optional stored or online-audio sketch-control spec.
         :param pin_memory: Whether dataloaders pin returned tensors.
+        :param include_audio: Whether all splits include target audio for render-feedback loss.
         :param param_spec_name: Registry key selecting parameter width.
         :param download_dataset_txids: Per-split transaction uuids pinning the
             source snapshots. Each split has independent transaction history.
@@ -426,6 +440,7 @@ class VSTDataModule(LightningDataModule):
         )
         self.sketch_controls: SketchControlSpec | None = resolve_sketch_controls(sketch)
         self.pin_memory = pin_memory
+        self.include_audio = include_audio
         self.param_spec_name = param_spec_name
         self.download_dataset_txids = materialize_config.download_dataset_txids
         self.download_dataset_row_limit = materialize_config.download_dataset_row_limit
@@ -474,7 +489,9 @@ class VSTDataModule(LightningDataModule):
         :returns: Columns the loaders read, keyed by split.
         """
         return {
-            split: self._loader_columns(read_audio=split == predict_split)
+            split: self._loader_columns(
+                read_audio=self.include_audio or split == predict_split
+            )
             for split in _MATERIALIZE_SPLITS
         }
 
@@ -523,7 +540,13 @@ class VSTDataModule(LightningDataModule):
         """
         columns = ["param_array", self._conditioning_column()]
         if self.sketch_controls is not None:
-            columns.append(self.sketch_controls.column)
+            sketch_column = (
+                "audio"
+                if self.sketch_controls.source == "online"
+                else self.sketch_controls.column
+            )
+            if sketch_column not in columns:
+                columns.append(sketch_column)
         if read_audio and "audio" not in columns:
             columns.append("audio")
         return columns

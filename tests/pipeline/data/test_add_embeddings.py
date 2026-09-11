@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import gc
+import glob
+import json
 import os
 import shutil
 import subprocess
@@ -21,6 +23,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 import torch
+import wandb
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig
@@ -37,6 +40,7 @@ from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
+    CQT_FIELD,
     M2L_FIELD,
     MEANAUDIO_16K_FIELD,
     PARAM_ARRAY_FIELD,
@@ -64,6 +68,7 @@ from synth_setter.model_cache import checkpoint_tree_sha256
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
+    CQT_EMBEDDING_DIM,
     DEFAULT_CLAP_CHECKPOINT,
     DEFAULT_LANCE_BATCH_SIZE,
     EMBEDDING_REGISTRY,
@@ -121,6 +126,7 @@ from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 from tests.helpers.lance_fixtures import write_lance_shard
 from tests.helpers.run_if import RunIf
+from tests.helpers.wandb_offline import read_run_config, read_run_exit_code, read_run_project
 
 _SAMPLE_RATE = 44100
 _FIXTURE_SAMPLES = 16
@@ -407,10 +413,12 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     """The registry is the single source of truth for all supported embeddings."""
     assert set(EMBEDDING_REGISTRY) == {
         "clap",
+        "cqt",
         "m2l",
         "param_shift",
         "pupujepa_large",
         "pupujepa_tiny",
+        "pyfdn_sketch",
         "same_l",
         "same_s",
         "sketch",
@@ -429,6 +437,10 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["clap"].index == IndexSpec(
         pool="none", vector_dim=CLAP_EMBEDDING_DIM
     )
+    assert EMBEDDING_REGISTRY["cqt"].index == IndexSpec(
+        pool="mean", vector_column=f"{CQT_FIELD}_vec", vector_dim=CQT_EMBEDDING_DIM
+    )
+    assert EMBEDDING_REGISTRY["cqt"].co_resident is False
     assert EMBEDDING_REGISTRY["m2l"].index == IndexSpec(
         pool="mean", vector_column=f"{M2L_FIELD}_vec"
     )
@@ -536,13 +548,14 @@ def test_add_embeddings_config_composition_surfaces_registry_defaults() -> None:
         assert list(cfg.embeddings) == ["clap", "m2l"]
         assert dict(cfg.checkpoints) == {}
         assert cfg.device is None
-        assert cfg.batch_size == DEFAULT_LANCE_BATCH_SIZE
+        assert cfg.lance_batch_size == DEFAULT_LANCE_BATCH_SIZE
         assert cfg.build_index is True
         assert cfg.num_partitions is None
         assert cfg.num_sub_vectors is None
         assert cfg.metric == "cosine"
         assert cfg.resume_cache is None
         assert cfg.debug is False
+        assert cfg.logger.wandb._target_ == "lightning.pytorch.loggers.wandb.WandbLogger"
         assert AddEmbeddingsConfig.from_hydra_cfg(cfg) == AddEmbeddingsConfig(lance_uri=_LANCE_URI)
     finally:
         GlobalHydra.instance().clear()
@@ -906,7 +919,7 @@ def test_write_columns_with_nonpositive_batch_size_raises(tmp_path: Path) -> Non
     """
     uri = tmp_path / "bad-batch.lance"
     _audio_dataset(uri, rows=2)
-    config = AddEmbeddingsConfig(lance_uri=str(uri)).model_copy(update={"batch_size": 0})
+    config = AddEmbeddingsConfig(lance_uri=str(uri)).model_copy(update={"lance_batch_size": 0})
 
     with pytest.raises(ValueError, match="batch_size must be >= 1, got 0"):
         _write_columns(lance.dataset(str(uri)), [_fake_spec("m2l")], _SAMPLE_RATE, config)
@@ -1144,7 +1157,7 @@ def test_add_embeddings_with_recreated_source_rejects_stale_resume_batches(
     config = AddEmbeddingsConfig(
         lance_uri=str(uri),
         embeddings=("m2l",),
-        batch_size=1,
+        lance_batch_size=1,
         resume_cache=resume_cache,
         build_index=False,
     )
@@ -1222,7 +1235,7 @@ def test_write_columns_with_resume_cache_skips_completed_batches_after_interrupt
     config = AddEmbeddingsConfig(
         lance_uri=str(uri),
         embeddings=(name,),
-        batch_size=2,
+        lance_batch_size=2,
         resume_cache=resume_cache,
         build_index=False,
     )
@@ -1351,7 +1364,7 @@ def test_write_columns_with_debug_logs_progress_and_versions(
             lance.dataset(str(uri)),
             [_fake_spec("m2l")],
             _SAMPLE_RATE,
-            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), batch_size=2, debug=True),
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), lance_batch_size=2, debug=True),
         )
 
     progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
@@ -2996,6 +3009,147 @@ def test_module_import_defers_lance_initialization_until_cli_configures_logging(
     assert result.returncode == 0, result.stderr
 
 
+def test_add_embeddings_main_creates_offline_wandb_run_with_config_and_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI records its resolved settings and launch command in one W&B run.
+
+    :param tmp_path: Scratch directory for the dataset, Hydra output, and W&B run.
+    :param monkeypatch: Fixture installing dependency-free encoders and a hermetic W&B environment.
+    """
+    from synth_setter.pipeline.data.add_embeddings import main
+
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    uri = tmp_path / "tracked.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    _install_fake_specs(monkeypatch, ("clap",))
+    argv = [
+        "synth-setter-add-embeddings",
+        f"lance_uri={uri}",
+        "embeddings=[clap]",
+        "build_index=false",
+        "lance_batch_size=7",
+        "logger.wandb.offline=true",
+        f"logger.wandb.save_dir={tmp_path}",
+        f"paths.log_dir={tmp_path}",
+        f"hydra.run.dir={tmp_path / 'hydra-run'}",
+    ]
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(sys, "argv", argv)
+
+    main()
+
+    run_files = glob.glob(str(tmp_path / "wandb" / "offline-run-*" / "run-*.wandb"))
+    assert len(run_files) == 1
+    run_config = read_run_config(
+        Path(run_files[0]),
+        until=lambda config: "command" in config and "lance_uri" in config,
+    )
+    assert json.loads(run_config["lance_uri"]) == str(uri)
+    assert json.loads(run_config["embeddings"]) == ["clap"]
+    assert read_run_project(Path(run_files[0])) == "synth-setter-generate-dataset"
+    assert json.loads(run_config["lance_batch_size"]) == 7
+    assert json.loads(run_config["command"]) == " ".join(argv)
+    assert read_run_exit_code(Path(run_files[0])) == 0
+    assert CLAP_FIELD in lance.dataset(str(uri)).schema.names
+
+
+def test_add_embeddings_main_when_augmentation_fails_marks_wandb_run_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed augmentation finalizes its offline W&B run with a nonzero exit code.
+
+    :param tmp_path: Scratch directory for the Hydra output and W&B run.
+    :param monkeypatch: Fixture installing a hermetic W&B environment.
+    """
+    from synth_setter.pipeline.data.add_embeddings import main
+
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    argv = [
+        "synth-setter-add-embeddings",
+        f"lance_uri={tmp_path / 'missing.lance'}",
+        "logger.wandb.offline=true",
+        f"logger.wandb.save_dir={tmp_path}",
+        "logger.wandb.project=add-embeddings-test",
+        f"paths.log_dir={tmp_path}",
+        f"hydra.run.dir={tmp_path / 'hydra-run'}",
+    ]
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 1
+    assert wandb.run is None
+    run_files = glob.glob(str(tmp_path / "wandb" / "offline-run-*" / "run-*.wandb"))
+    assert len(run_files) == 1
+    assert read_run_exit_code(Path(run_files[0])) == 1
+
+
+def test_add_embeddings_main_with_active_wandb_run_preserves_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A nested invocation rejects W&B reuse without mutating or closing its parent run.
+
+    :param tmp_path: Scratch directory for the dataset, Hydra output, and W&B run.
+    :param monkeypatch: Fixture installing dependency-free encoders and a hermetic W&B environment.
+    """
+    from synth_setter.pipeline.data.add_embeddings import main
+
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    uri = tmp_path / "nested.lance"
+    write_minimal_lance_shard(uri, build_lance_smoke_spec())
+    _install_fake_specs(monkeypatch, ("clap",))
+    argv = [
+        "synth-setter-add-embeddings",
+        f"lance_uri={uri}",
+        "embeddings=[clap]",
+        "build_index=false",
+        "logger.wandb.offline=true",
+        f"logger.wandb.save_dir={tmp_path}",
+        "logger.wandb.project=add-embeddings-test",
+        f"paths.log_dir={tmp_path}",
+        f"hydra.run.dir={tmp_path / 'hydra-run'}",
+    ]
+    monkeypatch.setenv("PROJECT_ROOT", str(operator_workspace()))
+    monkeypatch.setattr(sys, "argv", argv)
+    parent_run = wandb.init(
+        project="add-embeddings-parent-test",
+        dir=str(tmp_path),
+        config={"sentinel": "parent"},
+    )
+
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+        assert wandb.run is parent_run
+        assert dict(parent_run.config) == {"sentinel": "parent"}
+        assert CLAP_FIELD not in lance.dataset(str(uri)).schema.names
+    finally:
+        wandb.finish(exit_code=0)
+
+    run_files = glob.glob(str(tmp_path / "wandb" / "offline-run-*" / "run-*.wandb"))
+    assert len(run_files) == 1
+    assert read_run_exit_code(Path(run_files[0])) == 0
+
+
 def test_add_embeddings_main_when_open_fails_exits_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3016,6 +3170,7 @@ def test_add_embeddings_main_when_open_fails_exits_one(
         "argv",
         [
             "synth-setter-add-embeddings",
+            "logger=[]",
             "lance_uri=s3://bucket/missing.lance",
             f"paths.log_dir={tmp_path}",
             f"hydra.run.dir={tmp_path / 'run'}",
@@ -3115,6 +3270,7 @@ def test_add_embeddings_main_with_registry_mode_writes_exact_columns(
         monkeypatch.setitem(EMBEDDING_REGISTRY, name, replace(spec, load_encoder=load))
     argv = [
         "synth-setter-add-embeddings",
+        "logger=[]",
         f"lance_uri={uri}",
         "build_index=false",
         f"paths.log_dir={tmp_path}",
@@ -3176,6 +3332,7 @@ def test_add_embeddings_main_with_registry_selection_writes_requested_columns(
         "argv",
         [
             "synth-setter-add-embeddings",
+            "logger=[]",
             f"lance_uri={uri}",
             "embeddings=[clap,same_s]",
             "checkpoints.same_s=custom/same-s",
@@ -3617,9 +3774,85 @@ def test_sketch_encode_never_exceeds_extraction_batch_cap(
     assert all(size <= SKETCH_ENCODE_MAX_BATCH for size in seen_sizes)
 
 
+def test_sketch_encode_with_custom_max_batch_caps_extractor_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A configured max batch overrides the default extraction cap.
+
+    :param monkeypatch: Fixture recording extractor input batch sizes.
+    """
+    import synth_setter.features.sketch_controls as sketch_controls
+    from synth_setter.pipeline.data.add_embeddings import _sketch_encode
+
+    seen_sizes: list[int] = []
+
+    def record(batch: torch.Tensor, sample_rate: int, device: str = "cpu") -> torch.Tensor:
+        del sample_rate, device
+        seen_sizes.append(len(batch))
+        return torch.zeros(len(batch), NUM_SKETCH_CONTROLS, 1)
+
+    monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
+    audio = np.zeros((20, 1, _FIXTURE_SAMPLES), dtype=np.float32)
+
+    controls = _sketch_encode(audio, _SAMPLE_RATE, max_batch=8)
+
+    assert len(controls) == 20
+    assert seen_sizes == [8, 8, 4]
+
+
+def test_add_embeddings_config_with_non_positive_sketch_batch_raises() -> None:
+    """The sketch extraction batch validates as a positive row count."""
+    with pytest.raises(ValidationError):
+        AddEmbeddingsConfig(lance_uri=_LANCE_URI, sketch_encode_batch=0)
+
+
+def test_add_embeddings_config_composition_overrides_sketch_encode_batch() -> None:
+    """The shipped Hydra config exposes the sketch extraction batch as a tunable."""
+    cfg = _compose_add_embeddings("sketch_encode_batch=128")
+    try:
+        config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+    assert config.sketch_encode_batch == 128
+
+
+def test_sketch_spec_encoder_binds_config_batch_and_logs_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The registry loader threads the configured max batch and logs the resolved device.
+
+    :param monkeypatch: Fixture stubbing PESTO load and recording extractor batch sizes.
+    """
+    import synth_setter.features.sketch_controls as sketch_controls
+    from synth_setter.pipeline.data.add_embeddings import (
+        SketchEncodeFn,
+        _load_sketch_spec_encoder,
+    )
+
+    seen_sizes: list[int] = []
+
+    def record(batch: torch.Tensor, sample_rate: int, device: str = "cpu") -> torch.Tensor:
+        del sample_rate, device
+        seen_sizes.append(len(batch))
+        return torch.zeros(len(batch), NUM_SKETCH_CONTROLS, 1)
+
+    monkeypatch.setattr(sketch_controls, "load_pesto_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
+    config = AddEmbeddingsConfig(
+        lance_uri=_LANCE_URI, embeddings=("sketch",), device="cpu", sketch_encode_batch=4
+    )
+
+    with capture_logs() as logs:
+        encode = cast("SketchEncodeFn", _load_sketch_spec_encoder("dummy.ckpt", config))
+    encode(np.zeros((10, 1, _FIXTURE_SAMPLES), dtype=np.float32), _SAMPLE_RATE)
+
+    assert seen_sizes == [4, 4, 2]
+    assert any(log.get("device") == "cpu" and log.get("encode_batch") == 4 for log in logs)
+
+
 @pytest.mark.slow
-def test_sketch_encode_chunked_batch_matches_single_pass() -> None:
-    """Memory-capped chunking preserves control values within float32 kernel jitter.
+def test_sketch_encode_sub_batched_matches_single_pass() -> None:
+    """Memory-capped sub-batching preserves control values within float32 kernel jitter.
 
     Torch reduction kernels can vary by batch shape at approximately 1e-6.
     """
@@ -3807,6 +4040,7 @@ def test_add_embeddings_main_with_sketch_selection_writes_control_columns(
         "argv",
         [
             "synth-setter-add-embeddings",
+            "logger=[]",
             f"lance_uri={uri}",
             "embeddings=[sketch]",
             "build_index=false",
