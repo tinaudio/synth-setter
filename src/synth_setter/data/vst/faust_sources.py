@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import cast
 
+from synth_setter.data.vst.faust_shimmer_fdn_source import SHIMMER_FDN_SOURCE
 from synth_setter.param_spec_name import ParamSpecName
 
 
@@ -44,7 +45,7 @@ class FaustDsp:
     outputs: int
 
 
-_BRIGHT_ORGAN_SOURCE = r'''import("stdfaust.lib");
+_BRIGHT_ORGAN_SOURCE = r"""import("stdfaust.lib");
 
 declare name "brightOrgan";
 declare author "Claude AI";
@@ -131,9 +132,9 @@ output = dry * (1 - reverbAmount * REVERB_DRY_SCALE) + reverb(dry) * reverbAmoun
 process = output;
 
 effect = _,_;
-'''
+"""
 
-_CHURCH_ORGAN_SOURCE = r'''declare name "churchOrgan";
+_CHURCH_ORGAN_SOURCE = r"""declare name "churchOrgan";
 declare author "Remi Chapelle";
 
 import("stdfaust.lib");
@@ -173,9 +174,9 @@ orgue = os.osc(f)       *p0
         + no.noise*nog;
 
 process = orgue*g*t <: r;
-'''
+"""
 
-_FILTER_OSC_SOURCE = r'''declare name "filterOSC";
+_FILTER_OSC_SOURCE = r"""declare name "filterOSC";
 declare version "0.0";
 declare author "JOS, revised by RM";
 declare description "Simple application demoing filter based oscillators.";
@@ -183,7 +184,7 @@ declare description "Simple application demoing filter based oscillators.";
 import("stdfaust.lib");
 
 process = dm.oscrs_demo;
-'''
+"""
 
 _KRONECKER_FDN_SOURCE = r'''import("stdfaust.lib");
 declare name "kroneckerFDN";
@@ -278,7 +279,7 @@ fdn = _ <: ((_ * dry), (loop : (pg :> _))) :> _;
 process = 1 - 1' : fdn;
 '''
 
-_BUBBLE_SOURCE = r'''declare name "bubble";
+_BUBBLE_SOURCE = r"""declare name "bubble";
 declare description "Production of a water drop bubble sound.";
 declare license "MIT";
 declare copyright "(c) 2017: Yann Orlarey, GRAME";
@@ -295,22 +296,17 @@ bubble(f0,trig) = os.osc(f) * (exp(-damp*time) : si.smooth(0.99))
     };
 
 process = button("drop") : bubble(hslider("v:bubble/freq", 600, 150, 2000, 1)) <: dm.freeverb_demo;
-'''
+"""
 
 _faust_dsps: dict[ParamSpecName, FaustDsp] = {
-    ParamSpecName("faust_bright_organ"): FaustDsp(
-        _BRIGHT_ORGAN_SOURCE, num_voices=1, outputs=2
-    ),
+    ParamSpecName("faust_bright_organ"): FaustDsp(_BRIGHT_ORGAN_SOURCE, num_voices=1, outputs=2),
     ParamSpecName("faust_bubble"): FaustDsp(_BUBBLE_SOURCE, num_voices=0, outputs=2),
-    ParamSpecName("faust_church_organ"): FaustDsp(
-        _CHURCH_ORGAN_SOURCE, num_voices=0, outputs=2
-    ),
-    ParamSpecName("faust_filter_osc"): FaustDsp(
-        _FILTER_OSC_SOURCE, num_voices=0, outputs=1
-    ),
+    ParamSpecName("faust_church_organ"): FaustDsp(_CHURCH_ORGAN_SOURCE, num_voices=0, outputs=2),
+    ParamSpecName("faust_filter_osc"): FaustDsp(_FILTER_OSC_SOURCE, num_voices=0, outputs=1),
     ParamSpecName("faust_kronecker_fdn"): FaustDsp(
         _KRONECKER_FDN_SOURCE, num_voices=0, outputs=1
     ),
+    ParamSpecName("faust_shimmer_fdn"): FaustDsp(SHIMMER_FDN_SOURCE, num_voices=0, outputs=2),
 }
 faust_dsps = cast(Mapping[str, FaustDsp], MappingProxyType(_faust_dsps))
 

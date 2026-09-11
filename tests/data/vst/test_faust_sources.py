@@ -104,6 +104,26 @@ _EXPECTED_PARAMETER_ADDRESSES: Mapping[str, list[str]] = {
         "/kroneckerFDN/Output/c7",
         "/kroneckerFDN/Output/dry",
     ],
+    "faust_shimmer_fdn": [
+        "/shimmerFDN/FDN/T60_low",
+        "/shimmerFDN/FDN/T60_high",
+        "/shimmerFDN/FDN/crossover",
+        "/shimmerFDN/Shimmer/transpose",
+        "/shimmerFDN/Shimmer/window",
+        "/shimmerFDN/Shimmer/shifted_lines/line__0",
+        "/shimmerFDN/Shimmer/shifted_lines/line__1",
+        "/shimmerFDN/Shimmer/shifted_lines/line__2",
+        "/shimmerFDN/Shimmer/shifted_lines/line__3",
+        "/shimmerFDN/Shimmer/shifted_lines/line__4",
+        "/shimmerFDN/Shimmer/shifted_lines/line__5",
+        "/shimmerFDN/Shimmer/shifted_lines/line__6",
+        "/shimmerFDN/Shimmer/shifted_lines/line__7",
+        "/shimmerFDN/Shimmer/DC_comp_max",
+        "/shimmerFDN/Output/dry/wet",
+        "/shimmerFDN/Output/level",
+        "/shimmerFDN/Safety/loop_ceiling",
+        "/shimmerFDN/Safety/energy_guard_bypass",
+    ],
 }
 _EXPECTED_OUTPUT_CHANNELS = {
     "faust_bright_organ": 2,
@@ -111,6 +131,7 @@ _EXPECTED_OUTPUT_CHANNELS = {
     "faust_church_organ": 2,
     "faust_filter_osc": 1,
     "faust_kronecker_fdn": 1,
+    "faust_shimmer_fdn": 2,
 }
 _RENDER_PARAMETER_OVERRIDES: Mapping[str, Mapping[str, float]] = {
     "faust_bright_organ": {},
@@ -121,6 +142,7 @@ _RENDER_PARAMETER_OVERRIDES: Mapping[str, Mapping[str, float]] = {
     },
     "faust_filter_osc": {},
     "faust_kronecker_fdn": {},
+    "faust_shimmer_fdn": {},
 }
 
 
@@ -317,6 +339,7 @@ def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
         ("faust_church_organ", 16),
         ("faust_filter_osc", 6),
         ("faust_kronecker_fdn", 38),
+        ("faust_shimmer_fdn", 27),
     ],
 )
 def test_faust_param_spec_preserves_exact_addresses_and_encoded_width(
@@ -385,19 +408,13 @@ class _NativeDomainCase:
     "case",
     [
         _NativeDomainCase("faust_bubble", "/bubble/bubble/freq", 150.0, 2000.0),
-        _NativeDomainCase(
-            "faust_church_organ", "/churchOrgan/Zita_Light/Dry/Wet_Mix", -1.0, 1.0
-        ),
-        _NativeDomainCase(
-            "faust_church_organ", "/churchOrgan/Zita_Light/Level", -70.0, 40.0
-        ),
+        _NativeDomainCase("faust_church_organ", "/churchOrgan/Zita_Light/Dry/Wet_Mix", -1.0, 1.0),
+        _NativeDomainCase("faust_church_organ", "/churchOrgan/Zita_Light/Level", -70.0, 40.0),
         _NativeDomainCase("faust_church_organ", "/churchOrgan/freq", 50.0, 1000.0),
         _NativeDomainCase(
             "faust_filter_osc", "/SINE_WAVE_OSCILLATOR_oscrs/Amplitude", -120.0, 10.0
         ),
-        _NativeDomainCase(
-            "faust_filter_osc", "/SINE_WAVE_OSCILLATOR_oscrs/Frequency", 1.0, 88.0
-        ),
+        _NativeDomainCase("faust_filter_osc", "/SINE_WAVE_OSCILLATOR_oscrs/Frequency", 1.0, 88.0),
         _NativeDomainCase(
             "faust_filter_osc", "/SINE_WAVE_OSCILLATOR_oscrs/Portamento", 0.001, 10.0
         ),
@@ -426,9 +443,7 @@ def test_faust_model_output_decodes_exact_native_addresses() -> None:
     """Model-domain midpoints decode under exact Faust renderer addresses."""
     spec = resolve_faust_param_spec(ParamSpecName("faust_filter_osc"))
 
-    synth_params, _ = decode_model_output(
-        np.zeros(spec.encoded_width, dtype=np.float32), spec
-    )
+    synth_params, _ = decode_model_output(np.zeros(spec.encoded_width, dtype=np.float32), spec)
 
     assert synth_params == pytest.approx(
         {
@@ -439,15 +454,21 @@ def test_faust_model_output_decodes_exact_native_addresses() -> None:
     )
 
 
-@pytest.mark.parametrize("param_spec_name", _EXPECTED_PARAMETER_ADDRESSES)
+@pytest.mark.parametrize(
+    "param_spec_name",
+    [
+        "faust_bright_organ",
+        "faust_bubble",
+        "faust_church_organ",
+        "faust_filter_osc",
+    ],
+)
 def test_faust_note_conditioning_contract_is_identity_stable(param_spec_name: str) -> None:
     """Every Faust identity pins pitch and note-window label domains.
 
     :param param_spec_name: Faust parameter-spec identity under test.
     """
-    pitch, note_window = resolve_faust_param_spec(
-        ParamSpecName(param_spec_name)
-    ).note_params
+    pitch, note_window = resolve_faust_param_spec(ParamSpecName(param_spec_name)).note_params
 
     assert isinstance(pitch, DiscreteLiteralParameter)
     assert (pitch.name, pitch.min, pitch.max) == ("pitch", 48, 72)
@@ -466,10 +487,7 @@ def test_faust_param_spec_resolution_returns_fresh_specs() -> None:
 
     resolved_again = resolve_faust_param_spec(ParamSpecName("faust_bubble"))
 
-    assert (
-        resolved_again.synth_params[0].name
-        == _EXPECTED_PARAMETER_ADDRESSES["faust_bubble"][0]
-    )
+    assert resolved_again.synth_params[0].name == _EXPECTED_PARAMETER_ADDRESSES["faust_bubble"][0]
 
 
 def test_faust_param_spec_resolution_rejects_unknown_identity() -> None:

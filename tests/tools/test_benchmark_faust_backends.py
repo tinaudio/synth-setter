@@ -196,8 +196,27 @@ def test_benchmark_cli_generates_and_consumes_each_backend_dataset(tmp_path: Pat
     :param tmp_path: Isolated benchmark artifact root.
     """
     output = tmp_path / "benchmark"
-    main(["--output", str(output), "--rows", "1", "--trials", "1", "--block-size", "64"])
+    entrypoint = shutil.which("synth-setter-benchmark-faust-backends")
+    assert entrypoint is not None
+    completed = subprocess.run(  # noqa: S603 — installed entrypoint with controlled arguments
+        [
+            entrypoint,
+            "--output",
+            str(output),
+            "--rows",
+            "1",
+            "--trials",
+            "1",
+            "--block-size",
+            "64",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
 
+    assert str(output / "results.json") in completed.stdout
     report = json.loads((output / "results.json").read_text())
     assert report["settings"]["rows_per_trial"] == 1
     assert report["settings"]["trials_per_backend"] == 1
