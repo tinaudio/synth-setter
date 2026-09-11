@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const fdnDirectory = path.dirname(fileURLToPath(import.meta.url));
 const webDirectory = path.join(fdnDirectory, "..");
 const packageRoot = path.join(webDirectory, "..");
-const PAGE_ASSETS = ["index.html", "app.mjs", "audio.mjs", "bundle.mjs", "decode.mjs", "dsp.mjs", "fft.mjs", "inference.mjs", "metrics.mjs", "noise.mjs", "patch.mjs", "render.mjs", "sketch.mjs", "wav.mjs"];
+const PAGE_ASSETS = ["index.html", "app.mjs", "audio.mjs", "author.mjs", "bundle.mjs", "decode.mjs", "dsp.mjs", "fft.mjs", "inference.mjs", "metrics.mjs", "noise.mjs", "patch.mjs", "render.mjs", "sketch.mjs", "wav.mjs"];
 const MODEL_FILES = ["frontend.onnx", "conditioning.onnx", "velocity.onnx"];
 
 async function requireDirectory(directory, label) {

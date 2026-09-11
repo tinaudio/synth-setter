@@ -1,5 +1,6 @@
 import * as ort from "../ort/ort.wasm.min.mjs";
 import { decodeToContract } from "./audio.mjs";
+import { AUTHOR_DEFAULTS, authorReverbSketch, BAND_CENTRES_HZ, RT60_RANGE_SECONDS } from "./author.mjs";
 import { loadFaustBundle, loadModelBundle } from "./bundle.mjs";
 import { decodeHouseholderRow } from "./decode.mjs";
 import { loadGraphs, sampleParameters } from "./inference.mjs";
@@ -7,7 +8,7 @@ import { evaluateImpulseResponses } from "./metrics.mjs";
 import { gaussianNoise } from "./noise.mjs";
 import { canonicalPatch } from "./patch.mjs";
 import { renderImpulseResponse } from "./render.mjs";
-import { extractReverbSketch } from "./sketch.mjs";
+import { extractReverbSketch, SKETCH_CONTROLS, SKETCH_INTERVALS } from "./sketch.mjs";
 import { encodeWav } from "./wav.mjs";
 import { branchWeights } from "../guidance.mjs";
 
@@ -22,6 +23,9 @@ const status = document.querySelector("#status");
 const runButton = document.querySelector("#run");
 const results = document.querySelector("#results");
 const field = (name) => form.elements[name];
+const authorFieldset = document.querySelector("#author");
+const heatmap = document.querySelector("#heatmap");
+const bandSliders = document.querySelector("#bands");
 
 let bundles;
 // Object URLs from the previous run are released when results are replaced.
@@ -29,6 +33,77 @@ let objectUrls = [];
 
 function setStatus(text) {
   status.textContent = text;
+}
+
+function bindSlider(input) {
+  const output = input.parentElement.querySelector("output");
+  const show = () => (output.value = Number(input.value).toFixed(input.step.includes(".") ? 2 : 0));
+  input.addEventListener("input", () => {
+    show();
+    if (authorFieldset.hidden === false) drawHeatmap(authorReverbSketch(authorParams(), currentContract()));
+  });
+  show();
+}
+
+function buildBandSliders() {
+  BAND_CENTRES_HZ.forEach((centre, index) => {
+    const label = document.createElement("label");
+    label.append(`${centre} Hz `);
+    const input = document.createElement("input");
+    input.type = "range";
+    input.name = `rt60_${index}`;
+    input.min = String(RT60_RANGE_SECONDS[0]);
+    input.max = String(RT60_RANGE_SECONDS[1]);
+    input.step = "0.01";
+    input.value = String(AUTHOR_DEFAULTS.rt60Seconds[index]);
+    const output = document.createElement("output");
+    label.append(input, output);
+    bandSliders.append(label);
+  });
+  authorFieldset.querySelectorAll("input[type=range]").forEach(bindSlider);
+}
+
+const authorField = (name) => Number(authorFieldset.querySelector(`[name=${name}]`).value);
+
+// Tilt scales the four low and four high bands so most edits are one gesture; clamped to the RT60 range.
+function authorParams() {
+  const [low, high] = [authorField("tiltLow"), authorField("tiltHigh")];
+  const rt60Seconds = BAND_CENTRES_HZ.map((_, index) => {
+    const scaled = authorField(`rt60_${index}`) * (index < 4 ? low : high);
+    return Math.min(RT60_RANGE_SECONDS[1], Math.max(RT60_RANGE_SECONDS[0], scaled));
+  });
+  return {
+    rt60Seconds,
+    preDelayMs: authorField("preDelayMs"),
+    mixingTimeMs: authorField("mixingTimeMs"),
+    initialDensity: authorField("initialDensity"),
+    flatnessStart: authorField("flatnessStart"),
+    flatnessEnd: authorField("flatnessEnd"),
+  };
+}
+
+function currentContract() {
+  const { sampleRate, frames } = bundles.model.manifest;
+  return { sampleRate, frames };
+}
+
+function drawHeatmap(sketch) {
+  const context = heatmap.getContext("2d");
+  const cellWidth = heatmap.width / SKETCH_INTERVALS;
+  const cellHeight = heatmap.height / SKETCH_CONTROLS;
+  for (let row = 0; row < SKETCH_CONTROLS; row++) {
+    for (let k = 0; k < SKETCH_INTERVALS; k++) {
+      const level = Math.round(((sketch[row * SKETCH_INTERVALS + k] + 1) / 2) * 255);
+      context.fillStyle = `rgb(${level}, ${Math.round(level * 0.8)}, ${255 - level})`;
+      context.fillRect(k * cellWidth, row * cellHeight, cellWidth, cellHeight);
+    }
+  }
+}
+
+function syncSketchSource() {
+  const authored = field("sketchSource").value === "authored";
+  authorFieldset.hidden = !authored;
+  if (authored && bundles) drawHeatmap(authorReverbSketch(authorParams(), currentContract()));
 }
 
 async function loadBundles() {
@@ -41,6 +116,7 @@ async function loadBundles() {
   field("sketch").value = sampling.sketchCfg;
   field("steps").value = PAGE_DEFAULT_STEPS;
   bundles = { model, faust, graphs };
+  syncSketchSource();
   setStatus(`Ready: ${paramSpecName}, ${frames} frames at ${sampleRate} Hz; checkpoint default is ${sampling.steps} steps`);
   runButton.disabled = false;
 }
@@ -128,8 +204,11 @@ async function run(event) {
     setStatus("Decoding target audio");
     const decoded = await decodeToContract(await file.arrayBuffer(), contract);
     const target = decoded.samples;
-    setStatus("Extracting reverb sketch");
-    const sketch = extractReverbSketch(target, contract.sampleRate);
+    const sketchSource = field("sketchSource").value;
+    setStatus(sketchSource === "authored" ? "Authoring reverb sketch" : "Extracting reverb sketch");
+    const authored = sketchSource === "authored" ? authorParams() : null;
+    const sketch = authored ? authorReverbSketch(authored, contract) : extractReverbSketch(target, contract.sampleRate);
+    drawHeatmap(sketch);
     const mode = field("mode").value;
     const contentCfg = Number(field("content").value);
     const sketchCfg = Number(field("sketch").value);
@@ -159,6 +238,7 @@ async function run(event) {
     renderTable(results, "Predicted parameters", Object.entries(patch));
     renderTable(results, "Run", [
       ["mode", mode],
+      ["sketch source", sketchSource],
       ["content CFG", contentCfg],
       ["sketch CFG", sketchCfg],
       ["steps", steps],
@@ -172,6 +252,8 @@ async function run(event) {
     window.fdnEval = {
       state: "complete",
       mode,
+      sketchSource,
+      authored,
       contentCfg,
       sketchCfg,
       steps,
@@ -195,6 +277,8 @@ async function run(event) {
 }
 
 form.addEventListener("submit", run);
+field("sketchSource").addEventListener("change", syncSketchSource);
+buildBandSliders();
 loadBundles().catch((error) => {
   window.fdnEval = { state: "error", message: error.message };
   setStatus(`Error: ${error.message}`);

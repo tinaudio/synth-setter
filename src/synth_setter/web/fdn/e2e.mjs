@@ -5,9 +5,9 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "@playwright/test";
 
-const [siteDirectory, wavPath, outputPath, mode = "both", contentCfg = "2", sketchCfg = "2", steps = "8", seed = "17"] = process.argv.slice(2);
+const [siteDirectory, wavPath, outputPath, mode = "both", contentCfg = "2", sketchCfg = "2", steps = "8", seed = "17", sketchSource = "extracted"] = process.argv.slice(2);
 if (!siteDirectory || !wavPath || !outputPath) {
-  console.error("Usage: node e2e.mjs SITE_DIR TARGET_WAV OUTPUT_JSON [MODE CONTENT_CFG SKETCH_CFG STEPS SEED]");
+  console.error("Usage: node e2e.mjs SITE_DIR TARGET_WAV OUTPUT_JSON [MODE CONTENT_CFG SKETCH_CFG STEPS SEED SKETCH_SOURCE]");
   process.exit(2);
 }
 
@@ -46,6 +46,7 @@ try {
   await page.locator("#sketch").fill(sketchCfg);
   await page.locator("#steps").fill(steps);
   await page.locator("#seed").fill(seed);
+  await page.locator("#sketchSource").selectOption(sketchSource);
   await page.getByRole("button", { name: "Run evaluation" }).click();
   await page.waitForFunction(() => ["complete", "error"].includes(window.fdnEval?.state), null, { timeout: 600000 });
   const record = await page.evaluate(() => window.fdnEval);

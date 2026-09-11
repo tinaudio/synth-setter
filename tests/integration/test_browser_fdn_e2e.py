@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -43,6 +44,18 @@ class _BrowserRun(BaseModel):
         Conditioning mode the page ran.
 
         :type: str
+
+    .. attribute :: sketchSource
+
+        ``extracted`` from the upload or ``authored`` from the page controls.
+
+        :type: str
+
+    .. attribute :: authored
+
+        Authoring controls when the sketch was authored, else ``None``.
+
+        :type: dict[str, Any] | None
 
     .. attribute :: contentCfg
 
@@ -121,6 +134,8 @@ class _BrowserRun(BaseModel):
 
     state: str
     mode: str
+    sketchSource: str
+    authored: dict[str, Any] | None
     contentCfg: float
     sketchCfg: float
     steps: int
@@ -190,32 +205,7 @@ def test_browser_fdn_site_matches_python_inference_render_and_metrics(tmp_path: 
     write_wav(target, str(target_wav), _SAMPLE_RATE, 1)
     target_mono = np.asarray(target, dtype=np.float64).reshape(-1)
 
-    site = tmp_path / "site"
-    node = sh.Command("node")
-    node(
-        str(_WEB_ROOT / "fdn/export-site.mjs"),
-        "--model",
-        _MODEL_BUNDLE,
-        "--faust",
-        _FAUST_ARTIFACT,
-        "--output",
-        str(site),
-    )
-    record_path = tmp_path / "run.json"
-    output = node(
-        str(_WEB_ROOT / "fdn/e2e.mjs"),
-        str(site),
-        str(target_wav),
-        str(record_path),
-        "both",
-        "2",
-        "3",
-        str(_STEPS),
-        str(_SEED),
-    )
-    assert "BROWSER_FDN_E2E_COMPLETE" in str(output)
-    record = _BrowserRun.model_validate_json(record_path.read_text(encoding="utf-8"))
-    assert record.state == "complete"
+    record = _drive_site(tmp_path, target_wav, mode="both", sketch_source="extracted")
 
     # The browser decoded the 16-bit WAV, so its target differs from the float render by ≤ 1 LSB.
     browser_target = np.asarray(record.target, dtype=np.float64)
@@ -246,6 +236,83 @@ def test_browser_fdn_site_matches_python_inference_render_and_metrics(tmp_path: 
     _assert_onnx_replay_parity(Path(str(_MODEL_BUNDLE)), record, browser_target, expected_sketch)
     if _CHECKPOINT and _STATS:
         _assert_sampling_parity(_CHECKPOINT, _STATS, record, browser_target, expected_sketch)
+
+
+def _drive_site(tmp_path: Path, target_wav: Path, *, mode: str, sketch_source: str) -> _BrowserRun:
+    """Export the site and run one evaluation in headless Chromium.
+
+    :param tmp_path: Directory for the site and run record.
+    :param target_wav: Target impulse response to upload.
+    :param mode: Conditioning mode to select on the page.
+    :param sketch_source: ``extracted`` or ``authored``.
+    :returns: The validated run record.
+    """
+    site = tmp_path / "site"
+    node = sh.Command("node")
+    node(
+        str(_WEB_ROOT / "fdn/export-site.mjs"),
+        "--model",
+        str(_MODEL_BUNDLE),
+        "--faust",
+        str(_FAUST_ARTIFACT),
+        "--output",
+        str(site),
+    )
+    record_path = tmp_path / "run.json"
+    output = node(
+        str(_WEB_ROOT / "fdn/e2e.mjs"),
+        str(site),
+        str(target_wav),
+        str(record_path),
+        mode,
+        "2",
+        "3",
+        str(_STEPS),
+        str(_SEED),
+        sketch_source,
+    )
+    assert "BROWSER_FDN_E2E_COMPLETE" in str(output)
+    record = _BrowserRun.model_validate_json(record_path.read_text(encoding="utf-8"))
+    assert record.state == "complete"
+    return record
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not (_MODEL_BUNDLE and _FAUST_ARTIFACT),
+    reason="Set BROWSER_FDN_MODEL_BUNDLE and BROWSER_FDN_FAUST_ARTIFACT to exported directories",
+)
+@pytest.mark.skipif(
+    not (_WEB_ROOT / "node_modules/@playwright/test").is_dir(),
+    reason="Run npm ci --prefix src/synth_setter/web and install its Playwright Chromium browser",
+)
+def test_browser_fdn_site_authored_sketch_drives_sketch_only_inference(tmp_path: Path) -> None:
+    """An authored sketch is well formed, reaches the graphs, and yields a scorable render.
+
+    :param tmp_path: Isolated site export, target WAV, run record, and screenshot.
+    """
+    renderer = PyFDNRenderer(param_spec_name=_SPEC_NAME)
+    params, _note = resolve_param_spec(_SPEC_NAME).sample(np.random.default_rng(6))
+    target_wav = tmp_path / "target.wav"
+    write_wav(
+        renderer.render(params, note_start_and_end=(0.0, 4.0)), str(target_wav), _SAMPLE_RATE, 1
+    )
+
+    record = _drive_site(tmp_path, target_wav, mode="sketch_only", sketch_source="authored")
+
+    assert record.sketchSource == "authored"
+    assert record.authored is not None
+    sketch = np.asarray(record.sketch, dtype=np.float32).reshape(10, 32)
+    assert np.isfinite(sketch).all() and sketch.min() >= -1.0 and sketch.max() <= 1.0
+    assert (np.diff(sketch[:8], axis=1) <= 1e-6).all(), "decay rows must not rise"
+    assert (np.diff(sketch[8]) >= -1e-6).all(), "echo density must not fall"
+    assert record.weights == [-2.0, 3.0, 0.0, 0.0]
+    pred = np.asarray(record.pred, dtype=np.float64)
+    assert np.isfinite(pred).all() and np.abs(pred).max() > 0
+    assert all(np.isfinite(value) for value in record.metrics.values())
+    _assert_onnx_replay_parity(
+        Path(str(_MODEL_BUNDLE)), record, np.asarray(record.target, dtype=np.float64), sketch
+    )
 
 
 def _assert_onnx_replay_parity(
