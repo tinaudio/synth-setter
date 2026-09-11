@@ -587,6 +587,14 @@ class VSTFlowMatchingModule(LightningModule):
                     f"{stored_note_timing!r}, load override requested "
                     f"{requested_note_timing!r}"
                 )
+            if (
+                _PARAM_SPEC_IDENTITY_KEY not in checkpoint
+                or _NOTE_TIMING_PARAMETERIZATION_KEY not in checkpoint
+            ) and hparams_file is not None:
+                raise ValueError(
+                    "cannot verify param_spec/note_timing_parameterization for an "
+                    "unstamped checkpoint when hparams_file is provided"
+                )
             if _ENDPOINT_TIME_WEIGHTING_KEY not in checkpoint:
                 stored_time_weighting = _checkpoint_endpoint_time_weighting(checkpoint)
                 if hparams_file is not None:

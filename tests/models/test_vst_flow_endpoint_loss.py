@@ -894,6 +894,25 @@ def test_load_pre_stamp_checkpoint_with_hparams_file_raises(tmp_path: Path) -> N
         )
 
 
+def test_load_unstamped_timing_checkpoint_with_hparams_file_raises(tmp_path: Path) -> None:
+    """External hyperparameters cannot obscure unstamped timing semantics.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(),
+        tmp_path / "unstamped-timing.ckpt",
+        omit_metadata="note_timing_parameterization",
+    )
+
+    with pytest.raises(ValueError, match="hparams_file"):
+        VSTFlowMatchingModule.load_from_checkpoint(
+            path,
+            hparams_file=tmp_path / "overrides.yaml",
+            weights_only=False,
+        )
+
+
 def test_load_checkpoint_from_file_object_restores_module(tmp_path: Path) -> None:
     """Raw metadata inspection preserves file-object checkpoint loading.
 

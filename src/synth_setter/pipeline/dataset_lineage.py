@@ -103,7 +103,14 @@ def dataset_note_timing_parameterization(
         try:
             spec_uri = join_uri(str(root), INPUT_SPEC_FILENAME)
             identity = _DatasetTimingIdentity.model_validate_json(read_spec_text(spec_uri))
-        except (OSError, subprocess.CalledProcessError):
+        except FileNotFoundError:
+            continue
+        except (OSError, subprocess.CalledProcessError) as exc:
+            log.warning(
+                "dataset_timing_unreadable",
+                dataset_root=str(root),
+                error=str(exc),
+            )
             continue
         return identity.render.synth.note_timing_parameterization
     return None

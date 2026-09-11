@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import ANY, MagicMock
 
 import pytest
+from structlog.testing import capture_logs
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
@@ -19,6 +20,26 @@ from synth_setter.pipeline.dataset_lineage import (
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
+
+
+def test_dataset_note_timing_unreadable_metadata_warns_and_skips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """I/O failures surface a warning and skip validation fail-open.
+
+    :param tmp_path: Dataset root whose spec read fails.
+    :param monkeypatch: Spec-read failure injector.
+    """
+    import synth_setter.pipeline.dataset_lineage as lineage
+
+    def _boom(spec_uri: str) -> str:
+        raise OSError(f"cannot read {spec_uri}")
+
+    monkeypatch.setattr(lineage, "read_spec_text", _boom)
+    with capture_logs() as logs:
+        assert lineage.dataset_note_timing_parameterization(tmp_path) is None
+
+    assert [entry for entry in logs if entry["event"] == "dataset_timing_unreadable"]
 
 
 def test_dataset_artifact_ref_valid_local_spec_returns_dataset_artifact(
