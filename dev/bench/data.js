@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789113475535,
+  "lastUpdate": 1789113479981,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -28921,6 +28921,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.807430342700082,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5bfeda35639b0ee3e30a1d321dac756c53c02dbc",
+          "message": "internal-feat(faust): add impulse-excited Kronecker FDN identity (#3524)\n\nRegister faust_kronecker_fdn, a mono order-8 feedback delay network whose\nfeedback matrix is the three-level Kronecker product of Coppola (DAFx26),\nmirroring the pyfdn_n8_mono_kronecker control set in Faust UI form.\n\nEvery render starts from a fixed unit impulse, so MIDI conditioning stays\nan unused pipeline stub and dataset rows are deterministic impulse\nresponses. The compiled DSP reproduces the reference Kronecker loop\nsample-exactly (see test_faust_kronecker_fdn).\n\nCloses #3519",
+          "timestamp": "2026-09-11T01:30:16-04:00",
+          "tree_id": "c739facb8783e6c4ab1c17b92bc20ccaefcc4e66",
+          "url": "https://github.com/tinaudio/synth-setter/commit/5bfeda35639b0ee3e30a1d321dac756c53c02dbc"
+        },
+        "date": 1789113478980,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.802022933959961,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.74868942245841,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.0958792194724083,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.003944575786590576,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2862777709960938,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.743844261200001,
             "unit": "seconds"
           }
         ]
