@@ -83,6 +83,29 @@ def test_canonical_ast_config_corrected_padding_can_opt_in() -> None:
     assert cfg.model.encoder.use_fixed_ast_padding is True
 
 
+def test_canonical_ast_encoder_instantiation_selects_checkpoint_geometry() -> None:
+    """Prove the padding option reaches model construction in both modes."""
+    legacy_cfg = _compose(
+        "train.yaml",
+        ["datamodule=surge_lance", "model=vst_flow", "trainer=cpu"],
+    )
+    fixed_cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "model=vst_flow",
+            "model.encoder.use_fixed_ast_padding=true",
+            "trainer=cpu",
+        ],
+    )
+
+    legacy_encoder = hydra.utils.instantiate(legacy_cfg.model.encoder)
+    fixed_encoder = hydra.utils.instantiate(fixed_cfg.model.encoder)
+
+    assert legacy_encoder.patch_embed.num_tokens == 480
+    assert fixed_encoder.patch_embed.num_tokens == 520
+
+
 def test_eval_config(cfg_eval: DictConfig) -> None:
     """Tests the evaluation configuration provided by the `cfg_eval` pytest fixture.
 

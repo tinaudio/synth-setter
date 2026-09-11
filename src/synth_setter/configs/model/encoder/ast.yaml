@@ -7,4 +7,6 @@ patch_size: 16
 patch_stride: 10
 input_channels: 2
 spec_shape: [128, 401]
+# Checkpoint-architecture pin: false preserves the token geometry existing
+# checkpoints trained with; corrected/new models opt into true explicitly.
 use_fixed_ast_padding: false
