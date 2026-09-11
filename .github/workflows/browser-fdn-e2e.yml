@@ -95,8 +95,9 @@ jobs:
               case for case in ET.parse("logs/browser-fdn-e2e.xml").findall(".//testcase")
               if case.get("classname") == "tests.integration.test_browser_fdn_e2e"
           ]
-          assert len(cases) == 1, "Expected the real browser FDN E2E test"
-          assert cases[0].find("skipped") is None, "Browser FDN E2E must execute, not skip"
+          assert cases, "Expected the real browser FDN E2E tests"
+          skipped = [case.get("name") for case in cases if case.find("skipped") is not None]
+          assert not skipped, f"Browser FDN E2E must execute, not skip: {skipped}"
           PY
       - name: Upload evidence
         if: always()
