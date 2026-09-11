@@ -64,6 +64,9 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
         ParamSpecName("faust_fdn_n8_mono_householder")
     ),
     ParamSpecName("faust_filter_osc"): resolve_faust_param_spec(ParamSpecName("faust_filter_osc")),
+    ParamSpecName("faust_shimmer_fdn"): resolve_faust_param_spec(
+        ParamSpecName("faust_shimmer_fdn")
+    ),
     ParamSpecName("cardinal"): CARDINAL_PARAM_SPEC,
     ParamSpecName("surge_xt"): SURGE_XT_PARAM_SPEC,
     ParamSpecName("surge_simple"): SURGE_SIMPLE_PARAM_SPEC,

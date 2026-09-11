@@ -174,7 +174,7 @@ def test_materialize_lance_subset_evicts_written_data_files(
         advised_fds.append(fd)
         assert offset == 0
         assert length == 0
-        assert advice == os.POSIX_FADV_DONTNEED
+        assert advice == getattr(os, "POSIX_FADV_DONTNEED")
 
     monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
     monkeypatch.setattr(os, "posix_fadvise", record_advice, raising=False)
@@ -211,7 +211,7 @@ def test_materialize_lance_subset_real_cache_evict_remains_consumable(
     :param monkeypatch: Wraps the real syscall to prove the production path invokes it.
     """
     source, txid = two_version_source
-    real_advice = os.posix_fadvise
+    real_advice = getattr(os, "posix_fadvise")
     advised_fds: list[int] = []
 
     def record_real_advice(fd: int, offset: int, length: int, advice: int) -> None:
