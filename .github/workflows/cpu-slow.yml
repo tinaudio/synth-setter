@@ -45,9 +45,8 @@ jobs:
     # the `pull_request` trigger checks head-repo identity (see #1206).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
 
-    # Jammy matches the production worker image and its Faust 2.37.3 package.
-    # The suite runs serially, so per-test PyTorch peak is the only OOM risk.
-    runs-on: ubuntu-22.04
+    # Standard 2-core/7 GB runner; the suite runs serially to bound PyTorch memory.
+    runs-on: ubuntu-latest
 
     timeout-minutes: 90
 
@@ -74,9 +73,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends faust g++
-
-      - name: Verify production Faust version
-        run: faust --version 2>&1 | grep -F "FAUST Version 2.37.3"
 
       - name: Install FaustWasm browser dependencies
         run: |
@@ -276,3 +272,48 @@ jobs:
               -f childId="${new_node_id}" \
               || echo "WARN: failed to parent under Phase 1 (#150); reparent manually"
           fi
+
+  faust_host_parity:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install production native Faust toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends faust g++-12
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
+
+      - name: Verify production Faust toolchain
+        run: |
+          set -o pipefail
+          faust --version 2>&1 | grep -F "FAUST Version 2.37.3"
+          g++ -dumpversion | grep -E '^12([.]|$)'
+
+      - name: Set up Python 3.12.13
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.2.0
+        with:
+          python-version: "3.12.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install Python dependencies
+        run: uv sync --frozen
+
+      - name: Run four-second Faust host parity
+        run: uv run pytest -vv tests/data/vst/test_faustwasm_dawdreamer_parity_e2e.py

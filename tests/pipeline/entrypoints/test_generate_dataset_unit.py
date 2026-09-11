@@ -2686,7 +2686,9 @@ class TestBuildGenerateArgs:
         option_keys: set[str] = {arg.lstrip("-") for arg in args if arg.startswith("--")}
 
         assert option_keys == {*RenderConfig.model_fields.keys(), "shard_id"} - {
-            "retain_local_shards"
+            "retain_local_shards",
+            # Worker-transport provenance marker (exclude=True); never a CLI flag.
+            "v1_gui_toggle_cadence_omitted",
         }
 
     def test_args_start_with_python_and_script(self, spec: DatasetSpec) -> None:

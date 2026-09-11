@@ -1455,7 +1455,6 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     tmp_path: Path,
     surge_xt_smoke_datasets: Path,
     dataset_spec_factory: Callable[..., DatasetSpec],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Fake oracle returns ``batch["params"]`` verbatim, so ``test/param_mse`` is exactly zero.
 
@@ -1467,10 +1466,7 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     :param tmp_path: Pinned as Hydra ``paths.output_dir`` / ``paths.log_dir``.
     :param surge_xt_smoke_datasets: Holds ``{train,val,test}.lance`` + ``stats.npz``.
     :param dataset_spec_factory: Factory producing the frozen dataset provenance.
-    :param monkeypatch: Isolates the process environment modified by the endpoint.
     """
-    feature_flag_name = "SYNTH_SETTER_FF_3160_CORRECT_AST_PATCH_PADDING"
-    monkeypatch.delenv(feature_flag_name, raising=False)
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
@@ -1493,7 +1489,6 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
         cfg.datamodule.batch_size = 1
         cfg.datamodule.num_workers = 0
         cfg.ckpt_path = None
-        cfg.feature_flags = [3160]
 
     write_spec_to_path(
         dataset_spec_factory(
@@ -1512,7 +1507,6 @@ def test_evaluate_runs_oracle_with_null_ckpt_path(
     finally:
         GlobalHydra.instance().clear()
 
-    assert os.environ[feature_flag_name] == "1"
     param_mse = metric_dict["test/param_mse"]
     assert isinstance(param_mse, torch.Tensor)
     assert param_mse.numel() == 1

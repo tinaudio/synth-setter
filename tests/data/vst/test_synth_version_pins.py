@@ -231,7 +231,7 @@ def test_vst_version_probe_child_unknown_signal_becomes_test_failure(tmp_path: P
     :param tmp_path: Temporary plugin path root used in diagnostics.
     """
     plugin = tmp_path / "Crashing.vst3"
-    signal_number = signal.SIGRTMIN + 1
+    signal_number = getattr(signal, "SIGRTMIN") + 1
     command = [
         sys.executable,
         "-c",
