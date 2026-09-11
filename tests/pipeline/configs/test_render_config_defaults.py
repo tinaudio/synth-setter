@@ -236,6 +236,7 @@ def test_render_torchsynth_composes_into_valid_render_config(name: str, num_para
         ("faust_bubble", 10, 2, "faust"),
         ("faust_church_organ", 16, 2, "faust"),
         ("faust_filter_osc", 6, 1, "faust_filter_osc"),
+        ("faust_kronecker_fdn", 38, 1, "faust_kronecker_fdn"),
     ],
 )
 def test_render_faust_composes_into_valid_render_config(
@@ -279,6 +280,7 @@ def test_faustwasm_hydra_version_matches_pinned_node_dependency() -> None:
         ("faust_bubble", 2, "faustwasm"),
         ("faust_church_organ", 2, "faustwasm"),
         ("faust_filter_osc", 1, "faustwasm_filter_osc"),
+        ("faust_kronecker_fdn", 1, "faustwasm_kronecker_fdn"),
     ],
 )
 def test_render_faustwasm_composes_with_explicit_v2_contract(
@@ -309,6 +311,7 @@ def test_render_faustwasm_composes_with_explicit_v2_contract(
         ("faust_bubble", 2, "faustcpp"),
         ("faust_church_organ", 2, "faustcpp"),
         ("faust_filter_osc", 1, "faustcpp_filter_osc"),
+        ("faust_kronecker_fdn", 1, "faustcpp_kronecker_fdn"),
     ],
 )
 def test_render_faustcpp_composes_with_explicit_v2_contract(

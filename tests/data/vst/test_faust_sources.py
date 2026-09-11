@@ -70,12 +70,47 @@ _EXPECTED_PARAMETER_ADDRESSES: Mapping[str, list[str]] = {
         "/SINE_WAVE_OSCILLATOR_oscrs/Frequency",
         "/SINE_WAVE_OSCILLATOR_oscrs/Portamento",
     ],
+    "faust_kronecker_fdn": [
+        "/kroneckerFDN/Decay/t60",
+        "/kroneckerFDN/Delays/d0",
+        "/kroneckerFDN/Delays/d1",
+        "/kroneckerFDN/Delays/d2",
+        "/kroneckerFDN/Delays/d3",
+        "/kroneckerFDN/Delays/d4",
+        "/kroneckerFDN/Delays/d5",
+        "/kroneckerFDN/Delays/d6",
+        "/kroneckerFDN/Delays/d7",
+        "/kroneckerFDN/Input/b0",
+        "/kroneckerFDN/Input/b1",
+        "/kroneckerFDN/Input/b2",
+        "/kroneckerFDN/Input/b3",
+        "/kroneckerFDN/Input/b4",
+        "/kroneckerFDN/Input/b5",
+        "/kroneckerFDN/Input/b6",
+        "/kroneckerFDN/Input/b7",
+        "/kroneckerFDN/Kernel/a0",
+        "/kroneckerFDN/Kernel/a1",
+        "/kroneckerFDN/Kernel/a2",
+        "/kroneckerFDN/Kernel/r0",
+        "/kroneckerFDN/Kernel/r1",
+        "/kroneckerFDN/Kernel/r2",
+        "/kroneckerFDN/Output/c0",
+        "/kroneckerFDN/Output/c1",
+        "/kroneckerFDN/Output/c2",
+        "/kroneckerFDN/Output/c3",
+        "/kroneckerFDN/Output/c4",
+        "/kroneckerFDN/Output/c5",
+        "/kroneckerFDN/Output/c6",
+        "/kroneckerFDN/Output/c7",
+        "/kroneckerFDN/Output/dry",
+    ],
 }
 _EXPECTED_OUTPUT_CHANNELS = {
     "faust_bright_organ": 2,
     "faust_bubble": 2,
     "faust_church_organ": 2,
     "faust_filter_osc": 1,
+    "faust_kronecker_fdn": 1,
 }
 _RENDER_PARAMETER_OVERRIDES: Mapping[str, Mapping[str, float]] = {
     "faust_bright_organ": {},
@@ -85,6 +120,7 @@ _RENDER_PARAMETER_OVERRIDES: Mapping[str, Mapping[str, float]] = {
         "/churchOrgan/gate": 1.0,
     },
     "faust_filter_osc": {},
+    "faust_kronecker_fdn": {},
 }
 
 
@@ -280,6 +316,7 @@ def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
         ("faust_bubble", 10),
         ("faust_church_organ", 16),
         ("faust_filter_osc", 6),
+        ("faust_kronecker_fdn", 38),
     ],
 )
 def test_faust_param_spec_preserves_exact_addresses_and_encoded_width(
