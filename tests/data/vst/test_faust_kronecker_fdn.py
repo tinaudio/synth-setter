@@ -22,7 +22,7 @@ IDENTITY = "faust_kronecker_fdn"
 # Faust reports UI controls in traversal order: decay, delays, input gains,
 # kernel angles, reflect flags, output gains, dry.
 EXPECTED_SYNTH_PARAM_NAMES = (
-    ("/kroneckerFDN/Decay/t60", "/kroneckerFDN/Decay/t60_nyquist")
+    ("/kroneckerFDN/Decay/t60_dc", "/kroneckerFDN/Decay/t60_nyquist")
     + tuple(f"/kroneckerFDN/Delays/d{i}" for i in range(8))
     + tuple(f"/kroneckerFDN/Input/b{i}" for i in range(8))
     + tuple(f"/kroneckerFDN/Kernel/a{i}" for i in range(3))
@@ -58,7 +58,7 @@ def _audible_patch() -> dict[str, float]:
     for index in range(3):
         patch[f"/kroneckerFDN/Kernel/a{index}"] = np.pi / 4
         patch[f"/kroneckerFDN/Kernel/r{index}"] = 1.0
-    patch["/kroneckerFDN/Decay/t60"] = 1.5
+    patch["/kroneckerFDN/Decay/t60_dc"] = 1.5
     patch["/kroneckerFDN/Decay/t60_nyquist"] = 0.8
     return patch
 
@@ -216,7 +216,7 @@ def test_kronecker_fdn_matches_pyfdn_render() -> None:
                 [[patch[f"/kroneckerFDN/Output/c{i}"] for i in range(8)]]
             ),
             "direct_matrix": np.array([[patch["/kroneckerFDN/Output/dry"]]]),
-            "post_delay.rt_dc_seconds": patch["/kroneckerFDN/Decay/t60"],
+            "post_delay.rt_dc_seconds": patch["/kroneckerFDN/Decay/t60_dc"],
             "post_delay.rt_nyquist_seconds": patch["/kroneckerFDN/Decay/t60_nyquist"],
             "kronecker_angles": angles,
             "kronecker_reflect": reflects,

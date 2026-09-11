@@ -188,7 +188,7 @@ def _kronecker_fdn_param_spec() -> ParamSpec:
     """
     return ParamSpec(
         [
-            ContinuousParameter(name="/kroneckerFDN/Decay/t60", min=0.1, max=4.0),
+            ContinuousParameter(name="/kroneckerFDN/Decay/t60_dc", min=0.1, max=4.0),
             ContinuousParameter(
                 name="/kroneckerFDN/Decay/t60_nyquist", min=0.1, max=4.0
             ),

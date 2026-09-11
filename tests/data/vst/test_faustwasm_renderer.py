@@ -64,7 +64,7 @@ _EXPECTED_PARAMETER_ADDRESSES = {
         ("/SINE_WAVE_OSCILLATOR_oscrs/Portamento", "/SINE_WAVE_OSCILLATOR_oscrs/Portamento"),
     ),
     "faust_kronecker_fdn": (
-        ("/kroneckerFDN/Decay/t60", "/kroneckerFDN/Decay_t60"),
+        ("/kroneckerFDN/Decay/t60_dc", "/kroneckerFDN/Decay_t60_dc"),
         ("/kroneckerFDN/Decay/t60_nyquist", "/kroneckerFDN/Decay_t60_nyquist"),
         ("/kroneckerFDN/Delays/d0", "/kroneckerFDN/Delays_d0"),
         ("/kroneckerFDN/Delays/d1", "/kroneckerFDN/Delays_d1"),

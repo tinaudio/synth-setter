@@ -71,7 +71,7 @@ _EXPECTED_PARAMETER_ADDRESSES: Mapping[str, list[str]] = {
         "/SINE_WAVE_OSCILLATOR_oscrs/Portamento",
     ],
     "faust_kronecker_fdn": [
-        "/kroneckerFDN/Decay/t60",
+        "/kroneckerFDN/Decay/t60_dc",
         "/kroneckerFDN/Decay/t60_nyquist",
         "/kroneckerFDN/Delays/d0",
         "/kroneckerFDN/Delays/d1",

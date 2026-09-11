@@ -103,7 +103,7 @@ _WASM_ADDRESSES = MappingProxyType(
             "/SINE_WAVE_OSCILLATOR_oscrs/Portamento",
         ),
         ParamSpecName("faust_kronecker_fdn"): (
-            "/kroneckerFDN/Decay_t60",
+            "/kroneckerFDN/Decay_t60_dc",
             "/kroneckerFDN/Decay_t60_nyquist",
             "/kroneckerFDN/Delays_d0",
             "/kroneckerFDN/Delays_d1",
