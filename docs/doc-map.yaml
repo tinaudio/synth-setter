@@ -690,12 +690,20 @@ docs:
         covers: "Loopback serving and prediction validation"
       - pattern: "src/synth_setter/models/flow_onnx.py"
         covers: "Supported checkpoint and export contracts"
-      - pattern: "src/synth_setter/web/**"
+      - pattern: "src/synth_setter/web/*"
         covers: "Browser runtime, dependency installation, and RK4 sampling"
       - pattern: "tests/integration/test_browser_surgepy_e2e.py"
         covers: "Real checkpoint, browser, and audio-consumer verification"
       - pattern: ".github/workflows/browser-flow-e2e.yml"
         covers: "Trusted CI execution and retained evidence"
+
+  - doc: docs/reference/browser-fdn-ports.md
+    description: JavaScript ports of the pyFDN sketch, decode, and IR metrics with golden fixtures
+    sources:
+      - pattern: "src/synth_setter/web/fdn/**"
+        covers: "Browser-side sketch extraction, householder decode, impulse-response metrics, and synthetic-response reconstruction"
+      - pattern: "src/synth_setter/tools/browser_fdn_fixtures.py"
+        covers: "Golden fixture generation and the synthetic-response recipe"
 
   - doc: docs/guides/vst-interactive.md
     description: Interactive VST prediction audition and patch-recording guide
