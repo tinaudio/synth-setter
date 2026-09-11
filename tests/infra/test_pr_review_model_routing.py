@@ -207,7 +207,7 @@ def test_pi_project_settings_pin_review_pool_providers_only() -> None:
         "openai-codex/gpt-5.6-terra",
         "openai-codex/gpt-5.6-sol",
         "openai-codex/gpt-6-astra",
-        "meta/muse-spark-1.3-contributor",
+        "openrouter/meta/muse-spark-1.3-contributor",
     ]
 
 
@@ -236,7 +236,7 @@ def test_pi_project_append_system_scopes_subagent_model_selectors() -> None:
     assert "openai-codex/gpt-5.6-sol" in text
     assert "Never pass the provider-only `openai-codex`" in text
     assert "Muse-Spark-1.3" in text
-    assert "`meta`" in text
+    assert "openrouter" in text
 
 
 def _assert_referenced_subcommands_exist(runbook_text: str) -> None:
@@ -570,7 +570,7 @@ def test_pi_review_launcher_manifest_starts_detached_follow_up(tmp_path: Path) -
         '"pr_number":2174,"base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
         '"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","target":"PR #2174",'
         '"deferred_passes":[{"skill":"correctness-review","pass_name":"free-pool",'
-        '"origin":"primary","model":"meta/muse-spark-1.3-contributor",'
+        '"origin":"primary","model":"openrouter/meta/muse-spark-1.3-contributor",'
         '"verification_model":"openai-codex/gpt-5.6-sol","thinking":"high"}],'
         '"foreground_fingerprints":[]}\n'
         "JSON\n"
@@ -640,7 +640,7 @@ def _follow_up_success_payload() -> str:
                 {
                     "skill": "correctness-review",
                     "pass_name": "free-pool",
-                    "model": "meta/muse-spark-1.3-contributor",
+                    "model": "openrouter/meta/muse-spark-1.3-contributor",
                     "status": "success",
                     "agent_id": "agent-follow-up",
                     "output_path": ".pi/output/agent-follow-up.jsonl",
@@ -676,7 +676,7 @@ def _deferred_manifest_payload() -> str:
                     "skill": "correctness-review",
                     "pass_name": "free-pool",
                     "origin": "primary",
-                    "model": "meta/muse-spark-1.3-contributor",
+                    "model": "openrouter/meta/muse-spark-1.3-contributor",
                     "verification_model": "openai-codex/gpt-5.6-sol",
                     "thinking": "high",
                 }
@@ -1009,7 +1009,7 @@ def test_pi_review_follow_up_launcher_runs_detached_pinned_process(tmp_path: Pat
                         "skill": "correctness-review",
                         "pass_name": "free-pool",
                         "origin": "primary",
-                        "model": "meta/muse-spark-1.3-contributor",
+                        "model": "openrouter/meta/muse-spark-1.3-contributor",
                         "verification_model": "openai-codex/gpt-5.6-sol",
                         "thinking": "high",
                     }
