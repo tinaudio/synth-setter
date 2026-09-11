@@ -88,7 +88,7 @@ def _resume_loggers(spec: DatasetSpec, work_dir: Path) -> list[Logger]:
         WandbLogger(
             save_dir=str(work_dir),
             name=f"resume-{spec.task_name}-{spec.run_id}",
-            project=os.environ.get("WANDB_PROJECT") or "synth-setter",
+            project=os.environ.get("WANDB_PROJECT") or "synth-setter-generate-dataset",
             entity=os.environ.get("WANDB_ENTITY") or None,
             group=spec.run_id,
             job_type=_RESUME_WANDB_JOB_TYPE,

@@ -17,9 +17,17 @@ import lance
 import numpy as np
 import pyarrow as pa
 import pytest
+import torch
+from omegaconf import OmegaConf
 
-from synth_setter.cli.finalize_dataset import finalize_from_spec
-from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, MEL_SPEC_FIELD
+from synth_setter.cli.finalize_dataset import finalize, finalize_from_spec
+from synth_setter.data.normalization_stats import estimate_log_mel_statistics
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    DATASET_FIELD_NAMES,
+    MEL_SPEC_FIELD,
+)
+from synth_setter.models.components.spec_encoder import LogMelFrontend
 from synth_setter.pipeline.data.lance_finalize import finalize_lance_fragments
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
 from synth_setter.pipeline.data.lance_staging import (
@@ -53,6 +61,17 @@ def stage_all_shards(spec: DatasetSpec, tmp_path: Path, *, worker_id: str = "pod
         stage_lance_shard_attempt(
             spec, shard, local, worker_id=worker_id, attempt_uuid=f"u{shard.shard_id:04d}"
         )
+
+
+def mono_tiny_lance_spec() -> DatasetSpec:
+    """Return the tiny finalize fixture with mono waveform storage.
+
+    :returns: Frozen mono spec with degenerate-bin masking enabled.
+    """
+    values = tiny_lance_spec().model_dump(mode="json")
+    values["render"]["channels"] = 1
+    values["mask_degenerate_bins"] = True
+    return DatasetSpec.model_validate(values)
 
 
 def split_dataset_path(fake_r2_remote: Path, spec: DatasetSpec, split: str) -> Path:
@@ -133,7 +152,7 @@ def test_finalize_lance_fragments_reports_shard_then_artifact_progress(
 
     The fragment finalize decodes no rows, so ``shard_processed`` marks a selected +
     structural-checked winner; ``artifact_uploaded`` marks each committed split manifest
-    plus the ``stats.npz`` and ``dataset.json`` uploads.
+    plus the ``welford.npz``, ``stats.npz``, and ``dataset.json`` uploads.
 
     :param fake_r2_remote: Root the ``r2:`` remote resolves to.
     :param tmp_path: Scratch dir for local shard datasets.
@@ -147,7 +166,7 @@ def test_finalize_lance_fragments_reports_shard_then_artifact_progress(
 
     finalize_lance_fragments(spec, work_dir, events.append)
 
-    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 5
+    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 6
 
 
 def test_finalize_from_spec_threads_lance_progress_through_the_entrypoint(
@@ -170,7 +189,7 @@ def test_finalize_from_spec_threads_lance_progress_through_the_entrypoint(
     finalize_from_spec(spec, tmp_path / "work", events.append)
 
     # One more artifact than finalize_lance_fragments: the dataset.complete marker.
-    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 6
+    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 7
 
 
 def test_finalize_split_commit_is_one_atomic_manifest_version(
@@ -191,6 +210,233 @@ def test_finalize_split_commit_is_one_atomic_manifest_version(
     assert len(train.get_fragments()) == 2
 
 
+def test_finalize_entrypoint_estimates_stats_from_real_fragments(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The config entrypoint writes estimated stats from committed train audio.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for the spec and finalized artifacts.
+    :param monkeypatch: Isolates canonical storage settings from CI credentials.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "local-access-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "local-secret-key")
+    spec = mono_tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    spec_root = tmp_path / "spec"
+    spec_root.mkdir()
+    (spec_root / "input_spec.json").write_text(spec.model_dump_json())
+    cfg = OmegaConf.create(
+        {
+            "dataset_root_uri": spec_root.as_uri(),
+            "estimate_normalization_stats": True,
+            "paths": {"output_dir": str(tmp_path / "work")},
+            "seed": 23,
+        }
+    )
+
+    finalize(cfg)
+
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    with np.load(run_root / "stats.npz") as stats:
+        assert set(stats.files) == {"mean", "std"}
+    with np.load(run_root / "welford.npz") as welford:
+        assert set(welford.files) == {"count", "mean", "m2"}
+
+
+def test_finalize_estimation_writes_stats_usable_by_real_frontend_setter(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Estimated stats normalize real frontend output after fragment finalization.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = mono_tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+
+    finalize_from_spec(spec, tmp_path / "work", estimate_normalization_stats=True, seed=17)
+
+    stats_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "stats.npz"
+    with np.load(stats_path) as stats:
+        mean = np.array(stats["mean"], copy=True)
+        std = np.array(stats["std"], copy=True)
+    train = lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train")))
+    audio = train.take([0], columns=[AUDIO_FIELD])[AUDIO_FIELD].combine_chunks()
+    waveform = torch.from_numpy(audio.to_numpy_ndarray()[:, 0].astype(np.float32))
+    frontend = LogMelFrontend(waveform.shape[-1], sample_rate=spec.render.sample_rate)
+    frontend.set_normalization_statistics(torch.from_numpy(mean), torch.from_numpy(std))
+
+    normalized = frontend(waveform)
+
+    assert normalized.shape[1:] == mean.shape
+    assert torch.isfinite(normalized).all()
+
+
+def test_finalize_estimation_uses_training_rows_only(fake_r2_remote: Path, tmp_path: Path) -> None:
+    """Estimated statistics equal a direct frontend fold over the train split.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = mono_tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+
+    finalize_from_spec(spec, tmp_path / "work", estimate_normalization_stats=True, seed=19)
+
+    train = lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train")))
+    audio = train.take(list(range(train.count_rows())), columns=[AUDIO_FIELD])[AUDIO_FIELD]
+    waveform = torch.from_numpy(audio.combine_chunks().to_numpy_ndarray()[:, 0].astype(np.float32))
+    frontend = LogMelFrontend(waveform.shape[-1], sample_rate=spec.render.sample_rate)
+    expected_mean, expected_std = estimate_log_mel_statistics(
+        [waveform], frontend, mask_degenerate=True
+    )
+    stats_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "stats.npz"
+    with np.load(stats_path) as stats:
+        np.testing.assert_array_equal(stats["mean"], expected_mean)
+        np.testing.assert_array_equal(stats["std"], expected_std)
+
+
+def test_finalize_estimation_same_seed_reproduces_sampled_stats(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same seed reproduces a bounded random subset exactly.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    :param monkeypatch: Shrinks the production sample bound for this tiny fixture.
+    """
+    from synth_setter.pipeline.data import lance_finalize
+
+    monkeypatch.setattr(lance_finalize, "NORMALIZATION_SAMPLE_LIMIT", 2)
+    spec = mono_tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+
+    finalize_from_spec(spec, tmp_path / "work-1", estimate_normalization_stats=True, seed=0)
+    with np.load(run_root / "stats.npz") as stats:
+        first_mean = np.array(stats["mean"], copy=True)
+        first_std = np.array(stats["std"], copy=True)
+    (run_root / "dataset.complete").unlink()
+    (run_root / "stats.npz").unlink()
+
+    finalize_from_spec(spec, tmp_path / "work-2", estimate_normalization_stats=True, seed=0)
+    with np.load(run_root / "stats.npz") as stats:
+        np.testing.assert_array_equal(stats["mean"], first_mean)
+        np.testing.assert_array_equal(stats["std"], first_std)
+    (run_root / "dataset.complete").unlink()
+    (run_root / "stats.npz").unlink()
+
+    finalize_from_spec(spec, tmp_path / "work-3", estimate_normalization_stats=True, seed=1)
+    with np.load(run_root / "stats.npz") as stats:
+        assert not np.array_equal(stats["mean"], first_mean)
+
+
+def test_finalize_estimation_complete_dataset_remains_no_op(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """A completion marker wins before estimator reuse or mono validation.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir that must remain unused.
+    """
+    spec = tiny_lance_spec()
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    run_root.mkdir(parents=True)
+    (run_root / "dataset.complete").touch()
+
+    finalize_from_spec(spec, tmp_path / "work", estimate_normalization_stats=True)
+
+    assert not (tmp_path / "work").exists()
+    assert sorted(path.name for path in run_root.iterdir()) == ["dataset.complete"]
+
+
+def test_finalize_estimation_reuses_existing_stats_without_changing_bytes(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Enabled estimation preserves a valid existing statistics artifact.
+
+    Reuse also bypasses the mono-only estimator restriction while all split
+    manifests, the dataset card, and the completion marker still finalize.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    stats_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "stats.npz"
+    stats_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        stats_path,
+        mean=np.array(0.0, dtype=np.float32),
+        std=np.array(1.0, dtype=np.float32),
+    )
+    original = stats_path.read_bytes()
+    events: list[str] = []
+
+    finalize_from_spec(
+        spec,
+        tmp_path / "work",
+        events.append,
+        estimate_normalization_stats=True,
+        seed=7,
+    )
+
+    assert stats_path.read_bytes() == original
+    assert events == ["shard_processed"] * 4 + ["artifact_uploaded"] * 6
+    run_root = stats_path.parent
+    assert (run_root / "dataset.json").is_file()
+    assert (run_root / "dataset.complete").is_file()
+    for split in ("train", "val", "test"):
+        assert lance.dataset(str(run_root / f"{split}.lance")).count_rows() > 0
+
+
+def test_finalize_estimation_missing_stats_rejects_stereo_before_manifest_commit(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """A missing artifact exposes the mono-only estimator limit before commit.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+
+    with pytest.raises(ValueError, match="mono"):
+        finalize_from_spec(spec, tmp_path / "work", estimate_normalization_stats=True)
+
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    assert not (run_root / "train.lance" / "_versions").exists()
+    assert not (run_root / "dataset.json").exists()
+    assert not (run_root / "dataset.complete").exists()
+
+
+def test_finalize_estimation_rejects_corrupt_existing_stats_before_manifest_commit(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """A corrupt reusable artifact fails closed before committing manifests.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+    stats_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "stats.npz"
+    stats_path.parent.mkdir(parents=True, exist_ok=True)
+    stats_path.write_bytes(b"not-an-npz")
+
+    with pytest.raises(ValueError, match="existing stats"):
+        finalize_from_spec(spec, tmp_path / "work", estimate_normalization_stats=True)
+
+    assert not (stats_path.parent / "train.lance" / "_versions").exists()
+
+
 def test_finalize_stats_npz_matches_direct_recompute_over_train_mel_rows(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
@@ -204,9 +450,16 @@ def test_finalize_stats_npz_matches_direct_recompute_over_train_mel_rows(
 
     finalize_from_spec(spec, tmp_path / "work")
 
-    stats_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "stats.npz"
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    stats_path = run_root / "stats.npz"
+    welford_path = run_root / "welford.npz"
     with np.load(stats_path) as stats:
         stats_mean, stats_std = stats["mean"], stats["std"]
+    with np.load(welford_path) as welford:
+        assert welford["count"].dtype == np.dtype(np.int64)
+        assert welford["count"].shape == ()
+        assert welford["mean"].dtype == np.dtype(np.float32)
+        assert welford["m2"].dtype == np.dtype(np.float32)
     train_mel = np.concatenate(
         [shard_arrays(spec, sid)[MEL_SPEC_FIELD] for sid in (0, 1)], axis=0
     ).astype(np.float64)
@@ -525,7 +778,7 @@ def test_finalize_skips_empty_split_and_still_completes(
     assert (run_root / "val.lance" / "_versions").exists()
     assert not (run_root / "test.lance").exists()
     assert (run_root / "dataset.complete").exists()
-    assert events == ["shard_processed"] * 3 + ["artifact_uploaded"] * 5
+    assert events == ["shard_processed"] * 3 + ["artifact_uploaded"] * 6
 
 
 def test_finalize_reports_checked_shards_before_later_winner_fails(
@@ -913,9 +1166,7 @@ def test_finalize_schema_mismatch_metadata_only_drift_reports_values_and_skew_hi
     shard_metadata["sample_offset"] = 999
     schema_metadata[b"synth_setter.shard_metadata"] = json.dumps(shard_metadata).encode()
     skewed_dataset = tmp_path / "skewed.lance"
-    lance.write_dataset(
-        source.to_table().replace_schema_metadata(schema_metadata), skewed_dataset
-    )
+    lance.write_dataset(source.to_table().replace_schema_metadata(schema_metadata), skewed_dataset)
     skewed_file = next((skewed_dataset / "data").iterdir())
     shutil.copyfile(skewed_file, target_file)
 

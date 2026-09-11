@@ -69,6 +69,16 @@ def test_finalize_config_surfaces_dataset_root_uri_override() -> None:
         GlobalHydra.instance().clear()
 
 
+def test_finalize_config_normalization_estimation_is_disabled_by_default() -> None:
+    """The shipped finalize config preserves the exact stored-mel statistics fold."""
+    cfg = _compose_finalize()
+    try:
+        assert cfg.estimate_normalization_stats is False
+        assert cfg.seed == 1234
+    finally:
+        GlobalHydra.instance().clear()
+
+
 def test_finalize_config_paths_output_dir_is_runtime_output_template() -> None:
     """``paths.output_dir`` is the runtime-output template finalize passes as the work dir.
 

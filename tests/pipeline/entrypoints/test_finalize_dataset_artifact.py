@@ -109,10 +109,10 @@ def test_build_dataset_artifact_metadata_carries_shard_count_n_samples_git_sha(
     assert artifact.metadata == {"shard_count": 3, "n_samples": 12, "git_sha": "0" * 40}
 
 
-def test_build_dataset_artifact_references_nonempty_lance_splits_and_stats(
+def test_build_dataset_artifact_references_splits_cumulative_state_and_stats(
     dataset_spec_factory: Callable[..., DatasetSpec],
 ) -> None:
-    """Lance references each non-empty split ``.lance`` plus ``stats.npz`` as ``s3://`` URIs.
+    """Lance references each split plus cumulative state and derived stats.
 
     :param dataset_spec_factory: Shared ``conftest`` ``DatasetSpec`` factory.
     """
@@ -121,6 +121,7 @@ def test_build_dataset_artifact_references_nonempty_lance_splits_and_stats(
     assert refs == {
         f"s3://{_BUCKET}/{_PREFIX}train.lance",
         f"s3://{_BUCKET}/{_PREFIX}val.lance",
+        f"s3://{_BUCKET}/{_PREFIX}welford.npz",
         f"s3://{_BUCKET}/{_PREFIX}stats.npz",
     }
 

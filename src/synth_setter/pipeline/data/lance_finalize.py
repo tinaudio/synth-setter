@@ -1,12 +1,12 @@
 """Finalize-side Lance fragment commit: staged winners → split manifests (#1776).
 
-Finalize never decodes a row. It reconciles the staging prefix, selects one
-winning attempt per shard (earliest ``.valid`` storage ``LastModified``,
-tie-broken by full marker key on the first run and pinned by ``dataset.json``
-afterward), structural-checks each winner, commits the
-winners' fragment metadata into each split dataset as one atomic
-``Overwrite`` transaction, reduces the winners' Welford sidecars into
-``stats.npz``, and records the selection in ``dataset.json``. Design:
+Finalize reconciles the staging prefix, selects one winning attempt per shard
+(earliest ``.valid`` storage ``LastModified``, tie-broken by full marker key on
+the first run and pinned by ``dataset.json`` afterward), structural-checks each
+winner, and commits the winners' fragment metadata into each split dataset as
+one atomic ``Overwrite`` transaction. Statistics come from the default
+zero-row-decode Welford fold or an opt-in sample of committed training audio;
+selection is recorded in ``dataset.json``. Design:
 ``docs/design/data-pipeline.md`` §7.6.
 
 Typical use is ``finalize_lance_fragments(spec, work_dir)`` after every shard
@@ -15,7 +15,7 @@ has published a staged-valid attempt.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -25,13 +25,20 @@ from zipfile import BadZipFile
 import lance
 import numpy as np
 import structlog
+import torch
 from pydantic import ValidationError
 
+from synth_setter.data.normalization_stats import (
+    NORMALIZATION_SAMPLE_LIMIT,
+    estimate_log_mel_statistics,
+)
 from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
     MEL_SPEC_FIELD,
     dataset_field_dtypes,
     dataset_field_shapes,
 )
+from synth_setter.data.vst_datamodule import load_mel_statistics
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import (
     ATTEMPT_VALID_SUFFIX,
@@ -56,7 +63,7 @@ from synth_setter.pipeline.data.lance_staging import (
     invalidate_staged_attempt,
     split_for_shard,
 )
-from synth_setter.pipeline.data.stats import WelfordState, merge_welford
+from synth_setter.pipeline.data.stats import WelfordState, merge_welford, save_welford
 from synth_setter.pipeline.data.stats import finalize as finalize_welford
 from synth_setter.pipeline.schemas.lance_attempt import (
     LanceDatasetCard,
@@ -64,6 +71,8 @@ from synth_setter.pipeline.schemas.lance_attempt import (
     SelectedLanceAttempt,
 )
 from synth_setter.pipeline.schemas.r2_location import parse_shard_staging_dir
+
+_NORMALIZATION_TAKE_BATCH_SIZE = 32
 
 logger = structlog.get_logger(__name__)
 
@@ -123,13 +132,16 @@ class CheckedLanceWinner:
     welford: WelfordState
 
 
-def staged_complete_attempts(spec: DatasetSpec) -> dict[int, list[StagedLanceAttempt]]:
+def staged_complete_attempts(
+    spec: DatasetSpec, *, root_uri: str | None = None
+) -> dict[int, list[StagedLanceAttempt]]:
     """Discover every complete staged attempt in one recursive listing.
 
     :param spec: Validated dataset spec.
+    :param root_uri: Optional branch-specific staging root.
     :returns: Complete attempts grouped by shard id; shards with none are absent.
     """
-    root_uri = spec.r2.workers_shards_root_uri()
+    root_uri = spec.r2.workers_shards_root_uri() if root_uri is None else root_uri
     root_key = root_uri.removeprefix(f"{r2_io.R2_URI_SCHEME}{spec.r2.bucket}/")
     entries = r2_io.list_entries(root_uri, recursive=True)
     by_shard_dir: dict[str, dict[str, r2_io.RemoteEntry]] = {}
@@ -179,19 +191,25 @@ def select_winner(attempts: Sequence[StagedLanceAttempt]) -> StagedLanceAttempt:
 
 
 def _load_fragment_metadata(
-    spec: DatasetSpec, attempt: StagedLanceAttempt
+    spec: DatasetSpec,
+    attempt: StagedLanceAttempt,
+    *,
+    staging_dir_uri: str | None = None,
 ) -> lance.fragment.FragmentMetadata:
     """Parse one strict sidecar into Lance-owned fragment metadata.
 
     :param spec: Validated dataset spec.
     :param attempt: Staged attempt whose sidecar is loaded.
+    :param staging_dir_uri: Optional branch-specific sidecar directory.
     :returns: Deserialized Lance fragment metadata.
     :raises ValueError: The sidecar or nested Lance metadata is invalid.
     """
-    uri = (
-        f"{spec.r2.shard_staging_dir_uri(attempt.shard_id)}"
-        f"{attempt.name}{LANCE_FRAGMENT_SIDECAR_SUFFIX}"
+    staging_dir_uri = (
+        spec.r2.shard_staging_dir_uri(attempt.shard_id)
+        if staging_dir_uri is None
+        else staging_dir_uri
     )
+    uri = f"{staging_dir_uri}{attempt.name}{LANCE_FRAGMENT_SIDECAR_SUFFIX}"
     with r2_io.downloaded_to_tempfile(uri) as sidecar_path:
         try:
             sidecar = LanceFragmentSidecar.model_validate_json(sidecar_path.read_bytes())
@@ -208,18 +226,26 @@ def _load_fragment_metadata(
         ) from exc
 
 
-def _load_welford_state(spec: DatasetSpec, attempt: StagedLanceAttempt) -> WelfordState:
+def _load_welford_state(
+    spec: DatasetSpec,
+    attempt: StagedLanceAttempt,
+    *,
+    staging_dir_uri: str | None = None,
+) -> WelfordState:
     """Load and validate one staged Welford archive.
 
     :param spec: Validated dataset spec defining the expected mel shape.
     :param attempt: Staged attempt whose statistics are loaded.
+    :param staging_dir_uri: Optional branch-specific sidecar directory.
     :returns: Validated ``(count, mean, m2)`` state.
     :raises ValueError: The archive contract is malformed or numerically invalid.
     """
-    uri = (
-        f"{spec.r2.shard_staging_dir_uri(attempt.shard_id)}"
-        f"{attempt.name}{LANCE_SHARD_STATS_SUFFIX}"
+    staging_dir_uri = (
+        spec.r2.shard_staging_dir_uri(attempt.shard_id)
+        if staging_dir_uri is None
+        else staging_dir_uri
     )
+    uri = f"{staging_dir_uri}{attempt.name}{LANCE_SHARD_STATS_SUFFIX}"
     with r2_io.downloaded_to_tempfile(uri) as stats_path:
         try:
             stats_archive = np.load(stats_path)
@@ -464,24 +490,145 @@ def _select_checked_winners(
     return winners
 
 
-def _reduce_and_upload_stats(
-    spec: DatasetSpec, winners: dict[int, CheckedLanceWinner], work_dir: Path
-) -> None:
-    """Reduce the train winners' Welford sidecars into ``stats.npz`` and upload it.
+def _reduce_and_upload_welford(
+    spec: DatasetSpec,
+    winners: dict[int, CheckedLanceWinner],
+    work_dir: Path,
+    progress_callback: FinalizeProgressCallback | None = None,
+) -> WelfordState:
+    """Reduce and upload the train winners' cumulative Welford state.
 
     :param spec: Validated dataset spec.
     :param winners: Checked winner per shard id.
-    :param work_dir: Scratch directory the ``stats.npz`` is staged in.
+    :param work_dir: Scratch directory the archive is staged in.
+    :param progress_callback: Optional sink receiving the upload event.
+    :returns: Reduced training statistics state.
     """
     train_lo, train_hi = spec.split_shard_ranges["train"]
     state: WelfordState = (0, 0, 0)
     for shard_id in range(train_lo, train_hi):
         state = merge_welford(state, winners[shard_id].welford)
+    expected_shape = dataset_field_shapes(spec.render, spec.num_params)[MEL_SPEC_FIELD][1:]
+    welford_npz = work_dir / "welford.npz"
+    save_welford(welford_npz, state, expected_shape=expected_shape)
+    r2_io.upload(welford_npz, spec.r2.welford_uri())
+    report_finalize_progress(progress_callback, "artifact_uploaded")
+    logger.info("uploaded_welford", uri=spec.r2.welford_uri())
+    return state
+
+
+def _upload_stats_from_welford(
+    spec: DatasetSpec,
+    state: WelfordState,
+    work_dir: Path,
+    progress_callback: FinalizeProgressCallback | None = None,
+) -> None:
+    """Derive and upload ``stats.npz`` from cumulative Welford state.
+
+    :param spec: Validated dataset spec.
+    :param state: Reduced training statistics state.
+    :param work_dir: Scratch directory the archive is staged in.
+    :param progress_callback: Optional sink receiving the upload event.
+    """
     mean, std = finalize_welford(state, mask_degenerate=spec.mask_degenerate_bins)
     stats_npz = work_dir / STATS_NPZ_FILENAME
     np.savez(stats_npz, mean=mean, std=std)
     r2_io.upload(stats_npz, spec.r2.stats_uri())
+    report_finalize_progress(progress_callback, "artifact_uploaded")
     logger.info("uploaded_stats", uri=spec.r2.stats_uri())
+
+
+def _validate_existing_stats(spec: DatasetSpec) -> None:
+    """Fail closed unless an existing statistics artifact is consumable.
+
+    :param spec: Spec defining the expected stored-feature geometry.
+    :raises ValueError: The artifact is malformed or incompatible with the spec.
+    """
+    expected_shape = dataset_field_shapes(spec.render, spec.num_params)[MEL_SPEC_FIELD][1:]
+    with r2_io.downloaded_to_tempfile(spec.r2.stats_uri()) as stats_path:
+        try:
+            mean, std = load_mel_statistics(stats_path)
+        except (BadZipFile, EOFError, KeyError, OSError, ValueError) as exc:
+            raise ValueError(
+                f"existing stats.npz is invalid: {type(exc).__name__}: {exc}"
+            ) from exc
+    for name, value in (("mean", mean), ("std", std)):
+        if not np.issubdtype(value.dtype, np.floating):
+            raise ValueError(f"existing stats.npz {name} must have a floating dtype")
+        try:
+            broadcast_shape = np.broadcast_shapes(value.shape, expected_shape)
+        except ValueError as exc:
+            raise ValueError(
+                f"existing stats.npz {name} shape {value.shape} cannot broadcast to "
+                f"{expected_shape}"
+            ) from exc
+        if broadcast_shape != expected_shape:
+            raise ValueError(
+                f"existing stats.npz {name} shape {value.shape} cannot broadcast to "
+                f"{expected_shape}"
+            )
+
+
+def _sampled_audio_batches(
+    dataset: lance.LanceDataset, *, seed: int, sample_limit: int
+) -> Iterator[torch.Tensor]:
+    """Yield bounded float32 waveform batches from a seeded uniform row sample.
+
+    :param dataset: Committed training split.
+    :param seed: NumPy random-generator seed.
+    :param sample_limit: Maximum number of train rows to read.
+    :yields torch.Tensor: Mono waveform batches shaped ``(batch, samples)``.
+    """
+    row_count = dataset.count_rows()
+    sample_count = min(row_count, sample_limit)
+    indices = np.random.default_rng(seed).choice(row_count, size=sample_count, replace=False)
+    indices.sort()
+    for start in range(0, sample_count, _NORMALIZATION_TAKE_BATCH_SIZE):
+        table = dataset.take(
+            indices[start : start + _NORMALIZATION_TAKE_BATCH_SIZE].tolist(),
+            columns=[AUDIO_FIELD],
+        )
+        audio = table[AUDIO_FIELD].combine_chunks().to_numpy_ndarray()
+        yield torch.from_numpy(np.ascontiguousarray(audio[:, 0], dtype=np.float32))
+
+
+def _estimate_and_upload_stats(spec: DatasetSpec, work_dir: Path, *, seed: int) -> bool:
+    """Estimate raw online-front-end statistics from committed train audio.
+
+    :param spec: Mono dataset spec defining canonical frontend settings.
+    :param work_dir: Scratch directory for the upload artifact.
+    :param seed: Seed selecting the uniform training-row subset.
+    :returns: Whether this process uploaded the artifact.
+    """
+    from synth_setter.models.components.spec_encoder import LogMelFrontend
+
+    train_target, storage_options = r2_io.lance_target(spec.r2.split_lance_uri("train"))
+    train = lance.dataset(train_target, storage_options=storage_options)
+    sample_count = min(train.count_rows(), NORMALIZATION_SAMPLE_LIMIT)
+    audio_shape = dataset_field_shapes(spec.render, spec.num_params)[AUDIO_FIELD]
+    frontend = LogMelFrontend(audio_shape[-1], sample_rate=spec.render.sample_rate)
+    mean, std = estimate_log_mel_statistics(
+        _sampled_audio_batches(train, seed=seed, sample_limit=NORMALIZATION_SAMPLE_LIMIT),
+        frontend,
+        sample_limit=NORMALIZATION_SAMPLE_LIMIT,
+        mask_degenerate=spec.mask_degenerate_bins,
+    )
+    stats_path = work_dir / STATS_NPZ_FILENAME
+    np.savez(stats_path, mean=mean, std=std)
+    if r2_io.object_size(spec.r2.stats_uri()) is not None:
+        _validate_existing_stats(spec)
+        logger.info("reused_normalization_stats", uri=spec.r2.stats_uri())
+        return False
+    r2_io.upload(stats_path, spec.r2.stats_uri())
+    logger.info(
+        "uploaded_estimated_normalization_stats",
+        sample_count=sample_count,
+        sample_limit=NORMALIZATION_SAMPLE_LIMIT,
+        sample_rate=spec.render.sample_rate,
+        seed=seed,
+        uri=spec.r2.stats_uri(),
+    )
+    return True
 
 
 def _write_dataset_card(
@@ -517,26 +664,44 @@ def finalize_lance_fragments(  # noqa: DOC502
     spec: DatasetSpec,
     work_dir: Path,
     progress_callback: FinalizeProgressCallback | None = None,
+    *,
+    estimate_normalization_stats: bool = False,
+    seed: int = 1234,
 ) -> None:
-    """Commit staged winner fragments into split datasets; reduce stats; write the card.
+    """Commit staged winner fragments, select one stats writer, and write the card.
 
     Each split is one replace-semantics ``Overwrite`` commit over the full
     winner set in shard order — a re-run rebuilds the identical manifest
-    instead of appending. Zero rows are decoded. Preconditions: generation
+    instead of appending. The default statistics path decodes no rows; enabled
+    estimation samples raw rows only after the train commit. Preconditions: generation
     for this run prefix is quiescent and the train split is non-empty. The
     standard workflow enforces the generation barrier, and the entrypoint
     (``finalize_dataset.finalize_lance``) guards the split before delegating.
 
     Progress events fire one ``shard_processed`` per checked winner, then one
-    ``artifact_uploaded`` per committed split plus the ``stats.npz`` and
-    ``dataset.json`` uploads.
+    ``artifact_uploaded`` per committed split, ``welford.npz``, ``dataset.json``,
+    and newly uploaded ``stats.npz``. Reusing stats emits no upload event.
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for the staged ``stats.npz`` / ``dataset.json``.
     :param progress_callback: Optional sink for completed shard and upload events.
+    :param estimate_normalization_stats: Recompute statistics from committed train audio.
+    :param seed: Random-sampling seed, ignored unless estimation is enabled.
     :raises ValueError: Any spec shard has no staged-valid attempt, or a
         winner fails a structural check.
     """
+    reuse_estimated_stats = False
+    if estimate_normalization_stats:
+        reuse_estimated_stats = r2_io.object_size(spec.r2.stats_uri()) is not None
+        if reuse_estimated_stats:
+            _validate_existing_stats(spec)
+            logger.info("reused_normalization_stats", uri=spec.r2.stats_uri())
+        elif spec.render.channels != 1:
+            raise ValueError(
+                "normalization statistics estimation currently requires mono audio; "
+                f"got channels={spec.render.channels}"
+            )
+
     winners = _select_checked_winners(spec, progress_callback)
 
     for split, (lo, hi) in spec.split_shard_ranges.items():
@@ -551,8 +716,12 @@ def finalize_lance_fragments(  # noqa: DOC502
         )
         report_finalize_progress(progress_callback, "artifact_uploaded")
         logger.info("committed_winner_fragments", fragment_count=hi - lo, split=split)
+        if split == "train" and estimate_normalization_stats and not reuse_estimated_stats:
+            if _estimate_and_upload_stats(spec, work_dir, seed=seed):
+                report_finalize_progress(progress_callback, "artifact_uploaded")
 
-    _reduce_and_upload_stats(spec, winners, work_dir)
-    report_finalize_progress(progress_callback, "artifact_uploaded")
+    welford = _reduce_and_upload_welford(spec, winners, work_dir, progress_callback)
+    if not estimate_normalization_stats:
+        _upload_stats_from_welford(spec, welford, work_dir, progress_callback)
     _write_dataset_card(spec, winners, work_dir)
     report_finalize_progress(progress_callback, "artifact_uploaded")

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+import logging
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from math import prod
 from pathlib import Path
 from typing import cast
@@ -12,23 +14,22 @@ import lance
 import numpy as np
 import pyarrow as pa
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from synth_setter.conditioning import (
-    NUM_SKETCH_CONTROLS,
-    NUM_SKETCH_TRACK_ROWS,
     SKETCH_CENTROID_CHILD,
-    SKETCH_CENTROID_ROW,
     SKETCH_CTRL_FIELD,
     SKETCH_LOUDNESS_CHILD,
-    SKETCH_LOUDNESS_ROW,
     SKETCH_PITCH_BINS,
     SKETCH_PITCH_CHILD,
     Conditioning,
     EmbeddingConditioningSpec,
+    SketchControlProfile,
     SketchControls,
     SketchControlSpec,
     resolve_embedding_conditioning,
+    sketch_control_layout,
 )
 from synth_setter.data.lance_torch import (
     LanceMapDataset,
@@ -45,7 +46,11 @@ from synth_setter.data.vst_datamodule import (
     prepare_batch,
     ranked_generator_seed,
 )
+from synth_setter.features.tiv import extract_tiv_batch
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot, GrowingSnapshot
+
+logger = logging.getLogger(__name__)
 
 _FAKE_BATCHES_PER_EPOCH = 10_000
 _FAKE_AUDIO_SHAPE = (2, 44100 * 4)
@@ -117,38 +122,42 @@ def _validate_embedding_column(shard_path: Path, spec: EmbeddingConditioningSpec
         raise ValueError(f"conditioning column {spec.column!r} sample contains non-finite values")
 
 
-def _sketch_child_shapes(num_frames: int) -> dict[str, tuple[int, ...]]:
-    """Return the per-row shape each stored sketch struct child must have.
+def _sketch_child_shapes(sketch: SketchControlSpec) -> dict[str, tuple[int, ...]]:
+    """Return the stored child shapes required by the selected profile.
 
-    :param num_frames: Mel-grid frames per stored control row.
+    :param sketch: Profile and frame-grid contract.
     :returns: Expected shapes keyed by struct child name.
     """
+    if sketch.profile == "music":
+        return {
+            SKETCH_LOUDNESS_CHILD: (sketch.num_frames,),
+            SKETCH_CENTROID_CHILD: (sketch.num_frames,),
+            SKETCH_PITCH_CHILD: (SKETCH_PITCH_BINS, sketch.num_frames),
+        }
     return {
-        SKETCH_LOUDNESS_CHILD: (num_frames,),
-        SKETCH_CENTROID_CHILD: (num_frames,),
-        SKETCH_PITCH_CHILD: (SKETCH_PITCH_BINS, num_frames),
+        name: (group.stop - group.start, sketch.num_frames)
+        if group.stop - group.start > 1
+        else (sketch.num_frames,)
+        for name, group in zip(
+            sketch.layout.group_names, sketch.layout.group_slices, strict=True
+        )
     }
 
 
 def _stack_sketch_children(
-    loudness: np.ndarray, centroid: np.ndarray, pitch: np.ndarray
+    children: dict[str, np.ndarray], profile: SketchControlProfile
 ) -> np.ndarray:
-    """Reassemble stored struct children into the flat model control stack.
+    """Reassemble profile-specific struct children into the model control stack.
 
-    Inverts the write-time split bit-for-bit: loudness and centroid land on
-    their ``SKETCH_*_ROW`` rows, pitch fills the remaining block.
-
-    :param loudness: ``(B, F)`` loudness rows.
-    :param centroid: ``(B, F)`` centroid rows.
-    :param pitch: ``(B, SKETCH_PITCH_BINS, F)`` pitch activations.
-    :returns: ``(B, NUM_SKETCH_CONTROLS, F)`` stacked controls.
+    :param children: Stored child arrays keyed by profile group name.
+    :param profile: Profile defining child order and widths.
+    :returns: ``(B, profile controls, F)`` stacked controls.
     """
-    tracks = np.empty(
-        (len(loudness), NUM_SKETCH_TRACK_ROWS, loudness.shape[-1]), dtype=loudness.dtype
-    )
-    tracks[:, SKETCH_LOUDNESS_ROW] = loudness
-    tracks[:, SKETCH_CENTROID_ROW] = centroid
-    return np.concatenate([tracks, pitch], axis=1)
+    groups = []
+    for name in sketch_control_layout(profile).group_names:
+        values = children[name]
+        groups.append(values[:, None] if values.ndim == 2 else values)
+    return np.concatenate(groups, axis=1)
 
 
 def _validate_sketch_column(shard_path: Path, sketch: SketchControlSpec) -> None:
@@ -171,7 +180,8 @@ def _validate_sketch_column(shard_path: Path, sketch: SketchControlSpec) -> None
             f"{field.type}; this dataset stores the pre-#2707 flat layout — "
             "re-run the sketch add-embeddings backfill to rewrite it as a struct"
         )
-    for child, expected_shape in _sketch_child_shapes(sketch.num_frames).items():
+    child_shapes = _sketch_child_shapes(sketch)
+    for child, expected_shape in child_shapes.items():
         child_index = field.type.get_field_index(child)
         if child_index < 0:
             raise ValueError(
@@ -190,10 +200,17 @@ def _validate_sketch_column(shard_path: Path, sketch: SketchControlSpec) -> None
         )
     sample = dataset.take([0], columns=[sketch.column]).combine_chunks()
     tensors = batch_to_shaped_tensors(sample.to_batches()[0])
-    for child in _sketch_child_shapes(sketch.num_frames):
-        if not torch.isfinite(tensors[f"{sketch.column}.{child}"]).all():
+    for child in child_shapes:
+        values = tensors[f"{sketch.column}.{child}"]
+        if not torch.isfinite(values).all():
             raise ValueError(
                 f"sketch child {child!r} sample in {shard_path} contains non-finite values"
+            )
+        minimum = 0.0 if sketch.profile == "music" and child == SKETCH_PITCH_CHILD else -1.0
+        if torch.any((values < minimum) | (values > 1.0)):
+            raise ValueError(
+                f"sketch child {child!r} sample in {shard_path} has values outside "
+                f"[{minimum:g}, 1]"
             )
 
 
@@ -211,6 +228,7 @@ class PrepareBatchCollate:
         conditioning_shape: tuple[int, ...] | None = None,
         conditioning_stats: tuple[np.ndarray, np.ndarray] | None = None,
         sketch_column: str | None = None,
+        sketch_profile: SketchControlProfile = "music",
         sketch_pitch_zero_threshold: float | None = None,
         preserve_legacy_m2l: bool = False,
     ) -> None:
@@ -225,6 +243,7 @@ class PrepareBatchCollate:
         :param conditioning_stats: Cached-column ``(mean, std)``, or ``None``.
         :param sketch_column: Stored sketch struct column whose expanded
             children are reassembled into ``sketch_ctrl``.
+        :param sketch_profile: Child layout and numeric contract.
         :param sketch_pitch_zero_threshold: Pitch zero-bin threshold (#2614),
             or ``None`` to pass activations through unbinned.
         :param preserve_legacy_m2l: Whether ``music2latent`` also populates ``m2l``.
@@ -237,6 +256,7 @@ class PrepareBatchCollate:
         self.conditioning_shape = conditioning_shape
         self.conditioning_stats = conditioning_stats
         self.sketch_column = sketch_column
+        self.sketch_profile: SketchControlProfile = sketch_profile
         self.sketch_pitch_zero_threshold = sketch_pitch_zero_threshold
         self.preserve_legacy_m2l = preserve_legacy_m2l
         self._rank = (
@@ -278,9 +298,12 @@ class PrepareBatchCollate:
         """Convert stored Lance columns to the model batch contract.
 
         :param batch: Pre-collated stored columns from :class:`LanceMapDataset`.
-        :returns: Float32 model batch with generated noise.
+        :returns: Float32 model batch with generated noise and optional int64 source IDs.
+        :raises ValueError: If source identities accompany OT-reordered batches.
         """
         columns = cast(dict[str, torch.Tensor], batch)
+        if "sample_id" in columns and self.ot:
+            raise ValueError("sample_id cannot accompany OT-reordered batches")
         raw_values = {name: tensor.numpy() for name, tensor in columns.items()}
         if self.conditioning_column is not None:
             conditioning = raw_values[self.conditioning_column]
@@ -291,18 +314,21 @@ class PrepareBatchCollate:
                 del raw_values["music2latent"]
         if self.sketch_column is not None:
             prefix = f"{self.sketch_column}."
-            loudness = raw_values.pop(f"{prefix}{SKETCH_LOUDNESS_CHILD}")
-            centroid = raw_values.pop(f"{prefix}{SKETCH_CENTROID_CHILD}")
-            pitch = raw_values.pop(f"{prefix}{SKETCH_PITCH_CHILD}")
-            # Unread companions (e.g. the vec child) never reach prepare_batch.
+            layout = sketch_control_layout(self.sketch_profile)
+            children = {
+                name: raw_values.pop(f"{prefix}{name}") for name in layout.group_names
+            }
+            # Unread companions (e.g. the music vec child) never reach prepare_batch.
             for key in [key for key in raw_values if key.startswith(prefix)]:
                 del raw_values[key]
-            raw_values[SKETCH_CTRL_FIELD] = _stack_sketch_children(loudness, centroid, pitch)
+            raw_values[SKETCH_CTRL_FIELD] = _stack_sketch_children(
+                children, self.sketch_profile
+            )
         raw = cast(RawBatch, raw_values)
         conditioning_mean, conditioning_std = (
             self.conditioning_stats if self.conditioning_stats is not None else (None, None)
         )
-        return prepare_batch(
+        prepared = prepare_batch(
             raw,
             mean=self.mean,
             std=self.std,
@@ -311,8 +337,12 @@ class PrepareBatchCollate:
             rescale_params=self.rescale_params,
             ot=self.ot,
             generator=self._live_generator(),
+            sketch_profile=self.sketch_profile,
             sketch_pitch_zero_threshold=self.sketch_pitch_zero_threshold,
         )
+        if "sample_id" in columns:
+            prepared["sample_id"] = columns["sample_id"]
+        return prepared
 
 
 class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
@@ -337,7 +367,11 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
         """
         self._num_rows = batch_size * _FAKE_BATCHES_PER_EPOCH
         self._num_params = num_params
-        self._read_audio = read_audio or conditioning == "audio"
+        self._read_audio = (
+            read_audio
+            or conditioning == "audio"
+            or (sketch is not None and sketch.source == "online")
+        )
         self._read_mel = conditioning == "mel"
         self._preserve_legacy_m2l = isinstance(conditioning, str) and conditioning == "m2l"
         self._embedding_conditioning = resolve_embedding_conditioning(conditioning)
@@ -364,10 +398,16 @@ class _FakeMapDataset(torch.utils.data.Dataset[ModelBatch]):
             else None
         )
         m2l = conditioning if self._preserve_legacy_m2l else None
-        if self._sketch is not None:
-            # Stored layout: signed-unit loudness/centroid, unit-interval pitch.
-            sketch = torch.rand(num_rows, NUM_SKETCH_CONTROLS, self._sketch.num_frames)
-            sketch[:, :NUM_SKETCH_TRACK_ROWS] = sketch[:, :NUM_SKETCH_TRACK_ROWS] * 2 - 1
+        if self._sketch is not None and self._sketch.source == "stored":
+            sketch = torch.rand(
+                num_rows, self._sketch.layout.num_controls, self._sketch.num_frames
+            )
+            signed_controls = (
+                self._sketch.layout.num_controls
+                if self._sketch.profile == "pyfdn_reverb"
+                else self._sketch.layout.group_slices[1].stop
+            )
+            sketch[:, :signed_controls] = sketch[:, :signed_controls] * 2 - 1
         else:
             sketch = None
         params = torch.rand(num_rows, self._num_params) * 2 - 1
@@ -513,11 +553,15 @@ class LanceVSTDataModule(VSTDataModule):
         conditioning: Conditioning = "mel",
         sketch: SketchControls = None,
         pin_memory: bool = True,
+        include_audio: bool = False,
         param_spec_name: ParamSpecName,
         persistent_workers: bool = False,
         prefetch_factor: int | None = None,
         download_dataset_txids: dict[str, str] | None = None,
         download_dataset_row_limit: int | None = None,
+        high_memory_materialization: bool = False,
+        growing_active_record: str | Path | None = None,
+        eval_sample_ids: bool = False,
     ) -> None:
         """Store map-style Lance loader configuration.
 
@@ -535,6 +579,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param sketch: Optional sketch-control spec adding its stored column to
             every split's read set (#2612).
         :param pin_memory: Whether dataloaders pin returned tensors.
+        :param include_audio: Whether all splits include target audio for render-feedback loss.
         :param param_spec_name: Registry key selecting parameter width.
         :param persistent_workers: Whether positive worker counts persist between iterators.
         :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
@@ -543,7 +588,15 @@ class LanceVSTDataModule(VSTDataModule):
             source snapshots.
         :param download_dataset_row_limit: First-N rows per split at materialization
             time. Without txids, disposable runs use the latest source snapshots.
+        :param high_memory_materialization: Whether to use high-memory Lance tuning.
+        :param growing_active_record: Atomic active-record path for train-only snapshots.
+        :param eval_sample_ids: Include pinned source row identities in validation and test.
+        :raises ValueError: Growing refresh is combined with persistent workers, or
+            identity-bearing evaluation is requested for random fake data.
         """
+        if eval_sample_ids and fake:
+            raise ValueError("eval_sample_ids requires real source rows, not fake data")
+        self.eval_sample_ids = eval_sample_ids
         super().__init__(
             dataset_root=dataset_root,
             download_dataset_root_uri=download_dataset_root_uri,
@@ -557,15 +610,30 @@ class LanceVSTDataModule(VSTDataModule):
             conditioning=conditioning,
             sketch=sketch,
             pin_memory=pin_memory,
+            include_audio=include_audio,
             param_spec_name=param_spec_name,
             download_dataset_txids=download_dataset_txids,
             download_dataset_row_limit=download_dataset_row_limit,
+            high_memory_materialization=high_memory_materialization,
         )
         self.val_num_workers = val_num_workers
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
         self._splits: dict[str, _MapSplit] = {}
         self._setup_stage: str | None = None
+        # expanduser: Hydra overrides reach us with a literal ``~`` because bash
+        # does not tilde-expand ``training.growing_active_record=~/...``.
+        self.growing_active_record = (
+            Path(growing_active_record).expanduser()
+            if growing_active_record is not None
+            else None
+        )
+        if self.growing_active_record is not None and persistent_workers:
+            raise ValueError("growing_active_record requires persistent_workers=false")
+        self._growing_snapshot: ActiveGrowingSnapshot | None = None
+        self._growing_resume_snapshot: ActiveGrowingSnapshot | None = None
+        self._growing_history: list[int] = []
+        self._growing_skip_refresh_once = False
 
     def _dataset_for(self, split: str) -> _SplitDataset:
         """Return one built split through the public dataset attributes.
@@ -607,6 +675,8 @@ class LanceVSTDataModule(VSTDataModule):
         read_audio: bool,
         mel_stats: tuple[np.ndarray, np.ndarray] | None,
         conditioning_stats: tuple[np.ndarray, np.ndarray] | None,
+        version: int | None = None,
+        include_sample_id: bool = False,
     ) -> _MapSplit:
         """Build one real Lance split and its batch transformer.
 
@@ -615,18 +685,26 @@ class LanceVSTDataModule(VSTDataModule):
         :param read_audio: Whether to project prediction audio.
         :param mel_stats: Mel ``(mean, std)``, or ``None`` to skip normalization.
         :param conditioning_stats: Cached-column affine, or ``None`` to skip.
+        :param version: Exact local Lance version for a growing train split.
+        :param include_sample_id: Add transient source row identities to this split.
         :returns: Sample-indexed dataset and collate operation.
         """
         spec = self.embedding_conditioning
         if spec is not None:
             _validate_embedding_column(shard_path, spec)
         sketch = self.sketch_controls
-        if sketch is not None:
-            _validate_sketch_column(shard_path, sketch)
+        stored_sketch = sketch if sketch is not None and sketch.source == "stored" else None
+        if stored_sketch is not None:
+            _validate_sketch_column(shard_path, stored_sketch)
         columns = self._loader_columns(read_audio=read_audio)
         mean, std = mel_stats if mel_stats is not None else (None, None)
         return _MapSplit(
-            dataset=LanceMapDataset(shard_path, columns=columns),
+            dataset=LanceMapDataset(
+                shard_path,
+                columns=columns,
+                version=version,
+                include_sample_id=include_sample_id,
+            ),
             collate=PrepareBatchCollate(
                 mean=mean,
                 std=std,
@@ -635,9 +713,12 @@ class LanceVSTDataModule(VSTDataModule):
                 conditioning_column=spec.column if spec is not None else None,
                 conditioning_shape=spec.input_shape if spec is not None else None,
                 conditioning_stats=conditioning_stats,
-                sketch_column=sketch.column if sketch is not None else None,
+                sketch_column=stored_sketch.column if stored_sketch is not None else None,
+                sketch_profile=sketch.profile if sketch is not None else "music",
                 sketch_pitch_zero_threshold=(
-                    sketch.pitch_zero_threshold if sketch is not None else None
+                    stored_sketch.pitch_zero_threshold
+                    if stored_sketch is not None and stored_sketch.profile == "music"
+                    else None
                 ),
                 preserve_legacy_m2l=(
                     isinstance(self.conditioning, str) and self.conditioning == "m2l"
@@ -663,71 +744,312 @@ class LanceVSTDataModule(VSTDataModule):
             collate=_model_batch_passthrough,
         )
 
-    def _build_real_splits(self, split_names: Sequence[str]) -> dict[str, _MapSplit]:
-        """Build the requested on-disk Lance splits.
+    @staticmethod
+    def _digest(path: Path) -> str:
+        """Digest one local file's bytes.
 
-        :param split_names: Split names required by the current stage.
-        :returns: Requested split datasets and collate operations.
+        :param path: File to digest.
+        :returns: SHA-256 hexadecimal digest.
         """
-        train_shard = self.dataset_root / f"train{self.shard_suffix}"
-        split_stats = predict_stats = None
+        return sha256(path.read_bytes()).hexdigest()
+
+    def _validate_growing_snapshot(self, snapshot: ActiveGrowingSnapshot) -> None:
+        """Validate every checkpoint-loadable local identity field.
+
+        :param snapshot: Remote-to-local identity to validate.
+        :raises ValueError: Any exact identity field disagrees with local artifacts.
+        """
+        dataset_path = Path(snapshot.dataset_path)
+        version_root = Path(snapshot.version_stats_path)
+        if dataset_path != version_root.parents[1] / f"train{self.shard_suffix}":
+            raise ValueError("growing snapshot does not use the shared train dataset path")
+        local = lance.dataset(str(dataset_path), version=snapshot.local_version)
+        transaction = local.read_transaction(snapshot.local_version)
+        if transaction is None or transaction.uuid != snapshot.local_transaction:
+            raise ValueError("growing local Lance transaction does not match identity")
+        if local.count_rows() != snapshot.row_count:
+            raise ValueError("growing local row count does not match identity")
+        if len(local.get_fragments()) != snapshot.fragment_count:
+            raise ValueError("growing local fragment count does not match identity")
+        schema_digest = sha256(local.schema.serialize().to_pybytes()).hexdigest()
+        if schema_digest != snapshot.schema_fingerprint:
+            raise ValueError("growing local schema does not match identity")
+        for name, digest in (
+            ("stats.npz", snapshot.stats_sha256),
+            ("welford.npz", snapshot.welford_sha256),
+        ):
+            path = version_root / name
+            if not path.is_file() or self._digest(path) != digest:
+                raise ValueError(f"growing {name} does not match identity")
+        remote = GrowingSnapshot.model_validate_json(
+            (version_root / "snapshot.json").read_bytes()
+        )
+        if (
+            remote.branch != snapshot.branch
+            or remote.version != snapshot.remote_version
+            or remote.transaction != snapshot.remote_transaction
+            or remote.dataset_spec_fingerprint != snapshot.dataset_spec_fingerprint
+            or remote.row_count != snapshot.row_count
+            or remote.fragment_count != snapshot.fragment_count
+            or remote.stats_sha256 != snapshot.stats_sha256
+            or remote.welford_sha256 != snapshot.welford_sha256
+            or remote.high_watermark != snapshot.high_watermark
+        ):
+            raise ValueError("growing remote-to-local identity metadata disagrees")
+        local.validate()
+
+    def _local_active_candidate(self) -> ActiveGrowingSnapshot | None:
+        """Read and fully validate this rank's active record, or retain prior data.
+
+        :returns: Validated candidate, or ``None`` when unreadable or invalid.
+        """
+        if self.growing_active_record is None:
+            return None
+        from pydantic import ValidationError
+
+        try:
+            candidate = ActiveGrowingSnapshot.model_validate_json(
+                self.growing_active_record.read_bytes()
+            )
+            self._validate_growing_snapshot(candidate)
+        # RuntimeError: lance raises it for unreadable/corrupt local manifests.
+        except (OSError, RuntimeError, ValidationError, ValueError) as exc:
+            logger.warning(
+                "unable to validate growing active record %s; retaining prior data: %s",
+                self.growing_active_record,
+                exc,
+            )
+            return None
+        return candidate
+
+    def _read_active_train(self) -> ActiveGrowingSnapshot | None:
+        """Coordinate one exact candidate without returning before DDP collectives.
+
+        :returns: Unanimously available candidate, or ``None``.
+        """
+        local = self._local_active_candidate()
+        if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+            return local
+        payload = [
+            local.model_dump()
+            if torch.distributed.get_rank() == 0 and local is not None
+            else None
+        ]
+        torch.distributed.broadcast_object_list(payload, src=0)
+        selected = payload[0]
+        ready = local is not None and local.model_dump() == selected
+        readiness: list[bool | None] = [None] * torch.distributed.get_world_size()
+        torch.distributed.all_gather_object(readiness, ready)
+        if selected is None or not all(readiness):
+            return None
+        return ActiveGrowingSnapshot.model_validate(selected)
+
+    def _select_growing_snapshot(self) -> ActiveGrowingSnapshot | None:
+        """Choose the resume identity, a unanimous candidate, or the prior snapshot.
+
+        :returns: The snapshot the train split must build from, or ``None``.
+        """
+        if self._growing_resume_snapshot is not None:
+            self._validate_growing_snapshot(self._growing_resume_snapshot)
+            return self._growing_resume_snapshot
+        candidate = self._read_active_train()
+        if candidate is None:
+            return self._growing_snapshot
+        if self._growing_snapshot is not None and (
+            candidate.branch != self._growing_snapshot.branch
+            or candidate.dataset_spec_fingerprint
+            != self._growing_snapshot.dataset_spec_fingerprint
+        ):
+            logger.warning("incompatible growing candidate; retaining prior snapshot")
+            return self._growing_snapshot
+        return candidate
+
+    def _active_train_shard(self) -> Path:
+        """Adopt one validated exact local version or retain the prior data.
+
+        :returns: Active shared train dataset path or baseline path.
+        """
+        snapshot = self._select_growing_snapshot()
+        if snapshot is None:
+            return self.dataset_root / f"train{self.shard_suffix}"
+        if (
+            self._growing_snapshot is None
+            or snapshot.remote_version != self._growing_snapshot.remote_version
+        ):
+            self._growing_snapshot = snapshot
+            self._growing_history.append(snapshot.remote_version)
+        return Path(snapshot.dataset_path)
+
+    def _active_stats_shard(self, train_shard: Path) -> Path:
+        """Return the statistics location bound to the adopted train snapshot.
+
+        :param train_shard: Active train dataset path.
+        :returns: Version-bound statistics directory, or the shard itself.
+        """
+        if self._growing_snapshot is None:
+            return train_shard
+        return Path(self._growing_snapshot.version_stats_path) / f"train{self.shard_suffix}"
+
+    def _build_real_splits(self, split_names: Sequence[str]) -> dict[str, _MapSplit]:
+        """Build train from growth while eval-only stages stay on baseline stats.
+
+        :param split_names: Stage-specific splits to build.
+        :returns: Built split datasets and collates.
+        """
+        uses_train = "train" in split_names
+        baseline_shard = self.dataset_root / f"train{self.shard_suffix}"
+        train_shard = self._active_train_shard() if uses_train else baseline_shard
+        train_stats = eval_stats = predict_stats = None
         if self.use_saved_mean_and_variance and self._conditioning_column() == "mel_spec":
             if any(name != "predict" for name in split_names):
-                split_stats = load_dataset_statistics(train_shard)
+                # Val/test normalization stays pinned to the baseline even while
+                # train follows growing snapshots (epoch-comparable eval metrics).
+                eval_stats = load_dataset_statistics(baseline_shard)
+                train_stats = (
+                    load_dataset_statistics(self._active_stats_shard(train_shard))
+                    if uses_train and self._growing_snapshot is not None
+                    else eval_stats
+                )
             if "predict" in split_names:
                 predict_stats = (
-                    split_stats
-                    if split_stats is not None and self.predict_file.parent == self.dataset_root
+                    eval_stats
+                    if eval_stats is not None
+                    and self.predict_file.parent == self.dataset_root
                     else load_dataset_statistics(self.predict_file)
                 )
         spec = self.embedding_conditioning
-        split_conditioning_stats = predict_conditioning_stats = None
+        eval_conditioning_stats = predict_conditioning_stats = None
         if spec is not None:
             if any(name != "predict" for name in split_names):
-                split_conditioning_stats = load_conditioning_statistics(train_shard, spec)
+                eval_conditioning_stats = load_conditioning_statistics(baseline_shard, spec)
             if "predict" in split_names:
                 predict_conditioning_stats = (
-                    split_conditioning_stats
-                    if split_conditioning_stats is not None
+                    eval_conditioning_stats
+                    if eval_conditioning_stats is not None
                     and self.predict_file.parent == self.dataset_root
                     else load_conditioning_statistics(self.predict_file, spec)
                 )
-        shard_paths = {
+        paths = {
             "train": train_shard,
             "val": self.dataset_root / f"val{self.shard_suffix}",
             "test": self.dataset_root / f"test{self.shard_suffix}",
             "predict": self.predict_file,
         }
+        active_version = (
+            self._growing_snapshot.local_version
+            if uses_train and self._growing_snapshot is not None
+            else None
+        )
+        mel_stats_by_split = {"train": train_stats, "predict": predict_stats}
+        conditioning_stats_by_split = {"predict": predict_conditioning_stats}
         return {
             name: self._build_lance_split(
-                shard_paths[name],
+                paths[name],
                 ot=self.ot if name == "train" else False,
-                read_audio=name == "predict",
-                mel_stats=predict_stats if name == "predict" else split_stats,
-                conditioning_stats=(
-                    predict_conditioning_stats if name == "predict" else split_conditioning_stats
+                read_audio=self.include_audio or name == "predict",
+                mel_stats=mel_stats_by_split.get(name, eval_stats),
+                conditioning_stats=conditioning_stats_by_split.get(
+                    name, eval_conditioning_stats
                 ),
+                version=active_version if name == "train" else None,
+                include_sample_id=self.eval_sample_ids and name in ("val", "test"),
             )
             for name in split_names
         }
+
+    def _refresh_growing_train(self) -> None:
+        """Rebuild train only when every rank can adopt a newer exact snapshot."""
+        if not self._growing_train_built():
+            return
+        previous = self._growing_snapshot
+        train_shard = self._active_train_shard()
+        if previous == self._growing_snapshot:
+            return
+        self._rebuild_growing_train(train_shard)
+
+    def _growing_train_built(self) -> bool:
+        """Report whether a growing-capable train split already exists.
+
+        :returns: ``True`` once setup built train under an active record.
+        """
+        return self.growing_active_record is not None and "train" in self._splits
+
+    def _rebuild_growing_train(self, train_shard: Path) -> None:
+        """Replace the train split with the currently selected snapshot's data.
+
+        :param train_shard: Active train dataset path.
+        """
+        mel_stats = None
+        if self.use_saved_mean_and_variance and self._conditioning_column() == "mel_spec":
+            mel_stats = load_dataset_statistics(self._active_stats_shard(train_shard))
+        spec = self.embedding_conditioning
+        conditioning_stats = (
+            load_conditioning_statistics(train_shard, spec) if spec is not None else None
+        )
+        version = (
+            self._growing_snapshot.local_version
+            if self._growing_snapshot is not None
+            else None
+        )
+        self._splits["train"] = self._build_lance_split(
+            train_shard,
+            ot=self.ot,
+            read_audio=self.include_audio,
+            mel_stats=mel_stats,
+            conditioning_stats=conditioning_stats,
+            version=version,
+        )
 
     def setup(self, stage: str | None = None) -> None:
         """Build the sample-indexed splits required by a Lightning stage.
 
         :param stage: Lightning stage hint; ``None`` retains eager all-split setup.
+        :raises ValueError: The active record's directory does not exist, so the
+            materializer was never started and the run could never grow.
         """
+        if (
+            self.growing_active_record is not None
+            and not self.growing_active_record.parent.is_dir()
+        ):
+            raise ValueError(
+                "growing_active_record directory does not exist: "
+                f"{self.growing_active_record}"
+            )
+        # getattr: the attribute is set dynamically in Trainer.__init__, so
+        # static type checkers do not see it on the class.
+        if (
+            stage == "fit"
+            and self.growing_active_record is not None
+            and self.trainer is not None
+            and getattr(self.trainer, "reload_dataloaders_every_n_epochs", 0) == 0
+        ):
+            logger.warning(
+                "growing_active_record is set but the trainer's "
+                "reload_dataloaders_every_n_epochs is 0; newer growing snapshots will "
+                "never be adopted mid-run (set training.growing_refresh_epoch_interval)"
+            )
         split_names = (
             self._ALL_SPLITS if stage is None else self._STAGE_SPLITS.get(stage, self._ALL_SPLITS)
         )
         num_params = resolve_param_spec(self.param_spec_name).encoded_width
         if self.fake:
             self._splits = {
-                name: self._build_fake_split(num_params=num_params, read_audio=name == "predict")
+                name: self._build_fake_split(
+                    num_params=num_params,
+                    read_audio=self.include_audio or name == "predict",
+                )
                 for name in split_names
             }
         else:
             self._splits = self._build_real_splits(split_names)
         self._setup_stage = stage
+        self._release_growing_resume_pin()
+
+    def _release_growing_resume_pin(self) -> None:
+        """Let the next loader build after a resume keep the restored snapshot."""
+        if self._growing_resume_snapshot is not None:
+            self._growing_resume_snapshot = None
+            self._growing_skip_refresh_once = True
 
     def _dataloader(self, split: str, *, shuffle: bool, drop_last: bool) -> DataLoader:
         """Build one standard map-style dataloader.
@@ -766,7 +1088,54 @@ class LanceVSTDataModule(VSTDataModule):
 
         :returns: Sample-indexed training dataloader.
         """
+        if self._growing_skip_refresh_once:
+            self._growing_skip_refresh_once = False
+        else:
+            self._refresh_growing_train()
         return self._dataloader("train", shuffle=True, drop_last=True)
+
+    def state_dict(self) -> dict[str, object]:
+        """Persist growing train identity and adoption history in checkpoints.
+
+        :returns: DataModule checkpoint state.
+        """
+        return {
+            "growing_active_snapshot": (
+                self._growing_snapshot.model_dump()
+                if self._growing_snapshot is not None
+                else None
+            ),
+            "growing_history": tuple(self._growing_history),
+        }
+
+    def load_state_dict(self, state_dict: dict[str, object]) -> None:
+        """Restore the exact growing identity before loader construction.
+
+        Lightning restores checkpoints after ``setup("fit")``, so an already-built
+        train split is rebuilt from the restored snapshot here.
+
+        :param state_dict: DataModule checkpoint state.
+        :raises ValueError: Checkpoint history or snapshot identity is invalid.
+        """
+        payload = state_dict.get("growing_active_snapshot")
+        snapshot = (
+            ActiveGrowingSnapshot.model_validate(payload)
+            if payload is not None
+            else None
+        )
+        history = state_dict.get("growing_history", ())
+        if not isinstance(history, (list, tuple)) or not all(
+            isinstance(item, int) for item in history
+        ):
+            raise ValueError("growing_history must contain only integer remote versions")
+        if snapshot is not None:
+            self._validate_growing_snapshot(snapshot)
+        self._growing_snapshot = snapshot
+        self._growing_resume_snapshot = snapshot
+        self._growing_history = list(history)
+        if self._growing_train_built():
+            self._rebuild_growing_train(self._active_train_shard())
+            self._release_growing_resume_pin()
 
     def val_dataloader(self) -> DataLoader:
         """Return the ordered validation loader, retaining a ragged tail.
@@ -788,6 +1157,34 @@ class LanceVSTDataModule(VSTDataModule):
         :returns: Sample-indexed prediction dataloader.
         """
         return self._dataloader("predict", shuffle=False, drop_last=False)
+
+    def on_after_batch_transfer(
+        self, batch: Mapping[str, torch.Tensor | None], dataloader_idx: int
+    ) -> ModelBatch:
+        """Extract online TIV sketch controls from transferred waveform audio.
+
+        :param batch: Model batch containing projected audio for online TIV.
+        :param dataloader_idx: Unused; each stage serves one loader.
+        :returns: Batch with temporal ``sketch_ctrl`` when online TIV is configured.
+        :raises ValueError: Online TIV is configured but audio is absent.
+        """
+        del dataloader_idx
+        model_batch = dict(batch)
+        sketch = self.sketch_controls
+        if sketch is None or sketch.source != "online":
+            return model_batch
+        audio = model_batch.get("audio")
+        if audio is None:
+            raise ValueError("online TIV sketch extraction requires batch audio")
+        if sketch.sample_rate is None:
+            raise ValueError("online TIV sketch extraction requires sample_rate")
+        controls = extract_tiv_batch(
+            audio, sketch.sample_rate, backend=sketch.tiv_backend
+        )
+        model_batch[SKETCH_CTRL_FIELD] = F.adaptive_avg_pool1d(
+            controls, sketch.num_frames
+        )
+        return model_batch
 
     def teardown(self, stage: str | None = None) -> None:
         """Release references to process-local Lance datasets.

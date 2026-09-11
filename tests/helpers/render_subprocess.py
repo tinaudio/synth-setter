@@ -30,7 +30,7 @@ def materialize_shard(args: list[str]) -> None:
     Mirrors the production contract: ``generate_vst_dataset.py`` exits 0 only
     after writing the ``.lance`` dataset directory to its output path, so a test
     without this side effect would trip the ``shard_path.is_dir()`` check in
-    ``_render_and_upload_shard``. The ``_versions/`` subdir is populated because
+    ``render_and_upload_shard``. The ``_versions/`` subdir is populated because
     the resume skip-probe and the ordered directory upload both target it.
 
     :param args: argv list passed to the patched ``_check_call_streamed``.

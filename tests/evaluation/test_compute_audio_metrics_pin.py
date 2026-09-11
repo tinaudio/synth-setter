@@ -6,7 +6,7 @@ proven not to regress:
 
 * file layout: ``metrics-{pid}.csv``, ``metrics.csv``, ``aggregated_metrics.csv``
   land at the expected paths
-* schema: the four-metric column set is exactly ``{mss, wmfcc, sot, rms}``
+* schema: stereo fixtures add ``mldr_mid_side`` to the five universal metrics
 * scalar values: the committed snapshot in ``snapshots/`` matches within
   per-metric tolerance bands — ``rel=1e-2, abs=1e-6`` on every mean, and on
   every std EXCEPT the aggregated ``rms`` std, which uses ``abs=1e-5``
@@ -30,7 +30,7 @@ _SNAPSHOT_PATH = Path(__file__).parent / "snapshots" / "compute_audio_metrics_ag
 _PER_SAMPLE_SNAPSHOT_PATH = (
     Path(__file__).parent / "snapshots" / "compute_audio_metrics_per_sample.csv"
 )
-_EXPECTED_METRIC_COLUMNS = ("mss", "wmfcc", "sot", "rms")
+_EXPECTED_METRIC_COLUMNS = ("mss", "wmfcc", "sot", "rms", "mldr", "mldr_mid_side")
 
 
 @pytest.fixture(scope="module")
@@ -68,7 +68,7 @@ def test_cli_writes_expected_files(cli_metrics_dir: Path) -> None:
 
 
 def test_aggregated_csv_columns(cli_metrics_dir: Path) -> None:
-    """``aggregated_metrics.csv`` has ``mean``/``std`` columns and the four-metric row index.
+    """``aggregated_metrics.csv`` has stats columns and the stereo metric row index.
 
     :param cli_metrics_dir: Output directory from the module-scoped CLI invocation.
     """

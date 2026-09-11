@@ -28,6 +28,7 @@ from synth_setter.data.lance_torch import LanceMapDataset
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.constants import conditioning_stats_filename
+from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot
 from tests.helpers.lance_fixtures import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLES,
@@ -92,6 +93,29 @@ def _params_in_order(loader: torch.utils.data.DataLoader) -> np.ndarray:
     :return: ``(total_rows, num_params)`` array.
     """
     return torch.cat([_unwrap(batch["params"]) for batch in loader]).numpy()
+
+
+def _mel_in_order(loader: torch.utils.data.DataLoader) -> np.ndarray:
+    """Concatenate normalized mel tensors across one loader epoch.
+
+    :param loader: Loader whose epoch is materialized.
+    :returns: All normalized mel rows.
+    """
+    return torch.cat([_unwrap(batch["mel"]) for batch in loader]).numpy()
+
+
+def test_growing_active_record_with_persistent_workers_raises(dataset_root: Path) -> None:
+    """Growing reloads reject workers that could retain stale dataset handles.
+
+    :param dataset_root: Frozen baseline dataset root.
+    """
+    with pytest.raises(ValueError, match="persistent_workers"):
+        LanceVSTDataModule(
+            dataset_root=dataset_root,
+            growing_active_record=dataset_root / "active.json",
+            persistent_workers=True,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
 
 
 class _DDPIndexRecorder(LightningModule):
@@ -850,7 +874,26 @@ class TestLanceMapDataModuleFlows:
         assert _unwrap(predict_batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
         assert _unwrap(predict_batch["audio"]).dtype == torch.float32
 
-    def test_embedding_spec_routes_music2latent_to_conditioning(self, dataset_root: Path) -> None:
+    def test_include_audio_reads_training_target_without_changing_conditioning(
+        self, dataset_root: Path
+    ) -> None:
+        """Audio-feedback training projects waveforms alongside stored mel conditioning.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            include_audio=True,
+        ) as module:
+            train_batch = next(iter(module.train_dataloader()))
+        assert _unwrap(train_batch["mel"]).shape == (2, *MEL_SHAPE)
+        assert _unwrap(train_batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
+
+    def test_embedding_spec_routes_music2latent_to_conditioning(
+        self, dataset_root: Path
+    ) -> None:
         """A spec projects ``music2latent`` to the generic key and drops mel.
 
         :param dataset_root: Fixture-provided dataset-root directory.

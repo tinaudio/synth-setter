@@ -2,16 +2,22 @@
 defaults:
   - paths: default
   - hydra: default
-  - logger: wandb
+  - logger: wandb_dataset
   - _self_
 
 # Run-prefix dir containing `input_spec.json`; finalize joins the filename and
 # loads the spec from there (see `spec_io.load_spec_from_root`).
 dataset_root_uri: ???
 
-# Logger group resumes the data-generation run (id pinned to spec.run_id,
-# resume=allow forced in `finalize`) so the canonical `data-{config_id}`
-# dataset artifact lands on the producer node of the W&B lineage DAG.
+# Opt in to recomputing normalization statistics from a deterministic uniform
+# sample of at most 10,000 committed training waveforms. The seed is ignored
+# while estimation is disabled.
+estimate_normalization_stats: false
+seed: 1234
+
+# Logger group opens a dedicated `{spec.run_id}-finalize` run (job_type
+# finalize, resume=allow forced in `finalize_loggers`) that carries the
+# finalize/* progress rows and the canonical `data-{config_id}` dataset artifact.
 # WandbLogger inits lazily, so a finalize run without WANDB_API_KEY degrades
 # to a best-effort no-op rather than aborting (see `_log_dataset_artifact`).
 
