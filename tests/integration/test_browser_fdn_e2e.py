@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
 import sh
 import torch
+from pydantic import BaseModel, ConfigDict
 
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.vst.core import write_wav
@@ -24,6 +23,117 @@ from synth_setter.evaluation.compute_audio_metrics import (
 )
 from synth_setter.features.pyfdn_controls import extract_reverb_sketch
 from synth_setter.param_spec_name import ParamSpecName
+
+
+class _BrowserRun(BaseModel):
+    """The page's ``window.fdnEval`` record, validated at the browser-to-Python boundary.
+
+    .. attribute :: model_config
+
+        Strict validation; unknown keys are rejected.
+
+    .. attribute :: state
+
+        Run outcome; only ``complete`` records are scored.
+
+        :type: str
+
+    .. attribute :: mode
+
+        Conditioning mode the page ran.
+
+        :type: str
+
+    .. attribute :: contentCfg
+
+        Content guidance strength.
+
+        :type: float
+
+    .. attribute :: sketchCfg
+
+        Sketch guidance strength.
+
+        :type: float
+
+    .. attribute :: steps
+
+        RK4 integration steps.
+
+        :type: int
+
+    .. attribute :: seed
+
+        Noise seed.
+
+        :type: int
+
+    .. attribute :: weights
+
+        Branch weights over the four velocity branches.
+
+        :type: list[float]
+
+    .. attribute :: noise
+
+        Initial flow state in model space.
+
+        :type: list[float]
+
+    .. attribute :: params
+
+        Sampled model-space parameters.
+
+        :type: list[float]
+
+    .. attribute :: patch
+
+        Canonical native parameter values.
+
+        :type: dict[str, float]
+
+    .. attribute :: metrics
+
+        Impulse-response metrics the page computed.
+
+        :type: dict[str, float]
+
+    .. attribute :: sketch
+
+        Flattened ``(10, 32)`` reverb sketch.
+
+        :type: list[float]
+
+    .. attribute :: target
+
+        Decoded target samples.
+
+        :type: list[float]
+
+    .. attribute :: pred
+
+        FaustWasm render of the prediction.
+
+        :type: list[float]
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+    state: str
+    mode: str
+    contentCfg: float
+    sketchCfg: float
+    steps: int
+    seed: int
+    weights: list[float]
+    noise: list[float]
+    params: list[float]
+    patch: dict[str, float]
+    metrics: dict[str, float]
+    sketch: list[float]
+    target: list[float]
+    pred: list[float]
+
 
 _REPO = Path(__file__).resolve().parents[2]
 _WEB_ROOT = _REPO / "src/synth_setter/web"
@@ -104,28 +214,29 @@ def test_browser_fdn_site_matches_python_inference_render_and_metrics(tmp_path: 
         str(_SEED),
     )
     assert "BROWSER_FDN_E2E_COMPLETE" in str(output)
-    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record = _BrowserRun.model_validate_json(record_path.read_text(encoding="utf-8"))
+    assert record.state == "complete"
 
     # The browser decoded the 16-bit WAV, so its target differs from the float render by ≤ 1 LSB.
-    browser_target = np.asarray(record["target"], dtype=np.float64)
+    browser_target = np.asarray(record.target, dtype=np.float64)
     assert browser_target.shape == target_mono.shape
     assert np.abs(browser_target - target_mono).max() <= 1.5 / 32767
 
     # Sketch parity against the Python extractor on the exact samples the page saw.
     expected_sketch = extract_reverb_sketch(browser_target, _SAMPLE_RATE)
     np.testing.assert_allclose(
-        np.asarray(record["sketch"], dtype=np.float32).reshape(10, 32), expected_sketch, atol=1e-5
+        np.asarray(record.sketch, dtype=np.float32).reshape(10, 32), expected_sketch, atol=1e-5
     )
 
     # Metric parity on the exact pair the page scored.
-    browser_pred = np.asarray(record["pred"], dtype=np.float64)
+    browser_pred = np.asarray(record.pred, dtype=np.float64)
     assert browser_pred.shape == target_mono.shape
     assert np.isfinite(browser_pred).all() and np.abs(browser_pred).max() > 0
     for name, value in _python_metrics(browser_target, browser_pred).items():
-        assert record["metrics"][name] == pytest.approx(value, rel=1e-4), name
+        assert record.metrics[name] == pytest.approx(value, rel=1e-4), name
 
     # Render parity: pyFDN on the browser's decoded parameters vs the FaustWasm render.
-    synth_params, _ = decode_model_output(np.asarray(record["params"], dtype=np.float32), spec)
+    synth_params, _ = decode_model_output(np.asarray(record.params, dtype=np.float32), spec)
     pyfdn_pred = np.asarray(
         renderer.render(synth_params, note_start_and_end=(0.0, 4.0)), dtype=np.float64
     ).reshape(-1)
@@ -138,7 +249,7 @@ def test_browser_fdn_site_matches_python_inference_render_and_metrics(tmp_path: 
 
 
 def _assert_onnx_replay_parity(
-    bundle: Path, record: dict[str, Any], target: np.ndarray, sketch: np.ndarray
+    bundle: Path, record: _BrowserRun, target: np.ndarray, sketch: np.ndarray
 ) -> None:
     """Replay the browser's noise and weights through the same graphs on onnxruntime.
 
@@ -157,7 +268,7 @@ def _assert_onnx_replay_parity(
     content, controls, null_controls = conditioning.run(
         None, {"mel": mel, "sketch_ctrl": sketch[None]}
     )
-    weights = np.asarray(record["weights"], dtype=np.float32)
+    weights = np.asarray(record.weights, dtype=np.float32)
 
     def field(x: np.ndarray, t: float) -> np.ndarray:
         output = velocity.run(
@@ -173,7 +284,7 @@ def _assert_onnx_replay_parity(
         )[0]
         return np.asarray(output, dtype=np.float32)[0]
 
-    x = np.asarray(record["noise"], dtype=np.float32)
+    x = np.asarray(record.noise, dtype=np.float32)
     dt = np.float32(1.0 / _STEPS)
     t = np.float32(0.0)
     for _ in range(_STEPS):
@@ -184,12 +295,12 @@ def _assert_onnx_replay_parity(
         x = (x + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)).astype(np.float32)
         t = np.float32(t + dt)
     np.testing.assert_allclose(
-        np.asarray(record["params"], dtype=np.float32), x, rtol=2e-4, atol=2e-4
+        np.asarray(record.params, dtype=np.float32), x, rtol=2e-4, atol=2e-4
     )
 
 
 def _assert_sampling_parity(
-    checkpoint: str, stats: str, record: dict[str, Any], target: np.ndarray, sketch: np.ndarray
+    checkpoint: str, stats: str, record: _BrowserRun, target: np.ndarray, sketch: np.ndarray
 ) -> None:
     """Replay the browser's noise through the PyTorch sampler and compare parameters.
 
@@ -216,11 +327,11 @@ def _assert_sampling_parity(
         }
         expected = model.sample_batch(
             batch,
-            noise=torch.tensor(record["noise"], dtype=torch.float32)[None],
+            noise=torch.tensor(record.noise, dtype=torch.float32)[None],
             sample_steps=_STEPS,
-            content_cfg_strength=float(record["contentCfg"]),
-            sketch_cfg_strength=float(record["sketchCfg"]),
+            content_cfg_strength=record.contentCfg,
+            sketch_cfg_strength=record.sketchCfg,
         )
     np.testing.assert_allclose(
-        np.asarray(record["params"], dtype=np.float32), expected[0].numpy(), rtol=2e-4, atol=2e-4
+        np.asarray(record.params, dtype=np.float32), expected[0].numpy(), rtol=2e-4, atol=2e-4
     )

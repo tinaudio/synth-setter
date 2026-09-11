@@ -11,6 +11,9 @@ import { extractReverbSketch } from "./sketch.mjs";
 import { encodeWav } from "./wav.mjs";
 import { branchWeights } from "../guidance.mjs";
 
+// Fewer steps than the checkpoint default so a first run on the WASM backend finishes in seconds.
+const PAGE_DEFAULT_STEPS = 50;
+
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.wasmPaths = new URL("../ort/", import.meta.url).href;
 
@@ -36,6 +39,7 @@ async function loadBundles() {
   const { sampling, paramSpecName, frames, sampleRate } = model.manifest;
   field("content").value = sampling.contentCfg;
   field("sketch").value = sampling.sketchCfg;
+  field("steps").value = PAGE_DEFAULT_STEPS;
   bundles = { model, faust, graphs };
   setStatus(`Ready: ${paramSpecName}, ${frames} frames at ${sampleRate} Hz; checkpoint default is ${sampling.steps} steps`);
   runButton.disabled = false;

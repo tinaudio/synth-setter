@@ -20,8 +20,11 @@ const server = createServer(async (request, response) => {
     const body = await readFile(target);
     response.writeHead(200, { "Content-Type": types[path.extname(target)] ?? "application/octet-stream" });
     response.end(body);
-  } catch {
-    response.writeHead(404).end();
+  } catch (error) {
+    // Only a missing file is a 404; anything else is a server fault worth seeing in the log.
+    const status = error.code === "ENOENT" ? 404 : 500;
+    console.error(`static server ${status} for ${request.url}: ${error.message}`);
+    response.writeHead(status).end();
   }
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
