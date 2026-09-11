@@ -60,3 +60,8 @@ test("non-finite prediction is rejected", () => {
   broken[10] = Infinity;
   assert.throws(() => evaluateImpulseResponses(target, broken, SAMPLE_RATE), /finite/);
 });
+
+test("responses shorter than the energy-decay window are rejected", () => {
+  const short = new Float64Array(1024).fill(0.1);
+  assert.throws(() => evaluateImpulseResponses(short, short, SAMPLE_RATE), /4096/);
+});
