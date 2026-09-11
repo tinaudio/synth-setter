@@ -181,7 +181,9 @@ Metric name prefix: `surge-host-parity/<workload>/`.
 The workflow retains an evaluator-friendly `surge-host-parity-comparison`
 artifact for 14 days. Trusted main-branch runs copy the same directory with
 checksums to
-`r2:experiments/surge-host-parity/<git-sha>/<run-id>/`. Artifact schema v2 stores
+`r2:experiments/surge-host-parity/<UTC-datetime>-<git-sha>-<run-id>-<run-attempt>/`.
+The datetime uses the fixed-width `YYYY-MM-DDTHH-MM-SSZ` format, so R2's default
+lexicographic ordering is chronological. Artifact schema v2 stores
 one `audio/sample_NN/` directory per workload row with `pedalboard.wav`,
 `dawdreamer.wav`, and `surgepy.wav`. Each workload also includes same-backend
 persisted mel arrays and previews, exact normalized parameters, per-render onset and
@@ -192,21 +194,53 @@ seed, diagnostic-only green definition, and loudness override rationale. Consump
 recomputes every mel from its same-named WAV so a label swap cannot pass. Pull
 requests never receive R2 credentials.
 
+### Faust host parity
+
+[`test_faustwasm_dawdreamer_parity_e2e.py`](../../tests/data/vst/test_faustwasm_dawdreamer_parity_e2e.py)
+renders the same four-second bright-organ A/B/A volume workload through FaustWasm 0.18.3,
+DawDreamer 0.8.3, and the installed native Faust compiler. All paths use the production renderer
+factory, Lance writer, and Lance reader; metrics cover the calibrated first 0.5 seconds. The test
+requires byte-identical normalized parameter rows, non-early onsets aligned within one sample,
+deterministic repeated A rows, and a causal difference for the B row.
+
+The established DawDreamer/FaustWasm limits remain mel RMSE ≤ 0.1, MSS ≤ 0.06, RMS-envelope
+cosine ≥ 0.999, SOT ≤ 0.0001, and wMFCC ≤ 0.06. Native C++/FaustWasm uses compiler-calibrated
+limits of mel RMSE ≤ 3.75, MSS ≤ 1.5, RMS-envelope cosine ≥ 0.997, SOT ≤ 0.0013, and wMFCC ≤
+2.3. The Faust 2.70.3 calibration observed 3.109090, 1.170763, 0.997801, 0.001048, and 1.901054,
+respectively. Run all host-parity cases locally with:
+
+```bash
+npm ci
+uv run pytest -vv -s tests/data/vst/test_faustwasm_dawdreamer_parity_e2e.py
+```
+
+The test is `slow` but not `requires_vst`, so both CPU-slow CI selectors collect it after the
+workflow installs Node, Python dependencies, Faust, and `g++`. That lane also runs the real browser
+AudioWorklet E2E, guarding the browser-to-offline and both offline-host legs together.
+
+## Metric input contract
+
+Pairwise metrics accept matching, nonempty, channel-first NumPy arrays with integer or
+floating-point dtypes. Integer samples are widened without scaling; boolean, complex,
+object, string, datetime, and timedelta arrays raise `ValueError`, as do non-finite
+samples. Rate-aware metrics accept any finite positive `numbers.Real` sample rate that
+converts to `float` (including `fractions.Fraction`); all other rates raise `ValueError`.
+
 ## Metric series
 
 The two noise-floor buckets emit the per-row "round-trip" series (five distance metrics
 plus the two non-distance sentinels `num-samples` and
 `wall-clock-seconds-per-render`):
 
-| Metric                                | Computed by                                                                                     | Unit        | Smaller-is-better? |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------- | ------------------ |
-| `multi-scale-spectral-loss-max`       | `compute_mss` (`src/synth_setter/evaluation/compute_audio_metrics.py`) — multi-scale log-mel L1 | dB          | yes                |
-| `dtw-aligned-mfcc-distance-max`       | `compute_wmfcc` — DTW-aligned MFCC L1 distance                                                  | L1          | yes                |
-| `spectral-optimal-transport-max`      | `compute_sot` — Wasserstein on STFT magnitudes                                                  | Wasserstein | yes                |
-| `rms-envelope-cosine-distance-max`    | `1 - compute_rms` — RMS envelope cosine distance                                                | 1-cos       | yes                |
-| `mel-spectrogram-mean-absolute-error` | mean abs diff on stored mel arrays                                                              | dB          | yes                |
-| `num-samples`                         | static fixture size (input parameter)                                                           | count       | n/a (sentinel)     |
-| `wall-clock-seconds-per-render`       | `(stage1_t + stage2_t) / (2 × num_samples)`                                                     | seconds     | yes                |
+| Metric                                | Computed by                                                                                                                      | Unit        | Smaller-is-better? |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------- | ------------------ |
+| `multi-scale-spectral-loss-max`       | `compute_mss_corresponding_channels` (`src/synth_setter/evaluation/compute_audio_metrics.py`) — corresponding-channel log-mel L1 | dB          | yes                |
+| `dtw-aligned-mfcc-distance-max`       | `compute_wmfcc_global_joint` — DTW over a joint channel/coefficient feature vector                                               | L1          | yes                |
+| `spectral-optimal-transport-max`      | `compute_sot_downmix` — Wasserstein on channel-mean STFT magnitudes                                                              | Wasserstein | yes                |
+| `rms-envelope-cosine-distance-max`    | `1 - compute_rms_downmix` — channel-mean RMS envelope cosine distance                                                            | 1-cos       | yes                |
+| `mel-spectrogram-mean-absolute-error` | mean abs diff on stored mel arrays                                                                                               | dB          | yes                |
+| `num-samples`                         | static fixture size (input parameter)                                                                                            | count       | n/a (sentinel)     |
+| `wall-clock-seconds-per-render`       | `(stage1_t + stage2_t) / (2 × num_samples)`                                                                                      | seconds     | yes                |
 
 The **`1 preset N renders`** bucket additionally emits five `all-pairs-*`
 series — these are the **fix-regression signal for the #489
@@ -214,13 +248,13 @@ every-other-render bug**, since the per-row metrics can stay flat
 while the all-pairs worst-case spikes (the bug manifested as junk on
 every-other render, not on every render):
 
-| Metric                                       | Computed by                                   | Unit        |
-| -------------------------------------------- | --------------------------------------------- | ----------- |
-| `all-pairs-multi-scale-spectral-loss-max`    | worst-case `compute_mss` across all pairs     | dB          |
-| `all-pairs-dtw-aligned-mfcc-distance-max`    | worst-case `compute_wmfcc` across all pairs   | L1          |
-| `all-pairs-spectral-optimal-transport-max`   | worst-case `compute_sot` across all pairs     | Wasserstein |
-| `all-pairs-rms-envelope-cosine-distance-max` | worst-case `1 - compute_rms` across all pairs | 1-cos       |
-| `all-pairs-pair-count`                       | `n × (n − 1) / 2` for `n = 2 × num_samples`   | count       |
+| Metric                                       | Computed by                                                      | Unit        |
+| -------------------------------------------- | ---------------------------------------------------------------- | ----------- |
+| `all-pairs-multi-scale-spectral-loss-max`    | worst-case `compute_mss_corresponding_channels` across all pairs | dB          |
+| `all-pairs-dtw-aligned-mfcc-distance-max`    | worst-case `compute_wmfcc_global_joint` across all pairs         | L1          |
+| `all-pairs-spectral-optimal-transport-max`   | worst-case `compute_sot_downmix` across all pairs                | Wasserstein |
+| `all-pairs-rms-envelope-cosine-distance-max` | worst-case `1 - compute_rms_downmix` across all pairs            | 1-cos       |
+| `all-pairs-pair-count`                       | `n × (n − 1) / 2` for `n = 2 × num_samples`                      | count       |
 
 Distance metrics are emitted as **max-over-samples** (worst-case
 per-pair) for the round-trip series and **max-over-pairs** for the
@@ -298,15 +332,21 @@ benchmark publish — either the `workflow_run` trigger fires
 automatically when `test-vst-slow` completes on main, or a maintainer
 can `gh workflow run Docs --ref main` to redeploy on demand.
 
-### Publishing from a feature branch (pre-merge)
+### Running one host-parity cell
 
-The workflow's `workflow_dispatch` accepts a `publish_metrics` boolean.
-However, `gh workflow run --ref <feature-branch>` returns 404 because
-the gh CLI looks up the workflow file on the default branch first, and
-the standard PAT doesn't have permission for the REST `dispatches`
-endpoint. So pre-merge bootstrapping uses a temporary `push:` trigger
-on the feature branch + a relaxed publish-step `if:` condition; revert
-both once the chart exists.
+The workflow's `workflow_dispatch` accepts a `synth` choice. Select a registered
+synth to avoid running the other VST matrix cells:
+
+```bash
+gh workflow run test-vst-slow.yml \
+  --ref "$(git branch --show-current)" \
+  -f synth=ultramaster_kr106 \
+  -f image_tag=dev-snapshot \
+  -f publish_metrics=false
+```
+
+The `publish_metrics` opt-in applies only to dispatches that include the Surge XT
+cell because the benchmark dashboards and comparison artifact are Surge-specific.
 
 ### Adding a new benchmark dashboard
 

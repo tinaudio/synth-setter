@@ -48,7 +48,7 @@ def pin_wandb_run_id(cfg: DictConfig, run_id: str, job_type: str) -> None:
 
     :param cfg: Hydra-composed cfg; ``logger.wandb.{id,job_type}`` are updated in place.
     :param run_id: The W&B run id to pin (see :func:`synth_setter.run_id.make_wandb_run_id`).
-    :param job_type: W&B ``job_type`` (``training`` / ``evaluation`` / ``data-generation``).
+    :param job_type: W&B ``job_type`` (``training`` / ``evaluation`` / ``data-generation`` / ``finalize``).
     """
     wandb_cfg = OmegaConf.select(cfg, "logger.wandb")
     if wandb_cfg is None or "id" not in wandb_cfg or "job_type" not in wandb_cfg:
@@ -163,29 +163,59 @@ def record_input_lineage(
         mark_lineage_incomplete(logger_list, missing)
 
 
+def _resolve_logged_config_value(cfg: DictConfig, key: str) -> object:
+    """Resolve one allowlisted config value without traversing unlogged branches.
+
+    :param cfg: Full Hydra config, retained as the interpolation root.
+    :param key: Top-level key included in the logger payload.
+    :returns: Resolved plain container or scalar value.
+    """
+    value = cfg.get(key)
+    if OmegaConf.is_config(value):
+        return OmegaConf.to_container(value, resolve=True)
+    return value
+
+
 @rank_zero_only
 def log_hyperparameters(object_dict: dict[str, Any]) -> None:
-    """Control which config parts are saved by Lightning loggers.
+    """Save resolved config values and model parameter counts to Lightning loggers.
 
     Additionally saves:
         - Number of model parameters
 
     :param object_dict: A dictionary containing the following objects:
         - `"cfg"`: A DictConfig object containing the main config.
+        - `"datamodule"`: Optional data source exposing run provenance.
         - `"model"`: The Lightning model.
         - `"trainer"`: The Lightning trainer.
     """
-    hparams = {}
-
-    cfg = OmegaConf.to_container(object_dict["cfg"])
-    model = object_dict["model"]
     trainer = object_dict["trainer"]
-
     if not trainer.logger:
         log.warning("Logger not found! Skipping hyperparameter logging...")
         return
 
-    hparams["model"] = cfg["model"]
+    cfg = object_dict["cfg"]
+    hparams = {
+        key: _resolve_logged_config_value(cfg, key)
+        for key in (
+            "callbacks",
+            "ckpt_path",
+            "datamodule",
+            "extras",
+            "model",
+            "seed",
+            "tags",
+            "task_name",
+            "trainer",
+        )
+    }
+
+    datamodule = object_dict.get("datamodule")
+    source_provenance = getattr(datamodule, "source_provenance", None)
+    if source_provenance is not None:
+        hparams["source_provenance"] = source_provenance
+
+    model = object_dict["model"]
 
     # save number of model parameters
     hparams["model/params/total"] = sum(p.numel() for p in model.parameters())
@@ -195,17 +225,6 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
     hparams["model/params/non_trainable"] = sum(
         p.numel() for p in model.parameters() if not p.requires_grad
     )
-
-    hparams["datamodule"] = cfg["datamodule"]
-    hparams["trainer"] = cfg["trainer"]
-
-    hparams["callbacks"] = cfg.get("callbacks")
-    hparams["extras"] = cfg.get("extras")
-
-    hparams["task_name"] = cfg.get("task_name")
-    hparams["tags"] = cfg.get("tags")
-    hparams["ckpt_path"] = cfg.get("ckpt_path")
-    hparams["seed"] = cfg.get("seed")
 
     # send hparams to all loggers
     for logger in trainer.loggers:

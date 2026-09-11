@@ -1,22 +1,19 @@
 """Helpers for asserting on wandb offline-run artifacts.
 
 The wandb offline runtime writes one binary protobuf file per run
-(``run-*.wandb``) using ``wandb.sdk.internal.datastore`` — JSON history
-mirrors only materialize after ``wandb sync``. Tests that need to assert on
-``log_metrics`` payloads in an offline run therefore have to decode the
-binary directly.
-
-Both ``tests/test_generate_dataset_wandb.py`` and
-``tests/integration/test_generate_dataset_cli_wandb_e2e.py`` need this
-decoder; this module is the single owner so a wandb upgrade only requires
-updating one site.
+(``run-*.wandb``) using ``wandb.sdk.internal.datastore`` — JSON mirrors only
+materialize after ``wandb sync``. Tests assert on offline run payloads and
+lifecycle records by decoding that binary directly. This module is the single
+owner so a wandb upgrade only requires updating one site.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import pytest
 import wandb
@@ -91,6 +88,70 @@ def read_run_binary(
     return _poll_until(wandb_binary.read_bytes, until, timeout_s)
 
 
+def read_run_exit_code(
+    wandb_binary: Path,
+    *,
+    timeout_s: float = _FLUSH_TIMEOUT_S,
+) -> int | None:
+    """Decode the terminal exit code from an offline run record.
+
+    :param wandb_binary: Path to the offline ``run-*.wandb`` file.
+    :param timeout_s: Upper bound while waiting for the exit record to flush.
+    :returns: Process-style exit code, or ``None`` when no exit record appears.
+    """
+    return _poll_until(
+        lambda: _scan_run_exit_code(wandb_binary),
+        lambda exit_code: exit_code is not None,
+        timeout_s,
+    )
+
+
+def read_run_project(
+    wandb_binary: Path,
+    *,
+    timeout_s: float = _FLUSH_TIMEOUT_S,
+) -> str | None:
+    """Decode the project from an offline run record.
+
+    :param wandb_binary: Path to the offline ``run-*.wandb`` file.
+    :param timeout_s: Upper bound while waiting for the run record to flush.
+    :returns: Run project, or ``None`` when no run record appears before timeout.
+    """
+    return _poll_until(
+        lambda: _scan_run_project(wandb_binary),
+        lambda project: project is not None,
+        timeout_s,
+    )
+
+
+def read_run_labels(
+    wandb_binary: Path,
+) -> tuple[str, tuple[str, ...]] | None:
+    """Decode the display name and tags persisted in an offline run.
+
+    :param wandb_binary: Offline run datastore to read.
+    :returns: Display name and tags, or ``None`` if no run record was flushed.
+    """
+    return _poll_until(
+        lambda: _scan_run_labels(wandb_binary),
+        lambda labels: labels is not None,
+        _FLUSH_TIMEOUT_S,
+    )
+
+
+def _scan_run_labels(wandb_binary: Path) -> tuple[str, tuple[str, ...]] | None:
+    """Read display metadata from the datastore's run record.
+
+    :param wandb_binary: Offline run datastore to read.
+    :returns: Display name and tags when present, otherwise ``None``.
+    """
+    with _iter_records(wandb_binary) as records:
+        for record in records:
+            if record.WhichOneof("record_type") == "run":
+                return record.run.display_name, tuple(record.run.tags)
+    return None
+
+
 def read_history_rows(
     wandb_binary: Path,
     *,
@@ -116,34 +177,74 @@ def read_history_rows(
     return _poll_until(lambda: _scan_history_rows(wandb_binary), until, timeout_s)
 
 
+@contextmanager
+def _iter_records(wandb_binary: Path) -> Iterator[Iterator[Any]]:
+    """Yield parsed records while owning the datastore scan resource.
+
+    :param wandb_binary: Path to an offline ``run-*.wandb`` file.
+    :yields Iterator[Any]: Lazy records before the datastore's ``None`` sentinel.
+    """
+    ds = wandb_datastore.DataStore()
+
+    def _records() -> Iterator[Any]:
+        while True:
+            data = ds.scan_data()
+            if data is None:
+                return
+            record = wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
+            record.ParseFromString(data)
+            yield record
+
+    try:
+        ds.open_for_scan(str(wandb_binary))
+        yield _records()
+    finally:
+        ds.close()
+
+
+def _scan_run_exit_code(wandb_binary: Path) -> int | None:
+    """Read the exit code from the datastore's terminal record.
+
+    :param wandb_binary: Path to an offline ``run-*.wandb`` file.
+    :returns: Exit code when present, otherwise ``None``.
+    """
+    with _iter_records(wandb_binary) as records:
+        for record in records:
+            if record.WhichOneof("record_type") == "exit":
+                return record.exit.exit_code
+    return None
+
+
+def _scan_run_project(wandb_binary: Path) -> str | None:
+    """Read the project from the datastore's run record.
+
+    :param wandb_binary: Path to an offline ``run-*.wandb`` file.
+    :returns: Run project when present, otherwise ``None``.
+    """
+    with _iter_records(wandb_binary) as records:
+        for record in records:
+            if record.WhichOneof("record_type") == "run":
+                return record.run.project or None
+    return None
+
+
 def _scan_history_rows(wandb_binary: Path) -> list[dict[str, str]]:
     """Single-pass decode of the datastore binary's history records.
 
     :param wandb_binary: Path to the offline ``run-*.wandb`` file.
     :returns: One dict per history record found in this scan.
     """
-    ds = wandb_datastore.DataStore()
-    ds.open_for_scan(str(wandb_binary))
-    # ``open_for_scan`` opens a file handle; close it each pass so the polling
-    # loop in ``read_history_rows`` can't leak one handle per re-scan.
-    try:
-        rows: list[dict[str, str]] = []
-        while True:
-            data = ds.scan_data()
-            if data is None:
-                break
-            rec = wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
-            rec.ParseFromString(data)
-            if not rec.HasField("history"):
+    rows: list[dict[str, str]] = []
+    with _iter_records(wandb_binary) as records:
+        for record in records:
+            if not record.HasField("history"):
                 continue
             row: dict[str, str] = {}
-            for item in rec.history.item:
+            for item in record.history.item:
                 key = item.key if item.key else "/".join(item.nested_key)
                 row[key] = item.value_json
             rows.append(row)
-        return rows
-    finally:
-        ds.close()
+    return rows
 
 
 def read_run_config(
@@ -174,23 +275,12 @@ def _scan_run_config(wandb_binary: Path) -> dict[str, str]:
     :param wandb_binary: Path to the offline ``run-*.wandb`` file.
     :returns: Merged config mapping over every config update in this scan.
     """
-    ds = wandb_datastore.DataStore()
-    ds.open_for_scan(str(wandb_binary))
-    # ``open_for_scan`` opens a file handle; close it each pass so the polling
-    # loop in ``read_run_config`` can't leak one handle per re-scan.
-    try:
-        config: dict[str, str] = {}
-        while True:
-            data = ds.scan_data()
-            if data is None:
-                break
-            rec = wandb_pb.Record()  # pyright: ignore[reportAttributeAccessIssue]
-            rec.ParseFromString(data)
-            if not rec.HasField("config"):
+    config: dict[str, str] = {}
+    with _iter_records(wandb_binary) as records:
+        for record in records:
+            if not record.HasField("config"):
                 continue
-            for item in rec.config.update:
+            for item in record.config.update:
                 key = item.key if item.key else "/".join(item.nested_key)
                 config[key] = item.value_json
-        return config
-    finally:
-        ds.close()
+    return config

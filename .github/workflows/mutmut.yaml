@@ -29,12 +29,24 @@ jobs:
           - name: evaluation-audio
             patterns:
               - synth_setter.evaluation.a*
+          - name: evaluation-browser
+            patterns:
+              - synth_setter.evaluation.browser_flow.*
           - name: evaluation-metrics
             patterns:
               - synth_setter.evaluation.compute_audio_metrics.*
+              - synth_setter.evaluation.paired_retrieval.*
+          - name: evaluation-oracle-probe
+            patterns:
+              - synth_setter.evaluation.oracle_probe.*
+          - name: evaluation-response
+            patterns:
+              - synth_setter.evaluation.joint_transport.*
+              - synth_setter.evaluation.response_losses.*
           - name: evaluation-predict-misc
             patterns:
               - synth_setter.evaluation.predict_vst_audio.x_[!_r]*
+              - synth_setter.evaluation.predict_vst_audio.x__canonicalize_prediction_note_window*
               - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_1
               - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_1?*
               - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[5-9]
@@ -42,10 +54,14 @@ jobs:
               - synth_setter.evaluation.predict_vst_audio.x__make_render_fn*
               - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1
               - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1?
-          - name: evaluation-predict-render-audio-leading-2-4
+          - name: evaluation-predict-render-audio-leading-2
             patterns:
-              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[2-4]
-              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[2-4]?*
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_2
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_2?*
+          - name: evaluation-predict-render-audio-leading-3-4
+            patterns:
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[3-4]
+              - synth_setter.evaluation.predict_vst_audio.x_render_prediction_audio__mutmut_[3-4]?*
           - name: evaluation-predict-render-artifacts-leading-2-9-and-100-149
             patterns:
               - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_[2-9]
@@ -54,9 +70,6 @@ jobs:
           - name: evaluation-predict-render-artifacts-150-199
             patterns:
               - synth_setter.evaluation.predict_vst_audio.x__render_prediction_artifacts__mutmut_1[5-9]?
-          - name: evaluation-shuffle
-            patterns:
-              - synth_setter.evaluation.shuffle_pred_audio.*
           - name: tools
             patterns:
               - synth_setter.tools.*
@@ -69,18 +82,33 @@ jobs:
           - name: pipeline-add-private-n-z
             patterns:
               - synth_setter.pipeline.data.add_*.x__[n-z]*
+          - name: pipeline-cqt
+            patterns:
+              - synth_setter.pipeline.data.cqt.*
+          - name: pipeline-slap-export
+            patterns:
+              - synth_setter.pipeline.data.export_slap.*
           - name: pipeline-lance
             patterns:
               - synth_setter.pipeline.data.lance_*
           - name: pipeline-dataset-reopen
             patterns:
               - synth_setter.pipeline.data.dataset_reopen.*
+          - name: pipeline-growing-lance
+            patterns:
+              - synth_setter.pipeline.data.growing_lance.*
+          - name: pipeline-pyfdn-sketch
+            patterns:
+              - synth_setter.pipeline.data.pyfdn_sketch_worker.*
           - name: pipeline-stats
             patterns:
               - synth_setter.pipeline.data.stats.*
           - name: pipeline-finalize
             patterns:
               - synth_setter.pipeline.data.finalize_progress.*
+          - name: pipeline-param-language
+            patterns:
+              - synth_setter.pipeline.data.param_language.*
           - name: pipeline-param-shift
             patterns:
               - synth_setter.pipeline.data.param_shift.*

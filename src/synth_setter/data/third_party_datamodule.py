@@ -1,0 +1,743 @@
+"""Predict-only datamodule serving published third-party audio corpora (#2886).
+
+The corpora under ``r2:experiments/third_party`` store source WAV bytes as
+``lance.blob.v2`` columns and are never rewritten. Decode, resample, up-mix,
+length-pinning, amplitude scaling, and the mel front-end happen per batch.
+Compose ``datamodule=third_party/nsynth_test`` for mel-only prediction or
+``datamodule=third_party/nsynth_sketch sketch=on`` for live pooled controls;
+both require ``evaluation.no_params=true evaluation.rerender_target=false``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import logging
+import math
+import os
+import shutil
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import cast
+
+import lance
+import numpy as np
+import pyarrow as pa
+import torch
+from lightning import LightningDataModule
+from pedalboard.io import AudioFile
+from torch.utils.data import DataLoader, Dataset
+
+from synth_setter.conditioning import (
+    SKETCH_CTRL_FIELD,
+    SKETCH_PITCH_SLICE,
+    SKETCH_STORAGE_FRAMES,
+    SketchControls,
+    resolve_sketch_controls,
+)
+from synth_setter.data.vst.shapes import AUDIO_FIELD, make_spectrogram
+from synth_setter.data.vst_datamodule import load_mel_statistics
+from synth_setter.features.sketch_controls import extract_sketch_controls_batch
+from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.lance_materialize import retry_lance_read
+from synth_setter.sketch import pool_sketch_controls
+
+log = logging.getLogger(__name__)
+
+_PREDICT_STAGES = frozenset({"predict", None})
+_MEL_STATS_CACHE_DIR = ".mel-stats"
+_BLOB_EXTENSION_NAME = "lance.blob.v2"
+# Pedalboard maps PCM16 -32768 to -32768/32767 when decoding.
+_PCM16_DECODE_FULL_SCALE = 32768.0 / 32767.0
+
+
+class AudioDecodeError(ValueError):
+    """Encoded audio cannot be opened or decoded by pedalboard."""
+
+
+def _is_blob_encoded(field: pa.Field) -> bool:
+    """Return whether a column is readable through the blob API.
+
+    :param field: Schema field for the configured audio column.
+    :returns: True when either supported blob encoding is present.
+    """
+    if getattr(field.type, "extension_name", None) == _BLOB_EXTENSION_NAME:
+        return True
+    return (field.metadata or {}).get(b"lance-encoding:blob") == b"true"
+
+
+def _validate_config(
+    conditioning: str,
+    *,
+    use_saved_mean_and_variance: bool,
+    mel_stats_uri: str | None,
+    row_limit: int | None,
+    row_filter: str | None,
+    downmix: bool,
+    peak_normalize: bool,
+) -> None:
+    """Reject a configuration that cannot be served correctly.
+
+    :param conditioning: Conditioning mode; this layer accepts only ``mel``.
+    :param use_saved_mean_and_variance: Whether mel standardization is enabled.
+    :param mel_stats_uri: Configured statistics source, if any.
+    :param row_limit: Configured row cap, if any.
+    :param row_filter: Configured Lance SQL row predicate, if any.
+    :param downmix: Configured channel-averaging switch.
+    :param peak_normalize: Configured unit-peak rescaling switch.
+    :raises ValueError: The conditioning mode or normalization configuration is invalid.
+    """
+    if conditioning != "mel":
+        raise ValueError(
+            f"ThirdPartyAudioDataModule accepts mel conditioning only, got {conditioning!r}"
+        )
+    if not isinstance(use_saved_mean_and_variance, bool):
+        raise ValueError(
+            "use_saved_mean_and_variance must be a boolean, got "
+            f'{use_saved_mean_and_variance!r}; a quoted "false" would otherwise enable '
+            "normalization"
+        )
+    if row_limit is not None and (not isinstance(row_limit, int) or isinstance(row_limit, bool)):
+        raise ValueError(f"row_limit must be an integer, got {row_limit!r}")
+    if row_limit is not None and row_limit < 1:
+        raise ValueError(
+            f"row_limit must be at least 1, got {row_limit}; an empty sweep writes no "
+            "predictions and fails downstream instead of here"
+        )
+    if use_saved_mean_and_variance and mel_stats_uri is None:
+        raise ValueError(
+            "mel conditioning with use_saved_mean_and_variance=true requires "
+            "mel_stats_uri — point it at the statistics the checkpoint trained "
+            "with, not at this corpus"
+        )
+    if not use_saved_mean_and_variance and mel_stats_uri is not None:
+        raise ValueError(
+            f"mel_stats_uri={mel_stats_uri!r} is set with use_saved_mean_and_variance=false, "
+            "so the statistics would be dropped and the checkpoint fed raw mel"
+        )
+    if row_filter is not None and (not isinstance(row_filter, str) or not row_filter.strip()):
+        raise ValueError(
+            f"row_filter must be a non-empty Lance SQL predicate or null, got {row_filter!r}; "
+            "a blank filter would silently serve the whole corpus"
+        )
+    # Hydra composes a quoted `=false` as a truthy string, which would enable the switch.
+    for name, value in (("downmix", downmix), ("peak_normalize", peak_normalize)):
+        if not isinstance(value, bool):
+            raise ValueError(f"{name} must be a boolean, got {value!r}")
+
+
+def _validate_numeric_config(
+    *,
+    sample_rate: int,
+    channels: int,
+    signal_duration_seconds: float,
+    amplitude_scale: float,
+    dataset_version: int,
+    batch_size: int,
+    num_workers: int,
+) -> int:
+    """Validate the numeric render contract and return its sample count.
+
+    :param sample_rate: Target sample rate in Hz.
+    :param channels: Target channel count.
+    :param signal_duration_seconds: Target clip duration.
+    :param amplitude_scale: Gain applied to decoded audio.
+    :param dataset_version: Immutable Lance snapshot to serve.
+    :param batch_size: Rows per predict batch.
+    :param num_workers: Dataloader workers decoding rows.
+    :returns: Target samples per clip.
+    :raises ValueError: A value has the wrong type or lies outside its valid domain.
+    """
+    for name, value in (
+        ("sample_rate", sample_rate),
+        ("channels", channels),
+        ("dataset_version", dataset_version),
+        ("batch_size", batch_size),
+        ("num_workers", num_workers),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name}={value!r} must be an integer")
+    if isinstance(signal_duration_seconds, bool) or not isinstance(
+        signal_duration_seconds, (int, float)
+    ):
+        raise ValueError(f"signal_duration_seconds={signal_duration_seconds!r} must be a number")
+    if isinstance(amplitude_scale, bool) or not isinstance(amplitude_scale, (int, float)):
+        raise ValueError(f"amplitude_scale={amplitude_scale!r} must be a number")
+    if dataset_version <= 0:
+        raise ValueError(f"dataset_version={dataset_version} must be positive")
+    if batch_size <= 0:
+        raise ValueError(f"batch_size={batch_size} must be positive")
+    if sample_rate <= 0:
+        raise ValueError(f"sample_rate={sample_rate} must be positive")
+    if not math.isfinite(signal_duration_seconds) or signal_duration_seconds <= 0:
+        raise ValueError(
+            f"signal_duration_seconds={signal_duration_seconds} must be positive and finite"
+        )
+    if not math.isfinite(amplitude_scale) or amplitude_scale <= 0:
+        raise ValueError(f"amplitude_scale={amplitude_scale} must be positive and finite")
+    if num_workers < 0:
+        raise ValueError(f"num_workers={num_workers} must not be negative")
+    num_samples = int(sample_rate * signal_duration_seconds)
+    if num_samples <= 0:
+        raise ValueError(
+            f"sample_rate={sample_rate} x signal_duration_seconds="
+            f"{signal_duration_seconds} yields {num_samples} samples per clip; "
+            "the render contract needs a positive sample count"
+        )
+    if channels <= 0:
+        raise ValueError(f"channels={channels} must be positive")
+    return num_samples
+
+
+def decode_clip(
+    data: bytes,
+    *,
+    sample_rate: int,
+    channels: int,
+    num_samples: int,
+    amplitude_scale: float,
+    downmix: bool = False,
+    peak_normalize: bool = False,
+) -> np.ndarray:
+    """Decode one source clip onto the render contract's audio grid.
+
+    :param data: Source container bytes in any format pedalboard reads.
+    :param sample_rate: Target sample rate in Hz.
+    :param channels: Target channel count; a mono source is duplicated.
+    :param num_samples: Target sample count; shorter clips pad, longer ones truncate.
+    :param amplitude_scale: Gain applied after length-pinning.
+    :param downmix: Average a multichannel source to mono before channel mapping, so
+        stereo corpora can serve a narrower contract.
+    :param peak_normalize: Rescale the resampled clip to unit peak before length-pinning;
+        float impulse-response corpora carry arbitrary, often above-unity, levels. Silence
+        is left untouched.
+    :returns: ``(channels, num_samples)`` float32 audio.
+    :raises AudioDecodeError: The encoded container or codec cannot be decoded.
+    :raises ValueError: Source or scaled samples are invalid, or channels mismatch.
+    """
+    try:
+        with AudioFile(io.BytesIO(data)) as source_handle:
+            source = source_handle.read(source_handle.frames)
+    except (RuntimeError, ValueError) as exc:
+        raise AudioDecodeError("pedalboard could not decode the audio container") from exc
+    if not np.isfinite(source).all():
+        raise ValueError("source audio contains non-finite samples")
+    source_min = source.min(initial=0.0)
+    source_max = source.max(initial=0.0)
+    if not peak_normalize and (source_min < -_PCM16_DECODE_FULL_SCALE or source_max > 1.0):
+        raise ValueError("source audio leaves [-1, 1]")
+
+    try:
+        with AudioFile(io.BytesIO(data)).resampled_to(sample_rate) as handle:
+            audio = handle.read(handle.frames)
+    except (RuntimeError, ValueError) as exc:
+        raise AudioDecodeError("pedalboard could not decode the audio container") from exc
+    if downmix and audio.shape[0] > 1:
+        audio = audio.mean(axis=0, keepdims=True)
+    peak = np.abs(audio).max(initial=0.0)
+    if peak_normalize and peak > 0.0:
+        audio = audio / peak
+    if audio.shape[0] == 1 < channels:
+        audio = np.repeat(audio, channels, axis=0)
+    elif audio.shape[0] != channels:
+        raise ValueError(f"source has {audio.shape[0]} channels; render contract wants {channels}")
+    if audio.shape[1] < num_samples:
+        audio = np.pad(audio, [(0, 0), (0, num_samples - audio.shape[1])])
+    clip = np.ascontiguousarray(audio[:, :num_samples] * amplitude_scale, dtype=np.float32)
+    if not np.isfinite(clip).all():
+        raise ValueError("decoded audio contains non-finite samples")
+    if np.abs(clip).max(initial=0.0) > 1.0:
+        if amplitude_scale > 1.0:
+            raise ValueError(
+                f"decoded audio leaves [-1, 1] after amplitude_scale={amplitude_scale}; "
+                "the mel front-end and model contract assume normalized audio"
+            )
+        np.clip(clip, -1.0, 1.0, out=clip)
+    return clip
+
+
+class _BlobAudioDataset(Dataset[dict[str, torch.Tensor]]):
+    """Row-indexed corpus view decoding blob audio and mel on the worker."""
+
+    def __init__(
+        self,
+        uri: str,
+        *,
+        storage_options: Mapping[str, str] | None,
+        version: int,
+        audio_column: str,
+        sample_rate: int,
+        channels: int,
+        num_samples: int,
+        amplitude_scale: float,
+        downmix: bool,
+        peak_normalize: bool,
+        rows: int,
+        addresses: Sequence[int] | None = None,
+    ) -> None:
+        """Configure the per-row decode.
+
+        :param uri: Lance dataset location.
+        :param storage_options: Object-store options for a remote ``uri``.
+        :param version: Lance dataset version every reader pins to.
+        :param audio_column: Blob column holding source container bytes.
+        :param sample_rate: Target sample rate in Hz.
+        :param channels: Target channel count.
+        :param num_samples: Target sample count per clip.
+        :param amplitude_scale: Gain applied to decoded audio.
+        :param downmix: Whether multichannel sources are averaged to mono first.
+        :param peak_normalize: Whether each clip is rescaled to unit peak.
+        :param rows: Number of rows served.
+        :param addresses: Lance row addresses of the served rows, in serving order;
+            ``None`` serves the first ``rows`` stored rows.
+        """
+        self.uri = uri
+        self.storage_options = dict(storage_options) if storage_options else None
+        self.version = version
+        self.audio_column = audio_column
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.num_samples = num_samples
+        self.amplitude_scale = amplitude_scale
+        self.downmix = downmix
+        self.peak_normalize = peak_normalize
+        self.peak_normalize = peak_normalize
+        self.rows = rows
+        self.addresses = list(addresses) if addresses is not None else None
+        self._dataset: lance.LanceDataset | None = None
+
+    def __getstate__(self) -> dict[str, object]:
+        """Drop the open dataset so every worker opens its own handle.
+
+        :returns: Pickle state with no live Lance handle.
+        """
+        return {**self.__dict__, "_dataset": None}
+
+    def __len__(self) -> int:
+        """Expose the configured served-row count.
+
+        :returns: Rows this dataset serves.
+        """
+        return self.rows
+
+    def _open(self) -> lance.LanceDataset:
+        """Return this process's dataset handle, opening it on first use.
+
+        :returns: Open Lance dataset.
+        """
+        if self._dataset is None:
+            self._dataset = retry_lance_read(
+                "third_party_worker_open",
+                lambda: lance.dataset(
+                    self.uri, version=self.version, storage_options=self.storage_options
+                ),
+            )
+        return self._dataset
+
+    def _read_blobs(self, selected: list[int]) -> list[tuple[int, bytes]]:
+        """Read the containers behind served-row positions in the requested order.
+
+        :param selected: Served-row positions.
+        :returns: ``(row, bytes)`` pairs in ``selected`` order.
+        """
+        dataset = self._open()
+        if self.addresses is None:
+            return dataset.read_blobs(self.audio_column, indices=selected, preserve_order=True)
+        chosen = [self.addresses[position] for position in selected]
+        return dataset.read_blobs(self.audio_column, addresses=chosen, preserve_order=True)
+
+    def _decode(self, data: bytes) -> dict[str, torch.Tensor]:
+        """Decode one stored container into model audio and mel tensors.
+
+        :param data: Source audio container bytes.
+        :returns: ``audio`` and ``mel`` for one clip.
+        """
+        audio = decode_clip(
+            data,
+            sample_rate=self.sample_rate,
+            channels=self.channels,
+            num_samples=self.num_samples,
+            amplitude_scale=self.amplitude_scale,
+            downmix=self.downmix,
+            peak_normalize=self.peak_normalize,
+        )
+        mel = make_spectrogram(audio, self.sample_rate).astype(np.float32)
+        return {"audio": torch.from_numpy(audio), "mel": torch.from_numpy(mel)}
+
+    def __getitems__(self, indices: Sequence[int]) -> list[dict[str, torch.Tensor]]:
+        """Decode one ordered index batch through Lance's native blob scheduler.
+
+        :param indices: Row indices, including any requested duplicates.
+        :returns: One decoded sample per index in the requested order.
+        """
+        selected = list(indices)
+        blobs = retry_lance_read(
+            "third_party_blob_read", lambda: self._read_blobs(selected)
+        )
+        return [self._decode(data) for _, data in blobs]
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        """Decode one row onto the render contract.
+
+        :param index: Row index.
+        :returns: ``audio`` and ``mel`` for one clip.
+        """
+        return self.__getitems__((index,))[0]
+
+
+class ThirdPartyAudioDataModule(LightningDataModule):
+    """Serve an immutable third-party audio corpus to ``trainer.predict``.
+
+    Emits no ``params``: these corpora carry no ground-truth patch, so an eval
+    run against one must also disable target re-rendering.
+    """
+
+    def __init__(
+        self,
+        dataset_uri: str,
+        *,
+        sample_rate: int,
+        channels: int,
+        signal_duration_seconds: float,
+        dataset_version: int,
+        audio_column: str = AUDIO_FIELD,
+        amplitude_scale: float = 1.0,
+        batch_size: int = 32,
+        num_workers: int = 0,
+        row_limit: int | None = None,
+        row_filter: str | None = None,
+        downmix: bool = False,
+        peak_normalize: bool = False,
+        conditioning: str = "mel",
+        sketch: SketchControls = None,
+        use_saved_mean_and_variance: bool = False,
+        mel_stats_uri: str | None = None,
+        mel_stats_sha256: str | None = None,
+        stats_cache_dir: str | None = None,
+    ) -> None:
+        """Configure the corpus and render contract it maps onto.
+
+        :param dataset_uri: Corpus Lance dataset; local path or R2-backed URI.
+        :param sample_rate: Target sample rate in Hz.
+        :param channels: Target channel count.
+        :param signal_duration_seconds: Target clip duration.
+        :param dataset_version: Immutable Lance snapshot to serve.
+        :param audio_column: Blob column holding source container bytes.
+        :param amplitude_scale: Gain applied to decoded audio before the mel front-end.
+        :param batch_size: Rows per predict batch.
+        :param num_workers: Dataloader workers decoding rows.
+        :param row_limit: Serve only the first N rows; ``None`` serves the whole corpus.
+        :param row_filter: Lance SQL predicate over the corpus columns selecting the
+            served rows (e.g. ``audio_decodable = true AND source_path LIKE 'IRs/%'``);
+            ``None`` serves every row. Applied before ``row_limit``.
+        :param downmix: Average multichannel sources to mono before mapping onto the
+            contract's channel count; off, a channel-count mismatch raises.
+        :param peak_normalize: Rescale every clip to unit peak; off, a source outside
+            ``[-1, 1]`` raises.
+        :param conditioning: Conditioning mode; only ``mel`` is accepted.
+        :param sketch: Optional live sketch-control specification.
+        :param use_saved_mean_and_variance: Whether to standardize mel with saved statistics.
+        :param mel_stats_uri: Training mel statistics, local or ``r2://``.
+        :param mel_stats_sha256: Optional SHA-256 pin for the statistics bytes.
+        :param stats_cache_dir: Directory for fetched statistics.
+        :raises ValueError: A corpus, render, normalization, or sketch contract is invalid.
+        """
+        super().__init__()
+        _validate_config(
+            conditioning,
+            use_saved_mean_and_variance=use_saved_mean_and_variance,
+            mel_stats_uri=mel_stats_uri,
+            row_limit=row_limit,
+            row_filter=row_filter,
+            downmix=downmix,
+            peak_normalize=peak_normalize,
+        )
+        num_samples = _validate_numeric_config(
+            sample_rate=sample_rate,
+            channels=channels,
+            signal_duration_seconds=signal_duration_seconds,
+            amplitude_scale=amplitude_scale,
+            dataset_version=dataset_version,
+            batch_size=batch_size,
+            num_workers=num_workers,
+        )
+        self.dataset_uri = dataset_uri
+        self.dataset_version = dataset_version
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.num_samples = num_samples
+        self.audio_column = audio_column
+        self.amplitude_scale = amplitude_scale
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.row_limit = row_limit
+        self.row_filter = row_filter
+        self.downmix = downmix
+        self.peak_normalize = peak_normalize
+        self.conditioning = conditioning
+        self.sketch_controls = resolve_sketch_controls(sketch)
+        if (
+            self.sketch_controls is not None
+            and self.sketch_controls.num_frames != SKETCH_STORAGE_FRAMES
+        ):
+            raise ValueError(
+                f"live sketch extraction requires num_frames={SKETCH_STORAGE_FRAMES}, "
+                f"got {self.sketch_controls.num_frames}"
+            )
+        self.mel_stats_uri = mel_stats_uri
+        if mel_stats_sha256 is not None:
+            if not isinstance(mel_stats_sha256, str):
+                raise ValueError("mel_stats_sha256 must contain 64 hexadecimal characters")
+            normalized_digest = mel_stats_sha256.lower()
+            valid_digest = len(normalized_digest) == 64 and all(
+                character in "0123456789abcdef" for character in normalized_digest
+            )
+            if not valid_digest:
+                raise ValueError("mel_stats_sha256 must contain 64 hexadecimal characters")
+            if mel_stats_uri is None:
+                raise ValueError("mel_stats_sha256 requires mel_stats_uri")
+            mel_stats_sha256 = normalized_digest
+        self.mel_stats_sha256 = mel_stats_sha256
+        self.stats_cache_dir = Path(stats_cache_dir or Path.cwd() / _MEL_STATS_CACHE_DIR)
+        self._statistics: tuple[torch.Tensor, torch.Tensor] | None = None
+        self._predict_dataset: _BlobAudioDataset | None = None
+
+    def cached_stats_path(self) -> Path:
+        """Return the local path the configured statistics object resolves to.
+
+        :returns: Immutable cache path for pinned bytes, otherwise the resolved local path.
+        """
+        uri = cast(str, self.mel_stats_uri)
+        if self.mel_stats_sha256 is not None:
+            return self.stats_cache_dir / self.mel_stats_sha256 / Path(uri).name
+        if not r2_io.is_r2_uri(uri):
+            return Path(uri)
+        digest = hashlib.sha256(uri.encode()).hexdigest()
+        return self.stats_cache_dir / f"{digest[:16]}-{Path(uri).name}"
+
+    def _verify_stats_digest(self, path: Path) -> None:
+        """Reject statistics bytes that differ from their optional pin.
+
+        :param path: Local statistics file.
+        :raises ValueError: The file digest differs from ``mel_stats_sha256``.
+        """
+        if self.mel_stats_sha256 is None:
+            return
+        with path.open("rb") as stream:
+            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        if actual != self.mel_stats_sha256:
+            raise ValueError(
+                "mel statistics SHA-256 mismatch: "
+                f"expected {self.mel_stats_sha256}, received {actual}"
+            )
+
+    def _local_stats_file(self) -> Path:
+        """Return a readable local path for the configured statistics object.
+
+        :returns: Local ``.npz`` path, downloaded once per distinct ``r2://`` URI.
+        """
+        uri = cast(str, self.mel_stats_uri)
+        destination = self.cached_stats_path()
+        is_remote = r2_io.is_r2_uri(uri)
+        if not is_remote and self.mel_stats_sha256 is None:
+            return destination
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            self._verify_stats_digest(destination)
+            return destination
+        staged = destination.with_name(f"{destination.name}.{os.getpid()}.tmp")
+        try:
+            if is_remote:
+                r2_io.download_to_path(uri, staged)
+            else:
+                shutil.copyfile(uri, staged)
+            self._verify_stats_digest(staged)
+            staged.replace(destination)
+        finally:
+            staged.unlink(missing_ok=True)
+        return destination
+
+    def _open_corpus(self) -> tuple[_BlobAudioDataset, int]:
+        """Open the corpus, validate its audio column, and build the predict split.
+
+        :returns: The predict dataset and pinned Lance version.
+        :raises KeyError: The corpus has no configured audio column.
+        :raises ValueError: The audio column is not blob-encoded or the corpus is empty.
+        """
+        corpus_uri = (
+            r2_io.from_s3_uri(self.dataset_uri)
+            if self.dataset_uri.startswith("s3://")
+            else self.dataset_uri
+        )
+        uri, storage_options = (
+            r2_io.lance_target(corpus_uri)
+            if r2_io.is_r2_uri(corpus_uri)
+            else (corpus_uri, None)
+        )
+        dataset = retry_lance_read(
+            "third_party_corpus_open",
+            lambda: lance.dataset(
+                uri,
+                version=self.dataset_version,
+                storage_options=storage_options,
+            ),
+        )
+        if self.audio_column not in dataset.schema.names:
+            raise KeyError(
+                f"corpus {self.dataset_uri} has no {self.audio_column!r} column; "
+                f"columns: {', '.join(dataset.schema.names)}"
+            )
+        if not _is_blob_encoded(dataset.schema.field(self.audio_column)):
+            raise ValueError(
+                f"column {self.audio_column!r} in {self.dataset_uri} is not blob-encoded, "
+                "so its source containers cannot be read through the blob API"
+            )
+        addresses = self._filtered_addresses(dataset)
+        rows = (
+            retry_lance_read("third_party_row_count", dataset.count_rows)
+            if addresses is None
+            else len(addresses)
+        )
+        if rows == 0:
+            selection = (
+                "no rows" if addresses is None else f"no rows matching row_filter {self.row_filter!r}"
+            )
+            raise ValueError(
+                f"corpus {self.dataset_uri} has {selection}; an empty sweep writes no "
+                "predictions and fails downstream instead of here"
+            )
+        if self.row_limit is not None:
+            rows = min(rows, self.row_limit)
+            if addresses is not None:
+                addresses = addresses[:rows]
+        log.info(
+            "third-party corpus %s pinned at version %s", self.dataset_uri, dataset.version
+        )
+        return (
+            _BlobAudioDataset(
+                uri,
+                storage_options=storage_options,
+                version=dataset.version,
+                audio_column=self.audio_column,
+                sample_rate=self.sample_rate,
+                channels=self.channels,
+                num_samples=self.num_samples,
+                amplitude_scale=self.amplitude_scale,
+                downmix=self.downmix,
+                peak_normalize=self.peak_normalize,
+                rows=rows,
+                addresses=addresses,
+            ),
+            dataset.version,
+        )
+
+    def _filtered_addresses(self, dataset: lance.LanceDataset) -> list[int] | None:
+        """Resolve ``row_filter`` to the addresses of the matching rows in stored order.
+
+        ``row_limit`` is pushed into the scan so a smoke run over a large remote
+        corpus never materializes the full match set.
+
+        :param dataset: Open corpus.
+        :returns: Matching row addresses, or ``None`` when no filter is configured.
+        """
+        if self.row_filter is None:
+            return None
+        table = retry_lance_read(
+            "third_party_row_filter",
+            lambda: dataset.scanner(
+                columns=[],
+                filter=self.row_filter,
+                limit=self.row_limit,
+                with_row_address=True,
+                scan_in_order=True,
+            ).to_table(),
+        )
+        return table.column("_rowaddr").to_pylist()
+
+    def setup(self, stage: str | None = None) -> None:
+        """Open the corpus and load mel statistics for prediction.
+
+        :param stage: Lightning stage hint; only prediction is served.
+        :raises ValueError: The stage is unsupported or statistics are invalid in float32.
+        """
+        if stage not in _PREDICT_STAGES:
+            raise ValueError(f"{type(self).__name__} serves prediction only, got stage {stage!r}")
+        self._predict_dataset, self.dataset_version = self._open_corpus()
+        if self.mel_stats_uri is not None and self._statistics is None:
+            mean, std = load_mel_statistics(self._local_stats_file())
+            mean_f32 = torch.as_tensor(mean, dtype=torch.float32)
+            std_f32 = torch.as_tensor(std, dtype=torch.float32)
+            if not bool(torch.isfinite(mean_f32).all() and torch.isfinite(std_f32).all()):
+                raise ValueError(
+                    f"mel statistics from {self.mel_stats_uri} are not representable in float32"
+                )
+            if not bool((std_f32 > 0).all()):
+                raise ValueError(
+                    f"mel statistics from {self.mel_stats_uri} contain standard deviations "
+                    "that underflow to zero in float32"
+                )
+            self._statistics = (mean_f32, std_f32)
+
+    def predict_dataloader(self) -> DataLoader[dict[str, torch.Tensor]]:
+        """Return the corpus loader in stored row order.
+
+        :returns: Un-shuffled predict dataloader.
+        :raises RuntimeError: ``setup`` has not run.
+        """
+        if self._predict_dataset is None:
+            raise RuntimeError("predict split is not built; call setup('predict') first")
+        # A forked worker inherits Lance's native runtime state and can hang or die on
+        # its first object-store read; spawning starts each worker with a fresh runtime.
+        return DataLoader(
+            self._predict_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            multiprocessing_context="spawn" if self.num_workers > 0 else None,
+        )
+
+    def on_before_batch_transfer(
+        self, batch: Mapping[str, torch.Tensor], dataloader_idx: int
+    ) -> dict[str, torch.Tensor]:
+        """Normalize mel conditioning before model transfer.
+
+        :param batch: Decoded ``audio`` and ``mel`` batch.
+        :param dataloader_idx: Unused; the datamodule serves one loader.
+        :returns: Model batch with normalized mel when configured.
+        :raises ValueError: Mel normalization produced non-finite values.
+        """
+        del dataloader_idx
+        model_batch = dict(batch)
+        if self._statistics is None:
+            return model_batch
+        mean, std = self._statistics
+        normalized = (model_batch["mel"] - mean) / std
+        if not bool(torch.isfinite(normalized).all()):
+            raise ValueError(
+                f"mel normalization with statistics from {self.mel_stats_uri} produced "
+                "non-finite values"
+            )
+        model_batch["mel"] = normalized
+        return model_batch
+
+    def on_after_batch_transfer(
+        self, batch: Mapping[str, torch.Tensor], dataloader_idx: int
+    ) -> dict[str, torch.Tensor]:
+        """Derive canonical pooled sketch controls from transferred target audio.
+
+        :param batch: Model batch retaining decoded target audio.
+        :param dataloader_idx: Unused; the datamodule serves one loader.
+        :returns: Batch with live ``sketch_ctrl`` when configured.
+        """
+        del dataloader_idx
+        model_batch = dict(batch)
+        if self.sketch_controls is None:
+            return model_batch
+        controls = extract_sketch_controls_batch(model_batch[AUDIO_FIELD], self.sample_rate)
+        pooled = pool_sketch_controls(controls, self.sketch_controls.num_frames)
+        pitch = pooled[:, SKETCH_PITCH_SLICE]
+        pooled[:, SKETCH_PITCH_SLICE] = pitch.where(
+            pitch >= self.sketch_controls.pitch_zero_threshold, 0.0
+        )
+        model_batch[SKETCH_CTRL_FIELD] = pooled
+        return model_batch

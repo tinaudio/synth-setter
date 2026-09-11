@@ -1,0 +1,12 @@
+# @package _global_
+
+defaults:
+  - /experiment/surge/slap_ast_audio_vst_ff_param
+  - override /model/encoder@model.param_encoder.encoder: vst_language_param
+  - _self_
+
+run_name: slap_language
+
+callbacks:
+  parameter_language:
+    _target_: synth_setter.utils.parameter_language.ParameterLanguageInitializer

@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner, Result
 
+from synth_setter.cli.plugins import main
 from synth_setter.plugin_integrity import ArtifactLock
-from synth_setter.plugin_manager import ManagedPlugin, adopt_plugin_bundle, seal_plugin_bundle
+from synth_setter.plugin_manager import (
+    ManagedPlugin,
+    PluginManifest,
+    adopt_plugin_bundle,
+    seal_plugin_bundle,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -109,6 +117,59 @@ def _bundle(path: Path, *, version: str = "1.2.3", payload: bytes = b"plugin") -
     binary.write_bytes(_test_binary_magic() + payload)
     (contents / "moduleinfo.json").write_text(json.dumps({"Version": version}))
     return path
+
+
+def _run_archive_cli_install(
+    tmp_path: Path,
+    expected_version: str,
+    actual_version: str,
+) -> tuple[Result, Path, Path]:
+    """Run the plugin CLI against a local archive-producing installer.
+
+    :param tmp_path: Scratch root for the manifest, bundle, and alias.
+    :param expected_version: Exact runtime version pinned by the manifest.
+    :param actual_version: Runtime version written into the installed bundle.
+    :returns: CLI result, versioned bundle path, and checkout alias path.
+    """
+    package_version = ".".join(expected_version.split(".")[:3])
+    manifest_path = _manifest(
+        tmp_path / "studiorack.json",
+        package_version=package_version,
+        renderer_version=expected_version,
+    )
+    plugin = PluginManifest.load(manifest_path).resolve("example/synth")
+    _artifact_lock(tmp_path / "studiorack.lock.json", package_version=package_version)
+    managed = tmp_path / "managed"
+    bundle = managed / f"VST3/example/synth/{package_version}/Example Synth.vst3"
+    links_dir = tmp_path / "plugins"
+    executable = tmp_path / "studiorack"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "if sys.argv[1:3] == ['plugins', 'install']:\n"
+        "    bundle = pathlib.Path(os.environ['STUDIORACK_TEST_BUNDLE'])\n"
+        "    binary = bundle / os.environ['STUDIORACK_TEST_BINARY']\n"
+        "    binary.parent.mkdir(parents=True)\n"
+        "    binary.write_bytes(bytes.fromhex(os.environ['STUDIORACK_TEST_BINARY_MAGIC']) + b'archive')\n"
+        f"    (bundle / 'Contents/moduleinfo.json').write_text(json.dumps({{'Version': {actual_version!r}}}))\n"
+    )
+    executable.chmod(0o755)
+    result = CliRunner().invoke(
+        main,
+        [
+            "--manifest",
+            str(manifest_path),
+            "--plugins-dir",
+            str(managed),
+            "--links-dir",
+            str(links_dir),
+            "--studiorack-executable",
+            str(executable),
+            "install",
+        ],
+        env={**os.environ, "STUDIORACK_TEST_BUNDLE": str(bundle)},
+    )
+    return result, bundle, links_dir / plugin.bundle
 
 
 def _example_lock(*, package_version: str = "1.2.3") -> ArtifactLock:

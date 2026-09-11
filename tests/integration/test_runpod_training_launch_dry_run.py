@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -123,19 +124,21 @@ def test_generic_hydra_eval_command_composes_through_headless_worker_entrypoint(
 
 
 @pytest.mark.parametrize(
-    "launch_config_name",
+    ("launch_config_name", "memory_floor"),
     [
-        "train-runpod-smoke.yaml",
-        "train-runpod-flow-simple-440k.yaml",
+        ("train-runpod-smoke.yaml", None),
+        ("train-runpod-flow-simple-440k.yaml", "128+"),
     ],
     ids=["smoke", "flow-simple-440k"],
 )
 def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
     launch_config_name: str,
+    memory_floor: str | None,
 ) -> None:
     """Prepare the real SkyPilot task and compose its worker command without submission.
 
     :param launch_config_name: Shipped RunPod training launch config to exercise.
+    :param memory_floor: Expected SkyPilot host-memory request.
     """
     launch_config = load_launch_config(_LAUNCH_DIR / launch_config_name)
     assert launch_config.compute is not None
@@ -168,4 +171,7 @@ def test_runpod_training_launch_dry_run_composes_worker_task_and_hydra_config(
 
     assert result.returncode == 0, result.stderr
     assert task.to_yaml_config()["run"] == task.run
+    assert {resource.memory for resource in task.resources} == {memory_floor}
+    assert "datamodule.high_memory_materialization=" not in train_args
     assert "synth_setter.data.lance_datamodule.LanceVSTDataModule" in result.stdout
+    assert re.search(r"(?m)^\s*high_memory_materialization: (?:true|false)$", result.stdout)

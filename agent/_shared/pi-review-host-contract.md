@@ -16,6 +16,11 @@ review work in the host harness.
    agent/_shared/run_pi_review.sh <skill>
    ```
 
+   The launcher permits at most three local pre-PR
+   `repo-review-full-no-comments` requests per branch. If it refuses a later
+   request, open the PR and continue with `repo-review-full`; never bypass or
+   reset the local attempt state.
+
 4. Claude Code must set Bash `run_in_background: true`, then call `TaskOutput`
    with a `600000` ms timeout repeatedly until Pi exits. Codex must use one
    foreground blocking call; if the tool yields a shell session, poll that

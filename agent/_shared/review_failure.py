@@ -282,8 +282,8 @@ def deliver_failure(
         "comments": [],
     }
     fallback_banner = (
-        "Blocking terminal review failure. GitHub rejected REQUEST_CHANGES on "
-        "the reviewer's own PR, so this review falls back to COMMENT; the "
+        "Blocking terminal review failure. GitHub refused REQUEST_CHANGES from "
+        "this identity, so this review falls back to COMMENT; the "
         "[repo-review-full:block] marker remains auditable.\n\n"
     )
     try:

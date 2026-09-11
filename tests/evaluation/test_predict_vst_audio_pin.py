@@ -142,7 +142,11 @@ def test_cli_writes_params_csv(fixture_pred_dir: Path, tmp_path: Path) -> None:
     for sample_name in ("sample_0", "sample_1"):
         csv_path = out_dir / sample_name / "params.csv"
         assert csv_path.is_file()
-        assert list(pd.read_csv(csv_path, index_col=0).columns) == ["pred", "target"]
+        assert list(pd.read_csv(csv_path, index_col=0).columns) == [
+            "pred",
+            "target",
+            "pred_effective",
+        ]
 
 
 def test_cli_writes_spectrogram_when_enabled(fixture_pred_dir: Path, tmp_path: Path) -> None:

@@ -11,10 +11,7 @@ from typing import cast
 import pytest
 from workflow_fixtures import load_composite_action, load_workflow
 
-WORKFLOWS = (
-    ("claude.yml", "claude"),
-    ("claude-repo-review-full.yml", "repo-review-full"),
-)
+WORKFLOWS = (("claude.yml", "claude"),)
 
 
 def _steps(workflow: dict[str, object]) -> list[dict[str, object]]:

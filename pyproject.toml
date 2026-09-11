@@ -24,6 +24,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Essentia HPCP is needed only by sketch=tiv_online_cpu.
+tiv-cpu = ["essentia==2.1b6.dev1389"]
 # Backend selector for `uv sync` / `uv lock` on Linux/Win — mutually exclusive
 # (see [tool.uv].conflicts). The cpu/cu128 extras themselves are NOT platform-
 # gated; the `sys_platform == 'linux' or sys_platform == 'win32'` markers
@@ -53,6 +55,7 @@ cu128 = [
 # cpu/cu128 route backend wheels. Heavy runtime lives in [dependency-groups] (#1139).
 
 [project.scripts]
+synth-setter-benchmark-faust-backends = "synth_setter.tools.benchmark_faust_backends:main"
 synth-setter-train = "synth_setter.cli.train:main"
 synth-setter-eval = "synth_setter.cli.eval:main"
 synth-setter-generate-dataset = "synth_setter.cli.generate_dataset:main"
@@ -60,15 +63,20 @@ synth-setter-generate-dataset-from-hydra = "synth_setter.cli.generate_dataset:fr
 synth-setter-generate-dataset-from-spec-uri = "synth_setter.cli.generate_dataset_from_spec_uri:main"
 synth-setter-finalize-dataset = "synth_setter.cli.finalize_dataset:main"
 synth-setter-add-embeddings = "synth_setter.pipeline.data.add_embeddings:main"
+synth-setter-export-fdn-faust = "synth_setter.cli.export_fdn_faust:main"
+synth-setter-export-slap = "synth_setter.cli.export_slap:main"
 synth-setter-add-preview-columns = "synth_setter.pipeline.data.add_preview_columns:main"
 synth-setter-reopen-dataset = "synth_setter.pipeline.data.dataset_reopen:main"
 synth-setter-clap = "synth_setter.cli.clap_render:main"
+synth-setter-sketch = "synth_setter.cli.sketch_render:main"
 synth-setter-introspect-plugin = "synth_setter.cli.introspect_plugin:main"
 synth-setter-migrate-checkpoint = "synth_setter.cli.migrate_checkpoint:main"
 synth-setter-plugins = "synth_setter.cli.plugins:main"
 synth-setter-predict-capture = "synth_setter.cli.predict_capture:main"
+synth-setter-growing-lance = "synth_setter.cli.growing_lance:main"
 synth-setter-spec-uri = "synth_setter.pipeline.ci.spec_uri:main"
 synth-setter-skypilot-launch = "synth_setter.pipeline.skypilot_launch:main"
+synth-setter-create-wandb-parameter-workspace = "synth_setter.tools.wandb_parameter_workspace:main"
 
 
 
@@ -137,11 +145,14 @@ torch = [
   "torchaudio>=2.0.0",
   "lightning>=2.6.0",
   "torchmetrics>=0.11.4",
+  "torchdata>=0.11.0",
   # Audio-embedding encoders for the add_embeddings CLI (lazy-imported). CLAP
   # rides on transformers (>=5: ClapProcessor takes `audio=`, not `audios=`);
   # music2latent ships its own torch-backed encoder.
   "transformers>=5.0.0",
   "music2latent>=0.1.8",
+  # Commit-pinned: PyPI is stale and upstream has no Git tags.
+  "cqt-nsgt-pytorch @ git+https://github.com/eloimoliner/CQT_pytorch@2404597d0ccef74a93cad05d0619cb42728f987b",
   "ssondo==0.3.1",
   # Exact EVA/RoPE implementation used by the pinned PupuJEPA teacher.
   "timm==1.0.28",
@@ -163,6 +174,7 @@ config = [
   "hydra-optuna-sweeper==1.2.0",
   "omegaconf",
   "pydantic-settings>=2",
+  "psutil",
 ]
 # `kubernetes` extra serves skypilot-local kind-cluster CI; locking it here
 # keeps `uv sync --frozen` self-sufficient.
@@ -178,15 +190,19 @@ compute = [
 data = [
   "pandas",
   "numpy",
-  "pylance>=7.0.0",
+  "pylance>=9.0.0,<10.0.0",
+  "sentence-transformers>=5.1,<6",
 ]
 # Pin: scipy>=1.14,<1.15 — a hard ==1.14.1 patch-pin risks backtracking against
 # torch / librosa / kymatio during lock resolution. See #1247.
 audio = [
-  "dawdreamer; (sys_platform == 'darwin' and (platform_machine == 'arm64' or platform_machine == 'x86_64')) or (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
-  "librosa",
+  "adac==0.1.0",
+  "dawdreamer==0.8.3; (sys_platform == 'darwin' and (platform_machine == 'arm64' or platform_machine == 'x86_64')) or (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
+  "flamo==0.2.18",
+  "librosa==0.11.0",
   "mido",
   "pedalboard",
+  "pyFDN==0.4.2",
   "pyloudnorm",
   "scipy>=1.14,<1.15",
   "surgepy @ git+https://github.com/surge-synthesizer/surge.git@f7b97c682ade0b87da85ca5968b63d5c7c98e68d#subdirectory=src/surge-python ; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -217,7 +233,7 @@ util = [
   "threadpoolctl",
   "matplotlib",
   "tensorboard",
-  "wandb",
+  "wandb[workspaces]",
 ]
 runtime = [
   { include-group = "torch" },
@@ -229,6 +245,8 @@ runtime = [
   { include-group = "util" },
 ]
 dev = [
+  # Exercise optional CPU HPCP in Linux coverage without requiring it at runtime.
+  "essentia; sys_platform == 'linux' and platform_machine == 'x86_64'",
   "hypothesis",
   "mutmut==3.5.*",
   "nflows",
@@ -248,7 +266,13 @@ dev = [
   "ruff",
   { include-group = "docs" },
   { include-group = "notebooks" },
+  { include-group = "onnx" },
   { include-group = "runtime" },
+]
+onnx = [
+    "onnx>=1.17",
+    "onnxruntime>=1.20",
+    "onnxscript>=0.3",
 ]
 
 [tool.uv]
@@ -374,6 +398,17 @@ namespaces = true
   "configs/**/*.sh",
   "scripts/*.sh",
   "data/vst/*_param_map.json",
+  "data/vst/faustcpp_architecture.txt",
+  "faustwasm/**/*.js",
+  "faustwasm/**/*.json",
+  "faustwasm/**/*.mjs",
+  "faustwasm/**/*.binpart*",
+  "faustwasm/**/*.txt",
+  "web/*.html",
+  "web/*.mjs",
+  "web/fdn/*.mjs",
+  "web/fdn/fixtures/*.json",
+  "web/package*.json",
 ]
 
 
@@ -587,6 +622,7 @@ source = ["src/synth_setter", "scripts/ci"]
 branch = true
 parallel = true
 concurrency = ["thread", "multiprocessing"]
+patch = ["subprocess"]
 relative_files = true
 omit = ["**/__main__.py"]
 
@@ -632,7 +668,7 @@ tests_dir = [
 # (e.g. `synth_setter.cli`, `synth_setter.pipeline.r2_io`) fail with
 # ImportError during stats collection. Copy the whole package so the sandbox
 # can resolve them.
-also_copy = ["src/synth_setter/"]
+also_copy = ["src/synth_setter/", "scripts/dev/"]
 pytest_add_cli_args = [
     "-m",
     "not slow and not requires_vst and not r2 and not gpu and not benchmark",

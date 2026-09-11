@@ -21,8 +21,10 @@ CPU_SLOW_PR_PATHS: frozenset[str] = frozenset(
         ".github/actions/install-rclone/**",
         ".github/workflows/cpu-slow.yml",
         "Makefile",
+        "package*.json",
         "pyproject.toml",
         "scripts/ci/**",
+        "scripts/faustwasm/**",
         "src/synth_setter/**",
         "tests/**",
         "uv.lock",
@@ -240,8 +242,8 @@ def test_cpu_slow_pr_paths_cover_owned_surfaces(workflows: WorkflowSet) -> None:
     assert CPU_SLOW_PR_PATHS <= _pull_request_paths(workflows["cpu-slow.yml"])
 
 
-def test_cpu_slow_pr_lane_installs_rclone_without_r2_setup(workflows: WorkflowSet) -> None:
-    """Pull requests install rclone without R2 credentials or configuration.
+def test_cpu_slow_pr_lane_runs_only_targeted_live_r2_e2e(workflows: WorkflowSet) -> None:
+    """Trusted pull requests run one real R2 E2E after the secret-free slow suite.
 
     :param workflows: Four parsed workflow documents keyed by filename.
     """
@@ -251,20 +253,70 @@ def test_cpu_slow_pr_lane_installs_rclone_without_r2_setup(workflows: WorkflowSe
         for step in _steps(workflow, "run_slow_tests")
         if step.get("uses") == "./.github/actions/setup-r2"
     )
+    trusted_pr_clause = "github.event.pull_request.head.repo.full_name == github.repository"
     assert "github.event_name != 'pull_request'" in _string(setup_r2, "if")
-
-    install_rclone = next(
-        step
-        for step in _steps(workflow, "run_slow_tests")
-        if step.get("uses") == "./.github/actions/install-rclone"
-    )
-    assert "github.event_name == 'pull_request'" in _string(install_rclone, "if")
-    assert "secrets." not in str(install_rclone)
+    assert trusted_pr_clause in _string(setup_r2, "if")
 
     pr_step = _named_step(workflow, "run_slow_tests", "Run slow PR tests")
     assert "github.event_name == 'pull_request'" in _string(pr_step, "if")
     assert _string(pr_step, "run") == "make test-ci-slow-pr"
-    assert "RCLONE_CONFIG_R2" not in str(pr_step)
+
+    e2e_step = _named_step(workflow, "run_slow_tests", "Run growing Lance R2 E2E")
+    assert "github.event_name == 'pull_request'" in _string(e2e_step, "if")
+    assert trusted_pr_clause in _string(e2e_step, "if")
+    assert _string(e2e_step, "run") == "make test-ci-slow-pr-r2-e2e"
+
+
+def test_cpu_slow_lane_runs_real_faustwasm_browser_e2e(workflows: WorkflowSet) -> None:
+    """Slow CPU validation exports both artifacts and drives the browser player.
+
+    :param workflows: Four parsed workflow documents keyed by filename.
+    """
+    workflow = workflows["cpu-slow.yml"]
+    install = _named_step(workflow, "run_slow_tests", "Install FaustWasm browser dependencies")
+    export = _named_step(workflow, "run_slow_tests", "Export FaustWasm browser test artifacts")
+    browser = _named_step(workflow, "run_slow_tests", "Run FaustWasm browser E2E")
+
+    assert _string(install, "run") == (
+        "npm --prefix scripts/faustwasm/browser ci\n"
+        "npm --prefix scripts/faustwasm/browser exec playwright install --with-deps chromium\n"
+    )
+    assert _string(export, "run") == (
+        'uv run python -m synth_setter.tools.export_faustwasm --synth faust_bright_organ --output "${RUNNER_TEMP}/faust-bright-organ"\n'
+        'uv run python -m synth_setter.tools.export_faustwasm --synth faust_filter_osc --output "${RUNNER_TEMP}/faust-filter-osc"\n'
+    )
+    assert browser["env"] == {
+        "FAUSTWASM_E2E_ARTIFACT": "${{ runner.temp }}/faust-bright-organ",
+        "FAUSTWASM_MONO_E2E_ARTIFACT": "${{ runner.temp }}/faust-filter-osc",
+    }
+    assert _string(browser, "run") == "npm --prefix scripts/faustwasm/browser run test:e2e"
+
+
+def test_cpu_slow_lane_collects_faust_host_parity(
+    workflows: WorkflowSet,
+    project_root: Path,
+) -> None:
+    """The slow PR selector runs Faust parity after installing both runtimes.
+
+    :param workflows: Four parsed workflow documents keyed by filename.
+    :param project_root: Repository root containing test and Makefile contracts.
+    """
+    workflow = workflows["cpu-slow.yml"]
+    steps = _steps(workflow, "run_slow_tests")
+    step_names = [step.get("name") for step in steps]
+    slow_step_index = step_names.index("Run slow PR tests")
+    assert step_names.index("Install Node dependencies") < slow_step_index
+    assert step_names.index("Install dependencies (uv sync --frozen, CPU torch)") < slow_step_index
+
+    parity_test = project_root / "tests/data/vst/test_faustwasm_dawdreamer_parity_e2e.py"
+    source = parity_test.read_text(encoding="utf-8")
+    assert "pytestmark = pytest.mark.slow" in source
+    assert "requires_vst" not in source
+
+    makefile = (project_root / "Makefile").read_text(encoding="utf-8")
+    assert (
+        '-m "slow and not gpu and not mps and not requires_vst and not integration_r2"' in makefile
+    )
 
 
 def test_cpu_slow_non_pr_lane_preserves_live_r2_target(workflows: WorkflowSet) -> None:

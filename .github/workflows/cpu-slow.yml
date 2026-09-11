@@ -7,7 +7,7 @@ name: CPU Slow Tests
 # so any leftover VST-marked tests are deselected here; absent that filter, the
 # `pytest_collection_modifyitems` hook in `tests/conftest.py` still auto-skips
 # them when no plugin is present.
-# PRs omit live R2; push/main and dispatch retain it (#2458).
+# Trusted same-repository PRs run one targeted live-R2 E2E; forks receive no secrets.
 on:
   workflow_dispatch:
   push:
@@ -22,8 +22,10 @@ on:
       - ".github/workflows/cpu-slow.yml"
       - "Makefile"
       - "docker/**"
+      - "package*.json"
       - "pyproject.toml"
       - "scripts/ci/**"
+      - "scripts/faustwasm/**"
       - "src/synth_setter/**"
       - "tests/**"
       - "uv.lock"
@@ -43,8 +45,7 @@ jobs:
     # the `pull_request` trigger checks head-repo identity (see #1206).
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
 
-    # Standard 2-core/7 GB `ubuntu-latest`: the suite runs serially (no `-n auto`),
-    # so per-test PyTorch peak is the only OOM risk; an exit-137 OOM means re-pin to `ubuntu-latest-4core`.
+    # Standard 2-core/7 GB runner; the suite runs serially to bound PyTorch memory.
     runs-on: ubuntu-latest
 
     timeout-minutes: 90
@@ -59,6 +60,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install native Faust toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends faust g++
+
+      - name: Install FaustWasm browser dependencies
+        run: |
+          npm --prefix scripts/faustwasm/browser ci
+          npm --prefix scripts/faustwasm/browser exec playwright install --with-deps chromium
 
       # Registers the binfmt_misc aarch64 handler; without it BuildKit cannot exec
       # arm64 binaries and the cpu-slow arm64 buildx test fails. Refs #1817.
@@ -88,16 +107,22 @@ jobs:
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
 
-      # PRs need the binary for secret-free local/file-URI tests but never
-      # configure the R2 remote or receive production storage credentials.
-      - name: Install rclone for PR tests
-        if: github.event_name == 'pull_request'
-        uses: ./.github/actions/install-rclone
+      - name: Export FaustWasm browser test artifacts
+        run: |
+          uv run python -m synth_setter.tools.export_faustwasm --synth faust_bright_organ --output "${RUNNER_TEMP}/faust-bright-organ"
+          uv run python -m synth_setter.tools.export_faustwasm --synth faust_filter_osc --output "${RUNNER_TEMP}/faust-filter-osc"
 
-      # Push and dispatch retain the live-R2 coverage added in #1185. PRs
-      # exclude integration_r2 explicitly and never configure storage secrets.
+      - name: Run FaustWasm browser E2E
+        env:
+          FAUSTWASM_E2E_ARTIFACT: ${{ runner.temp }}/faust-bright-organ
+          FAUSTWASM_MONO_E2E_ARTIFACT: ${{ runner.temp }}/faust-filter-osc
+        run: npm --prefix scripts/faustwasm/browser run test:e2e
+
+      # Fork PRs are excluded at the job boundary; this guard keeps secrets
+      # limited to push/dispatch and trusted same-repository pull requests.
       - name: Set up R2
-        if: github.event_name != 'pull_request'
+        id: setup_r2
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: ./.github/actions/setup-r2
         with:
           access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
@@ -121,6 +146,15 @@ jobs:
           HYDRA_FULL_ERROR: "1"
           WANDB__SERVICE_WAIT: "120"
         run: make test-ci-slow-pr
+
+      # !cancelled() preserves this targeted signal after broad slow failures.
+      # Requiring setup success prevents missing credentials from becoming a test skip.
+      - name: Run growing Lance R2 E2E
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && steps.setup_r2.outcome == 'success' }}
+        env:
+          HYDRA_FULL_ERROR: "1"
+          WANDB__SERVICE_WAIT: "120"
+        run: make test-ci-slow-pr-r2-e2e
 
       # Dedicated `slow-cpu` flag keeps this signal separable from `unit-cpu`
       # in Codecov — the fast suite skips these PyTorch forward passes.
@@ -238,3 +272,48 @@ jobs:
               -f childId="${new_node_id}" \
               || echo "WARN: failed to parent under Phase 1 (#150); reparent manually"
           fi
+
+  faust_host_parity:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install production native Faust toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends faust g++-12
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
+
+      - name: Verify production Faust toolchain
+        run: |
+          set -o pipefail
+          faust --version 2>&1 | grep -F "FAUST Version 2.37.3"
+          g++ -dumpversion | grep -E '^12([.]|$)'
+
+      - name: Set up Python 3.12.13
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.2.0
+        with:
+          python-version: "3.12.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install Python dependencies
+        run: uv sync --frozen
+
+      - name: Run four-second Faust host parity
+        run: uv run pytest -vv tests/data/vst/test_faustwasm_dawdreamer_parity_e2e.py

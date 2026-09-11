@@ -136,16 +136,7 @@ def smoke_shard_metadata(render: RenderConfig) -> ShardMetadata:
     :param render: Render config supplying the sidecar field values.
     :returns: Strict ``ShardMetadata`` with every render-derived field filled.
     """
-    return ShardMetadata(
-        velocity=render.velocity,
-        signal_duration_seconds=render.signal_duration_seconds,
-        sample_rate=render.sample_rate,
-        channels=render.channels,
-        min_loudness=render.min_loudness,
-        base_seed=render.base_seed,
-        sample_offset=render.sample_offset,
-        attempts_per_sample=render.attempts_per_sample,
-    )
+    return render.shard_metadata()
 
 
 def write_minimal_lance_shard(
@@ -341,7 +332,7 @@ def stub_finalize_lance_io(monkeypatch: pytest.MonkeyPatch) -> None:
     ``Overwrite`` commit needs real staged fragment data — neither of which the
     local-typed ``fake_r2_remote`` can serve. Stubbing winner selection (with a
     synthetic non-degenerate Welford state per shard) and the fragment commit
-    leaves ``stats.npz`` + ``dataset.json`` + ``dataset.complete`` as the only
+    leaves Welford state, derived stats, dataset card, and completion marker as the
     artifacts routed through the real ``r2_io.upload`` — enough to pin the
     marker-last ordering and artifact-logging contracts locally. The full commit
     is covered against real R2 in ``tests/integration/test_finalize_dataset_r2.py``.
@@ -361,7 +352,7 @@ def stub_finalize_lance_io(monkeypatch: pytest.MonkeyPatch) -> None:
         progress_callback: FinalizeProgressCallback | None = None,
     ) -> dict[int, CheckedLanceWinner]:
         rows = spec.render.samples_per_shard
-        shape = (spec.render.channels, 8, 8)
+        shape = dataset_field_shapes(spec.render, spec.num_params)[MEL_SPEC_FIELD][1:]
         # Non-degenerate m2 (variance == 1) so finalize's default degenerate-bin
         # check never raises for the smoke spec.
         welford = (

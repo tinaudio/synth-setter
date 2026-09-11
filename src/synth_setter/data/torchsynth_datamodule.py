@@ -6,6 +6,7 @@ audio batch on the training machine without materializing an audio dataset.
 
 from __future__ import annotations
 
+import math
 import sys
 import threading
 import types
@@ -21,6 +22,7 @@ from torch.utils.data import DataLoader, Dataset, Sampler
 
 from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.sample_seed import derive_sample_seed
+from synth_setter.data.vst.param_spec import require_note_params
 
 # Re-exported for backward compat: training code imports these names from this module.
 from synth_setter.data.vst.torchsynth_param_spec import (
@@ -60,19 +62,23 @@ def _torchsynth_types() -> tuple[type, type]:
     :returns: TorchSynth's ``SynthConfig`` and ``Voice`` types.
     """
     try:
-        import pytorch_lightning.core.lightning  # noqa: F401
-    except ModuleNotFoundError:
-        import pytorch_lightning
+        try:
+            import pytorch_lightning.core.lightning  # noqa: F401
+        except ModuleNotFoundError:
+            import pytorch_lightning
 
-        shim = types.ModuleType("pytorch_lightning.core.lightning")
-        # setattr (not ``shim.LightningModule = ...``) so pyright doesn't flag the
-        # attribute as unknown on a dynamically created ModuleType.
-        setattr(shim, "LightningModule", pytorch_lightning.LightningModule)
-        sys.modules["pytorch_lightning.core.lightning"] = shim
-    from torchsynth.config import SynthConfig
-    from torchsynth.synth import Voice
+            shim = types.ModuleType("pytorch_lightning.core.lightning")
+            # setattr (not ``shim.LightningModule = ...``) so pyright doesn't flag the
+            # attribute as unknown on a dynamically created ModuleType.
+            setattr(shim, "LightningModule", pytorch_lightning.LightningModule)
+            sys.modules["pytorch_lightning.core.lightning"] = shim
+        from torchsynth.config import SynthConfig
+        from torchsynth.synth import Voice
 
-    return SynthConfig, Voice
+        return SynthConfig, Voice
+    finally:
+        # TorchSynth 1.0.2 replaces this process-global constant with a float32 estimate.
+        torch.pi = math.pi
 
 
 @dataclass
@@ -198,7 +204,7 @@ def render_torchsynth(
     # Decode the padded rows, not just the real ones: the voice holds render_batch_size
     # keyboard entries and every one of them must be set from the row it renders.
     notes = [
-        TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1]
+        require_note_params(TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1])
         for row in padded.detach().clamp(0, 1).cpu().numpy()
     ]
     column = partial(torch.tensor, dtype=torch.float32, device=params.device)

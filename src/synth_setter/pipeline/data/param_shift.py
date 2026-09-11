@@ -23,6 +23,10 @@ import numpy as np
 import pyarrow as pa
 import structlog
 
+from synth_setter.data.vst.param_spec import (
+    require_note_params,
+    require_scalar_synth_params,
+)
 from synth_setter.data.vst.seeding import rng_for_sample
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
@@ -164,7 +168,9 @@ def _render_encoded_row(
     :param velocity: MIDI velocity the source dataset was rendered with.
     :returns: Rendered audio shaped ``(channels, samples)``.
     """
-    synth_params, note_params = spec.decode(encoded)
+    synth_values, note_values = spec.decode(encoded)
+    synth_params = require_scalar_synth_params(synth_values)
+    note_params = require_note_params(note_values)
     return renderer.render(
         synth_params,
         note_params["pitch"],
@@ -206,19 +212,19 @@ def _shift_metrics(original: np.ndarray, shifted: np.ndarray, sample_rate: int) 
     :raises ValueError: A metric produced a non-finite score.
     """
     from synth_setter.evaluation.compute_audio_metrics import (
-        compute_mss,
-        compute_rms,
-        compute_sot,
-        compute_wmfcc,
+        compute_mss_corresponding_channels,
+        compute_rms_downmix,
+        compute_sot_downmix,
+        compute_wmfcc_global_joint,
     )
 
     target = np.ascontiguousarray(original, dtype=np.float32)
     pred = np.ascontiguousarray(shifted, dtype=np.float32)
     scores = {
-        SHIFT_RMS_SUBFIELD: float(compute_rms(target, pred, sample_rate)),
-        SHIFT_SOT_SUBFIELD: float(compute_sot(target, pred, sample_rate)),
-        SHIFT_WMFCC_SUBFIELD: float(compute_wmfcc(target, pred, sample_rate)),
-        SHIFT_MSS_SUBFIELD: float(compute_mss(target, pred, sample_rate)),
+        SHIFT_RMS_SUBFIELD: float(compute_rms_downmix(target, pred, sample_rate)),
+        SHIFT_SOT_SUBFIELD: float(compute_sot_downmix(target, pred, sample_rate)),
+        SHIFT_WMFCC_SUBFIELD: float(compute_wmfcc_global_joint(target, pred, sample_rate)),
+        SHIFT_MSS_SUBFIELD: float(compute_mss_corresponding_channels(target, pred, sample_rate)),
     }
     non_finite = sorted(name for name, score in scores.items() if not np.isfinite(score))
     if non_finite:

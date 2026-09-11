@@ -86,6 +86,14 @@ def test_missing_render_artifacts_in_process_backend_name_is_not_a_path(
     assert missing_render_artifacts(backend_name, "") == ()
 
 
+def test_missing_render_artifacts_registry_source_is_not_a_path(workspace: Path) -> None:
+    """A registry URI names a logical source rather than a filesystem artifact.
+
+    :param workspace: Empty CWD, proving the registry URI is not stat-ed.
+    """
+    assert missing_render_artifacts("registry://faust/faust_bright_organ", "") == ()
+
+
 def test_missing_render_artifacts_undeclared_preset_is_not_required(workspace: Path) -> None:
     """An empty preset path means the backend takes no preset, not a missing file.
 

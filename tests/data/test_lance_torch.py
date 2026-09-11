@@ -7,9 +7,11 @@ fakes or mocks anywhere in this module.
 
 from __future__ import annotations
 
+import multiprocessing
+import shutil
 import os
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import lance
@@ -37,6 +39,55 @@ from tests.helpers.lance_torch_datasets import (
 )
 
 BATCH_SIZE = 8
+_WIDE_TAKE_BATCH_BOUNDARY = 68
+_WIDE_TAKE_ROWS = 300
+_WIDE_TAKE_TIMEOUT_SECONDS = 30
+_WIDE_TAKE_COLUMNS = (
+    ("param_array", 1),
+    ("mel_spec", 219_648),
+    ("sketch", 4_096),
+)
+
+
+def _write_and_take_wide_batch_boundary(dest: str) -> None:
+    """Exercise the training reader at the scheduler-deadlock boundary.
+
+    :param dest: Child-process scratch dataset path.
+    """
+    schema = pa.schema(
+        [
+            pa.field(
+                name,
+                pa.fixed_shape_tensor(pa.float32(), (width,)),
+                nullable=False,
+            )
+            for name, width in _WIDE_TAKE_COLUMNS
+        ]
+    )
+
+    def batches() -> Iterator[pa.RecordBatch]:
+        for rows in (_WIDE_TAKE_BATCH_BOUNDARY, _WIDE_TAKE_ROWS):
+            yield pa.record_batch(
+                [
+                    pa.FixedShapeTensorArray.from_numpy_ndarray(
+                        np.zeros((rows, width), dtype=np.float32)
+                    )
+                    for _, width in _WIDE_TAKE_COLUMNS
+                ],
+                schema=schema,
+            )
+
+    write_lance_dataset(dest, schema, batches())
+    indices = range(
+        _WIDE_TAKE_BATCH_BOUNDARY,
+        _WIDE_TAKE_BATCH_BOUNDARY + _WIDE_TAKE_ROWS,
+    )
+
+    columns = [name for name, _ in _WIDE_TAKE_COLUMNS]
+    batch = LanceMapDataset(dest, columns=columns).__getitems__(indices)
+
+    for name, width in _WIDE_TAKE_COLUMNS:
+        assert batch[name].shape == (_WIDE_TAKE_ROWS, width)
 
 
 class _TakeRecorder:
@@ -155,6 +206,30 @@ def _assert_short_final_batch(loader_factory: Callable[[Path], DataLoader], dest
 
 class TestMapDataloader:
     """Behavior of ``lance_map_dataloader`` over a real local dataset."""
+
+    @pytest.mark.slow
+    def test_take_at_write_batch_boundary_over_256_mib_completes(
+        self, tmp_path: Path
+    ) -> None:
+        """A wide projected take at a write-batch boundary does not deadlock.
+
+        :param tmp_path: Scratch root for the generated dataset.
+        """
+        context = multiprocessing.get_context("spawn")
+        process = context.Process(
+            target=_write_and_take_wide_batch_boundary,
+            args=(str(tmp_path / "wide.lance"),),
+        )
+        process.start()
+        process.join(timeout=_WIDE_TAKE_TIMEOUT_SECONDS)
+        try:
+            assert not process.is_alive(), "wide boundary take did not complete"
+            assert process.exitcode == 0
+        finally:
+            if process.is_alive():
+                process.kill()
+                process.join()
+            process.close()
 
     def test_batches_unshuffled_preserve_shapes_dtypes_and_values(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
@@ -289,6 +364,29 @@ class TestMapDataloader:
 
         assert item["mel_spec"].shape == (2, 128, 3)
         np.testing.assert_array_equal(item["param_array"].numpy(), arrays["param_array"][3])
+
+    def test_map_dataset_exact_version_remains_pinned_after_append(
+        self,
+        lance_dataset: tuple[Path, dict[str, np.ndarray]],
+        tmp_path: Path,
+    ) -> None:
+        """The reader and worker reopen contract retain the requested local version.
+
+        :param lance_dataset: Module-shared dataset and original arrays.
+        :param tmp_path: Isolated mutable dataset copy.
+        """
+        source, arrays = lance_dataset
+        dest = tmp_path / "versioned.lance"
+        shutil.copytree(source, dest)
+        version = lance.dataset(dest).version
+        lance.write_dataset(lance.dataset(dest).to_table(), dest, mode="append")
+
+        pinned = LanceMapDataset(dest, columns=["param_array"], version=version)
+
+        assert len(pinned) == len(arrays["param_array"])
+        np.testing.assert_array_equal(
+            pinned[0]["param_array"].numpy(), arrays["param_array"][0]
+        )
 
     def test_persistent_workers_without_workers_is_effectively_disabled(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]

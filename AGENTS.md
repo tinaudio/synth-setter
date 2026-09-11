@@ -38,14 +38,18 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   `tinaudio/synth-setter`; existing upstream issues may be referenced only
   after verifying that they already exist.
 - **Pi provider policy:** project-local Pi sessions and Pi subagents use
-  `openai-codex` or the pinned `kimi-coding` / `openrouter` free-pool review
-  models only. Agent `model` arguments use a fully qualified
+  `openai-codex` or the pinned Meta Muse-Spark-1.3 secondary-review model
+  only. Agent `model` arguments use a fully qualified
   `provider/model-id` selector; default to `openai-codex/gpt-5.6-sol`, never
   the provider-only `openai-codex`. Do not select Anthropic models or launch
   Anthropic-backed Pi subagents; keep `.pi/settings.json`,
   `.pi/APPEND_SYSTEM.md`, and Pi agent briefs aligned.
 - **Never run `make docker-*` or RunPod commands without asking.** These
   spend money and burn cluster state.
+- **Command lookups:** For “give me the command” requests, start at
+  [`docs/reference/cli.md`](docs/reference/cli.md). Consult the linked config
+  only if needed. Don’t broaden into repository searches or live-state checks
+  unless requested or necessary to resolve a specific ambiguity.
 - **Check the RunPod balance before launching jobs** — exhaustion shows up as
   jobs stuck in STARTING with no visible cause. Run
   `uv run python -c "from synth_setter.pipeline.skypilot_launch import _check_runpod_balance; _check_runpod_balance(); print('balance preflight passed')"`.
@@ -95,7 +99,7 @@ full rules in the `comment-hygiene` skill.
 
 ## Testing
 
-- `make test-fast` is the default CPU loop; `@pytest.mark.slow` for slow.
+- `make test-fast` is the curated two-minute CPU loop; `make test-medium` runs all non-slow CPU tests; `@pytest.mark.slow` for slow.
 - Test names: `test_<what>_<condition>_<expected>`.
 - A test must be able to fail for exactly one interesting reason. Don't test
   helpers defined in the test file, freeze config into literals, or assert that
@@ -178,6 +182,28 @@ unintended shell expansion. A `PreToolUse` hook
 (`agent/hooks/no-yaml-run-comments.sh`) enforces this.
 
 ## PRs
+
+### Keep auxiliary work in separate PRs
+
+- **Separate helpful but non-core changes from the main PR.** Extract
+  independently useful refactors, cleanup, and fixes for pre-existing bugs into
+  auxiliary PRs, even when they are necessary prerequisites for the main work.
+  Fix regressions introduced by the current PR in that PR; keep directly
+  supporting tests and docs with their behavior change.
+- **Stack prerequisites below the main PR.** Open the auxiliary PR against
+  `main`, then base the dependent main PR on the auxiliary branch so its diff
+  contains only the core change. Link the dependency in both PR bodies and save
+  the prerequisite tip SHA before merging it first. Then fetch `origin` and,
+  from the dependent branch, run
+  `git rebase --onto origin/main <saved-prerequisite-tip-sha>` to replay only
+  its own commits, including after a squash merge. Push with `--force-with-lease`
+  and retarget the main PR to `main`. For multiple prerequisites, repeat in
+  dependency order.
+- Non-core work that is not a prerequisite belongs in an independent PR, not
+  in the stack. Continue to file out-of-scope bugs via `/github-taxonomy`;
+  separating a prerequisite fix does not replace its tracking issue.
+
+### Submission and readiness
 
 - **Every PR body links a taxonomy-compliant issue** via `Closes #N`,
   `Fixes #N`, `Refs #N`, or `Part of #N`. Use `Refs #N` for partial fixes
@@ -290,7 +316,8 @@ than "SKIP: requires VST / R2".
 ## Commands
 
 ```bash
-make test-fast       # CPU-only fast tests
+make test-fast       # curated CPU tests, two-minute budget
+make test-medium     # all non-slow CPU tests
 make test-full-cpu   # all CPU tests
 make test-full-gpu   # GPU + CPU, serial
 make format          # pre-commit hooks

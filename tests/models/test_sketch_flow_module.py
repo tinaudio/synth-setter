@@ -1,5 +1,6 @@
 """Tests for sketch-control conditioning in the flow-matching module."""
 
+from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -18,6 +19,7 @@ from synth_setter.models.vst_flow_matching_module import (
     VSTFlowMatchingModule,
     build_guided_velocity,
     joint_cfg_velocity,
+    multi_cfg_velocity,
     rk4_step,
 )
 
@@ -45,8 +47,8 @@ class _FlattenEncoder(torch.nn.Module):
 def _module(
     sketch: SketchControlSpec | None,
     *,
-    sketch_dropout_rate: float = 0.2,
-    all_conditioning_dropout_rate: float = 0.2,
+    sketch_dropout_rate: float = 0.1,
+    all_conditioning_dropout_rate: float = 0.1,
     cfg_dropout_rate: float = 0.1,
     audio_loss: torch.nn.Module | None = None,
 ) -> VSTFlowMatchingModule:
@@ -116,6 +118,22 @@ class _KeepCountAudioLoss(torch.nn.Module):
         return keep.to(theta_hat.dtype).sum()
 
 
+def _constant_field(
+    value: float,
+) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+    """Build a time-independent field for exact CFG algebra checks.
+
+    :param value: Constant velocity value.
+    :returns: Field matching the sampler's state-and-time signature.
+    """
+
+    def field(x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        del t
+        return torch.full_like(x, value)
+
+    return field
+
+
 def _batch(*, with_sketch: bool) -> dict[str, torch.Tensor]:
     """Draw a deterministic synthetic mel batch.
 
@@ -161,8 +179,27 @@ class _BranchField(torch.nn.Module):
         return value.expand_as(x)
 
 
-def test_build_guided_velocity_uses_pe_only_unconditional_control_branch() -> None:
-    """Joint CFG evaluates each content branch with its matching control-token state."""
+def test_build_guided_velocity_applies_separate_sketch_and_content_strengths() -> None:
+    """Sketch CFG isolates full controls before adding content conditioning."""
+    x = torch.zeros(_BATCH, _NUM_PARAMS)
+    guided_velocity = build_guided_velocity(
+        _BranchField(),
+        torch.ones(_BATCH, 8),
+        cfg_strength=4.0,
+        sketch_cfg_strength=3.0,
+        control_tokens=ControlTokenBranches(
+            conditional=torch.full((_BATCH, 2, _D_MODEL), 2.0),
+            unconditional=torch.full((_BATCH, 2, _D_MODEL), 3.0),
+        ),
+    )
+
+    guided = guided_velocity(x, torch.zeros(_BATCH, 1))
+
+    torch.testing.assert_close(guided, torch.full_like(x, 40.0))
+
+
+def test_build_guided_velocity_defaults_sketch_strength_to_content_strength() -> None:
+    """Omitted sketch scale applies the content scale to both guidance deltas."""
     x = torch.zeros(_BATCH, _NUM_PARAMS)
     guided_velocity = build_guided_velocity(
         _BranchField(),
@@ -179,8 +216,48 @@ def test_build_guided_velocity_uses_pe_only_unconditional_control_branch() -> No
     torch.testing.assert_close(guided, torch.full_like(x, 39.0))
 
 
-def test_sample_without_content_preserves_explicit_conditional_control_branch() -> None:
-    """Sampling does not reinterpret conditional controls when content is absent."""
+def test_build_guided_velocity_accepts_zero_sketch_strength() -> None:
+    """Zero sketch guidance leaves the content delta independently active."""
+    x = torch.zeros(_BATCH, _NUM_PARAMS)
+    guided_velocity = build_guided_velocity(
+        _BranchField(),
+        torch.ones(_BATCH, 8),
+        cfg_strength=4.0,
+        sketch_cfg_strength=0.0,
+        control_tokens=ControlTokenBranches(
+            conditional=torch.full((_BATCH, 2, _D_MODEL), 2.0),
+            unconditional=torch.full((_BATCH, 2, _D_MODEL), 3.0),
+        ),
+    )
+
+    guided = guided_velocity(x, torch.zeros(_BATCH, 1))
+
+    torch.testing.assert_close(guided, torch.full_like(x, 43.0))
+
+
+def test_sample_routes_separate_sketch_strength_to_guided_velocity() -> None:
+    """Sampling keeps sketch guidance independent from content guidance."""
+    module = _module(None)
+    module.vector_field = _BranchField()
+    control_tokens = ControlTokenBranches(
+        conditional=torch.full((_BATCH, 2, _D_MODEL), 2.0),
+        unconditional=torch.full((_BATCH, 2, _D_MODEL), 3.0),
+    )
+
+    sample = module._sample(  # noqa: SLF001
+        torch.zeros(_BATCH, *_MEL_SHAPE),
+        torch.zeros(_BATCH, _NUM_PARAMS),
+        steps=1,
+        cfg_strength=4.0,
+        sketch_cfg_strength=3.0,
+        control_tokens=control_tokens,
+    )
+
+    torch.testing.assert_close(sample, torch.full_like(sample, 40.0))
+
+
+def test_sample_without_content_uses_explicit_sketch_strength() -> None:
+    """Sketch-only sampling ignores the separate content strength."""
     module = _module(None)
     module.vector_field = _BranchField()
     control_tokens = ControlTokenBranches(
@@ -193,10 +270,45 @@ def test_sample_without_content_preserves_explicit_conditional_control_branch() 
         torch.zeros(_BATCH, _NUM_PARAMS),
         steps=1,
         cfg_strength=4.0,
+        sketch_cfg_strength=3.0,
         control_tokens=control_tokens,
     )
 
-    torch.testing.assert_close(sample, torch.full_like(sample, -1.0))
+    torch.testing.assert_close(sample, torch.zeros_like(sample))
+
+
+def test_multi_cfg_velocity_applies_three_branch_algebra() -> None:
+    """Multi-CFG scales sketch and content deltas independently."""
+    guided_velocity = multi_cfg_velocity(
+        _constant_field(2.0),
+        _constant_field(5.0),
+        _constant_field(11.0),
+        sketch_cfg_strength=3.0,
+        content_cfg_strength=4.0,
+    )
+
+    guided = guided_velocity(torch.zeros(2, 3), torch.zeros(2, 1))
+
+    torch.testing.assert_close(guided, torch.full((2, 3), 35.0))
+
+
+def test_multi_cfg_equal_strength_matches_joint_cfg() -> None:
+    """Equal sketch and content scales preserve joint-CFG output."""
+    unconditional = _constant_field(2.0)
+    content_sketch = _constant_field(11.0)
+    x = torch.zeros(2, 3)
+    t = torch.zeros(2, 1)
+
+    multi_guided = multi_cfg_velocity(
+        unconditional,
+        _constant_field(5.0),
+        content_sketch,
+        sketch_cfg_strength=4.0,
+        content_cfg_strength=4.0,
+    )
+    joint_guided = joint_cfg_velocity(content_sketch, unconditional, cfg_strength=4.0)
+
+    torch.testing.assert_close(multi_guided(x, t), joint_guided(x, t))
 
 
 def test_joint_cfg_velocity_applies_two_branch_algebra() -> None:
@@ -226,6 +338,199 @@ def test_rk4_step_integrates_two_argument_time_field() -> None:
     torch.testing.assert_close(result, torch.tensor([[1.1051708]]))
 
 
+def test_sample_batch_same_explicit_noise_returns_identical_predictions() -> None:
+    """Explicit noise makes repeated sketch sampling deterministic."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+    noise = batch["noise"].clone()
+
+    first = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+    second = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+
+    assert first.shape == (_BATCH, _NUM_PARAMS)
+    assert first.dtype is torch.float32
+    assert torch.equal(first, second)
+    assert not first.requires_grad
+
+
+def test_sample_batch_guidance_and_sketch_controls_change_fixed_noise_output() -> None:
+    """The public sampler consumes both CFG axes and sketch-control values."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    model.vector_field = _BranchField()
+    assert model.sketch_tokens is not None
+    with torch.no_grad():
+        for projection in model.sketch_tokens.projections.children():
+            assert isinstance(projection, torch.nn.Linear)
+            projection.weight.fill_(1.0)
+    batch = _batch(with_sketch=True)
+    noise = torch.zeros_like(batch["noise"])
+    baseline = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=0.0,
+        sample_steps=1,
+    )
+    content_guided = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=1.0,
+        sketch_cfg_strength=0.0,
+        sample_steps=1,
+    )
+    sketch_guided = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+    )
+    changed_batch = dict(batch)
+    changed_batch["sketch_ctrl"] = torch.zeros_like(batch["sketch_ctrl"])
+    changed_controls = model.sample_batch(
+        changed_batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+    )
+
+    branches = model._control_token_branches_from_batch(  # noqa: SLF001
+        cast(dict[str, torch.Tensor | None], batch)
+    )
+    assert branches is not None
+    sketch_delta = (branches.conditional - branches.unconditional).mean(dim=(1, 2)).unsqueeze(1)
+    torch.testing.assert_close(content_guided, baseline + 10.0)
+    torch.testing.assert_close(sketch_guided, baseline + sketch_delta.expand_as(baseline))
+    assert not torch.equal(sketch_guided, changed_controls)
+
+
+def test_fixed_time_diagnostics_use_conditional_sketch_tokens() -> None:
+    """Held-out endpoint diagnostics respond to conditional sketch controls."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    model.vector_field = _BranchField()
+    assert model.sketch_tokens is not None
+    with torch.no_grad():
+        for projection in model.sketch_tokens.projections.children():
+            assert isinstance(projection, torch.nn.Linear)
+            projection.weight.fill_(1.0)
+    batch = _batch(with_sketch=True)
+    changed_batch = dict(batch)
+    changed_batch["sketch_ctrl"] = torch.zeros_like(batch["sketch_ctrl"])
+
+    original = model._fixed_time_endpoint_mse(batch, batch["noise"])  # noqa: SLF001
+    changed = model._fixed_time_endpoint_mse(  # noqa: SLF001
+        changed_batch, batch["noise"]
+    )
+
+    assert not torch.equal(
+        original["velocity_endpoint_mse/equal_bin_mean"],
+        changed["velocity_endpoint_mse/equal_bin_mean"],
+    )
+
+
+def test_sample_batch_active_conditioning_none_raises_value_error() -> None:
+    """The active conditioning field cannot use an inactive field's ``None`` sentinel."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+    batch_with_missing_conditioning = {**batch, "mel": None}
+
+    with pytest.raises(ValueError, match="conditioning.*'mel'.*must contain a tensor"):
+        model.sample_batch(
+            batch_with_missing_conditioning,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=2,
+        )
+
+
+def test_sample_batch_wrong_noise_shape_raises() -> None:
+    """Explicit noise must provide one parameter vector per input row."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="noise shape"):
+        model.sample_batch(
+            batch,
+            noise=torch.zeros((_BATCH, _NUM_PARAMS + 1)),
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=2,
+        )
+
+
+def test_sample_batch_nonfinite_noise_raises() -> None:
+    """Explicit noise must contain finite flow states."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+    noise = batch["noise"].clone()
+    noise[0, 0] = float("nan")
+
+    with pytest.raises(ValueError, match="finite"):
+        model.sample_batch(
+            batch,
+            noise=noise,
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+        )
+
+
+def test_sample_batch_negative_guidance_raises() -> None:
+    """Guidance cannot reverse a conditioning direction."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="sketch_cfg_strength"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=-1.0,
+        )
+
+
+def test_sample_batch_negative_content_guidance_raises() -> None:
+    """Content guidance cannot reverse its conditioning direction."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="content_cfg_strength"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=-1.0,
+            sketch_cfg_strength=1.0,
+        )
+
+
+def test_sample_batch_nonpositive_steps_raises() -> None:
+    """Sampling requires at least one integration step."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=0,
+        )
+
+
 def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
     """Sketch-configured training consumes ``sketch_ctrl`` and stays finite."""
     module = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
@@ -233,6 +538,41 @@ def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
     loss = module._train_step(_batch(with_sketch=True)).loss  # noqa: SLF001
 
     assert torch.isfinite(loss)
+
+
+def test_train_step_pyfdn_reverb_profile_uses_temporal_groups() -> None:
+    """Flow construction and training use the selected reverb layout."""
+    module = _module(SketchControlSpec(num_frames=32, profile="pyfdn_reverb"))
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
+
+    loss = module._train_step(batch).loss  # noqa: SLF001
+
+    assert module.sketch_tokens is not None
+    assert tuple(module.sketch_tokens.projections) == (
+        "edc",
+        "echo_density",
+        "spectral_flatness",
+    )
+    assert torch.isfinite(loss)
+
+
+def test_sample_batch_pyfdn_reverb_profile_returns_parameter_rows() -> None:
+    """Inference accepts temporal reverb controls and preserves parameter shape."""
+    module = _module(SketchControlSpec(num_frames=32, profile="pyfdn_reverb"))
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
+
+    predictions = module.sample_batch(
+        batch,
+        noise=batch["noise"],
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+
+    assert predictions.shape == (_BATCH, _NUM_PARAMS)
+    assert torch.isfinite(predictions).all()
 
 
 def test_train_step_none_spec_ignores_sketch_free_batch() -> None:
@@ -392,6 +732,44 @@ def test_sketch_conditioned_training_fixed_batch_lowers_loss_and_updates_project
     assert all(
         torch.count_nonzero(cast(torch.nn.Linear, projection).weight) == 0
         for projection in projections
+    )
+
+    optimizer = torch.optim.Adam(module.parameters(), lr=1e-2)
+    torch.manual_seed(11)
+    initial_loss = module._train_step(batch).loss.item()  # noqa: SLF001
+
+    for _ in range(100):
+        optimizer.zero_grad(set_to_none=True)
+        loss = module._train_step(batch).loss  # noqa: SLF001
+        loss.backward()
+        optimizer.step()
+
+    torch.manual_seed(11)
+    final_loss = module._train_step(batch).loss.item()  # noqa: SLF001
+
+    assert final_loss < 0.01
+    assert final_loss < initial_loss / 100
+    assert all(
+        torch.count_nonzero(cast(torch.nn.Linear, projection).weight) > 0
+        for projection in module.sketch_tokens.projections.values()
+    )
+
+
+@pytest.mark.slow
+def test_pyfdn_reverb_training_fixed_batch_lowers_loss_and_updates_projections() -> None:
+    """A fixed reverb batch trains every temporal-group projection."""
+    module = _module(
+        SketchControlSpec(num_frames=32, profile="pyfdn_reverb"),
+        sketch_dropout_rate=0.0,
+        all_conditioning_dropout_rate=0.0,
+        cfg_dropout_rate=0.0,
+    )
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
+    assert module.sketch_tokens is not None
+    assert all(
+        torch.count_nonzero(cast(torch.nn.Linear, projection).weight) == 0
+        for projection in module.sketch_tokens.projections.values()
     )
 
     optimizer = torch.optim.Adam(module.parameters(), lr=1e-2)
