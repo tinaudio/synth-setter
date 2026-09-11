@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789152683118,
+  "lastUpdate": 1789152687579,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -29064,6 +29064,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.743844261200001,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "75956aa45a86648230a3a780b7329f3ec7edfd6f",
+          "message": "internal-feat(faust): match pyFDN shelf decay and loop timing (#3543)\n\n* internal-feat(faust): match pyFDN shelf decay and loop timing\n\nGive faust_kronecker_fdn the full 33-control parity set: a second decay\nendpoint (t60_nyquist) driving per-line first-order shelf biquads with the\nsame endpoint math and 6 kHz crossover as the pyFDN build, shelves placed\npre-matrix on delay outputs with taps on shelved signals, and a +-1 sample\ninput/delay compensation that lands Faust's implicit feedback sample\nexactly on the pyFDN recirculation grid.\n\nThe compiled DSP now reproduces pyfdn_n8_mono_kronecker renders to 5e-8\nover four seconds (float32 only); see\ntest_kronecker_fdn_matches_pyfdn_render.\n\nRefs #3519\n\n* internal-fix(faust): name Kronecker decay endpoint t60_dc\n\nThe Decay/t60 slider drives the DC endpoint of the (rt_dc, rt_nyquist)\nshelf pair, but its name read as broadband T60 next to t60_nyquist.\nRename the DSP label, Faust variable, canonical and wasm addresses, and\nboth digest pins to t60_dc.\n\nRefs #3519",
+          "timestamp": "2026-09-11T13:24:39-04:00",
+          "tree_id": "e6b810ca545f59a1c9a048f73ef4ddddd2ec6bf0",
+          "url": "https://github.com/tinaudio/synth-setter/commit/75956aa45a86648230a3a780b7329f3ec7edfd6f"
+        },
+        "date": 1789152686977,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.501998901367188,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.354089115280658,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.0824926346540451,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.009801387786865234,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.1678080558776855,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.860564912799987,
             "unit": "seconds"
           }
         ]
