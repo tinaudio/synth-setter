@@ -7,7 +7,11 @@ helpers, so each test pins one shape against the ``dataset_field_shapes`` /
 validator silently drifting apart.
 """
 
+import subprocess
+import sys
+
 import numpy as np
+import pytest
 
 from synth_setter.data.vst.generate_vst_dataset import make_spectrogram
 from synth_setter.data.vst.shapes import (
@@ -23,12 +27,36 @@ from synth_setter.data.vst.shapes import (
     dataset_field_shapes,
     mel_dataset_shape,
     mel_hop_length,
+    mel_n_frames_from_samples,
+    stft_n_frames_from_samples,
     mel_n_fft,
     mel_n_frames,
     param_array_dataset_shape,
 )
+from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
+
+
+def test_shape_constants_import_without_loading_audio_frontend() -> None:
+    """Schema consumers do not import optional audio-processing dependencies."""
+    result = subprocess.run(  # noqa: S603 — fixed interpreter and test-owned code
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "from synth_setter.data.vst.shapes import AUDIO_FIELD; "
+                "assert AUDIO_FIELD == 'audio'; "
+                "assert 'librosa' not in sys.modules"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_dataset_field_names_match_writer_emissions() -> None:
@@ -90,6 +118,25 @@ def test_mel_n_frames_matches_legacy_inline_calc() -> None:
     assert mel_n_frames(44100, 4.0) == 401
 
 
+def test_stft_n_frames_from_samples_matches_centered_frame_count() -> None:
+    """``1 + samples // hop`` frames, the count ``center=True`` transforms produce."""
+    assert stft_n_frames_from_samples(176_400, 11_025) == 17
+    assert stft_n_frames_from_samples(44_100, 11_025) == 5
+
+
+@pytest.mark.parametrize(("num_samples", "hop_length"), [(176_400, 0), (176_400, -1), (-1, 441)])
+def test_stft_n_frames_from_samples_invalid_geometry_raises(
+    num_samples: int, hop_length: int
+) -> None:
+    """A non-positive hop or negative length fails loudly at resolver time.
+
+    :param num_samples: Waveform length under test.
+    :param hop_length: Frame stride under test.
+    """
+    with pytest.raises(ValueError):
+        stft_n_frames_from_samples(num_samples, hop_length)
+
+
 def test_audio_dataset_shape_matches_legacy_inline_calc() -> None:
     """Pins ``(num_samples, channels, int(sample_rate * signal_duration_seconds))``."""
     assert audio_dataset_shape(2, 2, 16000, 4.0) == (2, 2, 64000)
@@ -111,10 +158,13 @@ def test_param_array_dataset_shape_matches_legacy_inline_calc() -> None:
 def test_dataset_field_shapes_maps_every_field_to_full_writer_shape() -> None:
     """``dataset_field_shapes`` returns the full writer-emitted shape for every dataset field."""
     render = RenderConfig(
-        plugin_path="/fake/Plugin.vst3",
-        plugin_state_path="presets/fake.vstpreset",
-        param_spec_name=ParamSpecName("surge_simple"),
-        renderer_version="1.0.0-test",
+        synth=SynthSpec(
+            name=SynthName("surge_simple"),
+            param_spec_name=ParamSpecName("surge_simple"),
+            plugin_path="/fake/Plugin.vst3",
+            plugin_state_path="presets/fake.vstpreset",
+            synth_version="1.0.0-test",
+        ),
         sample_rate=44100,
         channels=2,
         velocity=100,
@@ -152,3 +202,34 @@ def test_make_spectrogram_output_shape_matches_mel_dataset_shape_helper() -> Non
     stereo = np.zeros((2, audio_length), dtype=np.float32)
     stereo_spec = make_spectrogram(stereo, sample_rate)
     assert stereo_spec.shape == (2, *mel_dataset_shape(1, 1, sample_rate, duration)[2:])
+
+
+def test_make_spectrogram_pins_the_training_front_end() -> None:
+    """Independent properties pin window, hop, mel count, and the dB reference.
+
+    Asserting against the function itself would move with any regression, so
+    these are derived from the documented contract instead: ``ref=np.max``
+    forces a 0 dB peak, the grid follows ``mel_n_frames_from_samples``, and a
+    pure tone must peak in the mel bin its frequency maps to.
+    """
+    sample_rate = 16_000
+    duration_samples = 16_000
+    time = np.arange(duration_samples) / sample_rate
+    tone = np.sin(2 * np.pi * 440.0 * time).astype(np.float32)[np.newaxis, :]
+
+    spec = make_spectrogram(tone, sample_rate)
+
+    assert spec.shape == (
+        1,
+        MEL_N_MELS,
+        mel_n_frames_from_samples(duration_samples, sample_rate),
+    )
+    assert np.isfinite(spec).all()
+    # float64 features would double stored dataset size and drift from the training contract.
+    assert spec.dtype == np.float32
+    # A changed or disabled dB floor would shift every checkpoint's input.
+    assert spec.max() == pytest.approx(0.0)
+    assert spec.min() == pytest.approx(-80.0)
+    assert spec.min() >= -80.0
+    # The bin the test tone lands in.
+    assert abs(int(spec[0].mean(axis=1).argmax()) - 19) <= 1

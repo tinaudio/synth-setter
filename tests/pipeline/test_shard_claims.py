@@ -163,9 +163,7 @@ class TestPopulate:
 
         counts = claims.status_counts()
 
-        assert set(counts) <= {"available", "claimed", "done"}
-        assert all(isinstance(count, int) and count > 0 for count in counts.values())
-        assert sum(counts.values()) == 3
+        assert counts == {"available": 1, "claimed": 1, "done": 1}
 
     def test_claim_and_complete_preserve_the_claim_schema(self, tmp_path: Path) -> None:
         """Conditional updates never alter the table's columns or dtypes.

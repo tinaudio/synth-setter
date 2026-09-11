@@ -1,26 +1,75 @@
 """Render predicted-parameter and target audio from a trained model for offline evaluation."""
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
-import click
 import librosa
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
 from pedalboard.io import AudioFile
+from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from tqdm import tqdm, trange
 
 from synth_setter.data.vst import param_specs
-from synth_setter.data.vst.core import render_params
-from synth_setter.data.vst.param_spec import NoteParams, ParamSpec, decode_model_output
-from synth_setter.data.vst.param_spec_registry import default_plugin_path, plugin_state_paths
-from synth_setter.data.vst.renderers import TorchSynthRenderer
-from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME
+from synth_setter.data.vst.core import run_with_editor_held_open
+from synth_setter.data.vst.param_spec import (
+    NoteParams,
+    ParameterValue,
+    ParamSpec,
+    decode_model_output,
+    require_note_params,
+    spec_quantize_model_output,
+)
+from synth_setter.data.vst.renderers import AudioRenderer, PedalboardRenderer
+from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.renderer_factory import make_audio_renderer
 
-RenderFn = Callable[[dict[str, float], int, tuple[float, float]], np.ndarray]
+RenderFn = Callable[[Mapping[str, ParameterValue], int, tuple[float, float]], np.ndarray]
+
+
+class _PredictAudioCliArgs(RenderConfig, BaseSettings):
+    """Render configuration plus prediction-artifact CLI inputs.
+
+    .. attribute :: model_config
+
+        Pydantic settings and CLI parsing policy.
+
+    .. attribute :: pred_dir
+
+        Directory containing prediction tensors.
+
+    .. attribute :: output_dir
+
+        Destination for rendered artifacts.
+
+    .. attribute :: rerender_target
+
+        Whether to render target parameters instead of using staged audio.
+
+    .. attribute :: no_params
+
+        Whether staged target parameters are absent.
+
+    .. attribute :: skip_spectrogram
+
+        Whether to omit spectrogram artifacts.
+    """
+
+    model_config = SettingsConfigDict(
+        strict=True,
+        frozen=True,
+        extra="forbid",
+        cli_kebab_case=True,
+    )
+
+    pred_dir: CliPositionalArg[Path]
+    output_dir: CliPositionalArg[Path]
+    rerender_target: bool = False
+    no_params: bool = False
+    skip_spectrogram: bool = False
 
 
 def make_spectrogram(audio: np.ndarray, sample_rate: float) -> list[np.ndarray]:
@@ -93,140 +142,157 @@ def write_spectrograms(
 
 
 def params_to_csv(
-    target_synth_params: dict[str, float] | None,
+    target_synth_params: Mapping[str, ParameterValue] | None,
     target_note_params: NoteParams | None,
-    pred_synth_params: dict[str, float],
+    pred_synth_params: Mapping[str, ParameterValue],
     pred_note_params: NoteParams,
     save_path: str,
     param_spec: ParamSpec,
+    *,
+    pred_effective_synth_params: Mapping[str, ParameterValue] | None = None,
+    pred_effective_note_params: NoteParams | None = None,
+    pred_effective_note_window: tuple[float, float],
 ) -> None:
-    """Write the target and predicted parameters to a CSV file."""
-    row_names = list(pred_synth_params.keys()) + list(pred_note_params.keys())
+    """Write raw, target, and effective rendered parameters to a CSV file.
 
-    synth_df = pd.DataFrame({"pred": pred_synth_params, "target": target_synth_params})
-    note_df = pd.DataFrame({"pred": pred_note_params, "target": target_note_params})
+    :param target_synth_params: Target synth values, or ``None`` when absent.
+    :param target_note_params: Target note values, or ``None`` when absent.
+    :param pred_synth_params: Raw decoded prediction synth values.
+    :param pred_note_params: Raw decoded prediction note values.
+    :param save_path: Destination CSV path.
+    :param param_spec: Parameter ordering contract for the rendered synth.
+    :param pred_effective_synth_params: Quantized synth values used to render ``pred.wav``.
+    :param pred_effective_note_params: Quantized note values used to render ``pred.wav``.
+    :param pred_effective_note_window: Canonical note window used to render ``pred.wav``.
+    """
+
+    def flatten_synth_params(
+        params: Mapping[str, ParameterValue] | None,
+    ) -> dict[str, float] | None:
+        if params is None:
+            return None
+        flattened: dict[str, float] = {}
+        for parameter in param_spec.synth_params:
+            value = params[parameter.name]
+            if not isinstance(value, np.ndarray):
+                flattened[parameter.name] = float(value)
+                continue
+            flattened.update(
+                zip(
+                    parameter.native_names(),
+                    (float(item) for item in value.reshape(-1)),
+                    strict=True,
+                )
+            )
+        return flattened
+
+    pred_synth_coordinates = flatten_synth_params(pred_synth_params)
+    target_synth_coordinates = flatten_synth_params(target_synth_params)
+    effective_synth_coordinates = flatten_synth_params(
+        pred_synth_params if pred_effective_synth_params is None else pred_effective_synth_params
+    )
+    effective_note_params = (
+        pred_note_params if pred_effective_note_params is None else pred_effective_note_params
+    )
+    synth_df = pd.DataFrame(
+        {
+            "pred": pred_synth_coordinates,
+            "target": target_synth_coordinates,
+            "pred_effective": effective_synth_coordinates,
+        }
+    )
+    note_df = pd.DataFrame(
+        {
+            "pred": pred_note_params,
+            "target": target_note_params,
+            "pred_effective": effective_note_params,
+        }
+    )
     df = pd.concat([synth_df, note_df])
+    df.at["note_start_and_end", "pred_effective"] = pred_effective_note_window
 
     df.to_csv(save_path)
 
 
-def resolve_plugin_state_path(plugin_state_path: str | None, param_spec: str) -> str:
-    """Return ``plugin_state_path`` when given, else the registry's default preset for ``param_spec``.
-
-    ``None`` with an unregistered ``param_spec`` propagates the registry ``KeyError``.
-
-    :param plugin_state_path: Explicit preset path; ``None`` selects the registry default.
-    :param param_spec: Registry key naming the spec whose default preset to use.
-    :returns: Resolved preset path.
-    """
-    return plugin_state_path if plugin_state_path is not None else plugin_state_paths[param_spec]
-
-
-def _make_render_fn(
-    plugin_path: str,
-    plugin_state_path: str | None,
-    sample_rate: float,
-    channels: int,
-    velocity: int,
+def _canonicalize_prediction_note_window(
+    note_window: tuple[float, float],
+    *,
     signal_duration_seconds: float,
-) -> RenderFn:
-    """Return the per-row render callable for the backend ``plugin_path`` selects.
+    sample_rate: int,
+) -> tuple[float, float]:
+    """Return a finite chronological prediction window accepted by renderers.
 
-    The ``"torchsynth"`` sentinel dispatches to the in-process
-    :class:`TorchSynthRenderer` (no plugin host); every other path keeps the
-    pedalboard ``render_params`` call unchanged, without the generation-side
-    amplitude gate — predicted-parameter renders may legitimately clip.
-
-    :param plugin_path: Plugin bundle path, or the ``"torchsynth"`` backend sentinel.
-    :param plugin_state_path: Baseline preset path; unused by the torchsynth backend.
+    :param note_window: Model-predicted note endpoints in seconds.
+    :param signal_duration_seconds: Maximum renderable endpoint in seconds.
     :param sample_rate: Render sample rate in Hz.
-    :param channels: Output channel count.
-    :param velocity: MIDI note velocity applied to every render.
-    :param signal_duration_seconds: Duration of each rendered sample.
-    :returns: Callable of ``(synth_params, pitch, note_start_and_end)`` returning
-        ``(channels, samples)`` audio.
+    :returns: Clipped chronological endpoints separated by at least one available sample.
+    :raises ValueError: Either predicted endpoint is non-finite.
     """
-    if plugin_path == TORCHSYNTH_PLUGIN_NAME:
-        renderer = TorchSynthRenderer(
-            plugin_path=plugin_path,
-            sample_rate=sample_rate,
-            channels=channels,
-            signal_duration_seconds=signal_duration_seconds,
-        )
+    start, end = sorted(float(value) for value in note_window)
+    if not np.isfinite([start, end]).all():
+        raise ValueError(f"predicted note window must be finite, got {note_window!r}")
 
-        def render_torchsynth_row(
-            synth_params: dict[str, float],
-            pitch: int,
-            note_start_and_end: tuple[float, float],
-        ) -> np.ndarray:
-            return renderer.render(synth_params, pitch, velocity, note_start_and_end)
+    start = min(max(start, 0.0), signal_duration_seconds)
+    end = min(max(end, 0.0), signal_duration_seconds)
+    minimum_duration = min(1.0 / sample_rate, signal_duration_seconds)
+    if end - start >= minimum_duration:
+        return start, end
+    if start + minimum_duration <= signal_duration_seconds:
+        return start, start + minimum_duration
+    return signal_duration_seconds - minimum_duration, signal_duration_seconds
 
-        return render_torchsynth_row
 
-    def render_pedalboard_row(
-        synth_params: dict[str, float],
+def _make_render_fn(args: _PredictAudioCliArgs, renderer: AudioRenderer) -> RenderFn:
+    """Apply capture-time GUI warm-up cadence to one renderer session.
+
+    :param args: Validated renderer lifecycle configuration.
+    :param renderer: Renderer session used for every prediction and target row.
+    :returns: Row renderer honoring ``gui_toggle_cadence``.
+    """
+    warmup_pending = args.gui_toggle_cadence == "once"
+
+    def render(
+        synth_params: Mapping[str, ParameterValue],
         pitch: int,
         note_start_and_end: tuple[float, float],
     ) -> np.ndarray:
-        return render_params(
-            plugin_path,
+        nonlocal warmup_pending
+        warmup = args.gui_toggle_cadence == "render" or warmup_pending
+        audio = renderer.render(
             synth_params,
             pitch,
-            velocity,
+            args.velocity,
             note_start_and_end,
-            signal_duration_seconds,
-            sample_rate,
-            channels,
-            plugin_state_path=plugin_state_path,
+            warmup=warmup,
         )
+        warmup_pending = False
+        return audio
 
-    return render_pedalboard_row
+    return render
 
 
-@click.command()
-@click.argument("pred_dir", type=str)
-@click.argument("output_dir", type=str)
-@click.option("--plugin_path", "-p", type=str, default=default_plugin_path)
-@click.option("--plugin_state_path", "-r", type=str, default=None)
-@click.option("--sample_rate", "-s", type=float, default=44100.0)
-@click.option("--channels", "-c", type=int, default=2)
-@click.option("--velocity", "-v", type=int, default=100)
-@click.option("--signal_duration_seconds", "-d", type=float, default=4.0)
-@click.option("--param_spec", type=str, default="surge_xt")
-@click.option("--rerender_target", "-t", is_flag=True, default=False)
-@click.option("--no-params", "-X", is_flag=True, default=False)
-@click.option("--skip-spectrogram", "-S", is_flag=True, default=False)
-def main(
-    pred_dir: str,
-    output_dir: str,
-    plugin_path: str,
-    plugin_state_path: str | None = None,
-    sample_rate: float = 44100.0,
-    channels: int = 2,
-    velocity: int = 100,
-    signal_duration_seconds: float = 4.0,
-    param_spec: str = "surge_xt",
-    rerender_target: bool = False,
-    no_params: bool = False,
-    skip_spectrogram: bool = False,
+def _render_prediction_artifacts(
+    args: _PredictAudioCliArgs,
+    spec: ParamSpec,
+    render: RenderFn,
 ) -> None:
-    plugin_state_path = resolve_plugin_state_path(plugin_state_path, param_spec)
-    spec = param_specs[param_spec]
-    os.makedirs(output_dir, exist_ok=True)
+    """Write prediction and target artifacts for every staged tensor row.
 
-    # The pedalboard path loads the plugin (and applies plugin_state_path) on
-    # every call, so no upfront load_plugin is needed here.
-    render_fn = _make_render_fn(
-        plugin_path,
-        plugin_state_path,
-        sample_rate,
-        channels,
-        velocity,
-        signal_duration_seconds,
-    )
+    :param args: Validated artifact paths and output options.
+    :param spec: Parameter decoder for each prediction row.
+    :param render: Renderer call carrying the configured GUI cadence.
+    :raises ValueError: A sample has neither staged nor re-renderable target audio.
+    """
+    sample_rate = args.sample_rate
+    channels = args.channels
 
-    # list the .pt files with accompanying indices (each file has name
-    # pred-{index}.pt, and we want to sort by index)
+    pred_dir = str(args.pred_dir)
+    output_dir = str(args.output_dir)
+    rerender_target = args.rerender_target
+    no_params = args.no_params
+    skip_spectrogram = args.skip_spectrogram
+
+    # Glob order defines output numbering; numeric batch ordering is tracked in #2446.
     pred_path = Path(pred_dir)
     pred_files = [f for f in pred_path.glob("pred-*.pt") if f.is_file()]
     indices = [int(f.stem.split("-")[1]) for f in pred_files]
@@ -258,9 +324,9 @@ def main(
 
         if target_audio is None and not (rerender_target and target_params is not None):
             raise ValueError(
-                f"{target_audio_file} is missing and --rerender_target is off (or "
+                f"{target_audio_file} is missing and --rerender-target is off (or "
                 "target params are absent): there is no target audio source. Stage "
-                "target-audio tensors or pass --rerender_target with target params."
+                "target-audio tensors or pass --rerender-target with target params."
             )
 
         # 5. iterate over its internal rows and render the audio
@@ -270,15 +336,25 @@ def main(
             os.makedirs(sample_dir, exist_ok=True)
 
             row_params = pred_params[j].float().numpy()
-            synth_params, note_params = decode_model_output(row_params, spec)
-
-            pred_audio = render_fn(
-                synth_params,
-                int(note_params["pitch"]),
-                note_params["note_start_and_end"],
+            synth_params, note_values = decode_model_output(row_params, spec)
+            note_params = require_note_params(note_values)
+            effective_row_params = spec_quantize_model_output(row_params, spec)
+            effective_synth_params, effective_note_values = decode_model_output(
+                effective_row_params, spec
+            )
+            effective_note_params = require_note_params(effective_note_values)
+            render_note_window = _canonicalize_prediction_note_window(
+                effective_note_params["note_start_and_end"],
+                signal_duration_seconds=args.signal_duration_seconds,
+                sample_rate=args.sample_rate,
+            )
+            pred_audio = render(
+                effective_synth_params,
+                int(effective_note_params["pitch"]),
+                render_note_window,
             )
 
-            target_synth_params: dict[str, float] | None = None
+            target_synth_params: Mapping[str, ParameterValue] | None = None
             target_note_params: NoteParams | None = None
             # Dataset audio when staged; the rerender branch fills it only when absent,
             # so a staged tensor keeps the spectrogram on dataset audio.
@@ -288,9 +364,10 @@ def main(
             if rerender_target and target_params is not None:
                 # .float() aligns the target path with the pred path's float32 contract.
                 target_params_ = target_params[j].float().numpy()
-                target_synth_params, target_note_params = decode_model_output(target_params_, spec)
+                target_synth_params, target_note_values = decode_model_output(target_params_, spec)
+                target_note_params = require_note_params(target_note_values)
 
-                new_target = render_fn(
+                new_target = render(
                     target_synth_params,
                     int(target_note_params["pitch"]),
                     target_note_params["note_start_and_end"],
@@ -323,9 +400,42 @@ def main(
                 note_params,
                 os.path.join(sample_dir, "params.csv"),
                 spec,
+                pred_effective_synth_params=effective_synth_params,
+                pred_effective_note_params=effective_note_params,
+                pred_effective_note_window=render_note_window,
             )
 
         current_offset += pred_params.shape[0]
+
+
+def render_prediction_audio(args: _PredictAudioCliArgs) -> None:
+    """Render prediction artifacts through the configured production backend.
+
+    :param args: Validated render configuration and artifact paths.
+    :raises RuntimeError: An always-on GUI config lacks a cached Pedalboard plugin.
+    """
+    spec = param_specs[args.param_spec_name]
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    renderer = make_audio_renderer(args)
+    render = _make_render_fn(args, renderer)
+
+    if args.gui_toggle_cadence != "always_on":
+        _render_prediction_artifacts(args, spec, render)
+        return
+    if not isinstance(renderer, PedalboardRenderer) or renderer.plugin is None:
+        raise RuntimeError("always-on GUI rendering requires a cached Pedalboard plugin")
+    run_with_editor_held_open(
+        renderer.plugin,
+        lambda: _render_prediction_artifacts(args, spec, render),
+    )
+
+
+def main(cli_args: list[str] | None = None) -> None:
+    """Parse the process request and render prediction artifacts.
+
+    :param cli_args: Explicit arguments for tests; ``None`` reads ``sys.argv``.
+    """
+    render_prediction_audio(CliApp.run(_PredictAudioCliArgs, cli_args=cli_args))
 
 
 if __name__ == "__main__":

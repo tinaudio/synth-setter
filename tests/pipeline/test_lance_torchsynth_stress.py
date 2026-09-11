@@ -24,6 +24,7 @@ from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.workspace import operator_workspace
+from tests.helpers.xvfb import install_failing_xvfb
 
 _SAMPLE_RATE = 22_050
 _DURATION_SECONDS = 0.5
@@ -37,10 +38,13 @@ def _torchsynth_render_cfg(**overrides: object) -> RenderConfig:
     :returns: Validated render config.
     """
     kwargs: dict[str, object] = {
-        "plugin_path": "torchsynth",
-        "plugin_state_path": "",
-        "param_spec_name": "torchsynth_adsr",
-        "renderer_version": package_version("torchsynth"),
+        "synth": {
+            "name": "torchsynth_adsr",
+            "param_spec_name": "torchsynth_adsr",
+            "plugin_path": "torchsynth",
+            "plugin_state_path": "",
+            "synth_version": package_version("torchsynth"),
+        },
         "renderer_backend": "torchsynth",
         "sample_rate": _SAMPLE_RATE,
         "channels": 2,
@@ -121,6 +125,29 @@ def test_make_lance_dataset_batch_boundary_sweep(
     )
 
     _assert_batch_boundary_shard(shard, samples_per_shard)
+
+
+def test_make_lance_dataset_applies_configured_signal_quantization(tmp_path: Path) -> None:
+    """Real rendering stores audio and mel tensors at their configured widths.
+
+    :param tmp_path: Destination directory for the shard.
+    """
+    shard = tmp_path / "shard.lance"
+
+    make_lance_dataset(
+        shard,
+        _torchsynth_render_cfg(
+            samples_per_shard=1,
+            samples_per_render_batch=1,
+            audio_dtype="float32",
+            mel_spec_dtype="float16",
+        ),
+    )
+
+    table = lance.dataset(str(shard)).to_table()
+    assert table.column("audio").combine_chunks().to_numpy_ndarray().dtype == np.float32
+    assert table.column(MEL_SPEC_FIELD).combine_chunks().to_numpy_ndarray().dtype == np.float16
+    assert table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray().dtype == np.float32
 
 
 def test_make_lance_dataset_rerun_overwrites_instead_of_appending(tmp_path: Path) -> None:
@@ -249,6 +276,8 @@ def _compose_stress_cfg(tmp_path: Path) -> DictConfig:
                 f"render.sample_rate={_SAMPLE_RATE}",
                 f"render.signal_duration_seconds={_DURATION_SECONDS}",
                 "render.min_loudness=-70.0",
+                "render.audio_dtype=float32",
+                "render.mel_spec_dtype=float16",
             ],
         )
         with open_dict(cfg):
@@ -294,9 +323,10 @@ def _assert_map_loader_round_trip(
     encoded_width = len(resolve_param_spec(param_spec_name))
     seen = 0
     for batch in datamodule.train_dataloader():
-        mel, params = batch["mel_spec"], batch["params"]
+        mel, params = batch["mel"], batch["params"]
         assert params.shape[1] == encoded_width
         assert mel.shape[0] == params.shape[0]
+        assert mel.dtype == params.dtype
         assert bool(mel.isfinite().all()) and bool(params.isfinite().all())
         seen += params.shape[0]
     assert seen == expected_train_rows
@@ -346,11 +376,16 @@ def test_from_hydra_torchsynth_multishard_finalize_dataloader_round_trip_returns
     :param fake_r2_remote: Activates the local-filesystem ``r2:`` remote.
     :param monkeypatch: Pins worker state, finalize auth, and a non-repository cwd.
     """
+    xvfb_marker = install_failing_xvfb(tmp_path, monkeypatch)
     run_root, spec = _generate_and_finalize_stress_run(tmp_path, fake_r2_remote, monkeypatch)
 
+    assert not xvfb_marker.exists()
     assert spec.num_shards == 4
     assert (run_root / "stats.npz").is_file()
     expected_rows = {"train": 12, "val": 6, "test": 6}
     _assert_finalized_split_rows(run_root, expected_rows)
+    train_schema = lance.dataset(str(run_root / "train.lance")).schema
+    assert train_schema.field("audio").type.value_type == pa.float32()
+    assert train_schema.field(MEL_SPEC_FIELD).type.value_type == pa.float16()
     # The map loader preserves ragged shard tails; the legacy batch-indexed path drops them.
     _assert_map_loader_round_trip(run_root, spec.render.param_spec_name, expected_rows["train"])

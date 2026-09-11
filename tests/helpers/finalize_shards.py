@@ -21,24 +21,28 @@ from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
-    DATASET_FIELD_DTYPES,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
+    dataset_field_dtypes,
     dataset_field_shapes,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from tests.helpers.lance_fixtures import with_preview_columns
 
-# sample_rate=100 keeps the mel front end at its minimum hop so shards stay tiny.
-_LANCE_SMOKE_RENDER: dict[str, str | int | float] = {
-    "plugin_path": "/fake/Plugin.vst3",
-    "plugin_state_path": "presets/surge-base.vstpreset",
-    "param_spec_name": "surge_simple",
-    "renderer_version": "1.0.0-test",
-    "sample_rate": 100,
+# The shortest MP3-supported rate and loudness-compatible duration keep shards small.
+_LANCE_SMOKE_RENDER: dict[str, Any] = {
+    "synth": {
+        "name": "surge_simple",
+        "param_spec_name": "surge_simple",
+        "plugin_path": "/fake/Plugin.vst3",
+        "plugin_state_path": "presets/surge-base.vstpreset",
+        "synth_version": "1.0.0-test",
+    },
+    "sample_rate": 8000,
     "channels": 2,
     "velocity": 100,
-    "signal_duration_seconds": 1.0,
+    "signal_duration_seconds": 0.4,
     "min_loudness": -55.0,
     "samples_per_render_batch": 4,
     "samples_per_shard": 4,
@@ -103,14 +107,17 @@ def build_multishard_lance_smoke_spec(
         "mask_degenerate_bins": mask_degenerate_bins,
         "r2": {"bucket": "intermediate-data"},
         "render": {
-            "plugin_path": "/fake/Plugin.vst3",
-            "plugin_state_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.0.0-test",
-            "sample_rate": 100,
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": "/fake/Plugin.vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.0.0-test",
+            },
+            "sample_rate": 8000,
             "channels": 2,
             "velocity": 100,
-            "signal_duration_seconds": 1.0,
+            "signal_duration_seconds": 0.01,
             "min_loudness": -55.0,
             "samples_per_render_batch": samples_per_shard,
             "samples_per_shard": samples_per_shard,
@@ -129,25 +136,24 @@ def smoke_shard_metadata(render: RenderConfig) -> ShardMetadata:
     :param render: Render config supplying the sidecar field values.
     :returns: Strict ``ShardMetadata`` with every render-derived field filled.
     """
-    return ShardMetadata(
-        velocity=render.velocity,
-        signal_duration_seconds=render.signal_duration_seconds,
-        sample_rate=render.sample_rate,
-        channels=render.channels,
-        min_loudness=render.min_loudness,
-        base_seed=render.base_seed,
-        sample_offset=render.sample_offset,
-        attempts_per_sample=render.attempts_per_sample,
-    )
+    return render.shard_metadata()
 
 
-def write_minimal_lance_shard(dest: Path, spec: DatasetSpec, num_rows: int | None = None) -> None:
+def write_minimal_lance_shard(
+    dest: Path,
+    spec: DatasetSpec,
+    num_rows: int | None = None,
+    *,
+    audio: np.ndarray | None = None,
+) -> None:
     """Write a structurally valid Lance shard for ``spec`` at ``dest``.
 
     :param dest: Filesystem path where the Lance file is written.
     :param spec: Lance spec whose render shape/dtypes define the shard contract.
     :param num_rows: Override the leading (row-count) dimension of every field;
         ``None`` keeps the spec's per-shard sample count.
+    :param audio: Source audio replacing the zero-filled fixture rows.
+    :raises ValueError: ``audio`` differs from the spec-derived audio shape.
     """
     from synth_setter.pipeline.data.lance_shard import (
         lance_schema,
@@ -161,21 +167,40 @@ def write_minimal_lance_shard(dest: Path, spec: DatasetSpec, num_rows: int | Non
     shapes = dataset_field_shapes(render, spec.num_params)
     if num_rows is not None:
         shapes = {field: (num_rows, *shape[1:]) for field, shape in shapes.items()}
-    schema = lance_schema(shapes, smoke_shard_metadata(render))
+    field_dtypes = dataset_field_dtypes(render)
+    schema = lance_schema(
+        shapes,
+        smoke_shard_metadata(render),
+        field_dtypes=field_dtypes,
+    )
+    audio_values = np.zeros(shapes[AUDIO_FIELD], dtype=field_dtypes[AUDIO_FIELD])
+    if audio is not None:
+        if audio.shape != shapes[AUDIO_FIELD]:
+            raise ValueError(f"audio shape {audio.shape} does not match {shapes[AUDIO_FIELD]}")
+        audio_values = np.ascontiguousarray(audio, dtype=field_dtypes[AUDIO_FIELD])
     arrays = {
-        AUDIO_FIELD: np.zeros(shapes[AUDIO_FIELD], dtype=DATASET_FIELD_DTYPES[AUDIO_FIELD]),
-        MEL_SPEC_FIELD: np.arange(
-            np.prod(shapes[MEL_SPEC_FIELD]),
-            dtype=DATASET_FIELD_DTYPES[MEL_SPEC_FIELD],
-        ).reshape(shapes[MEL_SPEC_FIELD]),
+        AUDIO_FIELD: audio_values,
+        MEL_SPEC_FIELD: (np.arange(np.prod(shapes[MEL_SPEC_FIELD]), dtype=np.float32) % 100)
+        .astype(field_dtypes[MEL_SPEC_FIELD])
+        .reshape(shapes[MEL_SPEC_FIELD]),
         PARAM_ARRAY_FIELD: np.zeros(
             shapes[PARAM_ARRAY_FIELD],
-            dtype=DATASET_FIELD_DTYPES[PARAM_ARRAY_FIELD],
+            dtype=field_dtypes[PARAM_ARRAY_FIELD],
         ),
     }
     # record_batch_from_arrays rejects empty batches, so a zero-row shard is
     # written as a schema-only dataset with no batches at all.
-    batches = [] if shapes[MEL_SPEC_FIELD][0] == 0 else [record_batch_from_arrays(arrays, schema)]
+    batches = (
+        []
+        if shapes[MEL_SPEC_FIELD][0] == 0
+        else [
+            record_batch_from_arrays(
+                with_preview_columns(arrays, render.sample_rate),
+                schema,
+                debug=None,
+            )
+        ]
+    )
     write_lance_dataset(dest, schema, batches)
 
 
@@ -307,7 +332,7 @@ def stub_finalize_lance_io(monkeypatch: pytest.MonkeyPatch) -> None:
     ``Overwrite`` commit needs real staged fragment data — neither of which the
     local-typed ``fake_r2_remote`` can serve. Stubbing winner selection (with a
     synthetic non-degenerate Welford state per shard) and the fragment commit
-    leaves ``stats.npz`` + ``dataset.json`` + ``dataset.complete`` as the only
+    leaves Welford state, derived stats, dataset card, and completion marker as the
     artifacts routed through the real ``r2_io.upload`` — enough to pin the
     marker-last ordering and artifact-logging contracts locally. The full commit
     is covered against real R2 in ``tests/integration/test_finalize_dataset_r2.py``.
@@ -327,7 +352,7 @@ def stub_finalize_lance_io(monkeypatch: pytest.MonkeyPatch) -> None:
         progress_callback: FinalizeProgressCallback | None = None,
     ) -> dict[int, CheckedLanceWinner]:
         rows = spec.render.samples_per_shard
-        shape = (spec.render.channels, 8, 8)
+        shape = dataset_field_shapes(spec.render, spec.num_params)[MEL_SPEC_FIELD][1:]
         # Non-degenerate m2 (variance == 1) so finalize's default degenerate-bin
         # check never raises for the smoke spec.
         welford = (

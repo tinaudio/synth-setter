@@ -47,8 +47,8 @@ stated. A blocked PR must always come with the case that justifies the block.
 
 Get the changed code and read enough of the surrounding code to judge it —
 callers, callees, and the invariants they rely on. `$BASE` and `$HEAD` are the
-PR's base- and head-commit SHAs (from `gh pr view <N> --json baseRefOid,headRefOid`,
-or as set by the harness).
+PR's base- and head-commit SHAs (from `gh api repos/<owner>/<repo>/pulls/<N> --jq .base.sha`
+and `gh pr view <N> --json headRefOid`, or as set by the harness).
 
 ```bash
 git diff --diff-filter=d "$BASE"..."$HEAD"
@@ -143,6 +143,10 @@ Return the standard fan-out report. **Severity:**
 - **WARN** — latent or lower-confidence: needs input the code doesn't yet
   receive, a fragile assumption that will break under a plausible change, or a
   defect you can describe but not tie to a concrete trigger.
+- **NIT** — not used by this checklist. A correctness reviewer that has a
+  concrete failure scenario owes at least a WARN; one that has no failure
+  scenario owes silence. Downgrading a defect to NIT is the failure mode this
+  posture exists to prevent.
 
 Every finding description MUST contain, in this order:
 
@@ -192,7 +196,8 @@ does not downgrade a genuine defect to WARN. Two cross-cutting disciplines from
 the steps above govern how a row's severity is finally set: a defect is BLOCK
 only when its trigger is **reachable today** (else WARN — latent; Step 3.4), and
 **every** finding must cite a concrete failure scenario or it is dropped
-(Step 2 / the Posture section). BLOCK = must fix before merge · WARN = advisory.
+(Step 2 / the Posture section). BLOCK = must fix before merge · WARN = should
+fix. This checklist never emits NIT.
 
 ## Notes
 

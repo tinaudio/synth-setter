@@ -9,6 +9,7 @@ container.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -37,30 +38,47 @@ def test_every_devcontainer_sets_mode_idle_for_attached_pid1(
 def test_every_devcontainer_has_post_create_command_attached_mode(
     devcontainer_json_paths: list[Path],
 ) -> None:
-    """Each devcontainer.json has postCreateCommand set."""
+    """Each devcontainer.json runs the shared post-create script.
+
+    A truthiness check passes for a placeholder; the script path is the contract.
+    """
     for path in devcontainer_json_paths:
-        config = _load(path)
-        assert config.get("postCreateCommand"), f"{path}: postCreateCommand is required"
+        command = _load(path).get("postCreateCommand")
+        rendered = " ".join(command) if isinstance(command, list) else str(command or "")
+        assert "post-create.sh" in rendered, (
+            f"{path}: postCreateCommand must invoke post-create.sh, got {command!r}"
+        )
 
 
 @pytest.mark.infra
 def test_every_devcontainer_has_remote_user_attached_mode(
     devcontainer_json_paths: list[Path],
 ) -> None:
-    """RemoteUser must be set so VSCode attaches as a real user."""
+    """RemoteUser must stay overridable via ``DEVCONTAINER_USER`` with a baked default.
+
+    A hardcoded user would satisfy truthiness but break per-developer attach.
+    """
     for path in devcontainer_json_paths:
-        config = _load(path)
-        assert config.get("remoteUser"), f"{path}: remoteUser is required"
+        remote_user = _load(path).get("remoteUser")
+        assert re.fullmatch(r"\$\{localEnv:DEVCONTAINER_USER:\w+\}", str(remote_user)), (
+            f"{path}: remoteUser must be ${{localEnv:DEVCONTAINER_USER:<default>}}, "
+            f"got {remote_user!r}"
+        )
 
 
 @pytest.mark.infra
 def test_every_devcontainer_has_workspace_folder_attached_mode(
     devcontainer_json_paths: list[Path],
 ) -> None:
-    """WorkspaceFolder must be set so the attached shell starts in the project."""
+    """WorkspaceFolder must be the in-image checkout path, identically across flavors.
+
+    A truthiness check would accept a stale path and land the attached shell outside the project.
+    """
     for path in devcontainer_json_paths:
-        config = _load(path)
-        assert config.get("workspaceFolder"), f"{path}: workspaceFolder is required"
+        workspace_folder = _load(path).get("workspaceFolder")
+        assert workspace_folder == "/home/build/synth-setter", (
+            f"{path}: unexpected workspaceFolder {workspace_folder!r}"
+        )
 
 
 @pytest.mark.infra

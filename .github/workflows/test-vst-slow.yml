@@ -23,6 +23,15 @@ on:
         description: "Docker image tag (e.g. dev-snapshot, dev-snapshot-<sha>)"
         required: false
         default: "dev-snapshot"
+      synth:
+        description: "VST matrix cell to run"
+        type: choice
+        options:
+          - all
+          - obxf
+          - surge_xt
+          - ultramaster_kr106
+        default: all
       publish_metrics:
         # Opt-in escape hatch so a maintainer can bootstrap the gh-pages
         # chart from a feature branch without merging to main first. The
@@ -37,12 +46,26 @@ on:
     # the ``gh-pages`` benchmark chart from this PR before merging to main.
     # Revert to ``[main]`` once the chart exists.
     branches: [main, test/vst-roundtrip-xfail-tests]
-    # Keep these paths in sync with the pull_request trigger below.
+    # GitHub Actions rejects YAML anchors, so the pull_request trigger repeats this
+    # list; `tests/infra/test_vst_slow_workflow_triggers.py` fails on any divergence.
     paths:
+      - "src/synth_setter/cli/generate_dataset.py"
       - "src/synth_setter/data/vst/**"
+      - "src/synth_setter/renderer_backend.py"
+      - "src/synth_setter/renderer_factory.py"
+      - "presets/*.fxp"
       - "tests/data/vst/**"
       - "tests/integration/test_parallel_shard_render_linux.py"
+      - "tests/conftest.py"
+      - "tests/test_eval.py"
+      - "tests/test_generate_dataset.py"
+      - "tests/test_train.py"
+      - "src/synth_setter/configs/conditioning/**"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
+      - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/pipeline/data/meanaudio.py"
+      - "src/synth_setter/pipeline/data/ssondo.py"
+      - "src/synth_setter/pipeline/data/t5gemma.py"
       # Cadence cross-field coverage the retired render-matrix gated — the
       # parallel-render cells below now cover it under real Surge (#1354).
       - "src/synth_setter/data/render_config.py"
@@ -52,16 +75,30 @@ on:
       - ".github/actions/prepare-docker-storage/**"
       - ".github/workflows/test-vst-slow.yml"
       - "pyproject.toml"
+      - "uv.lock"
   # render-matrix gated these paths at PR time; preserve that by running the
   # suite (incl. the parallel-render cadence cells) pre-merge. The benchmark
   # publish step is push/dispatch-only, so PRs never touch gh-pages (#1354).
-  # Keep this path list in sync with the push trigger above.
+  # Mirrors the push paths above; the trigger-parity test is the enforcement.
   pull_request:
     paths:
+      - "src/synth_setter/cli/generate_dataset.py"
       - "src/synth_setter/data/vst/**"
+      - "src/synth_setter/renderer_backend.py"
+      - "src/synth_setter/renderer_factory.py"
+      - "presets/*.fxp"
       - "tests/data/vst/**"
       - "tests/integration/test_parallel_shard_render_linux.py"
+      - "tests/conftest.py"
+      - "tests/test_eval.py"
+      - "tests/test_generate_dataset.py"
+      - "tests/test_train.py"
+      - "src/synth_setter/configs/conditioning/**"
       - "src/synth_setter/evaluation/compute_audio_metrics.py"
+      - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/pipeline/data/meanaudio.py"
+      - "src/synth_setter/pipeline/data/ssondo.py"
+      - "src/synth_setter/pipeline/data/t5gemma.py"
       - "src/synth_setter/data/render_config.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
       - "src/synth_setter/configs/render/**"
@@ -69,6 +106,7 @@ on:
       - ".github/actions/prepare-docker-storage/**"
       - ".github/workflows/test-vst-slow.yml"
       - "pyproject.toml"
+      - "uv.lock"
 
 concurrency:
   group: test-vst-slow-${{ github.ref }}
@@ -101,26 +139,73 @@ jobs:
             pytest_targets: >-
               tests/data/vst/test_generate_vst_dataset.py
               tests/data/vst/test_dawdreamer_dataset_e2e.py
+              tests/data/vst/test_surgepy_host_parity_e2e.py
               tests/data/vst/test_always_on_integration.py
               tests/data/vst/test_run_with_editor_held_open_real_plugin.py
               tests/data/vst/test_pedalboard_threading_contract.py
               tests/integration/test_parallel_shard_render_linux.py
+              tests/test_generate_dataset.py::test_from_hydra_claims_mode_parallel_real_vst_writes_consumable_shards
+          - synth: ultramaster_kr106
+            plugin_path: /usr/lib/vst3/Ultramaster KR-106.vst3
+            pytest_targets: >-
+              tests/data/vst/test_dawdreamer_dataset_e2e.py
+              tests/data/vst/test_generate_vst_dataset.py::test_make_dataset
           - synth: obxf
             plugin_path: /usr/lib/vst3/OB-Xf.vst3
             pytest_targets: tests/data/vst/test_generate_vst_dataset.py::test_make_dataset
 
     env:
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag || 'dev-snapshot' }}
+      RUN_EMBEDDING_E2E: ${{ matrix.synth == 'surge_xt' && github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
 
     steps:
+      - name: Select requested synth
+        id: select_synth
+        env:
+          REQUESTED_SYNTH: ${{ inputs.synth || 'all' }}
+          MATRIX_SYNTH: ${{ matrix.synth }}
+        run: |
+          if [[ "${REQUESTED_SYNTH}" == "all" || "${REQUESTED_SYNTH}" == "${MATRIX_SYNTH}" ]]; then
+            echo "selected=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "selected=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Checkout
+        if: steps.select_synth.outputs.selected == 'true'
         uses: actions/checkout@v6
+
+      - name: Set up R2 for gated embedding checkpoints
+        if: steps.select_synth.outputs.selected == 'true' && env.RUN_EMBEDDING_E2E == 'true'
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: "true"
+
+      # The all-embedding E2E preflights gated weights before spending time on a VST render.
+      - name: Hydrate gated embedding checkpoints
+        if: steps.select_synth.outputs.selected == 'true' && env.RUN_EMBEDDING_E2E == 'true'
+        run: |
+          set -euo pipefail
+          cache="${GITHUB_WORKSPACE}/.ci-model-cache/synth-setter/models/embeddings"
+          mkdir -p "${cache}"
+          for model in same-s same-l sa3-small-music; do
+            rclone copy --checksum "r2:intermediate-data/models/${model}" "${cache}/${model}"
+          done
+          test -f "${cache}/same-s/model.safetensors"
+          test -f "${cache}/same-l/model.safetensors"
+          test -f "${cache}/sa3-small-music/model.safetensors"
+          test -f "${cache}/sa3-small-music/t5gemma-b-b-ul2/model.safetensors"
 
       # Reset preloaded Docker state and use separate storage when the runner provides it.
       - name: Prepare Docker storage capacity
+        if: steps.select_synth.outputs.selected == 'true'
         uses: ./.github/actions/prepare-docker-storage
 
       - name: Pull image
+        if: steps.select_synth.outputs.selected == 'true'
         run: docker pull "$IMAGE"
 
       # Mirrors the headless plugin-load smoke check in
@@ -128,6 +213,7 @@ jobs:
       # in ``cpu-slow.yml``) — fails fast if the plugin / image / mount layout
       # is broken before the much-longer pytest run.
       - name: Smoke-test ${{ matrix.synth }} plugin load
+        if: steps.select_synth.outputs.selected == 'true'
         env:
           PLUGIN_PATH: ${{ matrix.plugin_path }}
         run: |
@@ -144,6 +230,7 @@ jobs:
             '
 
       - name: Run VST slow tests in Docker
+        if: steps.select_synth.outputs.selected == 'true'
         # Mount the PR's tests + src into the container so we test THIS
         # branch's code against the image's environment. Image has no
         # ENTRYPOINT (#721 dropped it for SkyPilot); CMD defaults to
@@ -167,23 +254,36 @@ jobs:
           PYTEST_TARGETS: ${{ matrix.pytest_targets }}
         run: |
           mkdir -p /tmp/bench
+          image_id="$(docker image inspect --format '{{.Id}}' "${IMAGE}")"
           docker run --rm \
             -v "${{ github.workspace }}:/home/build/synth-setter" \
             -v /tmp/bench:/bench \
             -e BENCHMARK_OUTPUT_DIR=/bench \
+            -e SURGE_PARITY_OUTPUT_DIR=/bench/surge-host-parity \
+            -e GITHUB_RUN_ID \
+            -e GITHUB_SHA \
+            -e "SYNTH_SETTER_BENCHMARK_IMAGE=${IMAGE}@${image_id}" \
             -e HYDRA_FULL_ERROR=1 \
-            -e "SYNTH_SETTER_PLUGIN_PATH=$PLUGIN_PATH" \
-            -e "SYNTH_SETTER_TEST_SYNTH=$TEST_SYNTH" \
-            -e "PYTEST_TARGETS=$PYTEST_TARGETS" \
-            "$IMAGE" \
+            -e "SYNTH_SETTER_PLUGIN_PATH=${PLUGIN_PATH}" \
+            -e "SYNTH_SETTER_TEST_SYNTH=${TEST_SYNTH}" \
+            -e "PYTEST_TARGETS=${PYTEST_TARGETS}" \
+            -e "RUN_EMBEDDING_E2E=${RUN_EMBEDDING_E2E}" \
+            -e "SYNTH_SETTER_REQUIRE_EMBEDDING_E2E=${RUN_EMBEDDING_E2E}" \
+            -e XDG_CACHE_HOME=/home/build/synth-setter/.ci-model-cache \
+            "${IMAGE}" \
             bash -c '
               set -euo pipefail
               cd /home/build/synth-setter
               git config --global --add safe.directory /home/build/synth-setter
-              UV_PROJECT_ENVIRONMENT="$VIRTUAL_ENV" \
+              UV_PROJECT_ENVIRONMENT="${VIRTUAL_ENV}" \
                 uv sync --frozen --extra cu128 --no-default-groups --group dev --no-install-project
               uv pip install --no-deps -e .
-              read -ra targets <<< "$PYTEST_TARGETS"
+              read -ra targets <<< "${PYTEST_TARGETS}"
+              if [ "${RUN_EMBEDDING_E2E}" = "true" ]; then
+                targets+=(tests/test_eval.py::test_evaluate_ssondo_conditioning_real_e2e)
+                targets+=(tests/test_eval.py::test_train_eval_meanaudio_conditioning_real_lance_returns_bounded_metric)
+                targets+=(tests/test_train.py::test_train_all_embedding_conditioning_and_eval_real_e2e)
+              fi
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \
                   --cov=src --cov-branch --cov-report=xml --cov-report=term \
@@ -193,7 +293,7 @@ jobs:
       # coverage.xml is written inside the container at the workspace mount,
       # so it lands at ${{ github.workspace }}/coverage.xml on the host.
       - name: Upload coverage to Codecov
-        if: always() && hashFiles('coverage.xml') != ''
+        if: always() && steps.select_synth.outputs.selected == 'true' && hashFiles('coverage.xml') != ''
         uses: ./.github/actions/upload-coverage
         with:
           flags: vst-${{ matrix.synth }}
@@ -207,14 +307,21 @@ jobs:
         # Skipped cleanly if a file is missing (test deselected, xfailed
         # before emit, etc). Surge-only: the benchmark buckets (Issue #703)
         # track Surge's noise floor; the obxf cell renders but never publishes.
-        if: always() && matrix.synth == 'surge_xt'
+        if: always() && steps.select_synth.outputs.selected == 'true' && matrix.synth == 'surge_xt'
         run: |
-          for f in vst-noise-floor-1-preset-n-renders.json vst-noise-floor-random-preset-replay.json; do
-            if [ -f "/tmp/bench/$f" ]; then
-              cp "/tmp/bench/$f" "${{ github.workspace }}/$f"
-              echo "$f captured (size: $(wc -c < "${{ github.workspace }}/$f") bytes)"
+          files=(
+            surge-host-parity-diverse-patches.json
+            surge-host-parity-random-patches.json
+            surge-host-parity-repeated-patch.json
+            vst-noise-floor-1-preset-n-renders.json
+            vst-noise-floor-random-preset-replay.json
+          )
+          for f in "${files[@]}"; do
+            if [ -f "/tmp/bench/${f}" ]; then
+              cp "/tmp/bench/${f}" "${{ github.workspace }}/${f}"
+              echo "${f} captured (size: $(wc -c < "${{ github.workspace }}/${f}") bytes)"
             else
-              echo "no $f written by test run — corresponding publish step will be skipped"
+              echo "no ${f} written by test run — corresponding publish step will be skipped"
             fi
           done
 
@@ -223,15 +330,70 @@ jobs:
       # benchmark buckets (#703). ``if-no-files-found: ignore`` keeps a
       # deselected/xfailed run from failing the upload.
       - name: Upload benchmark JSON for the publish job
-        if: always() && matrix.synth == 'surge_xt'
+        if: always() && steps.select_synth.outputs.selected == 'true' && matrix.synth == 'surge_xt'
         uses: actions/upload-artifact@v4
         with:
           name: vst-benchmark-json
           path: |
+            ${{ github.workspace }}/surge-host-parity-diverse-patches.json
+            ${{ github.workspace }}/surge-host-parity-random-patches.json
+            ${{ github.workspace }}/surge-host-parity-repeated-patch.json
             ${{ github.workspace }}/vst-noise-floor-1-preset-n-renders.json
             ${{ github.workspace }}/vst-noise-floor-random-preset-replay.json
           if-no-files-found: ignore
           retention-days: 1
+
+      - name: Upload Surge host comparison directory
+        if: always() && steps.select_synth.outputs.selected == 'true' && matrix.synth == 'surge_xt'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: surge-host-parity-comparison
+          path: /tmp/bench/surge-host-parity
+          if-no-files-found: error
+          retention-days: 14
+
+  upload_surge_comparison:
+    name: Upload Surge host comparison to R2
+    needs: run_vst_slow_tests
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      (inputs.synth == '' || inputs.synth == 'all' || inputs.synth == 'surge_xt')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout trusted workflow actions
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+
+      - name: Download Surge host comparison
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: surge-host-parity-comparison
+          path: surge-host-parity
+
+      - name: Configure R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: "true"
+
+      - name: Upload comparison directory with checksums
+        run: |
+          set -euo pipefail
+          upload_datetime="$(date -u '+%Y-%m-%dT%H-%M-%SZ')"
+          r2_destination="r2:experiments/surge-host-parity/${upload_datetime}-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rclone copy surge-host-parity "${r2_destination}" --checksum
+          rclone check surge-host-parity "${r2_destination}" --checksum --one-way
+          printf '{"git_sha":"%s","run_id":"%s","run_attempt":"%s"}\n' \
+            "${GITHUB_SHA}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}" > benchmark.complete
+          rclone copyto benchmark.complete "${r2_destination}/benchmark.complete" --checksum
+          echo "### Surge host comparison" >> "${GITHUB_STEP_SUMMARY}"
+          echo "\`${r2_destination}\`" >> "${GITHUB_STEP_SUMMARY}"
 
   publish_benchmarks:
     name: Publish VST benchmarks to gh-pages
@@ -248,7 +410,7 @@ jobs:
       contents: write
     if: |
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test/vst-roundtrip-xfail-tests')) ||
-      (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true)
+      (github.event_name == 'workflow_dispatch' && inputs.publish_metrics == true && (inputs.synth == 'all' || inputs.synth == 'surge_xt'))
 
     steps:
       - name: Checkout
@@ -282,6 +444,51 @@ jobs:
           # Warn-only initially. Flip to ``true`` once the noise floor of
           # the five series is well-characterised and the alert threshold
           # is tuned.
+          fail-on-alert: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish repeated-patch Surge host parity metrics
+        if: hashFiles('surge-host-parity-repeated-patch.json') != ''
+        uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
+        with:
+          name: Surge host parity (repeated patch)
+          tool: customSmallerIsBetter
+          output-file-path: surge-host-parity-repeated-patch.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          auto-push: true
+          alert-threshold: "150%"
+          comment-on-alert: true
+          fail-on-alert: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish diverse-patch Surge host parity metrics
+        if: hashFiles('surge-host-parity-diverse-patches.json') != ''
+        uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
+        with:
+          name: Surge host parity (diverse patches)
+          tool: customSmallerIsBetter
+          output-file-path: surge-host-parity-diverse-patches.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          auto-push: true
+          alert-threshold: "150%"
+          comment-on-alert: true
+          fail-on-alert: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish random-patch Surge host diagnostics
+        if: hashFiles('surge-host-parity-random-patches.json') != ''
+        uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372 # v1.22.0
+        with:
+          name: Surge host diagnostics (random patches)
+          tool: customSmallerIsBetter
+          output-file-path: surge-host-parity-random-patches.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          auto-push: true
+          alert-threshold: "150%"
+          comment-on-alert: true
           fail-on-alert: false
           github-token: ${{ secrets.GITHUB_TOKEN }}
 

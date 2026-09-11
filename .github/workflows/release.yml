@@ -15,6 +15,7 @@ jobs:
   release:
     if: "!contains(github.event.head_commit.message, 'chore(release)')"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     concurrency:
       group: release-${{ github.ref }}
       cancel-in-progress: false
@@ -22,17 +23,61 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/create-github-app-token@v1
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
         id: app-token
         with:
           app-id: ${{ secrets.APPROVAL_BOT_APP_ID }}
           private-key: ${{ secrets.APPROVAL_BOT_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
+          ref: main
           token: ${{ steps.app-token.outputs.token }}
 
-      - uses: python-semantic-release/python-semantic-release@v9
+      - name: Record release base
+        id: release-base
+        run: echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: python-semantic-release/python-semantic-release@21ed7fa03e4a17ac49406eff4b60d5ad050fbdc2 # v9.21.2
+        id: release
+        continue-on-error: true
         with:
           github_token: ${{ steps.app-token.outputs.token }}
+
+      - name: Recover a stale release checkout
+        id: recover-release
+        if: steps.release.outcome == 'failure'
+        env:
+          RELEASE_BASE: ${{ steps.release-base.outputs.base }}
+          RELEASE_RECOVERY_ALLOWED: "true"
+        run: scripts/ci/recover_stale_release.sh
+
+      - uses: python-semantic-release/python-semantic-release@21ed7fa03e4a17ac49406eff4b60d5ad050fbdc2 # v9.21.2
+        id: retry-release
+        if: steps.recover-release.outcome == 'success'
+        continue-on-error: true
+        with:
+          github_token: ${{ steps.app-token.outputs.token }}
+
+      - name: Fail safely when the retry is superseded
+        id: finalize-stale-release
+        if: steps.retry-release.outcome == 'failure'
+        env:
+          FAIL_AFTER_RECOVERY: "true"
+          RELEASE_BASE: ${{ steps.recover-release.outputs.base }}
+          RELEASE_RECOVERY_ALLOWED: "true"
+        run: scripts/ci/recover_stale_release.sh
+
+      - name: Enforce a successful release attempt
+        id: enforce-release-outcome
+        if: always()
+        env:
+          FIRST_OUTCOME: ${{ steps.release.outcome }}
+          RETRY_OUTCOME: ${{ steps.retry-release.outcome }}
+        run: |
+          if [[ "$FIRST_OUTCOME" == "success" || "$RETRY_OUTCOME" == "success" ]]; then
+            exit 0
+          fi
+          echo "Neither Semantic Release attempt completed successfully." >&2
+          exit 1

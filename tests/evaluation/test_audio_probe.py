@@ -17,25 +17,59 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import NoReturn
 
+import numpy as np
 import pytest
 import torch
 
+from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
 from synth_setter.evaluation import audio_probe
-from synth_setter.evaluation.audio_probe import (
-    ProbeRenderSettings,
-    _render_argv,
-    _staged_sample_count,
-    run_audio_probe,
+from synth_setter.evaluation.audio_probe import _render_argv, _staged_sample_count, run_audio_probe
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.synth_spec import SynthName, SynthSpec
+
+_PYFDN_SETTINGS = RenderConfig(
+    synth=SynthSpec(
+        name=SynthName("pyfdn_n8_mono_householder"),
+        param_spec_name=ParamSpecName("pyfdn_n8_mono_householder"),
+        plugin_path="pyfdn",
+        plugin_state_path="",
+        synth_version="0.4.2",
+    ),
+    renderer_backend="pyfdn",
+    pyfdn_excitation="impulse",
+    sample_rate=44_100,
+    channels=1,
+    velocity=0,
+    signal_duration_seconds=4.0,
+    min_loudness=-100.0,
+    audio_dtype="float32",
+    mel_spec_dtype="float32",
+    samples_per_render_batch=1,
+    samples_per_shard=1,
+    param_sample_cadence="sample",
+    plugin_reload_cadence="render",
+    gui_toggle_cadence="never",
 )
 
-_SETTINGS = ProbeRenderSettings(
-    param_spec_name="surge_4",
-    plugin_state_path="presets/surge-mini.vstpreset",
-    plugin_path="plugins/Surge XT.vst3",
-    sample_rate=8000.0,
+_SETTINGS = RenderConfig(
+    synth=SynthSpec(
+        name=SynthName("surge_4"),
+        param_spec_name=ParamSpecName("surge_4"),
+        plugin_path="plugins/Surge XT.vst3",
+        plugin_state_path="presets/surge-mini.vstpreset",
+        synth_version="1.3.4",
+    ),
+    renderer_backend="dawdreamer",
+    sample_rate=8000,
     channels=2,
     velocity=100,
     signal_duration_seconds=0.1,
+    min_loudness=-55.0,
+    samples_per_render_batch=1,
+    samples_per_shard=1,
+    plugin_reload_cadence="render",
+    gui_toggle_cadence="never",
 )
 
 
@@ -62,7 +96,7 @@ def test_staged_sample_count_returns_pred_row_count(tmp_path: Path) -> None:
 
 
 def test_render_argv_forwards_settings_and_rerenders_target(tmp_path: Path) -> None:
-    """The argv names both probe subdirs, every render field, and --rerender_target.
+    """The argv names both probe subdirs, every render field, and target re-rendering.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
@@ -71,31 +105,19 @@ def test_render_argv_forwards_settings_and_rerenders_target(tmp_path: Path) -> N
 
     assert str(tmp_path / "predictions") in argv
     assert str(tmp_path / "audio") in argv
-    assert "--rerender_target" in argv
+    assert argv[argv.index("--rerender-target") + 1] == "True"
     for flag, value in (
-        ("--param_spec", "surge_4"),
-        ("--plugin_state_path", "presets/surge-mini.vstpreset"),
-        ("--plugin_path", "plugins/Surge XT.vst3"),
-        ("--sample_rate", "8000.0"),
+        ("--synth.param-spec-name", "surge_4"),
+        ("--synth.plugin-state-path", "presets/surge-mini.vstpreset"),
+        ("--synth.plugin-path", "plugins/Surge XT.vst3"),
+        ("--renderer-backend", "dawdreamer"),
+        ("--plugin-reload-cadence", "render"),
+        ("--sample-rate", "8000"),
         ("--channels", "2"),
         ("--velocity", "100"),
-        ("--signal_duration_seconds", "0.1"),
+        ("--signal-duration-seconds", "0.1"),
     ):
         assert argv[argv.index(flag) + 1] == value
-
-
-def test_render_argv_omits_unset_optional_fields(tmp_path: Path) -> None:
-    """``None`` render fields stay off the argv so the CLI's defaults apply.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    settings = ProbeRenderSettings(param_spec_name="surge_4", plugin_state_path="p.vstpreset")
-
-    with ExitStack() as stack:
-        argv = _render_argv(tmp_path, settings, stack)
-
-    for flag in ("--plugin_path", "--sample_rate", "--channels", "--velocity"):
-        assert flag not in argv
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="wrapper is prepended on Linux only")
@@ -183,6 +205,79 @@ def test_run_audio_probe_returns_namespaced_metrics_and_uploads(
     assert "metrics/aggregated_metrics.csv" in uploaded
     assert not [p for p in uploaded if p.endswith(".pt")], (
         f"staged tensors must stay local, got {uploaded}"
+    )
+
+
+def test_run_audio_probe_pyfdn_enables_reverb_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The validated pyFDN backend selects specialized metrics in the worker.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces subprocess execution while retaining its argv.
+    """
+    _stage(tmp_path)
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    monkeypatch.setattr(
+        audio_probe.subprocess,
+        "run",
+        _fake_probe_subprocesses(tmp_path, calls),
+    )
+
+    run_audio_probe(tmp_path, 1, settings=_PYFDN_SETTINGS, upload_uri=None)
+
+    metrics_argv = calls[1][0]
+    assert metrics_argv[metrics_argv.index("--renderer-backend") + 1] == "pyfdn"
+
+
+@pytest.mark.slow
+def test_run_audio_probe_pyfdn_real_chain_returns_reverb_metrics(tmp_path: Path) -> None:
+    """The production render-and-score chain emits finite pyFDN reverb metrics.
+
+    :param tmp_path: Isolated probe directory for real subprocess artifacts.
+    """
+    first_params, first_notes = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(
+        np.random.default_rng(31)
+    )
+    second_params, second_notes = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(
+        np.random.default_rng(37)
+    )
+    rows = np.stack(
+        [
+            PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encoded_to_model(
+                PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encode(first_params, first_notes)
+            ),
+            PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encoded_to_model(
+                PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.encode(second_params, second_notes)
+            ),
+        ]
+    )
+    predictions = tmp_path / "predictions"
+    predictions.mkdir()
+    torch.save(torch.from_numpy(rows), predictions / "pred-0.pt")
+    torch.save(torch.from_numpy(rows.copy()), predictions / "target-params-0.pt")
+
+    metrics = run_audio_probe(
+        tmp_path,
+        1,
+        settings=_PYFDN_SETTINGS,
+        upload_uri=None,
+        num_workers=1,
+    )
+
+    assert metrics["val_audio/joint_time_frequency_ot_mean"] == pytest.approx(0.0)
+    assert metrics["val_audio/pyfdn_match_cumulative_energy_mean"] == pytest.approx(0.0)
+    assert np.isfinite(metrics["val_audio/pyfdn_flat_spectrogram_pred_mean"])
+    reverb_metrics = {
+        key: value for key, value in metrics.items() if key.startswith("val_audio/octave_")
+    }
+    assert reverb_metrics == pytest.approx(
+        {
+            "val_audio/octave_edc_rmse_db_mean": 0.0,
+            "val_audio/octave_edc_rmse_db_std": 0.0,
+            "val_audio/octave_rt60_log_rmse_mean": 0.0,
+            "val_audio/octave_rt60_log_rmse_std": 0.0,
+        }
     )
 
 

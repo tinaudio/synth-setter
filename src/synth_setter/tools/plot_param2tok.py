@@ -1,4 +1,4 @@
-"""CLI for visualising param-to-token projections of a trained KSin model."""
+"""CLI for visualising param-to-token projections of a trained model."""
 
 import os
 from pathlib import Path
@@ -48,6 +48,14 @@ def get_state_dict(ckpt_file: Path, map_location: str = "cuda") -> dict:
     return state_dict
 
 
+def _require_learnt_projection(projection: object) -> LearntProjection:
+    if not isinstance(projection, LearntProjection):
+        raise TypeError(
+            f"plot_param2tok requires LearntProjection; got {type(projection).__name__}"
+        )
+    return projection
+
+
 def instantiate_model(
     model_cfg: DictConfig, ckpt_file: Path, map_location: str = "cuda"
 ) -> torch.nn.Module:
@@ -57,13 +65,15 @@ def instantiate_model(
     model = hydra.utils.instantiate(model_cfg)
 
     logger.info("Model instantiated")
+    projection = getattr(getattr(model, "vector_field", None), "projection", None)
+    _require_learnt_projection(projection)
     model.to(device=map_location)
 
     state_dict = get_state_dict(ckpt_file, map_location=map_location)
 
     logger.info("Mapping state dict to params")
     model.setup(None)
-    model.load_state_dict(state_dict, strict=False)
+    model.load_state_dict(state_dict, strict=True)
 
     return model
 
@@ -153,24 +163,13 @@ RENAMES = {
 }
 
 
-def kosc_intervals(spec: str):
-    _, k = spec.rsplit("_", 1)
-    k = int(k)
-
-    return [("Frequency", k), ("Amplitude", k), ("Waveform", k)]
-
-
 def get_labels(spec: str):
-    if spec.startswith("k_"):
-        return kosc_intervals(spec)
-
     param_spec = param_specs[spec]
 
-    synth_intervals = [(p.name, len(p)) for p in param_spec.synth_params]
-    note_intervals = [(p.name, len(p)) for p in param_spec.note_params]
-    intervals = synth_intervals + note_intervals
-
-    intervals = [(strip_scene_id(n), l) for n, l in intervals]
+    intervals = [
+        (strip_scene_id(param.name), span.stop - span.start)
+        for param, span in param_spec.encoded_slices()
+    ]
     true_intervals = []
 
     current_prefix = None
@@ -335,9 +334,10 @@ def plot_assignment(proj: LearntProjection, spec: str):
 
 
 def cosine_self_sim(x: np.ndarray) -> np.ndarray:
-    dot_prod = np.einsum("ik,jk->ij", x, x)
-    norm = np.einsum("ik,ik->i", x, x)
-    return dot_prod / norm
+    vectors = x.astype(np.float64)
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    normalized = np.divide(vectors, norms, out=np.zeros_like(vectors), where=norms != 0)
+    return normalized @ normalized.T
 
 
 def plot_embeds(proj: LearntProjection, spec: str):
@@ -386,7 +386,8 @@ def plot_embeds(proj: LearntProjection, spec: str):
     return fig
 
 
-def plot_param2tok(proj: LearntProjection, out_dir: str, spec: str):
+def plot_param2tok(proj: LearntProjection, out_dir: str, spec: str) -> None:
+    proj = _require_learnt_projection(proj)
     logger.info("Plotting assignment")
     assignment_fig = plot_assignment(proj, spec)
     logger.info("Plotting done")

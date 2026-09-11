@@ -15,10 +15,19 @@ from typing import Literal
 import pytest
 from lightning import Callback
 from omegaconf import DictConfig, OmegaConf, open_dict
+from pydantic import ValidationError
 
-from synth_setter.cli.train import _configure_val_audio_probe, _derive_probe_uri
+from synth_setter.cli.train import (
+    _checkpoint_prefix_uri,
+    _configure_val_audio_probe,
+    _derive_probe_uri,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.utils.callbacks import ValAudioProbe
+
+_LAUNCH_NAMESPACE = f"train-20260720T000000000Z-{'0' * 32}"
+_PLUGIN_PATH = "plugins/Surge XT.vst3"
+_PRESET_PATH = "presets/surge-base.vstpreset"
 
 
 @pytest.fixture(autouse=True)
@@ -30,19 +39,44 @@ def _skip_r2_auth_ping(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
 
 
+@pytest.fixture(autouse=True)
+def _render_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Run each test from a workspace holding the default synth's bundle and preset.
+
+    The probe pre-flight resolves the declared relative paths against the process
+    CWD, so a stub workspace keeps these tests independent of whether a real
+    ``plugins/`` mirror exists (it is gitignored and absent on CI runners).
+
+    :param tmp_path: Root of the stub workspace.
+    :param monkeypatch: Switches the process CWD to it.
+    :returns: The stub workspace root.
+    """
+    (tmp_path / _PLUGIN_PATH).mkdir(parents=True)
+    (tmp_path / _PRESET_PATH).parent.mkdir(parents=True)
+    (tmp_path / _PRESET_PATH).write_bytes(b"stub preset")
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
 def _cfg(
     *,
     enabled: bool | Literal["auto"],
     with_render: bool = True,
+    with_synth: bool = True,
     output_dir: str = "/runs/out",
-    datamodule: dict[str, str | None] | None = None,
+    plugin_path: str = _PLUGIN_PATH,
+    plugin_state_path: str = _PRESET_PATH,
+    renderer_backend: str = "pedalboard",
 ) -> DictConfig:
     """Build the minimal train cfg slice ``_configure_val_audio_probe`` reads.
 
     :param enabled: Value for ``training.val_audio_probe``.
     :param with_render: When ``False``, omit the ``render`` group entirely.
+    :param with_synth: When ``False``, omit the root ``synth`` group (#2565).
     :param output_dir: Value for ``paths.output_dir``.
-    :param datamodule: Optional ``datamodule`` group; ``None`` omits it entirely.
+    :param plugin_path: Value for ``synth.plugin_path``.
+    :param plugin_state_path: Value for ``synth.plugin_state_path``.
+    :param renderer_backend: Value for ``render.renderer_backend``.
     :returns: Composed cfg fragment.
     """
     cfg = OmegaConf.create(
@@ -53,19 +87,27 @@ def _cfg(
             "training": {"val_audio_probe": enabled, "val_audio_probe_samples": 5},
         }
     )
-    if datamodule is not None:
+    if with_synth:
         with open_dict(cfg):
-            cfg.datamodule = datamodule
+            cfg.synth = {
+                "name": "surge_xt",
+                "param_spec_name": "surge_xt",
+                "plugin_state_path": plugin_state_path,
+                "plugin_path": plugin_path,
+                "synth_version": "1.3.4",
+            }
     if with_render:
         with open_dict(cfg):
             cfg.render = {
-                "param_spec_name": "surge_xt",
-                "plugin_state_path": "presets/surge-base.vstpreset",
-                "plugin_path": "plugins/Surge XT.vst3",
+                "renderer_backend": renderer_backend,
                 "sample_rate": 44100,
                 "channels": 2,
                 "velocity": 100,
                 "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "samples_per_render_batch": 1,
+                "samples_per_shard": 1,
+                "gui_toggle_cadence": "never",
             }
     return cfg
 
@@ -74,7 +116,7 @@ def test_configure_val_audio_probe_appends_nothing_when_disabled() -> None:
     """False leaves the callback list untouched."""
     callbacks: list[Callback] = []
 
-    _configure_val_audio_probe(_cfg(enabled=False), callbacks)
+    _configure_val_audio_probe(_cfg(enabled=False), callbacks, _LAUNCH_NAMESPACE)
 
     assert callbacks == []
 
@@ -86,7 +128,7 @@ def test_configure_val_audio_probe_appends_nothing_when_setting_absent() -> None
     with open_dict(cfg):
         del cfg.training.val_audio_probe
 
-    _configure_val_audio_probe(cfg, callbacks)
+    _configure_val_audio_probe(cfg, callbacks, _LAUNCH_NAMESPACE)
 
     assert callbacks == []
 
@@ -95,7 +137,7 @@ def test_configure_val_audio_probe_appends_probe_when_enabled() -> None:
     """Enabling the flag wires exactly one ValAudioProbe under the run's output dir."""
     callbacks: list[Callback] = []
 
-    _configure_val_audio_probe(_cfg(enabled=True), callbacks)
+    _configure_val_audio_probe(_cfg(enabled=True), callbacks, _LAUNCH_NAMESPACE)
 
     assert len(callbacks) == 1
     probe = callbacks[0]
@@ -104,17 +146,75 @@ def test_configure_val_audio_probe_appends_probe_when_enabled() -> None:
     assert probe.probe_root == Path("/runs/out") / "val_audio_probe"
 
 
+def test_configure_val_audio_probe_forwards_validated_render_config() -> None:
+    """The callback receives both synth identity and renderer settings."""
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(_cfg(enabled=True), callbacks, _LAUNCH_NAMESPACE)
+
+    probe = callbacks[0]
+    assert isinstance(probe, ValAudioProbe)
+    settings = probe._probe_fn.keywords["settings"]  # noqa: SLF001
+    assert settings.param_spec_name == "surge_xt"
+    assert settings.plugin_state_path == "presets/surge-base.vstpreset"
+    assert settings.synth.synth_version == "1.3.4"
+    assert settings.sample_rate == 44100
+
+
 def test_configure_val_audio_probe_raises_when_render_group_missing() -> None:
     """Enabling the probe without a render group fails with a directed error."""
     with pytest.raises(ValueError, match="render"):
-        _configure_val_audio_probe(_cfg(enabled=True, with_render=False), [])
+        _configure_val_audio_probe(_cfg(enabled=True, with_render=False), [], _LAUNCH_NAMESPACE)
 
 
-def test_derive_probe_uri_uses_bucket_and_run_config_id() -> None:
-    """The snapshot prefix derives from r2.bucket under probes/."""
-    uri = _derive_probe_uri(_cfg(enabled=True))
+def test_probe_uri_isolates_independent_same_config_launches() -> None:
+    """Separate launches of one config archive probes under separate namespaces."""
+    cfg = _cfg(enabled=True)
+    first_namespace = f"train-20260715T000000000Z-{'0' * 31}1"
+    second_namespace = f"train-20260715T000001000Z-{'0' * 31}2"
 
-    assert uri.startswith("r2://intermediate-data/probes/")
+    first = _derive_probe_uri(cfg, first_namespace)
+    second = _derive_probe_uri(cfg, second_namespace)
+
+    assert first == f"r2://intermediate-data/probes/train/{first_namespace}"
+    assert second == f"r2://intermediate-data/probes/train/{second_namespace}"
+    assert first != second
+
+
+def test_probe_uri_resume_uses_new_launch_namespace_for_recovered_run() -> None:
+    """A resumed W&B run preserves its ID but starts a new probe launch namespace."""
+    cfg = _cfg(enabled=True)
+    recovered_run_id = "train-20260715T000000000Z"
+
+    source = _derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}1")
+    resumed = _derive_probe_uri(cfg, f"{recovered_run_id}-{'0' * 31}2")
+
+    assert source != resumed
+    assert f"/{recovered_run_id}-" in source
+    assert f"/{recovered_run_id}-" in resumed
+
+
+def test_derive_probe_uri_shares_namespace_segment_with_checkpoint_prefix() -> None:
+    """One launch namespace names both probe and recovery-checkpoint prefixes."""
+    cfg = _cfg(enabled=True)
+
+    probe_uri = _derive_probe_uri(cfg, _LAUNCH_NAMESPACE)
+    checkpoint_prefix = _checkpoint_prefix_uri(cfg, _LAUNCH_NAMESPACE)
+
+    assert probe_uri.endswith(f"/{_LAUNCH_NAMESPACE}")
+    assert checkpoint_prefix.endswith(f"/{_LAUNCH_NAMESPACE}")
+
+
+def test_configure_val_audio_probe_namespaces_upload_uri_without_durability() -> None:
+    """Probe namespacing does not depend on checkpoint durability."""
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(_cfg(enabled=True), callbacks, _LAUNCH_NAMESPACE)
+
+    probe = callbacks[0]
+    assert isinstance(probe, ValAudioProbe)
+    upload_uri = probe._probe_fn.keywords["upload_uri"]  # noqa: SLF001
+    assert upload_uri == f"r2://intermediate-data/probes/train/{_LAUNCH_NAMESPACE}"
 
 
 @pytest.mark.parametrize(
@@ -129,66 +229,23 @@ def test_configure_val_audio_probe_rejects_non_positive_int_samples(bad_samples:
     cfg.training.val_audio_probe_samples = bad_samples
 
     with pytest.raises(ValueError, match="positive integer"):
-        _configure_val_audio_probe(cfg, [])
+        _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
 
-def test_configure_val_audio_probe_rejects_render_spec_mismatching_datamodule() -> None:
-    """A render spec that cannot decode the model's output layout fails at configure time.
-
-    A ``surge_simple`` model probed with ``render=surge_xt`` decodes 92-dim
-    predictions against the 164-param spec: every probe cycle dies in the
-    subprocess and the run silently produces no audio metrics (#1990).
-    """
-    cfg = _cfg(enabled=True, datamodule={"param_spec_name": "surge_simple"})
-
-    with pytest.raises(ValueError) as excinfo:
-        _configure_val_audio_probe(cfg, [])
-
-    assert "render.param_spec_name is 'surge_xt'" in str(excinfo.value)
-    assert "datamodule.param_spec_name='surge_simple'" in str(excinfo.value)
+def test_configure_val_audio_probe_raises_when_synth_group_missing() -> None:
+    """A render group without the root synth identity fails with a directed error (#2565)."""
+    with pytest.raises(ValueError, match="synth=<name>"):
+        _configure_val_audio_probe(_cfg(enabled=True, with_synth=False), [], _LAUNCH_NAMESPACE)
 
 
-def test_configure_val_audio_probe_accepts_render_spec_matching_datamodule() -> None:
-    """A render spec matching the datamodule's spec wires the probe normally."""
-    callbacks: list[Callback] = []
-
-    _configure_val_audio_probe(
-        _cfg(enabled=True, datamodule={"param_spec_name": "surge_xt"}), callbacks
-    )
-
-    assert len(callbacks) == 1
-    assert isinstance(callbacks[0], ValAudioProbe)
-
-
-def test_configure_val_audio_probe_rejects_render_group_missing_spec_key() -> None:
-    """A render group without ``param_spec_name`` fails and the message says it is unset."""
-    cfg = _cfg(enabled=True, datamodule={"param_spec_name": "surge_simple"})
+def test_configure_val_audio_probe_rejects_synth_missing_param_spec_name() -> None:
+    """A malformed synth identity fails before probe construction."""
+    cfg = _cfg(enabled=True)
     with open_dict(cfg):
-        del cfg.render.param_spec_name
+        del cfg.synth.param_spec_name
 
-    with pytest.raises(ValueError) as excinfo:
-        _configure_val_audio_probe(cfg, [])
-
-    assert "render.param_spec_name is unset" in str(excinfo.value)
-
-
-@pytest.mark.parametrize(
-    "datamodule",
-    [{"batch_size": "8"}, {"param_spec_name": None}],
-    ids=["key-absent", "key-null"],
-)
-def test_configure_val_audio_probe_skips_spec_check_when_datamodule_has_no_spec(
-    datamodule: dict[str, str | None],
-) -> None:
-    """A datamodule without a ``param_spec_name`` value (non-VST) leaves the guard inert.
-
-    :param datamodule: Datamodule group variant carrying no usable spec name.
-    """
-    callbacks: list[Callback] = []
-
-    _configure_val_audio_probe(_cfg(enabled=True, datamodule=datamodule), callbacks)
-
-    assert len(callbacks) == 1
+    with pytest.raises(ValidationError, match="param_spec_name"):
+        _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
 
 def test_configure_val_audio_probe_rejects_disabled_validation() -> None:
@@ -201,14 +258,14 @@ def test_configure_val_audio_probe_rejects_disabled_validation() -> None:
         cfg.trainer = {"limit_val_batches": 0}
 
     with pytest.raises(ValueError, match="limit_val_batches"):
-        _configure_val_audio_probe(cfg, [])
+        _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
 
 def test_configure_val_audio_probe_auto_wires_probe_with_render_group() -> None:
     """``auto`` behaves like ``true`` when a render group is composed."""
     callbacks: list[Callback] = []
 
-    _configure_val_audio_probe(_cfg(enabled="auto"), callbacks)
+    _configure_val_audio_probe(_cfg(enabled="auto"), callbacks, _LAUNCH_NAMESPACE)
 
     assert len(callbacks) == 1
     assert isinstance(callbacks[0], ValAudioProbe)
@@ -218,7 +275,9 @@ def test_configure_val_audio_probe_auto_skips_without_render_group() -> None:
     """``auto`` with no render group skips the probe instead of failing the launch."""
     callbacks: list[Callback] = []
 
-    _configure_val_audio_probe(_cfg(enabled="auto", with_render=False), callbacks)
+    _configure_val_audio_probe(
+        _cfg(enabled="auto", with_render=False), callbacks, _LAUNCH_NAMESPACE
+    )
 
     assert callbacks == []
 
@@ -231,7 +290,7 @@ def test_configure_val_audio_probe_auto_skip_warns_operator(
     :param caplog: Captures the operator-visible warning.
     """
     with caplog.at_level(logging.WARNING):
-        _configure_val_audio_probe(_cfg(enabled="auto", with_render=False), [])
+        _configure_val_audio_probe(_cfg(enabled="auto", with_render=False), [], _LAUNCH_NAMESPACE)
 
     assert any("no render group composed" in message for message in caplog.messages)
 
@@ -243,17 +302,17 @@ def test_configure_val_audio_probe_auto_skips_when_validation_disabled() -> None
     with open_dict(cfg):
         cfg.trainer = {"limit_val_batches": 0}
 
-    _configure_val_audio_probe(cfg, callbacks)
+    _configure_val_audio_probe(cfg, callbacks, _LAUNCH_NAMESPACE)
 
     assert callbacks == []
 
 
-def test_configure_val_audio_probe_auto_rejects_spec_mismatch() -> None:
-    """``auto`` still fails fast on a decode mismatch — a composed render group is intent."""
-    cfg = _cfg(enabled="auto", datamodule={"param_spec_name": "surge_simple"})
+def test_configure_val_audio_probe_auto_rejects_missing_synth() -> None:
+    """``auto`` still fails fast without identity — a composed render group is intent."""
+    cfg = _cfg(enabled="auto", with_synth=False)
 
-    with pytest.raises(ValueError, match="param_spec_name"):
-        _configure_val_audio_probe(cfg, [])
+    with pytest.raises(ValueError, match="synth"):
+        _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
 
 @pytest.mark.parametrize(
@@ -270,7 +329,7 @@ def test_configure_val_audio_probe_rejects_unknown_mode(mode: object) -> None:
     cfg.training.val_audio_probe = mode
 
     with pytest.raises(ValueError, match="auto"):
-        _configure_val_audio_probe(cfg, [])
+        _configure_val_audio_probe(cfg, [], _LAUNCH_NAMESPACE)
 
 
 def _no_r2() -> None:
@@ -291,9 +350,72 @@ def test_configure_val_audio_probe_auto_skips_when_r2_unavailable(
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _no_r2)
     callbacks: list[Callback] = []
 
-    _configure_val_audio_probe(_cfg(enabled="auto"), callbacks)
+    _configure_val_audio_probe(_cfg(enabled="auto"), callbacks, _LAUNCH_NAMESPACE)
 
     assert callbacks == []
+
+
+def test_configure_val_audio_probe_raises_when_plugin_bundle_unresolvable(
+    _render_artifacts: Path,
+) -> None:
+    """A run whose plugin path resolves nowhere fails at launch, not once per validation.
+
+    :param _render_artifacts: Stub workspace whose plugin bundle is removed first.
+    """
+    (_render_artifacts / _PLUGIN_PATH).rmdir()
+
+    with pytest.raises(ValueError, match="link-plugins"):
+        _configure_val_audio_probe(_cfg(enabled=True), [], _LAUNCH_NAMESPACE)
+
+
+def test_configure_val_audio_probe_raises_when_preset_unresolvable(
+    _render_artifacts: Path,
+) -> None:
+    """A declared preset the renderer cannot open is as fatal as a missing bundle.
+
+    :param _render_artifacts: Stub workspace whose preset is removed first.
+    """
+    (_render_artifacts / _PRESET_PATH).unlink()
+
+    with pytest.raises(ValueError, match=_PRESET_PATH):
+        _configure_val_audio_probe(_cfg(enabled=True), [], _LAUNCH_NAMESPACE)
+
+
+def test_configure_val_audio_probe_auto_skips_when_plugin_bundle_unresolvable(
+    _render_artifacts: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``auto`` on a host without the plugin skips the probe and says which path is missing.
+
+    :param _render_artifacts: Stub workspace whose plugin bundle is removed first.
+    :param caplog: Captures the operator-visible warning.
+    """
+    (_render_artifacts / _PLUGIN_PATH).rmdir()
+    callbacks: list[Callback] = []
+
+    with caplog.at_level(logging.WARNING):
+        _configure_val_audio_probe(_cfg(enabled="auto"), callbacks, _LAUNCH_NAMESPACE)
+
+    assert callbacks == []
+    assert any(_PLUGIN_PATH in message for message in caplog.messages)
+
+
+def test_configure_val_audio_probe_wires_online_render_synth_without_plugin_bundle() -> None:
+    """An in-process backend declares no bundle or preset, so the pre-flight must not gate it."""
+    callbacks: list[Callback] = []
+
+    _configure_val_audio_probe(
+        _cfg(
+            enabled=True,
+            plugin_path="torchsynth",
+            plugin_state_path="",
+            renderer_backend="torchsynth",
+        ),
+        callbacks,
+        _LAUNCH_NAMESPACE,
+    )
+
+    assert len(callbacks) == 1
+    assert isinstance(callbacks[0], ValAudioProbe)
 
 
 def test_configure_val_audio_probe_true_propagates_r2_failure(
@@ -306,4 +428,4 @@ def test_configure_val_audio_probe_true_propagates_r2_failure(
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", _no_r2)
 
     with pytest.raises(RuntimeError, match="R2 credentials missing"):
-        _configure_val_audio_probe(_cfg(enabled=True), [])
+        _configure_val_audio_probe(_cfg(enabled=True), [], _LAUNCH_NAMESPACE)

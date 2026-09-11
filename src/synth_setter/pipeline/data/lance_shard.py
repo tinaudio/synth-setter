@@ -2,19 +2,49 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 import lance
 import numpy as np
 import pyarrow as pa
+from beartype import beartype
+from jaxtyping import Float, jaxtyped
 from lance.file import LanceFileReader
 from pydantic import ValidationError
 
-from synth_setter.data.vst.shapes import DATASET_FIELD_DTYPES, DATASET_FIELD_NAMES
+from synth_setter.conditioning import (
+    PYFDN_SKETCH_CONTROLS,
+    PYFDN_SKETCH_EDC_BANDS,
+    PYFDN_SKETCH_ECHO_DENSITY_CHILD,
+    PYFDN_SKETCH_EDC_CHILD,
+    PYFDN_SKETCH_SPECTRAL_FLATNESS_CHILD,
+    SKETCH_STORAGE_FRAMES,
+)
+from synth_setter.data.vst.shapes import (
+    AUDIO_MP3_FIELD,
+    AUDIO_MP3_FIELD_METADATA,
+    AUDIO_UUID_FIELD,
+    DATASET_FIELD_DTYPES,
+    DATASET_FIELD_NAMES,
+    DEBUG_FIELD,
+    SKETCH_CENTROID_CHILD,
+    SKETCH_CENTROID_ROW,
+    SKETCH_LOUDNESS_CHILD,
+    SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_CHILD,
+    SKETCH_PITCH_SLICE,
+    SKETCH_VEC_CHILD,
+)
+from synth_setter.pipeline.schemas.seed_debug import ParameterSource, SeedDebugDocument
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 
 SHARD_METADATA_SCHEMA_KEY = b"synth_setter.shard_metadata"
+DEBUG_JSON_TYPE = pa.json_()
+_LANCE_JSON_FIELD_METADATA = {
+    b"ARROW:extension:name": b"lance.json",
+    b"ARROW:extension:metadata": b"",
+}
 
 # Pin the Lance on-disk format instead of floating with the pylance default;
 # "2.2" leads that default and needs a reader new enough to open it (#1714).
@@ -22,28 +52,45 @@ LANCE_DATA_STORAGE_VERSION = "2.2"
 # Refs https://github.com/tinaudio/synth-setter/issues/1775: keep one data file
 # below S3's 10k multipart-part ceiling even at 5 MiB parts.
 LANCE_MAX_BYTES_PER_FILE = 32 * 1024**3
+PREVIEW_SCHEMA = pa.schema(
+    [
+        pa.field(
+            AUDIO_MP3_FIELD,
+            pa.binary(),
+            nullable=False,
+            metadata=AUDIO_MP3_FIELD_METADATA,
+        ),
+        pa.field(AUDIO_UUID_FIELD, pa.string(), nullable=False),
+    ]
+)
 
 
 def lance_schema(
     field_shapes: dict[str, tuple[int, ...]],
     metadata: ShardMetadata,
+    *,
+    field_dtypes: Mapping[str, np.dtype] | None = None,
 ) -> pa.Schema:
     """Build the Arrow schema used by one Lance shard file.
 
     :param field_shapes: Full writer shapes including the leading row axis.
     :param metadata: Per-shard render metadata to embed in schema metadata.
+    :param field_dtypes: Physical scalar dtype for each dataset field.
     :returns: Arrow schema with fixed-shape tensor columns and shard metadata.
     """
+    field_dtypes = DATASET_FIELD_DTYPES if field_dtypes is None else field_dtypes
     fields = []
     # DuckDB scans reserve STANDARD_VECTOR_SIZE (2048 rows) x flattened width for every
     # fixed-shape-tensor column; audio and mel_spec can OOM SmooSense's 3 GB memory_limit (#1704).
     for field in DATASET_FIELD_NAMES:
-        dtype = DATASET_FIELD_DTYPES[field]
+        dtype = field_dtypes[field]
         tensor_type = pa.fixed_shape_tensor(
             pa.from_numpy_dtype(dtype),
             field_shapes[field][1:],
         )
         fields.append(pa.field(field, tensor_type, nullable=False))
+    fields.append(pa.field(DEBUG_FIELD, DEBUG_JSON_TYPE, nullable=False))
+    fields.extend(PREVIEW_SCHEMA)
     return pa.schema(
         fields,
         metadata={SHARD_METADATA_SCHEMA_KEY: metadata.model_dump_json().encode("utf-8")},
@@ -70,23 +117,149 @@ def tensor_array(values: np.ndarray, dtype: np.dtype, inner_shape: tuple[int, ..
     return pa.FixedShapeTensorArray.from_numpy_ndarray(rows)
 
 
+def _fixed_size_list_array(values: np.ndarray) -> pa.FixedSizeListArray:
+    """Encode ``(N, dim)`` float32 vectors as a fixed-size-list array.
+
+    :param values: Contiguous float32 vectors.
+    :returns: Fixed-size-list float32 array.
+    """
+    flat = pa.array(np.ascontiguousarray(values, dtype=np.float32).reshape(-1), pa.float32())
+    return pa.FixedSizeListArray.from_arrays(flat, values.shape[1])
+
+
+@jaxtyped(typechecker=beartype)
+def sketch_struct_array(
+    controls: Float[np.ndarray, "batch control frame"],
+) -> pa.StructArray:
+    """Encode stacked sketch controls as the nested storage struct (#2707).
+
+    Children: ``loudness``/``centroid`` fixed-size-list(F), ``pitch``
+    fixed-shape-tensor (bins, F), and ``vec`` — the frame-mean of the full
+    control stack, the IVF companion.
+
+    :param controls: ``(B, NUM_SKETCH_CONTROLS, F)`` float32 control stack.
+    :returns: Struct array; requires Lance data storage >= 2.2 to commit.
+    """
+    contiguous = np.ascontiguousarray(controls, dtype=np.float32)
+    pitch = contiguous[:, SKETCH_PITCH_SLICE]
+    return pa.StructArray.from_arrays(
+        [
+            _fixed_size_list_array(contiguous[:, SKETCH_LOUDNESS_ROW]),
+            _fixed_size_list_array(contiguous[:, SKETCH_CENTROID_ROW]),
+            tensor_array(pitch, np.dtype("float32"), pitch.shape[1:]),
+            _fixed_size_list_array(contiguous.mean(axis=-1, dtype=np.float32)),
+        ],
+        names=[
+            SKETCH_LOUDNESS_CHILD,
+            SKETCH_CENTROID_CHILD,
+            SKETCH_PITCH_CHILD,
+            SKETCH_VEC_CHILD,
+        ],
+    )
+
+
+@jaxtyped(typechecker=beartype)
+def pyfdn_sketch_struct_array(
+    controls: Float[np.ndarray, "batch control frame"],
+) -> pa.StructArray:
+    """Split pyFDN temporal controls into their fixed Lance storage children.
+
+    :param controls: Float-compatible ``(B, 10, 32)`` reverb controls.
+    :returns: Struct array containing EDC, echo-density, and spectral-flatness children.
+    :raises ValueError: The control stack does not have shape ``(B, 10, 32)``.
+    """
+    expected_inner_shape = (PYFDN_SKETCH_CONTROLS, SKETCH_STORAGE_FRAMES)
+    contiguous = np.ascontiguousarray(controls, dtype=np.float32)
+    if contiguous.ndim != 3 or contiguous.shape[1:] != expected_inner_shape:
+        raise ValueError(
+            f"pyFDN sketch controls have shape {contiguous.shape}, "
+            f"expected (batch, {PYFDN_SKETCH_CONTROLS}, {SKETCH_STORAGE_FRAMES})"
+        )
+    return pa.StructArray.from_arrays(
+        [
+            tensor_array(
+                contiguous[:, :PYFDN_SKETCH_EDC_BANDS],
+                np.dtype("float32"),
+                (PYFDN_SKETCH_EDC_BANDS, SKETCH_STORAGE_FRAMES),
+            ),
+            _fixed_size_list_array(contiguous[:, PYFDN_SKETCH_EDC_BANDS]),
+            _fixed_size_list_array(contiguous[:, PYFDN_SKETCH_EDC_BANDS + 1]),
+        ],
+        names=[
+            PYFDN_SKETCH_EDC_CHILD,
+            PYFDN_SKETCH_ECHO_DENSITY_CHILD,
+            PYFDN_SKETCH_SPECTRAL_FLATNESS_CHILD,
+        ],
+    )
+
+
+def seed_debug_array(
+    master_seed: int,
+    sample_indices: Sequence[int],
+    attempts: Sequence[int],
+    sampler_seeds: Sequence[int | None],
+    *,
+    shard_id: int | None,
+    parameter_source: ParameterSource = "sampled",
+) -> pa.Array:
+    """Build row-level seed provenance as Arrow JSON documents.
+
+    :param master_seed: Dataset or split master seed shared by these rows.
+    :param sample_indices: Stable logical row indices within the seed stream.
+    :param attempts: Accepted loudness-gate attempt for each row.
+    :param sampler_seeds: Concrete sampler seed consumed by each row, or ``None``.
+    :param shard_id: Logical shard number, or ``None`` for an ad hoc render.
+    :param parameter_source: Whether parameters were sampled, fixed, or mixed.
+    :returns: JSON documents containing consumed seeds and their derivation inputs.
+    :raises ValueError: Input lengths differ or a debug document violates its schema.
+    """
+    if len({len(sample_indices), len(attempts), len(sampler_seeds)}) != 1:
+        raise ValueError("sample_indices, attempts, and sampler_seeds must have equal lengths")
+    documents = []
+    for sample_idx, attempt, sampler_seed in zip(
+        sample_indices, attempts, sampler_seeds, strict=True
+    ):
+        document = SeedDebugDocument(
+            seed=sampler_seed,
+            master_seed=master_seed,
+            sample_idx=sample_idx,
+            attempt=attempt,
+            shard_id=shard_id,
+            parameter_source=parameter_source,
+        )
+        documents.append(document.model_dump_json(exclude_none=True))
+    return pa.array(documents, type=DEBUG_JSON_TYPE)
+
+
 def record_batch_from_arrays(
-    arrays: dict[str, np.ndarray],
+    arrays: Mapping[str, np.ndarray | Sequence[bytes] | Sequence[str]],
     schema: pa.Schema,
+    *,
+    debug: pa.Array | None,
 ) -> pa.RecordBatch:
     """Build a Lance record batch from numpy arrays keyed by dataset field.
 
-    :param arrays: Mapping with one ``(N, *inner)`` array per dataset field.
+    :param arrays: Mapping with tensor and preview values keyed by field name.
     :param schema: Schema returned by :func:`lance_schema`.
+    :param debug: Row-level seed provenance; ``None`` writes empty documents for fixtures.
     :returns: Arrow record batch for :func:`write_lance_dataset` / :func:`lance_fragment`.
+    :raises TypeError: A tensor field is not backed by a compatible NumPy array.
     """
     columns = []
-    for field in DATASET_FIELD_NAMES:
-        # Read dtype and shape from the schema so an overridden field wins over
-        # the global DATASET_FIELD_DTYPES default and the batch matches the file.
-        tensor_type = schema.field(field).type
-        np_dtype = np.dtype(tensor_type.value_type.to_pandas_dtype())
-        columns.append(tensor_array(arrays[field], np_dtype, tuple(tensor_type.shape)))
+    for field in schema:
+        if field.name == DEBUG_FIELD:
+            if debug is None:
+                debug = pa.repeat(pa.scalar("{}", type=DEBUG_JSON_TYPE), len(columns[0]))
+            columns.append(debug)
+            continue
+        values = arrays[field.name]
+        if isinstance(field.type, pa.FixedShapeTensorType):
+            if not isinstance(values, np.ndarray):
+                raise TypeError(f"tensor field {field.name!r} requires a numpy array")
+            np_dtype = np.dtype(field.type.value_type.to_pandas_dtype())
+            columns.append(tensor_array(values, np_dtype, tuple(field.type.shape)))
+        else:
+            columns.append(pa.array(values, type=field.type))
     return pa.record_batch(columns, schema=schema)
 
 
@@ -181,6 +354,56 @@ def schema_mismatch_detail(physical: pa.Schema, expected: pa.Schema) -> str:
     return "; ".join(parts)
 
 
+def _logical_fragment_schema(physical: pa.Schema, logical: pa.Schema) -> pa.Schema:
+    """Restore logical JSON typing on a physical fragment schema.
+
+    :param physical: Schema read directly from a fragment data file.
+    :param logical: Schema supplied to the fragment writer and dataset commit.
+    :returns: Physical schema with Lance's JSON storage field restored to its logical type.
+    """
+    index = logical.get_field_index(DEBUG_FIELD)
+    if index < 0 or physical.names != logical.names:
+        return physical
+    physical_debug = physical.field(index)
+    logical_debug = logical.field(index)
+    if (
+        logical_debug.type != DEBUG_JSON_TYPE
+        or physical_debug.type != pa.large_binary()
+        or physical_debug.metadata != _LANCE_JSON_FIELD_METADATA
+    ):
+        return physical
+    restored_debug = pa.field(
+        physical_debug.name,
+        logical_debug.type,
+        nullable=physical_debug.nullable,
+        metadata=logical_debug.metadata,
+    )
+    return physical.set(index, restored_debug)
+
+
+def fragment_schema_matches(physical: pa.Schema, logical: pa.Schema) -> bool:
+    """Return whether a fragment file matches its logical dataset schema.
+
+    Lance stores Arrow JSON as ``large_binary`` plus field metadata in fragment
+    files, then restores the JSON extension from the committed dataset schema.
+
+    :param physical: Schema read directly from a fragment data file.
+    :param logical: Schema supplied to the fragment writer and dataset commit.
+    :returns: Whether all logical fields have the expected physical representation.
+    """
+    return _logical_fragment_schema(physical, logical).equals(logical, check_metadata=True)
+
+
+def fragment_schema_mismatch_detail(physical: pa.Schema, logical: pa.Schema) -> str:
+    """Describe a fragment mismatch after restoring logical JSON typing.
+
+    :param physical: Schema read directly from a fragment data file.
+    :param logical: Schema supplied to the fragment writer and dataset commit.
+    :returns: Field and metadata differences suitable for an operator error.
+    """
+    return schema_mismatch_detail(_logical_fragment_schema(physical, logical), logical)
+
+
 def lance_fragment(
     uri: Path | str,
     schema: pa.Schema,
@@ -226,14 +449,38 @@ def lance_fragment(
         .metadata()
         .schema
     )
-    if not physical.equals(schema, check_metadata=True):
+    if not fragment_schema_matches(physical, schema):
         raise ValueError(
             f"fragment under {uri} was written with the existing dataset's schema, not the "
             "spec-derived one (Lance append mode adopts a committed dataset's schema; the "
             f"target likely holds stale data from an older code version — #2084): "
-            f"{schema_mismatch_detail(physical, schema)}"
+            f"{fragment_schema_mismatch_detail(physical, schema)}"
         )
     return fragment
+
+
+def commit_lance_branch(
+    branch: lance.LanceDataset,
+    schema: pa.Schema,
+    fragments: Sequence[lance.fragment.FragmentMetadata],
+    *,
+    transaction_properties: dict[str, str] | None = None,
+) -> lance.LanceDataset:
+    """Overwrite one native Lance branch with staged fragment metadata.
+
+    :param branch: Checked-out branch receiving the new manifest version.
+    :param schema: Arrow schema shared by every selected fragment.
+    :param fragments: Fragment metadata whose files live in the parent dataset namespace.
+    :param transaction_properties: Durable identity attached to the branch transaction.
+    :returns: The branch checked out at the committed version.
+    """
+    operation = lance.LanceOperation.Overwrite(schema, list(fragments))
+    transaction = lance.Transaction(
+        read_version=branch.version,
+        operation=operation,
+        transaction_properties=transaction_properties,
+    )
+    return lance.LanceDataset.commit(branch, transaction)
 
 
 def commit_lance_dataset(

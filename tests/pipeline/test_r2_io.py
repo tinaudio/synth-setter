@@ -11,7 +11,9 @@ flag set on ``upload_to_uri`` and the ``lsf --format=s`` shape on
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from typing import NoReturn
@@ -20,9 +22,77 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.compute_task import load_compute_script
 from synth_setter.pipeline.schemas.object_storage import (
     STORAGE_REQUIRED_ENV_KEYS,
 )
+
+
+@pytest.fixture
+def synthetic_unreachable_rclone_env(free_tcp_port: int) -> dict[str, str]:
+    """Configure synthetic R2 credentials against an unused loopback port.
+
+    :param free_tcp_port: Unbound loopback port allocated by pytest.
+    :returns: Environment that makes real rclone transfers fail locally and quickly.
+    """
+    if shutil.which("rclone") is None:
+        pytest.skip("requires the real rclone binary")
+    return {
+        "RCLONE_CONFIG": os.devnull,
+        "RCLONE_CONFIG_R2_ACCESS_KEY_ID": "synthetic-access-id-2190",
+        "RCLONE_CONFIG_R2_ENDPOINT": f"http://127.0.0.1:{free_tcp_port}",
+        "RCLONE_CONFIG_R2_PROVIDER": "Cloudflare",
+        "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY": "synthetic-secret-key-2190",
+        "RCLONE_CONFIG_R2_TYPE": "s3",
+        "RCLONE_LOW_LEVEL_RETRIES": "1",
+        "RCLONE_RETRIES_SLEEP": "0s",
+    }
+
+
+def _assert_redacted_rclone_failure(
+    logs: str, rclone_env: dict[str, str], expected_context: str
+) -> None:
+    """Require credential-free INFO/error logs that identify the failed operation.
+
+    :param logs: Combined process stdout and stderr.
+    :param rclone_env: Synthetic credentials whose values must be absent.
+    :param expected_context: Operation-specific path that diagnostics must retain.
+    """
+    assert rclone_env["RCLONE_CONFIG_R2_ACCESS_KEY_ID"] not in logs
+    assert rclone_env["RCLONE_CONFIG_R2_SECRET_ACCESS_KEY"] not in logs
+    assert " DEBUG " not in logs
+    assert "Failed to copy" in logs
+    assert expected_context in logs
+
+
+def _run_debug_script(
+    script_name: str, sentinel_name: str, rclone_env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Execute one repository-owned rclone canary run script.
+
+    :param script_name: Packaged compute run script to execute.
+    :param sentinel_name: Task-created file removed after execution.
+    :param rclone_env: Isolated credentials and endpoint.
+    :returns: Captured task process result.
+    """
+    run_script = load_compute_script(script_name)
+    env = {
+        **os.environ,
+        **rclone_env,
+        "R2_BUCKET": "safe-test-bucket",
+        "R2_DEBUG_PREFIX": "issue-2190",
+    }
+    try:
+        return subprocess.run(  # noqa: S603 — run block is repository-owned.
+            ["/bin/bash", "-c", run_script],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+            env=env,
+        )
+    finally:
+        (Path(tempfile.gettempdir()) / sentinel_name).unlink(missing_ok=True)
 
 
 class TestIsR2Uri:
@@ -74,7 +144,7 @@ class TestRcloneArgv:
         assert r2_io._rclone_argv("copyto", "r2:bucket/key", "dest/file") == [
             "rclone",
             "copyto",
-            "-vv",
+            "-v",
             "--checksum",
             "--contimeout=30s",
             "--timeout=300s",
@@ -88,7 +158,7 @@ class TestRcloneArgv:
         assert r2_io._rclone_argv("copy", "src/dir", "r2:bucket/p", timeout="3h") == [
             "rclone",
             "copy",
-            "-vv",
+            "-v",
             "--checksum",
             "--contimeout=30s",
             "--timeout=3h",
@@ -96,6 +166,34 @@ class TestRcloneArgv:
             "src/dir",
             "r2:bucket/p",
         ]
+
+
+class TestRcloneDebugTemplates:
+    """Tests for SkyPilot rclone canary task logging."""
+
+    @pytest.mark.parametrize(
+        ("script_name", "sentinel_name"),
+        [
+            ("local-debug-rclone.sh", "skypilot-local-debug-sentinel.txt"),
+            ("debug-rclone.sh", "skypilot-debug-rclone-sentinel.txt"),
+        ],
+    )
+    def test_run_failure_redacts_credentials_and_keeps_error_context(
+        self,
+        script_name: str,
+        sentinel_name: str,
+        synthetic_unreachable_rclone_env: dict[str, str],
+    ) -> None:
+        """A real task run omits credentials while retaining its failure cause.
+
+        :param script_name: Packaged compute run script to execute.
+        :param sentinel_name: Task-created file removed after execution.
+        :param synthetic_unreachable_rclone_env: Isolated credentials and endpoint.
+        """
+        result = _run_debug_script(script_name, sentinel_name, synthetic_unreachable_rclone_env)
+        logs = f"{result.stdout}\n{result.stderr}"
+        assert result.returncode != 0
+        _assert_redacted_rclone_failure(logs, synthetic_unreachable_rclone_env, "safe-test-bucket")
 
 
 class TestToS3Uri:
@@ -133,8 +231,60 @@ class TestFromS3Uri:
             r2_io.from_s3_uri("r2://bucket/not-s3.ckpt")
 
 
+def _write_stub_rclone(bin_dir: Path, script_body: str) -> Path:
+    """Create a stand-in rclone executable so tests drive the real subprocess boundary.
+
+    :param bin_dir: New directory that will contain the stand-in.
+    :param script_body: Bash body appended to the shebang.
+    :returns: The directory to prepend to PATH.
+    """
+    bin_dir.mkdir()
+    rclone = bin_dir / "rclone"
+    rclone.write_text(f"#!/bin/bash\n{script_body}", encoding="utf-8")
+    rclone.chmod(0o755)
+    return bin_dir
+
+
+def _write_pre_1_56_rclone(bin_dir: Path) -> Path:
+    """Create a stand-in reproducing rclone v1.53.3's two config interfaces verbatim.
+
+    `config show` frames the remote in rules (the #2428 trap); `config dump` emits the same JSON as
+    current builds.
+
+    :param bin_dir: New directory that will contain the stand-in.
+    :returns: The directory to prepend to PATH.
+    """
+    return _write_stub_rclone(
+        bin_dir,
+        'if [ "$2" = "dump" ]; then\n'
+        "  cat <<'EOF'\n"
+        "{\n"
+        '    "r2": {\n'
+        '        "access_key_id": "old-access-key",\n'
+        '        "endpoint": "https://old.r2.cloudflarestorage.com",\n'
+        '        "provider": "Cloudflare",\n'
+        '        "secret_access_key": "old-secret-key",\n'
+        '        "type": "s3"\n'
+        "    }\n"
+        "}\n"
+        "EOF\n"
+        "else\n"
+        "  cat <<'EOF'\n"
+        "--------------------\n"
+        "[r2]\n"
+        "type = s3\n"
+        "provider = Cloudflare\n"
+        "access_key_id = old-access-key\n"
+        "secret_access_key = old-secret-key\n"
+        "endpoint = https://old.r2.cloudflarestorage.com\n"
+        "--------------------\n"
+        "EOF\n"
+        "fi\n",
+    )
+
+
 class TestR2StorageOptions:
-    """Tests for r2_storage_options — Lance object-store config from R2 env vars."""
+    """Tests for r2_storage_options — Lance config from supported credential sources."""
 
     @pytest.fixture(autouse=True)
     def _clear_r2_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,6 +296,7 @@ class TestR2StorageOptions:
         import os
 
         monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", tmp_path / "missing.env")
+        monkeypatch.setenv("RCLONE_CONFIG", os.devnull)
         for key in list(os.environ):
             if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
                 monkeypatch.delenv(key, raising=False)
@@ -226,6 +377,175 @@ class TestR2StorageOptions:
             "aws_endpoint": "https://acct.r2.cloudflarestorage.com",
             "region": "auto",
         }
+
+    def test_rclone_config_file_builds_storage_options(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Standard rclone config credentials are available to Lance readers.
+
+        :param tmp_path: Pytest tmp dir containing an isolated rclone config.
+        :param monkeypatch: Pytest fixture used to isolate rclone configuration.
+        """
+        if shutil.which("rclone") is None:
+            pytest.skip("requires the real rclone binary")
+        config_file = tmp_path / "rclone.conf"
+        config_file.write_text(
+            "[r2]\n"
+            "type = s3\n"
+            "provider = Cloudflare\n"
+            "access_key_id = config-access-key\n"
+            "secret_access_key = config-secret-key\n"
+            "endpoint = https://acct.r2.cloudflarestorage.com\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("RCLONE_CONFIG", str(config_file))
+
+        assert r2_io.r2_storage_options() == {
+            "access_key_id": "config-access-key",
+            "secret_access_key": "config-secret-key",
+            "endpoint": "https://acct.r2.cloudflarestorage.com",
+            "aws_endpoint": "https://acct.r2.cloudflarestorage.com",
+            "region": "auto",
+        }
+
+    def test_pre_1_56_rclone_build_builds_storage_options(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Credentials resolve against rclone builds older than 1.56.
+
+        The stand-in reproduces v1.53.3's real behavior on both config interfaces — dash-framed
+        `config show`, JSON `config dump` — so it holds whichever one the resolver reads (#2428).
+
+        :param tmp_path: Pytest tmp dir holding the stand-in rclone executable.
+        :param monkeypatch: Pytest fixture used to put the stand-in first on PATH.
+        """
+        bin_dir = _write_pre_1_56_rclone(tmp_path / "old-rclone-bin")
+        monkeypatch.setenv("PATH", str(bin_dir), prepend=os.pathsep)
+
+        assert r2_io.r2_storage_options() == {
+            "access_key_id": "old-access-key",
+            "secret_access_key": "old-secret-key",
+            "endpoint": "https://old.r2.cloudflarestorage.com",
+            "aws_endpoint": "https://old.r2.cloudflarestorage.com",
+            "region": "auto",
+        }
+
+    def test_unresolved_error_names_the_rclone_failure_reason(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The raised error states why the rclone fallback failed, not just that it did.
+
+        Without this the operator is told to configure a remote they already configured, and the
+        fallback's reason is erased from the traceback entirely (#2431).
+
+        :param tmp_path: Pytest tmp dir holding the stand-in rclone executable.
+        :param monkeypatch: Pytest fixture used to put the stand-in first on PATH.
+        """
+        bin_dir = _write_stub_rclone(tmp_path / "broken-rclone-bin", "exit 3\n")
+        monkeypatch.setenv("PATH", str(bin_dir), prepend=os.pathsep)
+
+        with pytest.raises(RuntimeError, match="exit code 3"):
+            r2_io.r2_storage_options()
+
+    def test_unresolved_error_reports_a_missing_rclone_binary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A host without rclone is told so, rather than that its config is malformed.
+
+        :param tmp_path: Pytest tmp dir used as an rclone-free PATH.
+        :param monkeypatch: Pytest fixture used to replace PATH.
+        """
+        empty_bin = tmp_path / "empty-bin"
+        empty_bin.mkdir()
+        monkeypatch.setenv("PATH", str(empty_bin))
+
+        with pytest.raises(RuntimeError, match="rclone is not installed"):
+            r2_io.r2_storage_options()
+
+    def test_unresolved_error_reports_unparsable_dump_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-JSON on stdout is named as such, so a future format change is self-diagnosing.
+
+        :param tmp_path: Pytest tmp dir holding the stand-in rclone executable.
+        :param monkeypatch: Pytest fixture used to put the stand-in first on PATH.
+        """
+        bin_dir = _write_stub_rclone(tmp_path / "chatty-rclone-bin", "echo 'not json at all'\n")
+        monkeypatch.setenv("PATH", str(bin_dir), prepend=os.pathsep)
+
+        with pytest.raises(RuntimeError, match="unparsable JSON"):
+            r2_io.r2_storage_options()
+
+    def test_unresolved_error_names_the_absent_remote(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A config without the expected remote says so, rather than reporting a parse failure.
+
+        :param tmp_path: Pytest tmp dir holding the stand-in rclone executable.
+        :param monkeypatch: Pytest fixture used to put the stand-in first on PATH.
+        """
+        bin_dir = _write_stub_rclone(tmp_path / "empty-rclone-bin", "echo '{}'\n")
+        monkeypatch.setenv("PATH", str(bin_dir), prepend=os.pathsep)
+
+        with pytest.raises(RuntimeError, match="no 'r2' remote"):
+            r2_io.r2_storage_options()
+
+    def test_rclone_config_output_builds_storage_options(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Config parsing remains covered when the test host lacks rclone.
+
+        :param monkeypatch: Pytest fixture used to isolate the subprocess boundary.
+        """
+        config = subprocess.CompletedProcess(
+            args=["rclone", "config", "dump"],
+            returncode=0,
+            stdout=(
+                '{"r2": {'
+                '"type": "s3", '
+                '"access_key_id": "parsed-access-key", '
+                '"secret_access_key": "parsed-secret-key", '
+                '"endpoint": "https://parsed.r2.cloudflarestorage.com"'
+                "}}"
+            ),
+            stderr="",
+        )
+        monkeypatch.setattr(r2_io.subprocess, "run", lambda *_args, **_kwargs: config)
+
+        assert r2_io.r2_storage_options() == {
+            "access_key_id": "parsed-access-key",
+            "secret_access_key": "parsed-secret-key",
+            "endpoint": "https://parsed.r2.cloudflarestorage.com",
+            "aws_endpoint": "https://parsed.r2.cloudflarestorage.com",
+            "region": "auto",
+        }
+
+    def test_rclone_config_read_timeout_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A hung config read stays bounded and fails without exposing output.
+
+        :param monkeypatch: Pytest fixture used to simulate the subprocess timeout.
+        """
+
+        def _timeout(*_args: object, **_kwargs: object) -> NoReturn:
+            raise subprocess.TimeoutExpired(cmd=["rclone", "config", "show"], timeout=10)
+
+        monkeypatch.setattr(r2_io.subprocess, "run", _timeout)
+
+        with pytest.raises(RuntimeError, match=r"rclone config dump timed out after 10s"):
+            r2_io.r2_storage_options()
+
+    def test_rclone_config_command_failure_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A nonzero config command fails closed without consuming its output.
+
+        :param monkeypatch: Pytest fixture used to simulate the subprocess failure.
+        """
+        failed = subprocess.CompletedProcess(
+            args=["rclone", "config", "show"], returncode=1, stdout="", stderr="failure"
+        )
+        monkeypatch.setattr(r2_io.subprocess, "run", lambda *_args, **_kwargs: failed)
+
+        with pytest.raises(RuntimeError, match=r"rclone config dump failed with exit code 1"):
+            r2_io.r2_storage_options()
 
 
 class TestR2DirectoryExists:
@@ -335,7 +655,7 @@ class TestDownloadToPath:
             r2_io.download_to_path("r2://bucket/key.json", tmp_path / "out.json")
         args = mock_call.call_args[0][0]
         assert args[:2] == ["rclone", "copyto"]
-        assert "-vv" in args
+        assert "-v" in args
         assert "--checksum" in args
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args
@@ -362,13 +682,69 @@ class TestDownloadDirNoOverwrite:
         assert (dest / "train.lance").read_text() == "train"
         assert (dest / "stats.npz").read_text() == "stats"
 
-    def test_rejects_non_r2_uri(self, tmp_path: Path) -> None:
-        """A local-path source is rejected — caller must branch on is_r2_uri.
+    def test_lands_file_uri_tree_under_dest_dir(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """Every file under a local URI is copied into ``dest_path``.
+
+        :param fake_r2_remote: Fixture that requires and configures the rclone binary.
+        :param tmp_path: Pytest tmp dir holding the source and destination trees.
+        """
+        source = tmp_path / "local source"
+        source.mkdir()
+        (source / "train.lance").write_text("train")
+        dest = tmp_path / "root"
+
+        r2_io.download_dir_no_overwrite(source.as_uri(), dest)
+
+        assert (dest / "train.lance").read_text() == "train"
+
+    def test_file_uri_command_uses_decoded_local_path(self, tmp_path: Path) -> None:
+        """The file-URI branch reaches rclone without requiring an installed binary.
+
+        :param tmp_path: Pytest tmp dir used to form source and destination paths.
+        """
+        source = tmp_path / "local source"
+        destination = tmp_path / "root"
+
+        with patch.object(r2_io.subprocess, "check_call") as mock_call:
+            r2_io.download_dir_no_overwrite(source.as_uri(), destination)
+
+        args = mock_call.call_args[0][0]
+        assert str(source) in args
+        assert str(destination) in args
+
+    def test_exclude_glob_skips_matching_subtree(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """An exclude glob copies the sidecars while skipping the split subtrees.
+
+        :param fake_r2_remote: Local-typed rclone remote rooted at a tmp dir.
+        :param tmp_path: Pytest tmp dir used for the download destination.
+        """
+        prefix = fake_r2_remote / "bucket" / "dataset"
+        (prefix / "train.lance").mkdir(parents=True)
+        (prefix / "train.lance" / "fragment.bin").write_text("rows")
+        (prefix / "metadata" / "workers").mkdir(parents=True)
+        (prefix / "metadata" / "workers" / "report.json").write_text("{}")
+        (prefix / "stats.npz").write_text("stats")
+        dest = tmp_path / "root"
+
+        r2_io.download_dir_no_overwrite(
+            "r2://bucket/dataset", dest, exclude="{*.lance/**,metadata/**}"
+        )
+
+        assert (dest / "stats.npz").read_text() == "stats"
+        assert not (dest / "train.lance").exists()
+        assert not (dest / "metadata").exists()
+
+    def test_rejects_unsupported_source_uri(self, tmp_path: Path) -> None:
+        """A source outside the R2 and local-file contracts is rejected.
 
         :param tmp_path: Pytest tmp dir used to build a local destination path.
         """
-        with pytest.raises(ValueError, match="not an r2:// URI"):
-            r2_io.download_dir_no_overwrite("local-dir", tmp_path / "root")
+        with pytest.raises(ValueError, match="r2:// or file://"):
+            r2_io.download_dir_no_overwrite("https://example.com/dataset", tmp_path / "root")
 
     def test_command_carries_immutable_and_reliability_flags(self, tmp_path: Path) -> None:
         """Pin the rclone verb + ``--immutable`` + reliability-flag set.
@@ -386,7 +762,7 @@ class TestDownloadDirNoOverwrite:
         assert args[:2] == ["rclone", "copy"]
         assert "--immutable" in args
         assert "--checksum" in args
-        assert "-vv" in args
+        assert "-v" in args
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args
         assert "--retries=3" in args
@@ -507,11 +883,38 @@ class TestUploadToUri:
         with pytest.raises(ValueError, match="not an r2:// URI"):
             r2_io.upload_to_uri(tmp_path / "in.json", "local-dest.json")
 
+    def test_failure_logs_redact_credentials_and_keep_error_context(
+        self,
+        tmp_path: Path,
+        synthetic_unreachable_rclone_env: dict[str, str],
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        """A real failed rclone upload omits credentials but retains its cause.
+
+        :param tmp_path: Local upload source directory.
+        :param synthetic_unreachable_rclone_env: Isolated credentials and endpoint.
+        :param capfd: Captures the child rclone process's inherited descriptors.
+        """
+        src = tmp_path / "in.json"
+        src.write_text("{}")
+
+        with (
+            patch.dict(os.environ, synthetic_unreachable_rclone_env),
+            pytest.raises(subprocess.CalledProcessError),
+        ):
+            r2_io.upload_to_uri(src, "r2://safe-test-bucket/issue-2190/object")
+
+        captured = capfd.readouterr()
+        logs = f"{captured.out}\n{captured.err}"
+        _assert_redacted_rclone_failure(
+            logs, synthetic_unreachable_rclone_env, "issue-2190/object"
+        )
+
     def test_command_carries_rclone_reliability_flags(self, tmp_path: Path) -> None:
         """Pin the rclone reliability-flag set on upload.
 
         State-based tests cover the file-landing contract but cannot observe the
-        ``-vv / --checksum / --contimeout / --timeout / --retries`` flags. Losing
+        ``-v / --checksum / --contimeout / --timeout / --retries`` flags. Losing
         any of them is a silent correctness regression (e.g. dropping
         ``--checksum`` would let half-uploaded objects pass; dropping
         ``--retries`` would surface transient network blips as hard failures).
@@ -525,7 +928,7 @@ class TestUploadToUri:
             r2_io.upload_to_uri(src, "r2://bucket/key.json")
         args = mock_call.call_args[0][0]
         assert args[:2] == ["rclone", "copyto"]
-        assert "-vv" in args
+        assert "-v" in args
         assert "--checksum" in args
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args
@@ -545,9 +948,65 @@ class TestIsR2Reachable:
         import os
 
         monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", tmp_path / "missing.env")
+        monkeypatch.setenv("RCLONE_CONFIG", os.devnull)
         for key in list(os.environ):
             if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
                 monkeypatch.delenv(key, raising=False)
+
+    def test_returns_true_when_config_file_remote_probe_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A standard rclone config remote satisfies the reachability gate.
+
+        :param tmp_path: Pytest tmp dir containing an isolated rclone config.
+        :param monkeypatch: Pytest fixture used to isolate rclone configuration.
+        """
+        if shutil.which("rclone") is None:
+            pytest.skip("requires the real rclone binary")
+        config_file = tmp_path / "rclone.conf"
+        config_file.write_text("[r2]\ntype = local\n", encoding="utf-8")
+        monkeypatch.setenv("RCLONE_CONFIG", str(config_file))
+        monkeypatch.chdir(tmp_path)
+
+        subprocess.run(  # noqa: S603 — args are literal strings
+            ["rclone", "lsd", "r2:", "--contimeout=10s", "--timeout=30s"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=r2_io._AUTH_PING_TIMEOUT_SECONDS,  # noqa: SLF001
+        )
+        assert r2_io.is_r2_reachable() is True
+
+    def test_returns_false_when_config_file_remote_auth_fails(
+        self,
+        free_tcp_port: int,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A config-backed remote with persistent auth failure remains unreachable.
+
+        :param free_tcp_port: Unbound loopback port used as an unreachable endpoint.
+        :param tmp_path: Pytest tmp dir containing an isolated rclone config.
+        :param monkeypatch: Pytest fixture used to isolate rclone configuration.
+        """
+        if shutil.which("rclone") is None:
+            pytest.skip("requires the real rclone binary")
+        config_file = tmp_path / "rclone.conf"
+        config_file.write_text(
+            "[r2]\n"
+            "type = s3\n"
+            "provider = Cloudflare\n"
+            "access_key_id = synthetic-access-key\n"
+            "secret_access_key = synthetic-secret-key\n"
+            f"endpoint = http://127.0.0.1:{free_tcp_port}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("RCLONE_CONFIG", str(config_file))
+        monkeypatch.setenv("RCLONE_LOW_LEVEL_RETRIES", "1")
+        monkeypatch.setenv("RCLONE_RETRIES", "1")
+        monkeypatch.setenv("RCLONE_RETRIES_SLEEP", "0s")
+
+        assert r2_io.is_r2_reachable() is False
 
     def test_returns_true_when_rclone_lsd_exits_zero(
         self, monkeypatch: pytest.MonkeyPatch
@@ -655,12 +1114,16 @@ class TestIsR2Reachable:
         monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "   ")
         monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "secret")
         monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "endpoint")
-        monkeypatch.setattr(
-            r2_io.subprocess,
-            "run",
-            lambda *a, **kw: pytest.fail("subprocess.run should not be reached"),
-        )
 
+        def _missing_config() -> NoReturn:
+            raise RuntimeError("no config")
+
+        monkeypatch.setattr(r2_io, "_storage_config_from_rclone", _missing_config)
+
+        def _auth_failure(*_args: object, **_kwargs: object) -> NoReturn:
+            raise subprocess.CalledProcessError(returncode=1, cmd=["rclone", "lsd", "r2:"])
+
+        monkeypatch.setattr(r2_io.subprocess, "run", _auth_failure)
         assert r2_io.is_r2_reachable() is False
 
     def test_returns_false_when_rclone_lsd_exits_non_zero(
@@ -696,29 +1159,26 @@ class TestIsR2Reachable:
         )
         assert r2_io.is_r2_reachable() is False
 
-    def test_returns_false_when_secret_env_keys_missing(
+    def test_returns_false_when_config_sources_missing_and_live_probe_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Rclone-on-PATH + working local config but no env keys → skip, not hard-fail later.
-
-        Mirrors the contract of ``ensure_r2_env_loaded`` so a test that
-        gates on ``is_r2_reachable`` doesn't pass the gate and then crash
-        on ``RuntimeError`` from the env-key check downstream.
+        """Missing settings and an unsuccessful ambient probe fail closed.
 
         :param tmp_path: Pytest tmp dir used for an intentionally missing default dotenv.
-        :param monkeypatch: Pytest fixture used to clear env + stub the probe.
+        :param monkeypatch: Pytest fixture used to isolate configuration and the probe.
         """
         monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", tmp_path / "missing.env")
-        monkeypatch.setattr(
-            "synth_setter.pipeline.r2_io.shutil.which", lambda name: f"/usr/bin/{name}"
-        )
-        for key in STORAGE_REQUIRED_ENV_KEYS:
-            monkeypatch.delenv(key, raising=False)
-        # subprocess.run must never be called — short-circuit on missing env.
-        monkeypatch.setattr(
-            "synth_setter.pipeline.r2_io.subprocess.run",
-            lambda *a, **kw: pytest.fail("subprocess.run should not be reached"),
-        )
+        monkeypatch.setattr(r2_io.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+        def _missing_config() -> NoReturn:
+            raise RuntimeError("no config")
+
+        monkeypatch.setattr(r2_io, "_storage_config_from_rclone", _missing_config)
+
+        def _auth_failure(*_args: object, **_kwargs: object) -> NoReturn:
+            raise subprocess.CalledProcessError(returncode=1, cmd=["rclone", "lsd", "r2:"])
+
+        monkeypatch.setattr(r2_io.subprocess, "run", _auth_failure)
         assert r2_io.is_r2_reachable() is False
 
 
@@ -1146,6 +1606,23 @@ class TestLanceTarget:
         assert options is not None and options["endpoint"] == "https://r2.example"
 
 
+def test_delete_file_removes_exact_object(fake_r2_remote: Path) -> None:
+    """The retry-aware storage helper removes only the requested object.
+
+    :param fake_r2_remote: Local rclone remote root.
+    """
+    target = fake_r2_remote / "bucket/pending.json"
+    sibling = fake_r2_remote / "bucket/keep.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("pending", encoding="utf-8")
+    sibling.write_text("keep", encoding="utf-8")
+
+    r2_io.delete_file("r2://bucket/pending.json")
+
+    assert not target.exists()
+    assert sibling.read_text(encoding="utf-8") == "keep"
+
+
 class TestPurgePrefix:
     """Tests for purge_prefix — best-effort recursive delete via `rclone purge`."""
 
@@ -1253,6 +1730,7 @@ class TestEnsureR2EnvLoaded:
         :param monkeypatch: Pytest fixture used to remove env vars.
         """
         monkeypatch.setattr(r2_io, "_DEFAULT_ENV_FILE", tmp_path / "missing.env")
+        monkeypatch.setenv("RCLONE_CONFIG", os.devnull)
         for key in list(os.environ):
             if key.startswith(("SYNTH_SETTER_STORAGE_", "RCLONE_CONFIG_R2_")):
                 monkeypatch.delenv(key, raising=False)
@@ -1522,6 +2000,21 @@ class TestEnsureR2EnvLoaded:
         ):
             with pytest.raises(RuntimeError, match="timed out"):
                 r2_io.ensure_r2_env_loaded(env_file=None)
+
+    def test_auth_ping_missing_rclone_raises_actionable_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing rclone binary raises through the public storage error contract.
+
+        :param monkeypatch: Pytest fixture used to populate secrets.
+        """
+        _set_all_r2_secrets(monkeypatch)
+
+        with (
+            patch.object(r2_io.subprocess, "run", side_effect=FileNotFoundError("rclone")),
+            pytest.raises(RuntimeError, match="rclone executable was not found"),
+        ):
+            r2_io.ensure_r2_env_loaded(env_file=None)
 
     def test_no_env_file_uses_process_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """``env_file=None`` skips dotenv; succeeds when os.environ already has the keys.

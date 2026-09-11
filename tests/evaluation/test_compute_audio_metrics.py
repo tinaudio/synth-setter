@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from fractions import Fraction
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 from click.testing import CliRunner
 
 import synth_setter.evaluation.compute_audio_metrics as cam
+from synth_setter.evaluation import response_losses
 from synth_setter.evaluation.compute_audio_metrics import (
     MEL_PARAMS,
     batched_wasserstein_distance_np,
@@ -20,6 +26,8 @@ from synth_setter.evaluation.compute_audio_metrics import (
     compute_metrics,
     compute_metrics_on_dir,
     compute_mfcc,
+    compute_mldr,
+    compute_mldr_mid_side,
     compute_mss,
     compute_rms,
     compute_sot,
@@ -67,6 +75,174 @@ def _reset_module_caches(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cam, "pesto_model", None, raising=True)
 
 
+# Public metric channel contracts.
+
+
+_PAIR_METRICS_WITH_SAMPLE_RATE: tuple[Callable[..., object], ...] = (
+    cam.compute_mss_corresponding_channels,
+    cam.compute_wmfcc_global_joint,
+    cam.compute_f0_downmix,
+    cam.compute_sot_downmix,
+    cam.compute_octave_rt60_log_rmse_mono_only,
+    cam.compute_octave_edc_rmse_db_mono_only,
+    cam.compute_acoustic_parameter_metrics_mono_only,
+    cam.compute_rms_downmix,
+    cam.compute_mldr_corresponding_channels,
+)
+
+
+@pytest.mark.parametrize(
+    ("target", "pred", "message"),
+    [
+        (np.zeros(32), np.zeros(32), "channel-first"),
+        (np.zeros((1, 32)), np.zeros((1, 31)), "same shape"),
+        (np.zeros((0, 32)), np.zeros((0, 32)), "at least one channel"),
+        (np.zeros((1, 0)), np.zeros((1, 0)), "one sample"),
+        (np.array([[np.nan]]), np.array([[0.0]]), "finite"),
+        (np.array([[1.0j]]), np.array([[0.0j]]), "real numeric"),
+        (np.array([[True]]), np.array([[False]]), "real numeric"),
+        (
+            np.array([[np.datetime64("2026-01-01")]]),
+            np.array([[np.datetime64("2026-01-02")]]),
+            "real numeric",
+        ),
+        (
+            np.array([[np.timedelta64(1, "ns")]]),
+            np.array([[np.timedelta64(2, "ns")]]),
+            "real numeric",
+        ),
+        (np.array([["audio"]]), np.array([["audio"]]), "real numeric"),
+    ],
+    ids=(
+        "wrong-rank",
+        "shape-mismatch",
+        "zero-channels",
+        "zero-samples",
+        "nonfinite",
+        "complex",
+        "boolean",
+        "datetime",
+        "timedelta",
+        "nonnumeric",
+    ),
+)
+@pytest.mark.parametrize(
+    "metric", _PAIR_METRICS_WITH_SAMPLE_RATE, ids=lambda metric: metric.__name__
+)
+def test_public_audio_metric_malformed_pair_raises(
+    metric: Callable[..., object], target: np.ndarray, pred: np.ndarray, message: str
+) -> None:
+    """Every metric rejects malformed audio through the shared contract.
+
+    :param metric: Public metric under test.
+    :param target: Invalid target audio.
+    :param pred: Invalid predicted audio.
+    :param message: Expected validation-error fragment.
+    """
+    with pytest.raises(ValueError, match=message):
+        metric(target, pred, _SR)
+
+
+@pytest.mark.parametrize("sample_rate", [True, 0, -1, np.nan, np.inf, "44100"])
+@pytest.mark.parametrize(
+    "metric", _PAIR_METRICS_WITH_SAMPLE_RATE, ids=lambda metric: metric.__name__
+)
+def test_public_audio_metric_invalid_sample_rate_raises(
+    metric: Callable[..., object], sample_rate: object
+) -> None:
+    """Every rate-aware metric rejects an invalid time base before analysis.
+
+    :param metric: Public metric under test.
+    :param sample_rate: Invalid sample rate.
+    """
+    audio = np.zeros((1, 32), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="sample_rate"):
+        metric(audio, audio, sample_rate)
+
+
+def test_public_audio_metric_fraction_sample_rate_is_normalized_to_float() -> None:
+    """Finite positive real sample rates reach downstream transforms as floats."""
+    audio = _sine(seconds=0.2)
+
+    score = cam.compute_mss_corresponding_channels(audio, audio, Fraction(_SR, 1))
+
+    assert score == pytest.approx(0.0, abs=1e-9)
+
+
+def test_public_audio_metric_integer_pair_matches_float64_pair() -> None:
+    """Integer audio is widened without scaling before metric analysis."""
+    target = (1000.0 * _sine(seconds=0.2, freq=440.0)).astype(np.int16)
+    pred = (1000.0 * _sine(seconds=0.2, freq=880.0)).astype(np.int16)
+
+    integer_score = cam.compute_mss_corresponding_channels(target, pred)
+    float_score = cam.compute_mss_corresponding_channels(
+        target.astype(np.float64), pred.astype(np.float64)
+    )
+
+    assert integer_score == pytest.approx(float_score, rel=1e-12)
+
+
+@pytest.mark.parametrize("sample_rate", [True, 0, -1, np.nan, np.inf, "44100"])
+def test_stereo_only_metric_invalid_sample_rate_raises(sample_rate: object) -> None:
+    """The stereo-only metric validates its time base before the transform.
+
+    :param sample_rate: Invalid sample rate.
+    """
+    audio = np.zeros((2, 32), dtype=np.float32)
+
+    metric = cast(Callable[..., object], cam.compute_mldr_mid_side_stereo_only)
+    with pytest.raises(ValueError, match="sample_rate"):
+        metric(audio, audio, sample_rate)
+
+
+def test_compatibility_metric_names_alias_explicit_channel_policies() -> None:
+    """Compatibility import names resolve to the explicit-policy callables."""
+    assert cam.compute_mss is cam.compute_mss_corresponding_channels
+    assert cam.compute_jtfs_distance is cam.compute_jtfs_distance_corresponding_channels
+    assert cam.compute_wmfcc is cam.compute_wmfcc_global_joint
+    assert cam.compute_f0 is cam.compute_f0_downmix
+    assert cam.compute_sot is cam.compute_sot_downmix
+    assert cam.compute_octave_rt60_log_rmse is cam.compute_octave_rt60_log_rmse_mono_only
+    assert cam.compute_octave_edc_rmse_db is cam.compute_octave_edc_rmse_db_mono_only
+    assert (
+        cam.compute_acoustic_parameter_metrics is cam.compute_acoustic_parameter_metrics_mono_only
+    )
+    assert cam.compute_rms is cam.compute_rms_downmix
+    assert cam.compute_mldr is cam.compute_mldr_corresponding_channels
+    assert cam.compute_mldr_mid_side is cam.compute_mldr_mid_side_stereo_only
+
+
+def test_compute_jtfs_distance_corresponding_channels_wrong_rank_raises() -> None:
+    """JTFS rejects implicit mono rank before constructing Scattering1D."""
+    audio = np.zeros(32, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="channel-first"):
+        cam.compute_jtfs_distance_corresponding_channels(audio, audio)
+
+
+@pytest.mark.parametrize(
+    "metric_name",
+    [
+        "compute_octave_rt60_log_rmse",
+        "compute_octave_edc_rmse_db",
+        "compute_acoustic_parameter_metrics",
+        "compute_octave_rt60_log_rmse_mono_only",
+        "compute_octave_edc_rmse_db_mono_only",
+        "compute_acoustic_parameter_metrics_mono_only",
+    ],
+)
+def test_mono_only_metric_stereo_input_raises(metric_name: str) -> None:
+    """Mono-only response metrics reject stereo before pyFDN transforms.
+
+    :param metric_name: Public mono-only metric under test.
+    """
+    stereo = np.zeros((2, 32), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="mono-only"):
+        getattr(cam, metric_name)(stereo, stereo, _SR)
+
+
 # ---------------------------------------------------------------------------
 # compute_rms — regression guards for #899.
 # ---------------------------------------------------------------------------
@@ -93,6 +269,325 @@ def test_compute_rms_silent_pred_returns_zero_not_nan() -> None:
     rms = compute_rms(target, pred)
     assert np.isfinite(rms), f"compute_rms produced non-finite {rms!r} for silent pred"
     assert rms == 0.0
+
+
+def test_compute_octave_rt60_log_rmse_identical_decay_returns_zero() -> None:
+    """Identical broadband decays have zero octave-band RT60 log error."""
+    rng = np.random.default_rng(7)
+    time = np.arange(_SR, dtype=np.float64) / _SR
+    decay = (rng.standard_normal(_SR) * np.exp(-20.0 * time))[None, :]
+
+    error = cam.compute_octave_rt60_log_rmse(decay, decay, _SR)
+
+    assert error == pytest.approx(0.0, abs=1e-12)
+
+
+def test_compute_octave_rt60_log_rmse_changed_decay_is_positive() -> None:
+    """Different broadband decay rates produce finite positive RT60 error."""
+    rng = np.random.default_rng(11)
+    time = np.arange(_SR, dtype=np.float64) / _SR
+    noise = rng.standard_normal(_SR)
+    target = (noise * np.exp(-20.0 * time))[None, :]
+    pred = (noise * np.exp(-10.0 * time))[None, :]
+
+    error = cam.compute_octave_rt60_log_rmse(target, pred, _SR)
+
+    assert np.isfinite(error)
+    assert error > 0.0
+
+
+def test_compute_octave_rt60_log_rmse_ignores_unfit_band_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Zero and non-finite estimates cannot enter the logarithmic reduction.
+
+    :param monkeypatch: Supplies controlled pyFDN RT estimates at the dependency boundary.
+    """
+    estimates = iter(
+        [
+            (np.array([1.0, 0.0, np.nan, 2.0]), np.array([63.0, 125.0, 250.0, 500.0])),
+            (np.array([2.0, 3.0, 4.0, 2.0]), np.array([63.0, 125.0, 250.0, 500.0])),
+        ]
+    )
+    monkeypatch.setattr(cam, "estimate_rt_bands", lambda *_args, **_kwargs: next(estimates))
+    audio = np.zeros((1, _SR), dtype=np.float32)
+
+    error = cam.compute_octave_rt60_log_rmse(audio, audio, _SR)
+
+    assert error == pytest.approx(np.log(2.0) / np.sqrt(2.0))
+
+
+def test_compute_octave_rt60_log_rmse_mismatched_band_centres_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pyFDN band-layout mismatch cannot silently pair unrelated estimates.
+
+    :param monkeypatch: Supplies inconsistent centre frequencies.
+    """
+    estimates = iter(
+        [
+            (np.ones(2), np.array([63.0, 125.0])),
+            (np.ones(2), np.array([63.0, 250.0])),
+        ]
+    )
+    monkeypatch.setattr(cam, "estimate_rt_bands", lambda *_args, **_kwargs: next(estimates))
+    audio = np.zeros((1, _SR), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="centre frequencies differ"):
+        cam.compute_octave_rt60_log_rmse(audio, audio, _SR)
+
+
+def test_compute_octave_rt60_log_rmse_without_valid_band_pair_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An entirely unfit pair fails instead of logging NaN or infinity.
+
+    :param monkeypatch: Supplies controlled zero RT estimates.
+    """
+    monkeypatch.setattr(
+        cam,
+        "estimate_rt_bands",
+        lambda *_args, **_kwargs: (np.zeros(2), np.array([63.0, 125.0])),
+    )
+    audio = np.zeros((1, _SR), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="no valid paired octave-band RT60 estimates"):
+        cam.compute_octave_rt60_log_rmse(audio, audio, _SR)
+
+
+def test_compute_octave_edc_rmse_db_identical_decay_returns_zero() -> None:
+    """Identical broadband decays have zero octave-band EDC error."""
+    rng = np.random.default_rng(13)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    decay = (rng.standard_normal(_SR).astype(np.float32) * np.exp(-20.0 * time))[None, :]
+
+    error = cam.compute_octave_edc_rmse_db(decay, decay, _SR)
+
+    assert error == pytest.approx(0.0, abs=1e-7)
+
+
+def test_compute_octave_edc_rmse_db_disables_gradients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Using pyFDN's matching loss as a metric never records a gradient graph.
+
+    :param monkeypatch: Replaces the criterion at its external-library boundary.
+    """
+    grad_enabled: list[bool] = []
+
+    class Criterion:
+        def __init__(self, _target: np.ndarray) -> None:
+            pass
+
+        def __call__(self, _response: object) -> torch.Tensor:
+            grad_enabled.append(torch.is_grad_enabled())
+            return torch.tensor(0.0)
+
+    monkeypatch.setattr(response_losses, "MatchEnergyDecay", Criterion)
+    audio = np.zeros((1, _SR), dtype=np.float32)
+
+    with torch.enable_grad():
+        cam.compute_octave_edc_rmse_db(audio, audio, _SR)
+
+    assert grad_enabled == [False]
+
+
+def test_compute_octave_edc_rmse_db_nonfinite_result_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-finite pyFDN criterion result cannot enter metric aggregation.
+
+    :param monkeypatch: Replaces the criterion with a non-finite result.
+    """
+
+    class NonfiniteCriterion:
+        def __init__(self, _target: np.ndarray) -> None:
+            pass
+
+        def __call__(self, _response: object) -> torch.Tensor:
+            return torch.tensor(float("nan"))
+
+    monkeypatch.setattr(response_losses, "MatchEnergyDecay", NonfiniteCriterion)
+    audio = np.zeros((1, _SR), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="pyfdn_match_energy_decay must be finite"):
+        cam.compute_octave_edc_rmse_db(audio, audio, _SR)
+
+
+def test_compute_octave_edc_rmse_db_changed_decay_is_positive() -> None:
+    """Different broadband decay rates produce finite positive EDC error."""
+    rng = np.random.default_rng(17)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    noise = rng.standard_normal(_SR).astype(np.float32)
+    target = (noise * np.exp(-20.0 * time))[None, :]
+    pred = (noise * np.exp(-10.0 * time))[None, :]
+
+    error = cam.compute_octave_edc_rmse_db(target, pred, _SR)
+
+    assert np.isfinite(error)
+    assert error > 0.0
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [cam.compute_octave_rt60_log_rmse, cam.compute_octave_edc_rmse_db],
+)
+def test_pyfdn_reverb_metric_nonfinite_input_raises(
+    metric: Callable[[np.ndarray, np.ndarray, float], float],
+) -> None:
+    """Reverb metrics reject non-finite audio before calling pyFDN.
+
+    :param metric: pyFDN metric under test.
+    """
+    audio = np.zeros((1, _SR), dtype=np.float32)
+    audio[0, 0] = np.nan
+
+    with pytest.raises(ValueError, match="finite"):
+        metric(audio, audio, _SR)
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [cam.compute_octave_rt60_log_rmse, cam.compute_octave_edc_rmse_db],
+)
+def test_pyfdn_reverb_metric_mismatched_lengths_raise(
+    metric: Callable[[np.ndarray, np.ndarray, float], float],
+) -> None:
+    """Reverb metrics require aligned target and prediction durations.
+
+    :param metric: pyFDN metric under test.
+    """
+    target = np.zeros((1, _SR), dtype=np.float32)
+    pred = np.zeros((1, _SR - 1), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="same shape"):
+        metric(target, pred, _SR)
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        cam.compute_octave_rt60_log_rmse_corresponding_channels,
+        cam.compute_octave_edc_rmse_db_corresponding_channels,
+    ],
+)
+def test_pyfdn_reverb_metric_multichannel_averages_corresponding_channel_scores(
+    metric: Callable[[np.ndarray, np.ndarray, float], float],
+) -> None:
+    """A matching first channel cannot hide a wrong second-channel decay.
+
+    :param metric: pyFDN metric under test.
+    """
+    rng = np.random.default_rng(29)
+    time = np.arange(_SR, dtype=np.float64) / _SR
+    noise = rng.standard_normal(_SR)
+    first = (noise * np.exp(-20.0 * time))[None, :]
+    second_target = (noise * np.exp(-24.0 * time))[None, :]
+    second_pred = (noise * np.exp(-8.0 * time))[None, :]
+    target = np.concatenate((first, second_target), axis=0)
+    pred = np.concatenate((first, second_pred), axis=0)
+
+    score = metric(target, pred, _SR)
+    second_score = metric(second_target, second_pred, _SR)
+
+    assert score == pytest.approx(second_score / 2.0)
+    assert score > 0.0
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        cam.compute_octave_rt60_log_rmse_corresponding_channels,
+        cam.compute_octave_edc_rmse_db_corresponding_channels,
+        cam.compute_acoustic_parameter_metrics_corresponding_channels,
+    ],
+)
+def test_pyfdn_reverb_metric_channel_count_mismatch_raises(
+    metric: Callable[[np.ndarray, np.ndarray, float], object],
+) -> None:
+    """Mono and stereo responses cannot broadcast during metric evaluation.
+
+    :param metric: pyFDN metric under test.
+    """
+    mono = np.zeros((1, _SR), dtype=np.float64)
+    stereo = np.zeros((2, _SR), dtype=np.float64)
+
+    with pytest.raises(ValueError, match="same shape"):
+        metric(mono, stereo, _SR)
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        cam.compute_octave_rt60_log_rmse_corresponding_channels,
+        cam.compute_acoustic_parameter_metrics_corresponding_channels,
+    ],
+)
+def test_multichannel_reverb_metric_invalid_second_channel_raises(
+    metric: Callable[[np.ndarray, np.ndarray, float], object],
+) -> None:
+    """An invalid second channel is not omitted from the scalar average.
+
+    :param metric: Reverb metric under test.
+    """
+    rng = np.random.default_rng(31)
+    time = np.arange(_SR, dtype=np.float64) / _SR
+    valid = rng.standard_normal(_SR) * np.exp(-20.0 * time)
+    audio = np.stack((valid, np.zeros_like(valid)))
+
+    with (
+        np.errstate(divide="ignore"),
+        pytest.raises(ValueError, match="no valid paired octave-band"),
+    ):
+        metric(audio, audio, _SR)
+
+
+def test_acoustic_parameter_metrics_multichannel_average_measurements() -> None:
+    """Scalar errors and raw bands average independent channel measurements."""
+    rng = np.random.default_rng(37)
+    time = np.arange(_SR, dtype=np.float64) / _SR
+    noise = rng.standard_normal(_SR)
+    first_target = (noise * np.exp(-20.0 * time))[None, :]
+    first_pred = (noise * np.exp(-16.0 * time))[None, :]
+    second_target = (noise * np.exp(-24.0 * time))[None, :]
+    second_pred = (noise * np.exp(-10.0 * time))[None, :]
+    target = np.concatenate((first_target, second_target), axis=0)
+    pred = np.concatenate((first_pred, second_pred), axis=0)
+
+    metrics = cam.compute_acoustic_parameter_metrics_corresponding_channels(target, pred, _SR)
+    first = cam.compute_acoustic_parameter_metrics_corresponding_channels(
+        first_target, first_pred, _SR
+    )
+    second = cam.compute_acoustic_parameter_metrics_corresponding_channels(
+        second_target, second_pred, _SR
+    )
+
+    for name in (
+        "t30_mape",
+        "c50_mae_db",
+        "acoustic_param/t30/1000hz/target",
+        "acoustic_param/t30/1000hz/pred",
+        "acoustic_param/c50/1000hz/target",
+        "acoustic_param/c50/1000hz/pred",
+    ):
+        assert metrics[name] == pytest.approx((first[name] + second[name]) / 2.0)
+
+
+def test_compute_rms_downmix_accepts_three_channels() -> None:
+    """RMS explicitly downmixes any nonempty matching channel count."""
+    mono = _sine(seconds=0.2)
+    audio = np.concatenate((mono, 0.5 * mono, -mono), axis=0)
+
+    assert cam.compute_rms_downmix(audio, audio) == pytest.approx(1.0, abs=1e-6)
+
+
+def test_compute_rms_downmix_uses_arithmetic_channel_mean() -> None:
+    """Anti-phase target channels cancel before RMS-envelope comparison."""
+    channel = np.ones(4096, dtype=np.float32)
+    target = np.stack((channel, -channel))
+    pred = np.stack((channel, channel))
+
+    assert cam.compute_rms_downmix(target, pred) == 0.0
 
 
 def test_compute_rms_quiet_nonzero_inputs_return_zero() -> None:
@@ -237,26 +732,305 @@ def test_compute_mel_specs_is_deterministic() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_compute_mss_corresponding_channels_accepts_three_channels() -> None:
+    """MSS compares matching channels without restricting their count."""
+    mono = _sine(seconds=0.5)
+    audio = np.concatenate((mono, 0.5 * mono, -mono), axis=0)
+
+    assert cam.compute_mss_corresponding_channels(audio, audio) == pytest.approx(0.0, abs=1e-9)
+
+
 def test_compute_mss_identical_inputs_returns_zero() -> None:
     """``compute_mss(x, x)`` is exactly 0."""
-    audio = _sine(seconds=0.5)[0]
+    audio = _sine(seconds=0.5)
     assert compute_mss(audio, audio) == pytest.approx(0.0, abs=1e-9)
 
 
 def test_compute_mss_different_inputs_is_positive() -> None:
     """Distinct signals produce a strictly positive distance."""
-    target = _sine(seconds=0.5, freq=440.0)[0]
-    pred = _sine(seconds=0.5, freq=880.0)[0]
+    target = _sine(seconds=0.5, freq=440.0)
+    pred = _sine(seconds=0.5, freq=880.0)
     dist = compute_mss(target, pred)
     assert dist > 0
     assert np.isfinite(dist)
 
 
+def test_compute_mss_valid_pair_preserves_reference_value() -> None:
+    """Channel validation does not change the established MSS reduction."""
+    target = _sine(seconds=0.5, freq=440.0)
+    pred = _sine(seconds=0.5, freq=880.0)
+
+    assert compute_mss(target, pred, _SR) == pytest.approx(8.276928, rel=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("sample_rate", "invalid_length"),
+    [(99.0, "n_fft"), (199.0, "hop_length")],
+)
+def test_compute_mss_sample_rate_with_zero_analysis_length_raises(
+    sample_rate: float, invalid_length: str
+) -> None:
+    """MSS rejects rates that truncate any configured analysis length to zero.
+
+    :param sample_rate: Rate that makes at least one MSS analysis length invalid.
+    :param invalid_length: Derived length expected in the public validation error.
+    """
+    audio = np.zeros((1, 32), dtype=np.float32)
+
+    with pytest.raises(ValueError, match=rf"MSS sample_rate.*positive.*{invalid_length}"):
+        cam.compute_mss_corresponding_channels(audio, audio, sample_rate)
+
+
 def test_compute_mss_is_symmetric() -> None:
     """``compute_mss(a, b) == compute_mss(b, a)``."""
-    a = _sine(seconds=0.5, freq=440.0)[0]
-    b = _sine(seconds=0.5, freq=880.0)[0]
+    a = _sine(seconds=0.5, freq=440.0)
+    b = _sine(seconds=0.5, freq=880.0)
     assert compute_mss(a, b) == pytest.approx(compute_mss(b, a), abs=1e-9)
+
+
+def test_compute_mss_grows_with_frequency_separation() -> None:
+    """A tone two octaves away scores further from the reference than one octave.
+
+    Monotonicity holds over this range but not globally — the mel-scale distance saturates above
+    ~3.5 kHz, so widening the sweep would invert the comparison.
+    """
+    reference = _sine(seconds=0.5, freq=440.0)
+    one_octave = _sine(seconds=0.5, freq=880.0)
+    two_octaves = _sine(seconds=0.5, freq=1760.0)
+
+    assert compute_mss(reference, one_octave) < compute_mss(reference, two_octaves)
+
+
+# ---------------------------------------------------------------------------
+# compute_mldr
+# ---------------------------------------------------------------------------
+
+
+def _tremolo(depth: float, rate_hz: float = 4.0, seconds: float = 2.0) -> np.ndarray:
+    """Amplitude-modulated 440 Hz tone with the given modulation ``depth`` in ``[0, 1]``.
+
+    :param depth: Fraction of the carrier amplitude swept by the modulator.
+    :param rate_hz: Modulation rate in Hz.
+    :param seconds: Length in seconds.
+    :return: ``(1, N)`` float32 array.
+    """
+    carrier = _sine(seconds=seconds)
+    t = np.arange(carrier.shape[-1], dtype=np.float32) / _SR
+    envelope = 1.0 - depth * 0.5 * (1.0 + np.sin(2 * np.pi * rate_hz * t))
+    return (carrier * envelope).astype(np.float32)
+
+
+def test_compute_mldr_corresponding_channels_accepts_three_channels() -> None:
+    """MLDR scores corresponding channels for any nonempty channel count."""
+    mono = _tremolo(depth=0.5, seconds=0.2)
+    audio = np.concatenate((mono, 0.5 * mono, -mono), axis=0)
+
+    assert cam.compute_mldr_corresponding_channels(audio, audio) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_compute_mldr_identical_inputs_returns_zero() -> None:
+    """``compute_mldr(x, x)`` is exactly 0."""
+    audio = _tremolo(depth=0.5)
+    assert compute_mldr(audio, audio) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_compute_mldr_steady_tone_vs_tremolo_is_positive() -> None:
+    """A modulated envelope differs in loudness dynamic range from a steady one."""
+    dist = compute_mldr(_sine(seconds=2.0), _tremolo(depth=0.9))
+    assert np.isfinite(dist)
+    assert dist > 0
+
+
+def test_compute_mldr_is_symmetric() -> None:
+    """``compute_mldr(a, b) == compute_mldr(b, a)``."""
+    a = _sine(seconds=2.0)
+    b = _tremolo(depth=0.9)
+    assert compute_mldr(a, b) == pytest.approx(compute_mldr(b, a), abs=1e-9)
+
+
+def test_compute_mldr_is_invariant_to_overall_gain() -> None:
+    """LDR is a ratio of envelopes, so a global gain change nearly cancels.
+
+    Not exactly zero: the energy floor applied before the log bites at zero crossings, and
+    which samples it floors depends on the gain.
+    """
+    audio = _tremolo(depth=0.5)
+    assert compute_mldr(audio, 0.25 * audio) == pytest.approx(0.0, abs=1e-3)
+
+
+def test_compute_mldr_grows_with_modulation_depth() -> None:
+    """Deeper tremolo sits further from a steady tone than shallow tremolo."""
+    steady = _sine(seconds=2.0)
+    assert compute_mldr(steady, _tremolo(depth=0.3)) < compute_mldr(steady, _tremolo(depth=0.9))
+
+
+def test_compute_mldr_stereo_equals_mean_of_independent_channel_scores() -> None:
+    """Channels are scored as independent rows, so a stereo pair averages its two mono scores.
+
+    The channels differ so that a flattened alignment roll, which would leak the left tail into the
+    right head, cannot reproduce the per-channel result.
+    """
+    left = (_sine(seconds=2.0), _tremolo(depth=0.9))
+    right = (_tremolo(depth=0.3, rate_hz=1.5), _sine(seconds=2.0, freq=880.0))
+    stereo_target = np.concatenate([left[0], right[0]], axis=0)
+    stereo_pred = np.concatenate([left[1], right[1]], axis=0)
+
+    stereo = compute_mldr(stereo_target, stereo_pred)
+
+    per_channel_mean = (compute_mldr(*left) + compute_mldr(*right)) / 2
+    assert stereo == pytest.approx(per_channel_mean, rel=1e-6)
+
+
+def test_compute_mldr_matches_diffvox_reference_value() -> None:
+    """A frozen value from DiffVox's ``MLDRLoss`` pins the coefficients, alignment, and reduction.
+
+    Reference: ``loss/ldr.py`` of github.com/SonyResearch/diffvox with ``torchcomp==0.2.1`` and
+    ``torchlpc==0.7.2``, ``s_taus=[50, 100]``, ``l_taus=[1000, 2000]``, on this exact signal
+    pair. The tolerance covers the reference's float32 ``ms2coef`` coefficient.
+    """
+    sr = 44100
+    t = np.arange(3 * sr) / sr
+    target = (0.5 * np.sin(2 * np.pi * 220 * t) * (1 + 0.5 * np.sin(2 * np.pi * 3 * t)))[None]
+    noise = np.random.default_rng(0).standard_normal(3 * sr)
+    pred = (target[0] * np.exp(-t) + 0.05 * noise)[None]
+
+    dist = compute_mldr(target.astype(np.float32), pred.astype(np.float32), sr)
+
+    assert dist == pytest.approx(1.9981863186, rel=1e-4)
+
+
+def test_compute_mldr_mismatched_shapes_raise() -> None:
+    """A mono target against a stereo prediction is rejected instead of broadcast."""
+    target = _sine(seconds=1.0)
+    pred = np.repeat(target, 2, axis=0)
+    with pytest.raises(ValueError, match="shape"):
+        compute_mldr(target, pred)
+
+
+def test_compute_mldr_silent_inputs_are_finite() -> None:
+    """Digital silence is floored before the logarithm instead of producing NaN."""
+    silence = np.zeros((1, 2 * _SR), dtype=np.float32)
+    dist = compute_mldr(_sine(seconds=2.0), silence)
+    assert np.isfinite(dist)
+
+
+def test_compute_mldr_mid_side_stereo_only_rejects_three_channels() -> None:
+    """The mid/side metric exposes its exact stereo-only contract."""
+    audio = np.zeros((3, 100), dtype=np.float32)
+
+    with pytest.raises(ValueError, match="stereo-only"):
+        cam.compute_mldr_mid_side_stereo_only(audio, audio)
+
+
+def test_compute_mldr_mid_side_identical_stereo_returns_zero() -> None:
+    """Identical stereo pairs have zero mid/side MLDR distance."""
+    stereo = np.concatenate([_sine(seconds=2.0), _tremolo(depth=0.5)], axis=0)
+
+    assert compute_mldr_mid_side(stereo, stereo) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_compute_mldr_mid_side_matches_mldr_on_supplied_mid_side_signals() -> None:
+    """The stereo score equals MLDR applied to the supplied original M/S signals."""
+    sqrt_two = np.sqrt(2.0)
+    target_ms = np.concatenate([_sine(seconds=2.0), _tremolo(depth=0.2)], axis=0)
+    pred_ms = np.concatenate([_tremolo(depth=0.8), _sine(seconds=2.0)], axis=0)
+    target_lr = np.stack(
+        ((target_ms[0] + target_ms[1]) / sqrt_two, (target_ms[0] - target_ms[1]) / sqrt_two)
+    )
+    pred_lr = np.stack(
+        ((pred_ms[0] + pred_ms[1]) / sqrt_two, (pred_ms[0] - pred_ms[1]) / sqrt_two)
+    )
+
+    score = compute_mldr_mid_side(target_lr, pred_lr)
+
+    assert score == pytest.approx(compute_mldr(target_ms, pred_ms), rel=1e-8, abs=1e-8)
+
+
+def test_compute_mldr_mid_side_detects_right_channel_polarity_change() -> None:
+    """Mid/side MLDR detects a polarity change hidden by per-channel energy."""
+    target = np.concatenate([_sine(seconds=2.0), _tremolo(depth=0.9)], axis=0)
+    pred = target.copy()
+    pred[1] *= -1
+
+    assert compute_mldr(target, pred) == pytest.approx(0.0, abs=1e-9)
+    assert compute_mldr_mid_side(target, pred) > 0.0
+
+
+def test_compute_mldr_mid_side_integer_input_matches_float64_input() -> None:
+    """Mid/side addition occurs after widening, so integer samples cannot overflow."""
+    target = np.tile(
+        np.array(
+            [[30_000, 20_000, -30_000, -20_000], [20_000, 30_000, -20_000, -30_000]],
+            dtype=np.int16,
+        ),
+        (1, 1_000),
+    )
+    pred = np.roll(target, 97, axis=1)
+
+    integer_score = compute_mldr_mid_side(target, pred, sample_rate=1_000)
+
+    assert integer_score == pytest.approx(
+        compute_mldr_mid_side(
+            target.astype(np.float64), pred.astype(np.float64), sample_rate=1_000
+        ),
+        abs=1e-12,
+    )
+
+
+def test_compute_mldr_mid_side_near_silent_side_is_finite() -> None:
+    """A nearly centred stereo pair remains finite after mid/side conversion."""
+    left = _tremolo(depth=0.5)[0]
+    stereo = np.stack((left, left + 1e-12))
+
+    assert np.isfinite(compute_mldr_mid_side(stereo, stereo))
+
+
+@pytest.mark.parametrize(
+    ("target", "pred"),
+    [
+        (np.zeros((1, 10)), np.zeros((1, 10))),
+        (np.zeros((3, 10)), np.zeros((3, 10))),
+        (np.zeros((2, 10)), np.zeros((2, 9))),
+        (np.zeros((2, 0)), np.zeros((2, 0))),
+        (np.zeros(10), np.zeros(10)),
+    ],
+)
+def test_compute_mldr_mid_side_nonmatching_stereo_shape_raises(
+    target: np.ndarray, pred: np.ndarray
+) -> None:
+    """Only matching channel-first stereo arrays satisfy the public contract.
+
+    :param target: Invalid target shape.
+    :param pred: Invalid prediction shape.
+    """
+    with pytest.raises(ValueError, match="channel-first|same shape|at least one|stereo-only"):
+        compute_mldr_mid_side(target, pred)
+
+
+def test_compute_mldr_mid_side_finite_energy_overflow_is_rescaled() -> None:
+    """Finite transformed values are safely rescaled before energy squaring."""
+    stereo = np.full((2, 10), 1e200)
+
+    result = compute_mldr_mid_side(stereo, stereo)
+
+    assert result == pytest.approx(0.0)
+
+
+def test_compute_mldr_mid_side_finite_overflowing_transform_raises() -> None:
+    """Finite values whose mid/side sum overflows cannot produce a metric."""
+    stereo = np.full((2, 10), np.finfo(np.float64).max)
+
+    with pytest.raises(ValueError, match="finite"):
+        compute_mldr_mid_side(stereo, stereo)
+
+
+def test_compute_mldr_mid_side_nonfinite_audio_raises() -> None:
+    """Non-finite stereo samples cannot enter metric aggregation."""
+    stereo = np.zeros((2, 10), dtype=np.float64)
+    stereo[0, 0] = np.nan
+
+    with pytest.raises(ValueError, match="finite"):
+        compute_mldr_mid_side(stereo, stereo)
 
 
 # ---------------------------------------------------------------------------
@@ -299,19 +1073,53 @@ def test_compute_mfcc_multichannel_input_returns_channel_leading_shape() -> None
 # ---------------------------------------------------------------------------
 
 
+def test_compute_wmfcc_global_joint_accepts_three_channels() -> None:
+    """WMFCC keeps all channels in one joint DTW feature vector."""
+    mono = _sine(seconds=0.2)
+    audio = np.concatenate((mono, 0.5 * mono, -mono), axis=0)
+
+    assert cam.compute_wmfcc_global_joint(audio, audio) == pytest.approx(0.0, abs=1e-9)
+
+
 def test_compute_wmfcc_identical_inputs_returns_zero() -> None:
     """DTW-normalized distance of identical signals is 0."""
-    audio = _sine(seconds=0.5)[0]
+    audio = _sine(seconds=0.5)
     assert compute_wmfcc(audio, audio) == pytest.approx(0.0, abs=1e-9)
 
 
 def test_compute_wmfcc_different_inputs_is_positive() -> None:
     """Distinct signals produce a strictly positive distance."""
-    target = _sine(seconds=0.5, freq=440.0)[0]
-    pred = _sine(seconds=0.5, freq=880.0)[0]
+    target = _sine(seconds=0.5, freq=440.0)
+    pred = _sine(seconds=0.5, freq=880.0)
     dist = compute_wmfcc(target, pred)
     assert dist > 0
     assert np.isfinite(dist)
+
+
+def test_compute_wmfcc_global_joint_preserves_reference_value() -> None:
+    """Multichannel wMFCC uses one joint channel/coefficient feature vector."""
+    first = _sine(seconds=0.2, freq=440.0)
+    second = _sine(seconds=0.2, freq=880.0)
+    target = np.concatenate((first, second), axis=0)
+    pred = np.concatenate((second, first), axis=0)
+
+    assert compute_wmfcc(target, pred, _SR) == pytest.approx(22.158663702011108, rel=1e-6)
+
+
+def test_compute_wmfcc_is_symmetric() -> None:
+    """``compute_wmfcc(a, b) == compute_wmfcc(b, a)`` despite the DTW alignment.
+
+    DTW distance is only symmetric when the local cost and step pattern are; the length
+    normalisation applied here preserves that, so a step-pattern change that broke it would surface
+    as an argument-order dependence.
+
+    Unlike the other distances, wMFCC is *not* monotonic in frequency separation — it dips around
+    3.5 kHz — so no ordering is asserted.
+    """
+    a = _sine(seconds=0.5, freq=440.0)
+    b = _sine(seconds=0.5, freq=880.0)
+
+    assert compute_wmfcc(a, b) == pytest.approx(compute_wmfcc(b, a), rel=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +1181,16 @@ def test_batched_wasserstein_distance_preserves_batch_dim() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_compute_sot_downmix_anti_phase_matches_silence() -> None:
+    """SOT explicitly averages channels before spectral analysis."""
+    mono = _sine(seconds=0.5)
+    anti_phase = np.concatenate((mono, -mono), axis=0)
+    silence = np.zeros_like(anti_phase)
+
+    assert cam.compute_sot_downmix(anti_phase, silence) == pytest.approx(0.0, abs=1e-9)
+    assert cam.compute_mss_corresponding_channels(anti_phase, silence) > 0.0
+
+
 def test_compute_sot_identical_inputs_returns_zero() -> None:
     """Identical signals have zero spectral optimal-transport distance."""
     audio = _sine(seconds=0.5)
@@ -385,7 +1203,24 @@ def test_compute_sot_different_inputs_is_finite_and_nonnegative() -> None:
     pred = _sine(seconds=0.5, freq=1760.0)
     dist = compute_sot(target, pred)
     assert np.isfinite(dist)
-    assert dist >= 0
+    assert dist > 0
+
+
+def test_compute_sot_is_symmetric() -> None:
+    """``compute_sot(a, b) == compute_sot(b, a)`` — transport cost carries no direction."""
+    a = _sine(seconds=0.5, freq=440.0)
+    b = _sine(seconds=0.5, freq=880.0)
+
+    assert compute_sot(a, b) == pytest.approx(compute_sot(b, a), rel=1e-9)
+
+
+def test_compute_sot_grows_with_frequency_separation() -> None:
+    """Transport cost rises as the spectra move further apart."""
+    reference = _sine(seconds=0.5, freq=440.0)
+    one_octave = _sine(seconds=0.5, freq=880.0)
+    three_octaves = _sine(seconds=0.5, freq=3520.0)
+
+    assert compute_sot(reference, one_octave) < compute_sot(reference, three_octaves)
 
 
 # ---------------------------------------------------------------------------
@@ -394,15 +1229,202 @@ def test_compute_sot_different_inputs_is_finite_and_nonnegative() -> None:
 
 
 def test_compute_metrics_on_dir_returns_expected_keys(tmp_path: Path) -> None:
-    """End-to-end on a single sample dir returns finite ``mss/wmfcc/sot/rms``.
+    """End-to-end on a single sample dir returns finite ``mss/wmfcc/sot/rms/mldr``.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     sample_dir = _make_sample_dir(tmp_path, "0", _sine(seconds=0.5), _sine(seconds=0.5))
     metrics = compute_metrics_on_dir(sample_dir)
-    assert set(metrics.keys()) == {"mss", "wmfcc", "sot", "rms"}
+    assert set(metrics.keys()) == {"mss", "wmfcc", "sot", "rms", "mldr"}
     for value in metrics.values():
         assert np.isfinite(value)
+
+
+def test_compute_metrics_on_dir_three_channel_wavs_use_declared_policies(tmp_path: Path) -> None:
+    """Real three-channel WAVs run all unrestricted metrics without adding stereo-only output.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    mono = _sine(seconds=0.2)
+    audio = np.concatenate((mono, 0.5 * mono, -mono), axis=0)
+    sample_dir = _make_sample_dir(tmp_path, "0", audio, audio)
+
+    metrics = compute_metrics_on_dir(sample_dir)
+
+    assert set(metrics) == {"mss", "wmfcc", "sot", "rms", "mldr"}
+    assert np.isfinite(list(metrics.values())).all()
+
+
+def test_compute_metrics_on_dir_stereo_adds_mid_side_metric(tmp_path: Path) -> None:
+    """A real stereo WAV pair includes a finite mid/side MLDR score.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    stereo = np.concatenate([_sine(seconds=0.5), _tremolo(depth=0.5, seconds=0.5)], axis=0)
+    sample_dir = _make_sample_dir(tmp_path, "0", stereo, stereo)
+
+    metrics = compute_metrics_on_dir(sample_dir)
+
+    assert metrics["mldr_mid_side"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_compute_metrics_on_dir_pyfdn_scores_wrong_second_channel(tmp_path: Path) -> None:
+    """The real WAV consumer includes a mismatched second transfer path in its score.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    rng = np.random.default_rng(41)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    first = rng.standard_normal(_SR).astype(np.float32) * np.exp(-20.0 * time)
+    second = rng.standard_normal(_SR).astype(np.float32) * np.exp(-12.0 * time)
+    target = np.stack((first, second))
+    pred = np.stack((first, -second))
+    sample_dir = _make_sample_dir(tmp_path, "0", target, pred)
+
+    metrics = compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
+
+    assert metrics["pyfdn_match_impulse_response"] > 0.0
+
+
+def test_compute_metrics_on_dir_pyfdn_uses_explicit_corresponding_channel_edc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Directory scoring does not route multichannel EDC through its mono compatibility alias.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Replaces the explicit EDC policy with a recognizable score.
+    """
+    rng = np.random.default_rng(43)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    decay = (rng.standard_normal(_SR).astype(np.float32) * np.exp(-20.0 * time))[None, :]
+    sample_dir = _make_sample_dir(tmp_path, "0", decay, decay)
+    monkeypatch.setattr(
+        cam, "compute_octave_edc_rmse_db_corresponding_channels", lambda *_args: 17.0
+    )
+
+    metrics = compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
+
+    assert metrics["octave_edc_rmse_db"] == 17.0
+
+
+def test_compute_metrics_on_dir_pyfdn_adds_reverb_metrics(tmp_path: Path) -> None:
+    """Selecting pyFDN augments the historical metric set with reverb errors.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    rng = np.random.default_rng(23)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    decay = (rng.standard_normal(_SR).astype(np.float32) * np.exp(-20.0 * time))[None, :]
+    sample_dir = _make_sample_dir(tmp_path, "0", decay, decay)
+
+    metrics = compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
+
+    assert set(metrics) == {
+        "c50_mae_db",
+        "joint_time_frequency_ot",
+        "mldr",
+        "mss",
+        "octave_edc_rmse_db",
+        "octave_rt60_log_rmse",
+        "pyfdn_asymmetric_flat_magnitude_pred",
+        "pyfdn_asymmetric_flat_magnitude_target",
+        "pyfdn_energy_pred",
+        "pyfdn_energy_target",
+        "pyfdn_flat_magnitude_pred",
+        "pyfdn_flat_magnitude_target",
+        "pyfdn_flat_spectrogram_pred",
+        "pyfdn_flat_spectrogram_target",
+        "pyfdn_match_cumulative_energy",
+        "pyfdn_match_energy_decay",
+        "pyfdn_match_impulse_response",
+        "pyfdn_match_magnitude",
+        "pyfdn_match_mel_spectrogram",
+        "pyfdn_match_spectrogram",
+        "rms",
+        "sot",
+        "t30_mape",
+        "wmfcc",
+        *cam.ACOUSTIC_PARAMETER_COLUMNS,
+    }
+    assert metrics["octave_edc_rmse_db"] == pytest.approx(0.0, abs=1e-7)
+    assert metrics["octave_rt60_log_rmse"] == pytest.approx(0.0, abs=1e-12)
+    assert metrics["t30_mape"] == pytest.approx(0.0, abs=1e-12)
+    assert metrics["c50_mae_db"] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_compute_metrics_on_dir_pyfdn_records_per_band_parameters(tmp_path: Path) -> None:
+    """Raw per-band T30/C50 of both sides are kept so PCC can be computed across samples.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    rng = np.random.default_rng(23)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    # exp(-20 t) decays 60 dB in 6.91 / 20 ≈ 0.35 s.
+    decay = (rng.standard_normal(_SR).astype(np.float32) * np.exp(-20.0 * time))[None, :]
+    sample_dir = _make_sample_dir(tmp_path, "0", decay, decay)
+
+    metrics = compute_metrics_on_dir(sample_dir, renderer_backend="pyfdn")
+
+    assert metrics["acoustic_param/t30/1000hz/target"] == pytest.approx(0.35, abs=0.05)
+    assert metrics["acoustic_param/t30/1000hz/pred"] == metrics["acoustic_param/t30/1000hz/target"]
+    assert metrics["acoustic_param/c50/1000hz/pred"] == metrics["acoustic_param/c50/1000hz/target"]
+
+
+def test_compute_metrics_on_dir_uses_wav_sample_rate(tmp_path: Path) -> None:
+    """File sample rate controls analysis windows instead of the 44.1 kHz default.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    sample_dir = tmp_path / "sample_0"
+    sample_dir.mkdir()
+    target = sine(freq=440.0, amplitude=0.5, channels=1, sr=8_000, seconds=0.5)
+    pred = sine(freq=880.0, amplitude=0.5, channels=1, sr=8_000, seconds=0.5)
+    write_wav(sample_dir / "target.wav", target, sr=8_000)
+    write_wav(sample_dir / "pred.wav", pred, sr=8_000)
+
+    with cam.AudioFile(str(sample_dir / "target.wav")) as target_file:
+        loaded_target = target_file.read(target_file.frames)
+    with cam.AudioFile(str(sample_dir / "pred.wav")) as pred_file:
+        loaded_pred = pred_file.read(pred_file.frames)
+    metrics = compute_metrics_on_dir(sample_dir)
+
+    assert metrics["mss"] == pytest.approx(
+        compute_mss(loaded_target, loaded_pred, 8_000), rel=1e-5
+    )
+    assert metrics["mss"] != pytest.approx(
+        compute_mss(loaded_target, loaded_pred, 44_100), rel=1e-3
+    )
+
+
+def test_compute_metrics_on_dir_mismatched_sample_counts_raise(tmp_path: Path) -> None:
+    """Real WAV dispatch validates pair geometry before metric transforms.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    sample_dir = _make_sample_dir(
+        tmp_path,
+        "0",
+        _sine(seconds=0.2),
+        _sine(seconds=0.1),
+    )
+
+    with pytest.raises(ValueError, match="same shape"):
+        compute_metrics_on_dir(sample_dir)
+
+
+def test_compute_metrics_on_dir_mismatched_sample_rates_raise(tmp_path: Path) -> None:
+    """An audio pair with incompatible time bases cannot be compared.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    sample_dir = tmp_path / "sample_0"
+    sample_dir.mkdir()
+    audio = _sine(seconds=0.5)
+    write_wav(sample_dir / "target.wav", audio, sr=44_100)
+    write_wav(sample_dir / "pred.wav", audio, sr=48_000)
+
+    with pytest.raises(ValueError, match="same sample rate"):
+        compute_metrics_on_dir(sample_dir)
 
 
 def test_compute_metrics_on_dir_identical_files_yields_perfect_scores(tmp_path: Path) -> None:
@@ -453,9 +1475,303 @@ def test_compute_metrics_writes_csv_with_expected_index_and_columns(tmp_path: Pa
     assert np.isfinite(df.to_numpy()).all()
 
 
+def test_aggregate_metrics_pyfdn_preserves_reverb_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Parallel aggregation forwards pyFDN specialization to each worker.
+
+    :param tmp_path: Pytest fixture providing isolated audio and metric directories.
+    :param monkeypatch: Replaces process isolation with threads for xdist-safe coverage.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    rng = np.random.default_rng(29)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    decay = (rng.standard_normal(_SR).astype(np.float32) * np.exp(-20.0 * time))[None, :]
+    sample_dir = _make_sample_dir(audio_root, "0", decay, decay)
+    monkeypatch.setattr(cam, "ProcessPoolExecutor", ThreadPoolExecutor)
+
+    result = cam._aggregate_metrics([sample_dir], output_dir, 1, "pyfdn")
+
+    assert "octave_rt60_log_rmse" in result
+    assert "octave_edc_rmse_db" in result
+    assert "pyfdn_match_impulse_response" in result
+    assert "joint_time_frequency_ot" in result
+
+
 # ---------------------------------------------------------------------------
 # main (Click CLI)
 # ---------------------------------------------------------------------------
+
+
+def test_main_mixed_channel_files_export_optional_mid_side_metric(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real WAV evaluation exports stereo scores and preserves mono omissions.
+
+    :param tmp_path: Pytest fixture providing isolated input and output directories.
+    :param monkeypatch: Keeps unrelated expensive metrics deterministic and runs workers in-
+        process.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    mono = _tremolo(depth=0.5, seconds=2.0)
+    stereo_target = np.concatenate([_sine(seconds=2.0), mono], axis=0)
+    stereo_pred = stereo_target.copy()
+    stereo_pred[1] *= -1
+    _make_sample_dir(audio_root, "mono", mono, mono)
+    _make_sample_dir(audio_root, "stereo", stereo_target, stereo_pred)
+    _make_sample_dir(audio_root, "identity", stereo_target, stereo_target)
+    metrics_dir = tmp_path / "metrics"
+    monkeypatch.setattr(cam, "ProcessPoolExecutor", ThreadPoolExecutor)
+    for metric_name in (
+        "compute_mss_corresponding_channels",
+        "compute_wmfcc_global_joint",
+        "compute_sot_downmix",
+        "compute_rms_downmix",
+    ):
+        monkeypatch.setattr(cam, metric_name, lambda *_args: 0.0)
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    per_sample = pd.read_csv(metrics_dir / "metrics.csv", index_col=0)
+    assert pd.isna(per_sample.loc["mono", "mldr_mid_side"])
+    assert per_sample.loc["stereo", "mldr_mid_side"] > 0.0
+    flattened = cam.load_aggregated_metrics(metrics_dir / "aggregated_metrics.csv")
+    assert flattened["mldr_mid_side_mean"] == pytest.approx(
+        (per_sample.loc["stereo", "mldr_mid_side"] + per_sample.loc["identity", "mldr_mid_side"])
+        / 2
+    )
+    assert np.isfinite(flattened["mldr_mid_side_std"])
+
+
+def test_main_pyfdn_writes_reverb_aggregate_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The CLI option persists pyFDN metrics in the public aggregate schema.
+
+    :param tmp_path: Pytest fixture providing isolated input and output directories.
+    :param monkeypatch: Replaces expensive parallel calculation with its resulting frame.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    _make_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
+    metrics_dir = tmp_path / "metrics"
+    frame = pd.DataFrame({"octave_rt60_log_rmse": [0.2, 0.4], "octave_edc_rmse_db": [1.0, 3.0]})
+    monkeypatch.setattr(cam, "_aggregate_metrics", lambda *_args: frame)
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "--renderer-backend", "pyfdn"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    aggregate = pd.read_csv(metrics_dir / "aggregated_metrics.csv", index_col=0)
+    assert aggregate.loc["octave_rt60_log_rmse", "mean"] == pytest.approx(0.3)
+    assert aggregate.loc["octave_edc_rmse_db", "mean"] == pytest.approx(2.0)
+
+
+def _decaying_noise(rt60: float, seed: int) -> np.ndarray:
+    """Return a 1 s mono noise impulse response with the given RT60.
+
+    :param rt60: Reverberation time in seconds of the exponential envelope.
+    :param seed: RNG seed for the noise carrier.
+    :return: ``(1, samples)`` float32 array.
+    """
+    rng = np.random.default_rng(seed)
+    time = np.arange(_SR, dtype=np.float32) / _SR
+    return (rng.standard_normal(_SR).astype(np.float32) * np.exp(-6.91 * time / rt60))[None, :]
+
+
+def test_main_pyfdn_end_to_end_writes_pcc_rows_from_raw_parameters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Per-band Pearson rows land in the aggregate; raw parameter columns stay per-sample.
+
+    Predictions equal their targets and the RT60 varies across samples, so every per-band
+    correlation is exactly one.
+
+    :param tmp_path: Pytest fixture providing isolated input and output directories.
+    :param monkeypatch: Replaces process isolation with threads for xdist-safe coverage.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    for index, rt60 in enumerate((0.3, 0.5, 0.8)):
+        decay = _decaying_noise(rt60, seed=index)
+        _make_sample_dir(audio_root, str(index), decay, decay)
+    metrics_dir = tmp_path / "metrics"
+    monkeypatch.setattr(cam, "ProcessPoolExecutor", ThreadPoolExecutor)
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1", "--renderer-backend", "pyfdn"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    per_sample = pd.read_csv(metrics_dir / "metrics.csv", index_col=0)
+    assert "acoustic_param/t30/125hz/target" in per_sample.columns
+    aggregate = pd.read_csv(metrics_dir / "aggregated_metrics.csv", index_col=0)
+    pcc_rows = aggregate.loc[aggregate.index.str.contains("_pcc_")]
+    assert list(pcc_rows.index) == [
+        "t30_pcc_125hz",
+        "t30_pcc_250hz",
+        "t30_pcc_500hz",
+        "t30_pcc_1000hz",
+        "t30_pcc_2000hz",
+        "t30_pcc_4000hz",
+        "t30_pcc_8000hz",
+        "c50_pcc_125hz",
+        "c50_pcc_250hz",
+        "c50_pcc_500hz",
+        "c50_pcc_1000hz",
+        "c50_pcc_2000hz",
+        "c50_pcc_4000hz",
+        "c50_pcc_8000hz",
+    ]
+    assert pcc_rows["mean"].to_numpy() == pytest.approx(np.ones(14))
+    assert pcc_rows["std"].isna().all()
+    assert aggregate.loc["t30_mape", "mean"] == pytest.approx(0.0)
+    expected_response_rows = {
+        "joint_time_frequency_ot",
+        "pyfdn_asymmetric_flat_magnitude_pred",
+        "pyfdn_asymmetric_flat_magnitude_target",
+        "pyfdn_energy_pred",
+        "pyfdn_energy_target",
+        "pyfdn_flat_magnitude_pred",
+        "pyfdn_flat_magnitude_target",
+        "pyfdn_flat_spectrogram_pred",
+        "pyfdn_flat_spectrogram_target",
+        "pyfdn_match_cumulative_energy",
+        "pyfdn_match_energy_decay",
+        "pyfdn_match_impulse_response",
+        "pyfdn_match_magnitude",
+        "pyfdn_match_mel_spectrogram",
+        "pyfdn_match_spectrogram",
+    }
+    assert expected_response_rows <= set(aggregate.index)
+    assert np.isfinite(aggregate.loc[list(expected_response_rows), "mean"]).all()
+    assert not aggregate.index.str.startswith("acoustic_param/").any()
+
+
+def _fake_level_encoder(mono: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Return a two-dimensional level embedding per row — a stand-in for CLAP.
+
+    :param mono: ``(B, T)`` mono audio batch.
+    :param sample_rate: Unused; matches the CLAP encoder signature.
+    :return: ``(B, 2)`` array of ``[mean |x|, std x]`` per row.
+    """
+    return np.stack([np.abs(mono).mean(axis=1), mono.std(axis=1)], axis=1)
+
+
+def test_compute_fad_identical_sets_returns_zero(tmp_path: Path) -> None:
+    """Prediction and target sets with identical audio have zero Fréchet distance.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    dirs = [
+        _make_sample_dir(
+            tmp_path,
+            str(index),
+            _sine(seconds=0.2, amplitude=amp),
+            _sine(seconds=0.2, amplitude=amp),
+        )
+        for index, amp in enumerate((0.1, 0.4, 0.7))
+    ]
+
+    assert cam.compute_fad(dirs, _fake_level_encoder) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_compute_fad_louder_predictions_is_positive(tmp_path: Path) -> None:
+    """Predictions that are systematically louder than targets score a positive distance.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    dirs = [
+        _make_sample_dir(
+            tmp_path,
+            str(index),
+            _sine(seconds=0.2, amplitude=amp),
+            _sine(seconds=0.2, amplitude=2 * amp),
+        )
+        for index, amp in enumerate((0.1, 0.2, 0.3))
+    ]
+
+    assert cam.compute_fad(dirs, _fake_level_encoder) > 0.0
+
+
+def test_main_fad_option_writes_fad_clap_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--fad`` adds a dataset-level ``fad_clap`` row to the aggregate.
+
+    :param tmp_path: Pytest fixture providing isolated input and output directories.
+    :param monkeypatch: Swaps the CLAP checkpoint load for a cheap level encoder.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    for index, amp in enumerate((0.1, 0.4, 0.7)):
+        _make_sample_dir(
+            audio_root,
+            str(index),
+            _sine(seconds=0.2, amplitude=amp),
+            _sine(seconds=0.2, amplitude=amp),
+        )
+    metrics_dir = tmp_path / "metrics"
+    monkeypatch.setattr(cam, "ProcessPoolExecutor", ThreadPoolExecutor)
+    monkeypatch.setattr(cam, "_load_fad_encoder", lambda: _fake_level_encoder)
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1", "--fad"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    aggregate = pd.read_csv(metrics_dir / "aggregated_metrics.csv", index_col=0)
+    assert aggregate.loc["fad_clap", "mean"] == pytest.approx(0.0, abs=1e-9)
+    assert np.isnan(aggregate.loc["fad_clap", "std"])
+
+
+@pytest.mark.slow
+def test_main_fad_option_with_real_clap_loader_writes_finite_row(tmp_path: Path) -> None:
+    """``--fad`` through the real CLAP checkpoint loader yields a finite, non-negative row.
+
+    Guards the loader/encoder contract the fake-encoder tests cannot: the checkpoint
+    resolves, the encoder accepts the CLI's mono ``(1, T)`` batches, and the
+    embeddings feed the Fréchet distance.
+
+    :param tmp_path: Pytest fixture providing isolated input and output directories.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    for index, freq in enumerate((220.0, 440.0)):
+        _make_sample_dir(
+            audio_root,
+            str(index),
+            _sine(seconds=0.5, freq=freq),
+            _sine(seconds=0.5, freq=2 * freq),
+        )
+    metrics_dir = tmp_path / "metrics"
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1", "--fad"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    aggregate = pd.read_csv(metrics_dir / "aggregated_metrics.csv", index_col=0)
+    assert np.isfinite(aggregate.loc["fad_clap", "mean"])
+    assert aggregate.loc["fad_clap", "mean"] >= 0.0
 
 
 @pytest.mark.slow
@@ -512,7 +1828,7 @@ def test_compute_jtfs_first_call_constructs_scatter_and_returns_array() -> None:
 @pytest.mark.slow
 def test_compute_jtfs_distance_identical_inputs_returns_zero() -> None:
     """Identical signals → JTFS L1 distance is 0."""
-    audio = _sine(seconds=0.5)[0]
+    audio = _sine(seconds=0.5)
     dist = compute_jtfs_distance(audio, audio, J=6, Q=8)
     assert dist == pytest.approx(0.0, abs=1e-9)
 
@@ -520,11 +1836,32 @@ def test_compute_jtfs_distance_identical_inputs_returns_zero() -> None:
 @pytest.mark.slow
 def test_compute_jtfs_distance_different_inputs_is_positive() -> None:
     """Distinct signals → JTFS L1 distance is strictly positive and finite."""
-    target = _sine(seconds=0.5, freq=440.0)[0]
-    pred = _sine(seconds=0.5, freq=880.0)[0]
+    target = _sine(seconds=0.5, freq=440.0)
+    pred = _sine(seconds=0.5, freq=880.0)
     dist = compute_jtfs_distance(target, pred, J=6, Q=8)
     assert np.isfinite(dist)
     assert dist > 0
+
+
+def test_compute_jtfs_distance_compares_corresponding_channels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JTFS preserves each channel through scattering before reducing the distance.
+
+    :param monkeypatch: Replaces only the expensive Scattering1D boundary.
+    """
+
+    class FakeScattering:
+        def __call__(self, audio: np.ndarray) -> np.ndarray:
+            return audio.mean(axis=-1, keepdims=True) ** 2
+
+    monkeypatch.setattr(cam, "Scattering1D", lambda **_kwargs: FakeScattering())
+    target = np.repeat(np.array([[0.0], [1.0], [4.0]]), 8, axis=1)
+    pred = np.repeat(np.array([[1.0], [3.0], [4.0]]), 8, axis=1)
+
+    distance = cam.compute_jtfs_distance_corresponding_channels(target, pred)
+
+    assert distance == pytest.approx(3.0)
 
 
 @pytest.mark.slow
@@ -546,6 +1883,56 @@ def test_compute_jtfs_cache_is_shape_keyed_not_param_keyed() -> None:
 # ---------------------------------------------------------------------------
 # get_pesto_activations / compute_f0 — exercise the real pesto model
 # ---------------------------------------------------------------------------
+
+
+def test_compute_f0_downmix_nondefault_sample_rate_reaches_pesto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The caller's exact rate governs pitch values at the public PESTO boundary.
+
+    :param monkeypatch: Replaces only the pretrained PESTO model boundary.
+    """
+    received_rates: list[float] = []
+
+    def fake_pesto(
+        audio: torch.Tensor, sample_rate: float
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        received_rates.append(sample_rate)
+        pitches = audio.mean(dim=1, keepdim=True) * sample_rate / 1000.0
+        confidence = torch.ones_like(pitches)
+        return pitches, confidence, pitches, confidence
+
+    monkeypatch.setattr(cam, "pesto_model", fake_pesto)
+    target = np.ones((2, 16), dtype=np.float32)
+    pred = np.full((2, 16), 3.0, dtype=np.float32)
+
+    distance = cam.compute_f0_downmix(target, pred, 16000.0)
+
+    assert distance == pytest.approx(32.0)
+    assert received_rates == [16000.0]
+
+
+def test_compute_f0_downmix_uses_arithmetic_channel_mean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The PESTO boundary receives channel means, not selected or paired channels.
+
+    :param monkeypatch: Replaces only the pretrained PESTO model boundary.
+    """
+
+    def fake_pesto(
+        audio: torch.Tensor, _sample_rate: float
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        pitches = audio.abs().mean(dim=1, keepdim=True) * 100.0
+        confidence = torch.ones_like(pitches)
+        return pitches, confidence, pitches, confidence
+
+    monkeypatch.setattr(cam, "pesto_model", fake_pesto)
+    channel = np.ones(16, dtype=np.float32)
+    target = np.stack((channel, -channel))
+    pred = np.stack((channel, channel))
+
+    assert cam.compute_f0_downmix(target, pred) == pytest.approx(100.0)
 
 
 @pytest.mark.slow
@@ -570,15 +1957,33 @@ def test_compute_f0_identical_inputs_returns_zero() -> None:
 
 @pytest.mark.slow
 def test_compute_f0_different_inputs_is_finite() -> None:
-    """Distinct tones produce a finite mean abs f0 difference."""
+    """An octave apart produces a finite, strictly positive mean abs f0 difference."""
     target = _sine(seconds=1.0, freq=440.0)
     pred = _sine(seconds=1.0, freq=880.0)
     dist = compute_f0(target, pred)
     assert np.isfinite(dist)
+    assert dist > 0
+
+
+@pytest.mark.slow
+def test_compute_f0_without_confident_frames_returns_nan() -> None:
+    """No frame clearing the 0.85 gate on both signals yields NaN, not an error.
+
+    Pins current behaviour, not desired behaviour: the pinned ``mir-1k_g7``
+    model is vocal-trained, so a 1760 Hz tone leaves the mask empty and the
+    mean over zero frames is NaN, which then propagates into eval aggregates.
+    Tracked in #2634 — update this test with the fix.
+    """
+    target = _sine(seconds=1.0, freq=440.0)
+    pred = _sine(seconds=1.0, freq=1760.0)
+
+    confident_target, _ = get_pesto_activations(target, pred)
+    assert confident_target.size == 0
+
+    assert np.isnan(compute_f0(target, pred))
 
 
 _UNIFORM_PARAMS_CSV = ",pred,target\ncutoff,0.5,0.5\nresonance,0.2,0.2\n"
-_NONUNIFORM_PARAMS_CSV = ",pred,target\ncutoff,0.9,0.9\n"
 
 
 def _make_uniform_sample_dir(
@@ -604,245 +2009,130 @@ def _make_uniform_sample_dir(
 
 
 @pytest.mark.slow
-def test_main_uniform_params_auto_produces_shuffled_symlink_view(tmp_path: Path) -> None:
-    """Uniform params → ``shuffled_audio/`` symlink view built automatically (no flag needed).
+def test_main_uniform_params_writes_only_standard_metric_outputs(tmp_path: Path) -> None:
+    """Uniform parameters do not trigger an additional shuffled evaluation pass.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
     """
     audio_root = tmp_path / "audio"
     audio_root.mkdir()
     metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
+    metrics_dir.mkdir()
+    (metrics_dir / "aggregated_metrics_shuffled.csv").write_text("stale")
+    (metrics_dir / "shuffle_permutation.csv").write_text("stale")
+    sample_0 = _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
     _make_uniform_sample_dir(
         audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)
     )
+    legacy_sample = metrics_dir / "shuffled_audio" / "sample_0"
+    legacy_sample.mkdir(parents=True)
+    (legacy_sample / "pred.wav").symlink_to(sample_0 / "pred.wav")
+    (legacy_sample / "target.wav").symlink_to(sample_0 / "target.wav")
 
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         compute_audio_metrics_main,
         [str(audio_root), str(metrics_dir), "-w", "1"],
         catch_exceptions=False,
     )
-    assert result.exit_code == 0, result.output
-
-    shuffled_dir = metrics_dir / "shuffled_audio"
-    assert (shuffled_dir / "sample_0" / "pred.wav").is_symlink()
-
-
-@pytest.mark.slow
-def test_main_uniform_params_writes_aggregated_metrics_shuffled_csv(tmp_path: Path) -> None:
-    """Uniform params → ``aggregated_metrics_shuffled.csv`` written alongside normal CSV.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
-    _make_uniform_sample_dir(
-        audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-
-    agg_shuffled = pd.read_csv(metrics_dir / "aggregated_metrics_shuffled.csv", index_col=0)
-    assert {"mean", "std"}.issubset(agg_shuffled.columns)
-    assert {"mss", "wmfcc", "sot", "rms"}.issubset(set(agg_shuffled.index))
-
-
-@pytest.mark.slow
-def test_main_uniform_params_writes_shuffle_permutation_csv(tmp_path: Path) -> None:
-    """Uniform params → ``shuffle_permutation.csv`` round-trips the ``dest_idx -> src_idx`` mapping.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
-    _make_uniform_sample_dir(
-        audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-
-    permutation = pd.read_csv(metrics_dir / "shuffle_permutation.csv")
-    assert list(permutation.columns) == ["dest_idx", "src_idx"]
-    assert permutation["dest_idx"].tolist() == [0, 1]
-    assert sorted(permutation["src_idx"].tolist()) == [0, 1]
-    # _draw_non_identity_permutation guarantees ≥1 pred.wav moves even at the default
-    # seed 0, so for two dirs the only non-identity mapping is the full swap [1, 0].
-    assert permutation["src_idx"].tolist() == [1, 0]
-
-
-def test_run_shuffle_probe_fewer_than_two_sample_dirs_writes_neither_csv(tmp_path: Path) -> None:
-    """A <2 permutation (too few dirs with params) short-circuits before either probe write.
-
-    Pins the ``len(permutation) < 2`` guard, which the CLI cannot reach — its outer
-    ``len(probe_dirs) >= 2`` gate fires first.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    output_dir = tmp_path / "metrics"
-    output_dir.mkdir()
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.05), _sine(seconds=0.05))
-
-    cam._run_shuffle_probe(audio_root, output_dir, shuffle_seed=0, num_workers=1)
-
-    assert not (output_dir / "shuffle_permutation.csv").exists()
-    assert not (output_dir / "aggregated_metrics_shuffled.csv").exists()
-
-
-def test_run_shuffle_probe_aggregation_failure_leaves_no_permutation_csv(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A failed shuffled-metric aggregation leaves no orphaned ``shuffle_permutation.csv``.
-
-    Pins the write ordering: the permutation is recorded only after the shuffled metrics
-    land, so an aggregation that raises must not leave a permutation file behind.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    :param monkeypatch: Patches ``_aggregate_metrics`` to raise during the shuffled pass.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    output_dir = tmp_path / "metrics"
-    output_dir.mkdir()
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.05), _sine(seconds=0.05))
-    _make_uniform_sample_dir(audio_root, "1", _sine(seconds=0.05), _sine(seconds=0.05))
-
-    def _raise(*_args: object, **_kwargs: object) -> pd.DataFrame:
-        raise RuntimeError("metric aggregation failed")
-
-    monkeypatch.setattr(cam, "_aggregate_metrics", _raise)
-
-    with pytest.raises(RuntimeError, match="metric aggregation failed"):
-        cam._run_shuffle_probe(audio_root, output_dir, shuffle_seed=0, num_workers=1)
-
-    assert not (output_dir / "shuffle_permutation.csv").exists()
-
-
-@pytest.mark.slow
-def test_main_auto_shuffle_does_not_mutate_source(tmp_path: Path) -> None:
-    """The original ``audio/`` tree is byte-identical after the auto-shuffle pass.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.3), _sine(seconds=0.3))
-    _make_uniform_sample_dir(
-        audio_root, "1", _sine(seconds=0.3, freq=440.0), _sine(seconds=0.3, freq=880.0)
-    )
-    before = {
-        p.relative_to(audio_root): p.read_bytes() for p in audio_root.rglob("*") if p.is_file()
-    }
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-
-    after = {
-        p.relative_to(audio_root): p.read_bytes() for p in audio_root.rglob("*") if p.is_file()
-    }
-    assert after == before
-
-
-@pytest.mark.slow
-def test_main_nonuniform_params_default_seed_skips_shuffle_no_shuffled_csv(
-    tmp_path: Path,
-) -> None:
-    """Non-uniform params + default seed → shuffle silently skipped, no shuffled CSV.
-
-    Creates two sample dirs with real wav data but differing params.csv; with the default seed (0)
-    the probe is skipped and no aggregated_metrics_shuffled.csv appears.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
-    """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
-    _make_uniform_sample_dir(
-        audio_root, "1", _sine(seconds=0.2), _sine(seconds=0.2), params_csv=_NONUNIFORM_PARAMS_CSV
-    )
-
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1"],
-    )
 
     assert result.exit_code == 0, result.output
+    assert (metrics_dir / "aggregated_metrics.csv").is_file()
+    assert (metrics_dir / "metrics.csv").is_file()
     assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
     assert not (metrics_dir / "shuffle_permutation.csv").exists()
+    assert not (metrics_dir / "shuffled_audio").exists()
 
 
 @pytest.mark.slow
-def test_main_nonuniform_params_explicit_seed_raises(tmp_path: Path) -> None:
-    """Non-uniform params + explicit non-zero seed → ``ValueError`` (seed implies intent).
+def test_main_preserves_unowned_legacy_named_directory(tmp_path: Path) -> None:
+    """Metric cleanup does not recursively delete an unowned output directory.
 
-    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param tmp_path: Root containing rendered audio and a user-owned metrics artifact.
     """
     audio_root = tmp_path / "audio"
     audio_root.mkdir()
+    _make_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
     metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
-    _make_uniform_sample_dir(
-        audio_root, "1", _sine(seconds=0.2), _sine(seconds=0.2), params_csv=_NONUNIFORM_PARAMS_CSV
+    retained_file = metrics_dir / "shuffled_audio" / "notes.txt"
+    retained_file.parent.mkdir(parents=True)
+    retained_file.write_text("keep")
+    retained_csvs = [
+        metrics_dir / "aggregated_metrics_shuffled.csv",
+        metrics_dir / "shuffle_permutation.csv",
+    ]
+    for path in retained_csvs:
+        path.write_text("keep")
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(metrics_dir), "-w", "1"],
+        catch_exceptions=False,
     )
 
-    runner = CliRunner()
-    result = runner.invoke(
+    assert result.exit_code == 0, result.output
+    assert retained_file.read_text() == "keep"
+    assert all(path.read_text() == "keep" for path in retained_csvs)
+
+
+def test_main_output_dir_equal_to_audio_dir_raises(tmp_path: Path) -> None:
+    """Metric outputs cannot overwrite or remove source audio artifacts.
+
+    :param tmp_path: Root containing one valid rendered sample.
+    """
+    audio_root = tmp_path / "audio"
+    audio_root.mkdir()
+    _make_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+
+    result = CliRunner().invoke(
         compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1", "--shuffle_seed", "7"],
+        [str(audio_root), str(audio_root), "-w", "1"],
     )
 
     assert result.exit_code != 0
     assert isinstance(result.exception, ValueError)
+    assert "must not equal, contain, or be contained" in str(result.exception)
+    assert (audio_root / "sample_0" / "pred.wav").is_file()
 
 
-@pytest.mark.slow
-def test_main_explicit_seed_single_sample_dir_raises(tmp_path: Path) -> None:
-    """Explicit non-zero seed with only one sample_* dir → ``ValueError``.
+def test_main_output_dir_nested_in_audio_dir_raises_without_mutation(tmp_path: Path) -> None:
+    """Containment validation runs before creating a nested output directory.
 
-    With fewer than two dirs the probe cannot run; an explicit seed signals intent so it must raise
-    rather than silently skip.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param tmp_path: Root containing one valid rendered sample.
     """
     audio_root = tmp_path / "audio"
     audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+    _make_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+    metrics_dir = audio_root / "metrics"
 
-    runner = CliRunner()
-    result = runner.invoke(
+    result = CliRunner().invoke(
         compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1", "--shuffle_seed", "7"],
+        [str(audio_root), str(metrics_dir), "-w", "1"],
     )
+
     assert result.exit_code != 0
     assert isinstance(result.exception, ValueError)
+    assert not metrics_dir.exists()
+
+
+def test_main_output_dir_ancestor_of_audio_dir_raises(tmp_path: Path) -> None:
+    """Metric cleanup cannot remove a nested source audio directory.
+
+    :param tmp_path: Output root containing source audio under a cleanup target name.
+    """
+    output_root = tmp_path / "metrics"
+    audio_root = output_root / "shuffled_audio"
+    audio_root.mkdir(parents=True)
+    _make_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+
+    result = CliRunner().invoke(
+        compute_audio_metrics_main,
+        [str(audio_root), str(output_root), "-w", "1"],
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, ValueError)
+    assert "must not equal, contain, or be contained" in str(result.exception)
+    assert (audio_root / "sample_0" / "pred.wav").is_file()
 
 
 def test_main_num_workers_zero_raises_usage_error(tmp_path: Path) -> None:
@@ -858,77 +2148,89 @@ def test_main_num_workers_zero_raises_usage_error(tmp_path: Path) -> None:
     assert result.exit_code != 0
 
 
-@pytest.mark.slow
-def test_main_single_sample_dir_no_shuffled_csv(tmp_path: Path) -> None:
-    """Single sample dir cannot be shuffled → no shuffled-metrics or permutation CSV.
+# ---------------------------------------------------------------------------
+# sample-rate forwarding
+# ---------------------------------------------------------------------------
 
-    Drives ``main`` with one uniform-params dir; both probe outputs are written only when a
-    real shuffle ran (≥2 dirs), so neither must appear.
+_RATE_AWARE_METRICS = (compute_mss, compute_sot, compute_wmfcc)
 
-    :param tmp_path: Pytest fixture providing a fresh test directory.
+
+@pytest.mark.parametrize(
+    ("metric", "sample_rate", "metric_name"),
+    [
+        (cam.compute_rms_downmix, 39.0, "RMS"),
+        (cam.compute_sot_downmix, 49.0, "SOT"),
+        (cam.compute_wmfcc_global_joint, 99.0, "wMFCC"),
+    ],
+    ids=("rms", "sot", "wmfcc"),
+)
+def test_metric_sample_rate_with_zero_hop_length_raises(
+    metric: Callable[..., float], sample_rate: float, metric_name: str
+) -> None:
+    """Windowed metrics reject rates that truncate their own hop to zero.
+
+    :param metric: Public windowed metric under test.
+    :param sample_rate: Rate below the metric's derived-hop boundary.
+    :param metric_name: Metric name expected in the public validation error.
     """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = tmp_path / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
+    audio = np.zeros((1, 32), dtype=np.float32)
 
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
-    assert not (metrics_dir / "shuffle_permutation.csv").exists()
+    with pytest.raises(ValueError, match=rf"{metric_name} sample_rate.*positive.*hop_length"):
+        metric(audio, audio, sample_rate)
 
 
-@pytest.mark.slow
-def test_main_output_dir_inside_audio_dir_default_seed_skips_shuffle(tmp_path: Path) -> None:
-    """output_dir nested inside audio_dir with default seed → probe skipped, no shuffled CSV.
+@pytest.mark.parametrize(
+    ("metric", "sample_rate"),
+    [
+        (cam.compute_mss_corresponding_channels, 200.0),
+        (cam.compute_rms_downmix, 40.0),
+        (cam.compute_sot_downmix, 50.0),
+        (cam.compute_wmfcc_global_joint, 100.0),
+    ],
+    ids=("mss", "rms", "sot", "wmfcc"),
+)
+def test_windowed_metric_smallest_valid_sample_rate_is_accepted(
+    metric: Callable[..., float], sample_rate: float
+) -> None:
+    """Derived-length guards accept the exact positive-sample boundary.
 
-    When output_dir (and therefore shuffled_audio) would sit inside the source tree,
-    ``shuffle_pred_audio`` would raise. With seed=0 (default, automatic probe) the CLI must
-    warn and skip rather than crash.
-
-    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param metric: Public windowed metric under test.
+    :param sample_rate: Lowest rate that keeps every metric-specific length positive.
     """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = audio_root / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
-    _make_uniform_sample_dir(audio_root, "1", _sine(seconds=0.2), _sine(seconds=0.2))
+    audio = np.ones((1, 32), dtype=np.float32)
 
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    assert not (metrics_dir / "aggregated_metrics_shuffled.csv").exists()
-    assert not (metrics_dir / "shuffle_permutation.csv").exists()
+    assert np.isfinite(metric(audio, audio, sample_rate))
 
 
-@pytest.mark.slow
-def test_main_output_dir_inside_audio_dir_explicit_seed_raises(tmp_path: Path) -> None:
-    """output_dir nested inside audio_dir with explicit non-zero seed → ``ValueError``.
+@pytest.mark.parametrize("metric", _RATE_AWARE_METRICS, ids=lambda fn: fn.__name__)
+def test_metric_sample_rate_reaches_the_analysis_window(
+    metric: Callable[..., float],
+) -> None:
+    """A caller's sample rate changes the score, so it must be reaching the transform.
 
-    The non-zero seed signals the probe was explicitly intended, so the nested layout is an
-    unrecoverable error rather than a silenced warning.
+    Each of these metrics sizes its window and hop from the sample rate. If the argument were
+    dropped on the way to the helper — the defect this parametrisation guards — every rate would
+    collapse onto the 44.1 kHz default and score identically.
 
-    :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param metric: Metric under test.
     """
-    audio_root = tmp_path / "audio"
-    audio_root.mkdir()
-    metrics_dir = audio_root / "metrics"
-    _make_uniform_sample_dir(audio_root, "0", _sine(seconds=0.2), _sine(seconds=0.2))
-    _make_uniform_sample_dir(audio_root, "1", _sine(seconds=0.2), _sine(seconds=0.2))
+    target = _sine(seconds=0.5, freq=440.0)
+    pred = _sine(seconds=0.5, freq=880.0)
 
-    runner = CliRunner()
-    result = runner.invoke(
-        compute_audio_metrics_main,
-        [str(audio_root), str(metrics_dir), "-w", "1", "--shuffle_seed", "7"],
-    )
-    assert result.exit_code != 0
-    assert isinstance(result.exception, ValueError)
+    assert metric(target, pred, _SR / 2) != pytest.approx(metric(target, pred, _SR))
+
+
+@pytest.mark.parametrize("metric", _RATE_AWARE_METRICS, ids=lambda fn: fn.__name__)
+def test_metric_default_sample_rate_matches_an_explicit_44100(
+    metric: Callable[..., float],
+) -> None:
+    """Omitting the sample rate keeps the historical 44.1 kHz behaviour exactly.
+
+    Every pre-existing call site relies on this: the parameter is additive, not a change.
+
+    :param metric: Metric under test.
+    """
+    target = _sine(seconds=0.5, freq=440.0)
+    pred = _sine(seconds=0.5, freq=880.0)
+
+    assert metric(target, pred) == pytest.approx(metric(target, pred, 44100.0))

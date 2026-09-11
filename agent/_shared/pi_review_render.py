@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -14,13 +15,38 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 if __package__:
+    from agent._shared.pi_review_routing import SUPPORTED_SKILLS, ReviewAdjudication
     from agent._shared.review_sentinel import make_review_path
 else:
+    from pi_review_routing import SUPPORTED_SKILLS, ReviewAdjudication
     from review_sentinel import make_review_path
+
+_SKILL_TAGS = {
+    "code-health": "code-health",
+    "comment-hygiene": "comment-hygiene",
+    "correctness-review": "correctness",
+    "gha-workflow-validator": "gha",
+    "lance-review": "lance",
+    "ml-data-pipeline": "ml-pipeline",
+    "ml-test": "ml-test",
+    "python-style": "python-style",
+    "shell-style": "shell-style",
+    "synth-setter-project-standards": "synth-setter",
+    "tdd-implementation": "tdd-impl",
+    "tdd-refactor": "tdd-refactor",
+}
+if _SKILL_TAGS.keys() != SUPPORTED_SKILLS:
+    raise RuntimeError("Review skill tags must cover every supported review skill")
+_DELIVERED_FINDING_RE = re.compile(
+    r"^- (?:\*\*L\d+\*\* — )?\*\*\[[a-z][a-z0-9-]*:"
+    r"(block|warn|nit|low-confidence)\](?: \[low confidence\])?\*\*",
+    re.MULTILINE,
+)
 
 
 class ReviewFinding(BaseModel, strict=True, extra="forbid"):
@@ -69,12 +95,18 @@ class ReviewPayload(BaseModel, strict=True, extra="forbid"):
         :type: tuple[ReviewFinding, ...]
 
         Aggregated findings in review order.
+
+    .. attribute :: event
+        :type: Literal["APPROVE", "COMMENT", "REQUEST_CHANGES"] | None
+
+        GitHub review event for posted mode, or ``None`` for legacy dry-run payloads.
     """
 
     pr_number: int | None = Field(default=None, gt=0)
     repo: str = Field(min_length=1)
     review_body: str = Field(min_length=1)
     findings: tuple[ReviewFinding, ...]
+    event: Literal["APPROVE", "COMMENT", "REQUEST_CHANGES"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +164,123 @@ class RenderContext:
     next_step: str
 
 
+def _audit_text(value: str) -> str:
+    """Indent continuation lines so audit evidence cannot impersonate findings.
+
+    :param value: Original candidate or rationale text.
+    :returns: Text with Markdown continuation lines indented.
+    """
+    return "\n  ".join(value.splitlines())
+
+
+def _adjudication_sections(adjudications: Sequence[ReviewAdjudication]) -> str:
+    """Render body-only findings and the complete final-judge audit.
+
+    :param adjudications: Candidate-order final decisions, including drops.
+    :returns: Markdown sections for optional findings and audit evidence.
+    """
+    if not adjudications:
+        return ""
+    sections: list[str] = []
+    nits = [item for item in adjudications if item.final_disposition == "nit"]
+    low_confidence = [item for item in adjudications if item.final_disposition == "low-confidence"]
+    if nits:
+        sections.extend(
+            [
+                "## Nits",
+                "",
+                *(
+                    f"- **[{_SKILL_TAGS[item.skill]}:nit]** `{item.path}:{item.line}` — "
+                    f"{_audit_text(item.description)}"
+                    for item in nits
+                ),
+            ]
+        )
+    if low_confidence:
+        sections.extend(
+            [
+                "## Low-confidence observations",
+                "",
+                "Explicitly ignorable: these observations create no reply or merge obligation.",
+                "",
+                *(
+                    f"- **[{_SKILL_TAGS[item.skill]}:low-confidence] [low confidence]** "
+                    f"`{item.path}:{item.line}` — {_audit_text(item.description)} "
+                    f"Rationale: {_audit_text(item.rationale)}"
+                    for item in low_confidence
+                ),
+            ]
+        )
+    sections.extend(["## Final judge audit", ""])
+    sections.extend(
+        f"- `{item.id}` — {item.skill} at `{item.path}:{item.line}`; "
+        f"original `{item.original_severity}` → final `{item.final_disposition}`; "
+        f"finding: {_audit_text(item.description)}; rationale: {_audit_text(item.rationale)}"
+        for item in adjudications
+    )
+    return "\n".join(sections)
+
+
+def _insert_before_pi_audit(review_body: str, adjudication_sections: str) -> str:
+    """Place final dispositions before provider-attempt audit evidence.
+
+    :param review_body: Lead-in, incidents, health, and Pi audit Markdown.
+    :param adjudication_sections: Optional findings and final-judge audit.
+    :returns: Review body in the canonical section order.
+    """
+    marker = "## Pi review audit"
+    prefix, separator, suffix = review_body.partition(marker)
+    if not separator:
+        return f"{review_body.rstrip()}\n\n{adjudication_sections}"
+    return f"{prefix.rstrip()}\n\n{adjudication_sections}\n\n{marker}{suffix}"
+
+
+def build_adjudicated_review(
+    *,
+    pr_number: int | None,
+    repo: str,
+    review_body: str,
+    adjudications: Sequence[ReviewAdjudication],
+) -> ReviewPayload:
+    """Build one delivery payload from final judge decisions.
+
+    :param pr_number: Pull request number, or ``None`` for local mode.
+    :param repo: GitHub repository identity.
+    :param review_body: Lead-in, provider incidents, and PR-health Markdown.
+    :param adjudications: Complete candidate-order final judge output.
+    :returns: Payload with BLOCK/WARN inline and optional findings body-only.
+    """
+    inline = tuple(
+        ReviewFinding(
+            path=item.path,
+            line=item.line,
+            body=(
+                f"**[{_SKILL_TAGS[item.skill]}:{item.final_disposition}]** "
+                f"{_audit_text(item.description)}"
+            ),
+        )
+        for item in adjudications
+        if item.final_disposition in {"block", "warn"}
+    )
+    final_classes = {item.final_disposition for item in adjudications}
+    event: Literal["APPROVE", "COMMENT", "REQUEST_CHANGES"]
+    if "block" in final_classes or _delivered_counts((review_body,))["block"]:
+        event = "REQUEST_CHANGES"
+    elif final_classes - {"drop"}:
+        event = "COMMENT"
+    else:
+        event = "APPROVE"
+    audit = _adjudication_sections(adjudications)
+    body = _insert_before_pi_audit(review_body, audit) if audit else review_body
+    return ReviewPayload(
+        pr_number=pr_number,
+        repo=repo,
+        review_body=body,
+        findings=inline,
+        event=event,
+    )
+
+
 def _validated_payload(payload: ReviewPayload | Mapping[str, object]) -> ReviewPayload:
     """Return strict payload data from a model or mapping.
 
@@ -160,6 +309,19 @@ def _finding_lines(findings: tuple[ReviewFinding, ...]) -> list[str]:
     return lines
 
 
+def _delivered_counts(texts: Sequence[str]) -> dict[str, int]:
+    """Count only rendered finding markers that create delivery semantics.
+
+    :param texts: Markdown bodies or inline finding strings.
+    :returns: Counts keyed by final delivered disposition.
+    """
+    counts = dict.fromkeys(("block", "warn", "nit", "low-confidence"), 0)
+    for text in texts:
+        for match in _DELIVERED_FINDING_RE.finditer(text):
+            counts[match.group(1)] += 1
+    return counts
+
+
 def _summary_lines(review: ReviewPayload, context: RenderContext) -> list[str]:
     """Render deterministic severity and progress summary lines.
 
@@ -167,16 +329,14 @@ def _summary_lines(review: ReviewPayload, context: RenderContext) -> list[str]:
     :param context: Reviewed Git and progress state.
     :returns: Markdown lines for the summary section.
     """
-    blocks = review.review_body.count(":block]") + sum(
-        ":block]" in finding.body for finding in review.findings
-    )
-    warns = review.review_body.count(":warn]") + sum(
-        ":warn]" in finding.body for finding in review.findings
+    counts = _delivered_counts(
+        (review.review_body, *(f"- {finding.body}" for finding in review.findings))
     )
     lines = [
         "## Summary",
         "",
-        f"- {blocks} BLOCK, {warns} WARN across {context.skill_count} skills",
+        f"- {counts['block']} BLOCK, {counts['warn']} WARN, {counts['nit']} NIT, "
+        f"{counts['low-confidence']} LOW CONFIDENCE across {context.skill_count} skills",
         f"- Reviewed at: {context.head_sha}",
         "- Progress: "
         f"branch {context.head_ref}; HEAD {context.head_sha}; "
@@ -244,7 +404,7 @@ def render_zero_diff(context: RenderContext) -> str:
         "PASS — no findings across all skills (code-health, correctness, comment-hygiene, "
         "python-style, shell-style, synth-setter, tdd-impl, ml-test).\n\n"
         "## Summary\n\n"
-        "- 0 BLOCK, 0 WARN\n"
+        "- 0 BLOCK, 0 WARN, 0 NIT, 0 LOW CONFIDENCE\n"
         f"- Reviewed at: {context.head_sha}\n"
         "- Progress: "
         f"branch {context.head_ref}; HEAD {context.head_sha}; "

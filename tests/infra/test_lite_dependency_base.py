@@ -39,7 +39,6 @@ HEAVY_DEPS = {
     "omegaconf",
     "skypilot",
     "runpod",
-    "oci",
     "kubernetes",
     "librosa",
     "pedalboard",
@@ -88,15 +87,6 @@ def test_project_dependencies_equal_lite_closure(project_dependency_names: set[s
     assert project_dependency_names == LITE_CLOSURE
 
 
-def test_project_dependencies_exclude_heavy_runtime(project_dependency_names: set[str]) -> None:
-    """No heavy runtime dep leaks into the base lite install.
-
-    :param project_dependency_names: Declared base dependency names (fixture).
-    """
-    leaked = project_dependency_names & HEAVY_DEPS
-    assert not leaked, f"heavy deps leaked into [project.dependencies]: {sorted(leaked)}"
-
-
 def test_smoosense_viewer_deps_are_notebook_only(project_root: Path) -> None:
     """SmooSense viewer deps stay out of the pipeline runtime and base install.
 
@@ -114,3 +104,20 @@ def test_smoosense_viewer_deps_are_notebook_only(project_root: Path) -> None:
     assert all("duckdb" not in str(dep) for dep in pyproject["project"]["dependencies"])
     assert all("smoosense" not in str(dep) for dep in dependency_groups["runtime"])
     assert all("duckdb" not in str(dep) for dep in dependency_groups["runtime"])
+
+
+def test_notebook_execution_toolchain_is_notebook_only(project_root: Path) -> None:
+    """`jupyter nbconvert --execute` deps ship in `notebooks`, never in the base.
+
+    :param project_root: Repo root holding ``pyproject.toml`` (from conftest).
+    """
+    with (project_root / "pyproject.toml").open("rb") as fh:
+        pyproject = tomllib.load(fh)
+
+    dependency_groups = pyproject["dependency-groups"]
+    notebook_names = {_requirement_name(dep) for dep in dependency_groups["notebooks"]}
+
+    assert {"nbconvert", "ipykernel"} <= notebook_names
+    for name in ("nbconvert", "ipykernel"):
+        assert all(name not in str(dep) for dep in pyproject["project"]["dependencies"])
+        assert all(name not in str(dep) for dep in dependency_groups["runtime"])

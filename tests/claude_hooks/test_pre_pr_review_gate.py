@@ -96,6 +96,54 @@ def test_gate_blocks_when_sentinel_lists_synth_setter_block_finding(tmp_path: Pa
     assert "unresolved BLOCK finding" in result.stderr
 
 
+def test_gate_blocks_when_description_quotes_comment_hygiene_block(tmp_path: Path) -> None:
+    """Exclude comment-hygiene only when it is the leading disposition.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n"
+        "- **L42** — **[correctness:block]** mishandles [comment-hygiene:block] rows.\n",
+    )
+
+    result = _run_gate(review, env={"REVIEW_COMMENT_GATE": "off"})
+
+    assert result.returncode == 2, (result.returncode, result.stderr)
+
+
+def test_comment_gate_blocks_annotated_comment_hygiene_block(tmp_path: Path) -> None:
+    """Match a comment-hygiene BLOCK carrying a confidence annotation.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n"
+        "- **L42** — **[comment-hygiene:block] [low confidence]** noisy prose.\n",
+    )
+
+    result = _run_gate(review, env={"REVIEW_BLOCK_GATE": "off"})
+
+    assert result.returncode == 2, (result.returncode, result.stderr)
+
+
+def test_gate_blocks_annotated_block_marker(tmp_path: Path) -> None:
+    """Match delivered BLOCK tags carrying an accepted confidence annotation.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n"
+        "- **L42** — **[correctness:block] [low confidence]** claimed defect.\n",
+    )
+
+    result = _run_gate(review, env={"REVIEW_COMMENT_GATE": "off"})
+
+    assert result.returncode == 2, (result.returncode, result.stderr)
+
+
 def test_gate_off_mode_allows_sentinel_with_block_finding(tmp_path: Path) -> None:
     """``REVIEW_BLOCK_GATE=off`` is the documented escape hatch (exit 0).
 
@@ -138,6 +186,58 @@ def test_block_gate_excludes_comment_hygiene_blocks(tmp_path: Path) -> None:
         "- **L9** — **[comment-hygiene:block]** comment inside a run: block-scalar.\n",
     )
     result = _run_gate(review, env={"REVIEW_COMMENT_GATE": "off"})
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
+def test_gate_does_not_fire_on_nit_only_sentinel(tmp_path: Path) -> None:
+    """NIT is advisory: neither sub-gate fires, even on ``[comment-hygiene:nit]``.
+
+    Both gates run at their defaults here, so a pass proves NIT is outside the
+    comment sub-gate's ``warn|block`` set as well as the block sub-gate's.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n## Nits\n\n"
+        "- **[comment-hygiene:nit]** `src/example.py:9` — comment restates the assignment.\n"
+        "- **[code-health:nit]** `src/example.py:14` — name could be shorter.\n",
+    )
+    result = _run_gate(review)
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
+def test_gate_does_not_fire_on_low_confidence_only_sentinel(tmp_path: Path) -> None:
+    """LOW CONFIDENCE is body-only and outside both required-action gates.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n## Low-confidence observations\n\n"
+        "- **[correctness:low-confidence] [low confidence]** "
+        "`src/example.py:9` — plausible but unproven. Explicitly ignorable.\n",
+    )
+
+    result = _run_gate(review)
+
+    assert result.returncode == 0, (result.returncode, result.stderr)
+
+
+def test_gate_does_not_fire_on_drop_audit_quoting_block_tag(tmp_path: Path) -> None:
+    """Audit evidence cannot turn a dropped candidate into a merge obligation.
+
+    :param tmp_path: pytest tmp dir for the synthetic sentinel.
+    """
+    review = _head_sentinel(
+        tmp_path,
+        "# repo-review-full-no-comments\n\n## Final judge audit\n\n"
+        "- `candidate-id` — original `warn` → final `drop`; "
+        "rationale: quoted [correctness:block] report was not reproducible.\n",
+    )
+
+    result = _run_gate(review)
+
     assert result.returncode == 0, (result.returncode, result.stderr)
 
 

@@ -20,12 +20,12 @@ class TestPathsConfigAcceptsDefault:
         """All five string fields land on the parsed model."""
         paths_subtree = compose_subtree("paths", "default")
         parsed = PathsConfig.model_validate(paths_subtree)
-        # Values here are unresolved interpolation templates; assert non-blank only.
-        assert parsed.root_dir
-        assert parsed.data_dir
-        assert parsed.log_dir
-        assert parsed.output_dir
-        assert parsed.work_dir
+        # Composed before interpolation, so these are the literal templates.
+        assert parsed.root_dir == "${oc.env:PROJECT_ROOT}"
+        assert parsed.data_dir == "${paths.root_dir}/data/"
+        assert parsed.log_dir == "${paths.root_dir}/logs/"
+        assert parsed.output_dir == "${hydra:runtime.output_dir}"
+        assert parsed.work_dir == "${hydra:runtime.cwd}"
 
 
 _VALID_PATHS = {

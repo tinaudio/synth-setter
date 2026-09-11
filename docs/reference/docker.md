@@ -1,6 +1,6 @@
 # Docker Reference
 
-> **Last verified:** 2026-06-12
+> **Last verified:** 2026-09-09
 
 How to build, run, and debug Docker images for the synth-setter training
 pipeline. Intended for developers working locally or in CI environments.
@@ -66,13 +66,15 @@ The rclone reference doc is planned ([#310](https://github.com/tinaudio/synth-se
 
 ### First build (dev-snapshot)
 
-The dev-snapshot image has Surge XT + Python deps + source code baked at a
-specific git ref, plus prebuilt VST3 synths (Dexed, OB-Xf, Six Sines) fetched by
-the `vst3-synths-fetch` stage in `docker/ubuntu22_04/Dockerfile` (amd64
-only; versions and SHA256 pins live there as `ARG`s). Each synth is
-load-validated at build time by
-`src/synth_setter/scripts/load_vst3_check.py` under headless X11 and
-symlinked into `plugins/`.
+The dev-snapshot image installs the package set pinned in `studiorack.json`
+through the npm-locked Studiorack CLI. Host-selected artifacts must match
+`studiorack.lock.json`, and completed bundles are content-sealed before aliasing.
+Archive packages remain versioned under `/opt/studiorack`; `/usr/lib/vst3` and
+checkout-local `plugins/` aliases keep render specs portable. Surge source mode
+and KR-106 retain source fallbacks for
+registry artifacts that do not satisfy supported architecture/glibc contracts.
+Every shipped bundle is load-validated under headless X11 before the image is
+published.
 
 ```bash
 make docker-build-dev-snapshot \
@@ -97,10 +99,11 @@ ______________________________________________________________________
 
 ### Make targets
 
-| Target               | Source code            | Typical use                                   |
-| -------------------- | ---------------------- | --------------------------------------------- |
-| `dev-snapshot`       | Git clone at `GIT_REF` | CI, cloud, evaluation                         |
-| `devcontainer-tools` | Git clone at `GIT_REF` | Dev container base (CLI tools + non-root dev) |
+| Target                        | Source code            | Typical use                                            |
+| ----------------------------- | ---------------------- | ------------------------------------------------------ |
+| `dev-snapshot`                | Git clone at `GIT_REF` | CI, cloud, evaluation                                  |
+| `devcontainer-tools`          | Git clone at `GIT_REF` | CLI tools, defaults to root (SkyPilot/RunPod dev pods) |
+| `devcontainer-tools-dev-user` | Git clone at `GIT_REF` | `devcontainer-tools` + non-root `dev` (local VS Code)  |
 
 Set `GIT_REF` for reproducible builds (defaults to `main` if omitted):
 
@@ -110,18 +113,24 @@ make docker-build-dev-snapshot \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 
-# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code/Codex/pi, Infisical, Antigravity (agy), Hermes, zellij, dev user
+# devcontainer-tools — dev-base + CLI tools, Node.js + Claude Code/Codex/pi, Infisical, Antigravity (agy), Hermes, zellij; defaults to root
 # (see the "devcontainer-tools" stage in docker/ubuntu22_04/Dockerfile)
 make docker-build-devcontainer-tools \
+  GIT_REF="$(git rev-parse HEAD)" \
+  DOCKER_BUILD_FLAGS="--load"
+
+# devcontainer-tools-dev-user — devcontainer-tools with a non-root `dev` default user, for local VS Code devcontainers
+make docker-build-devcontainer-tools-dev-user \
   GIT_REF="$(git rev-parse HEAD)" \
   DOCKER_BUILD_FLAGS="--load"
 ```
 
 The `devcontainer-tools` stage is a sibling of `dev-snapshot` — both stages
-build `FROM dev-base`, the shared parent that holds Surge XT, the venv, and
-the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
+build `FROM dev-base`, the shared parent that holds the Studiorack-provisioned
+plugin set, the venv, and the synth-setter source. `devcontainer-tools` adds interactive CLI tooling
 (see the stage's `apt-get install` list and the GitHub CLI install block),
-Node.js installed system-wide, the `@anthropic-ai/claude-code`,
+the npm CLI tree layered onto the Node binary `dev-base` already bakes for its
+own pytest run, the `@anthropic-ai/claude-code`,
 `@openai/codex`, and `@earendil-works/pi-coding-agent` (`pi`) CLIs installed
 for the `dev` user via a per-user npm prefix (`~/.npm-global`, on PATH) — so
 later `npm install -g` runs, including claude-code's in-app self-update, avoid
@@ -133,10 +142,13 @@ run with `VIRTUAL_ENV` and `UV_PYTHON_INSTALL_DIR` unset (`env -u`), so its uv
 doesn't write into the root-owned `/opt/uv` tree that `/venv/main` reads (the
 #1923 bug class); the Google Antigravity (`agy`) CLI installed by its upstream
 `install.sh` into `~/.local/bin` (also on PATH), the zellij terminal
-multiplexer (pinned upstream musl binary, SHA256-verified, in `/usr/local/bin`),
+multiplexer (latest upstream musl binary at image build time, verified against its published SHA256, in `/usr/local/bin`),
 a non-root
 `dev` user, chowns the baked uv venv at `/venv/main` to `dev` so
-`uv pip install` and editable installs work without sudo, and adds a
+`uv pip install` and editable installs work without sudo (the `dev`-owned tools
+above are installed mid-stage, but the stage ends with `USER root` so SkyPilot's
+RunPod backend can bootstrap sshd; the non-root default lives in the
+`devcontainer-tools-dev-user` sibling stage), and adds a
 `/commandhistory` directory (owned by `dev`) that
 `.devcontainer/{cpu,gpu}/devcontainer.json` mounts as a named volume so bash
 history survives container rebuilds. The VS Code terminal defaults to the
@@ -154,7 +166,7 @@ overlay `/home/build/synth-setter/plugins` with an anonymous volume so the
 baked `plugins/Surge XT.vst3` symlink survives the workspace bind mount —
 without it, the host's gitignored `plugins/` would shadow the baked file and
 VST-dependent tests would fail. `.devcontainer/Dockerfile` consumes the
-stage via `FROM tinaudio/synth-setter:devcontainer-tools`.
+non-root sibling via `FROM tinaudio/synth-setter:devcontainer-tools-dev-user`.
 
 ### Build variables
 
@@ -252,8 +264,7 @@ docker run --rm -it --device /dev/fuse --cap-add SYS_ADMIN \
 ```
 
 The devcontainer variants pass `--device=/dev/fuse --cap-add=SYS_ADMIN` via
-`runArgs` (pinned by `tests/infra/test_fuse_support.py`); the OCI compute
-template already runs `--privileged`, which is a superset. RunPod pods cannot
+`runArgs` (pinned by `tests/infra/test_fuse_support.py`). RunPod pods cannot
 express these flags — SkyPilot creates them via `runpod.create_pod`, which
 has no device/capability parameters — so `rclone mount` does not work on
 RunPod workers; use `rclone copy`/`sync` there instead.
@@ -301,8 +312,8 @@ plus `WANDB_API_KEY`. `SYNTH_SETTER_STORAGE_PROVIDER` defaults to `r2`.
 
 ### Workflow artifact bundle (generate_dataset)
 
-When the test workflow runs, it uploads one artifact bundle per provider:
-`test-run-metadata-runpod` and `test-run-metadata-oci`. Each bundle
+When the test workflow runs, it uploads one artifact bundle per matrix cell,
+named `test-run-metadata-<provider>-<output_format>-<scenario>`. Each bundle
 contains two files:
 
 | File              | Contents                                                                 |
@@ -313,9 +324,8 @@ contains two files:
 **Download:**
 
 ```bash
-# Per-provider:
-gh run download <run_id> -n test-run-metadata-runpod
-gh run download <run_id> -n test-run-metadata-oci
+# One provider/output/scenario cell:
+gh run download <run_id> -n test-run-metadata-runpod-lance-static
 # Or grab everything for this run:
 gh run download <run_id>
 ```
@@ -368,20 +378,25 @@ dev-snapshot image, pushes to Docker Hub (and mirrors to
 4. Runs smoke tests against the SHA-pinned tag (dispatch/push-to-main only)
 
 On **pull requests** (Docker-related paths only), the workflow runs steps 1–2
-as build validation — no push, no smoke tests.
+as build validation, plus in-image smoke tests
+(`tests/docker/test_devcontainer_tools.py`) for the `devcontainer-tools` and
+`devcontainer-tools-dev-user` targets — but no push and no smoke test against
+the pushed SHA-pinned `dev-snapshot` tag.
 
 If the YAML violates the schema, the workflow fails before any build starts.
 
 ### Tags
 
-| Tag                                              | Mutable? | Purpose                                                                          |
-| ------------------------------------------------ | -------- | -------------------------------------------------------------------------------- |
-| `tinaudio/synth-setter:latest`                   | Yes      | Convenience pointer to the most recent default-branch build                      |
-| `tinaudio/synth-setter:dev-snapshot`             | Yes      | Latest dev-snapshot from main (gated like `latest`)                              |
-| `tinaudio/synth-setter:dev-snapshot-<branch>`    | Yes      | Per-branch floating tag for feature-branch dispatches (slug = branch, `/` → `-`) |
-| `tinaudio/synth-setter:dev-snapshot-<sha>`       | No       | Immutable, used for smoke tests                                                  |
-| `tinaudio/synth-setter:devcontainer-tools`       | Yes      | Latest devcontainer-tools (consumed by `.devcontainer/`)                         |
-| `tinaudio/synth-setter:devcontainer-tools-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                              |
+| Tag                                                       | Mutable? | Purpose                                                                          |
+| --------------------------------------------------------- | -------- | -------------------------------------------------------------------------------- |
+| `tinaudio/synth-setter:latest`                            | Yes      | Convenience pointer to the most recent default-branch build                      |
+| `tinaudio/synth-setter:dev-snapshot`                      | Yes      | Latest dev-snapshot from main (gated like `latest`)                              |
+| `tinaudio/synth-setter:dev-snapshot-<branch>`             | Yes      | Per-branch floating tag for feature-branch dispatches (slug = branch, `/` → `-`) |
+| `tinaudio/synth-setter:dev-snapshot-<sha>`                | No       | Immutable, used for smoke tests                                                  |
+| `tinaudio/synth-setter:devcontainer-tools`                | Yes      | Latest devcontainer-tools, root default (SkyPilot/RunPod dev pods)               |
+| `tinaudio/synth-setter:devcontainer-tools-<sha>`          | No       | Immutable root-default pin                                                       |
+| `tinaudio/synth-setter:devcontainer-tools-dev-user`       | Yes      | Non-root `dev` default (consumed by `.devcontainer/`)                            |
+| `tinaudio/synth-setter:devcontainer-tools-dev-user-<sha>` | No       | Immutable, pinnable from `.devcontainer/Dockerfile`                              |
 
 Every tag above is also published to `ghcr.io/tinaudio/synth-setter:<same-tag>`
 as a Docker Hub pull mirror.

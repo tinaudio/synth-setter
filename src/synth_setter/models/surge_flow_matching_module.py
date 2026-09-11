@@ -10,13 +10,9 @@ from __future__ import annotations
 from synth_setter.models.vst_flow_matching_module import (
     SurgeFlowMatchingModule,
     VSTFlowMatchingModule,
-    call_with_cfg,
-    rk4_with_cfg,
 )
 
 __all__ = [
     "SurgeFlowMatchingModule",
     "VSTFlowMatchingModule",
-    "call_with_cfg",
-    "rk4_with_cfg",
 ]

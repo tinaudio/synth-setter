@@ -44,6 +44,34 @@ def finalization_workflow(project_root: Path) -> dict:
     return load_workflow(project_root, "test-dataset-finalization.yml")
 
 
+def test_generation_revisions_match_default_pr_merge_checkout(project_root: Path) -> None:
+    """PR generation, workers, and finalization consume the merge revision.
+
+    :param project_root: Repo root provided by the infra fixture.
+    """
+    workflow = load_workflow(project_root, "generate-dataset-shards.yaml")
+    generate = workflow["jobs"]["generate"]
+    checkout = next(step for step in generate["steps"] if step.get("name") == "Checkout")
+    local_generate = next(step for step in generate["steps"] if step.get("id") == "gen_local")
+    docker_generate = next(step for step in generate["steps"] if step.get("id") == "gen_docker")
+    finalize = workflow["jobs"]["finalize"]
+
+    merge_sha = "merge-sha"
+    pr_expression_values = {
+        "${{ github.sha }}": merge_sha,
+        "${{ github.event.pull_request.head.sha || github.sha }}": "head-sha",
+    }
+
+    assert "ref" not in checkout.get("with", {})
+    resolved_revisions = [
+        merge_sha,
+        pr_expression_values[local_generate["env"]["WORKER_GIT_REF"]],
+        pr_expression_values[docker_generate["env"]["WORKER_GIT_REF"]],
+        pr_expression_values[finalize["with"]["env_ref"]],
+    ]
+    assert resolved_revisions == [merge_sha, merge_sha, merge_sha, merge_sha]
+
+
 def test_finalization_workflow_runs_static_and_queue_lance_scenarios(
     finalization_workflow: dict,
 ) -> None:
@@ -53,9 +81,9 @@ def test_finalization_workflow_runs_static_and_queue_lance_scenarios(
     """
     generate = finalization_workflow["jobs"]["smoke-pipeline"]
     rows = generate["strategy"]["matrix"]["include"]
-    assert [row["scenario"] for row in rows] == ["static", "queue"]
+    assert {row["scenario"] for row in rows} == {"static", "queue"}
     assert "matrix.scenario == 'queue'" in generate["with"]["hydra_overrides"]
-    assert "use_shard_queue=true" in generate["with"]["hydra_overrides"]
+    assert "use_shard_queue=true render.parallel=true" in generate["with"]["hydra_overrides"]
     assert "matrix.scenario" in generate["with"]["artifact_name"]
 
     verify_rows = finalization_workflow["jobs"]["verify-artifacts"]["strategy"]["matrix"][
@@ -73,9 +101,11 @@ def test_generate_job_has_output_format_matrix_axis(workflow: dict, job_name: st
     """
     job = workflow["jobs"][job_name]
     matrix = job["strategy"]["matrix"]
-    assert "output_format" in matrix, (
-        f"{job_name}.strategy.matrix is missing the `output_format` axis — "
-        f"found keys: {sorted(matrix.keys())}"
+    # The axis is fed at runtime from the setup job, so pin the wiring rather than
+    # the formats: a rename of that output would silently collapse the fan-out.
+    assert matrix.get("output_format") == "${{ fromJSON(needs.setup.outputs.output_formats) }}", (
+        f"{job_name}.strategy.matrix.output_format is not wired to setup.outputs."
+        f"output_formats — found: {matrix.get('output_format')!r}"
     )
 
 

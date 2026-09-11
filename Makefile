@@ -20,7 +20,7 @@ format: ## Run pre-commit hooks
 install-git-hooks: ## Install commit and push enforcement hooks
 	@common_dir=$$(git rev-parse --git-common-dir); \
 	primary_root=$$(cd "$$common_dir/.." && pwd); \
-	uv run --project "$$primary_root" pre-commit install --hook-type pre-commit --hook-type pre-push
+	uv run --project "$$primary_root" pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
 
 GATE ?=
 count-doc-noqa: ## Count inline `# noqa: DOC*` under src/ + tests/. Use GATE=1 to fail if non-zero.
@@ -36,20 +36,57 @@ sync: ## Merge changes from main branch to your current branch
 # tests run (VST3-not-installed → tests skip via existing skipif decorators).
 UNAME_S := $(shell uname -s)
 HEADLESS_WRAPPER := $(if $(filter Linux,$(UNAME_S)),src/synth_setter/scripts/run-linux-vst-headless.sh,)
+PYTEST := ./.venv/bin/pytest
+# One BLAS/OpenMP thread per xdist worker: N workers each defaulting to a
+# full-core intra-op pool oversubscribes the host N-fold (#2274). Env form
+# (not torch.set_num_threads) so spawned DataLoader children inherit it.
+XDIST_THREAD_CAPS := OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 
-test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
-	./.venv/bin/pytest -n auto -m "not slow and not gpu and not mps and not requires_vst"
+# Explicit paths avoid importing the entire medium suite during the inner loop.
+FAST_TEST_BUDGET_SECONDS := 120
+FAST_TEST_PATHS := \
+	tests/_meta \
+	tests/data/vst/test_core.py \
+	tests/data/vst/test_param_spec.py \
+	tests/data/vst/test_param_spec_registry.py \
+	tests/data/vst/test_renderer_factory.py \
+	tests/data/vst/test_renderers.py \
+	tests/data/vst/test_seeding.py \
+	tests/data/vst/test_shape_helpers.py \
+	tests/evaluation \
+	tests/features \
+	tests/integration/test_parallel_shard_dispatch.py \
+	tests/models/test_audio_distance.py \
+	tests/models/test_cnn.py \
+	tests/models/test_sketch_tokens.py \
+	tests/models/test_spec_encoder.py \
+	tests/models/test_vst_validation_preds_contract.py \
+	tests/pipeline/ci_config \
+	tests/pipeline/configs \
+	tests/pipeline/schemas \
+	tests/schemas
+
+# Wall-clock budgets per lane (enforced by tests/conftest.py, #2274): a run that
+# blows its budget fails even when every test passes.
+fast-test-budget: ## Print the fast-tier wall-clock budget in seconds.
+	@printf '%s\n' '$(FAST_TEST_BUDGET_SECONDS)'
+
+test-fast: ## Strict inner loop: curated CPU-only tests with a two-minute budget.
+	PATH="$$(pwd)/.venv/bin:$$PATH" PYTEST_SESSION_BUDGET_SECONDS=$(FAST_TEST_BUDGET_SECONDS) $(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst and not infra" $(FAST_TEST_PATHS)
+
+test-medium: ## Complete CPU-only non-slow suite.
+	PATH="$$(pwd)/.venv/bin:$$PATH" PYTEST_SESSION_BUDGET_SECONDS=600 $(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst"
 
 # Darwin VST editors share AppKit state, so requires_vst tests stay serial.
 # GPU/MPS tests run serially because accelerators need exclusive access.
 test-full-cpu: ## All non-hardware tests (slow + requires_vst included; gpu/mps excluded). Linux: bootstraps Xvfb; Darwin: serial VST lane.
 	@if [ "$(UNAME_S)" = "Darwin" ]; then \
 		status=0; \
-		pytest -n auto -m "not gpu and not mps and not requires_vst" || status=1; \
-		pytest -m "requires_vst and not gpu and not mps" || status=1; \
+		$(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not gpu and not mps and not requires_vst" || status=1; \
+		$(PYTEST) -m "requires_vst and not gpu and not mps" || status=1; \
 		exit $$status; \
 	else \
-		$(HEADLESS_WRAPPER) pytest -n auto -m "not gpu and not mps"; \
+		$(XDIST_THREAD_CAPS) $(HEADLESS_WRAPPER) $(PYTEST) -n auto -m "not gpu and not mps"; \
 	fi
 
 test-full-gpu: ## GPU + CPU tests (mps excluded). Runs serially for exclusive GPU access. Linux: bootstraps Xvfb.
@@ -85,15 +122,22 @@ codex-doctor: ## Check Codex CLI, repo skill projection, and tinaudio skill plug
 # `--cov=scripts/ci` is needed alongside `--cov=src`: pytest-cov's `--cov`
 # overrides [tool.coverage.run].source in pyproject.toml.
 CI_COV := --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
+CI_COV_APPEND := --cov-append $(CI_COV)
 
-test-ci-unit: ## CI fast suite (test.yml): CPU-only, excludes slow/gpu/mps.
-	uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s $(CI_COV)
+test-ci-unit: ## CI medium suite (test.yml): CPU-only, excludes slow/gpu/mps.
+	PYTEST_SESSION_BUDGET_SECONDS=1500 uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s $(CI_COV)
 
-test-ci-slow: ## CI slow suite (cpu-slow.yml): slow CPU tests, excludes gpu/mps/vst.
-	uv run pytest -vv -s -m "slow and not gpu and not mps and not requires_vst" $(CI_COV)
+test-ci-slow: ## CI slow suite (cpu-slow.yml): slow CPU tests with live R2, excludes gpu/mps/vst.
+	PYTEST_SESSION_BUDGET_SECONDS=4500 uv run pytest -vv -s -m "slow and not gpu and not mps and not requires_vst" $(CI_COV)
+
+test-ci-slow-pr: ## CI slow PR suite (cpu-slow.yml): slow CPU tests without live R2.
+	PYTEST_SESSION_BUDGET_SECONDS=4500 uv run pytest -vv -s -m "slow and not gpu and not mps and not requires_vst and not integration_r2" $(CI_COV)
+
+test-ci-slow-pr-r2-e2e: ## CI trusted-PR growing Lance E2E; append subprocess data to slow coverage.
+	PYTEST_SESSION_BUDGET_SECONDS=1200 uv run pytest -vv -s tests/integration/test_pyfdn_growing_lance_r2_e2e.py $(CI_COV_APPEND)
 
 test-ci-nightly: ## CI nightly suite (nightly.yml): all non-hardware, non-VST (unit + slow).
-	uv run pytest -vv -s -m "not gpu and not mps and not requires_vst"
+	PYTEST_SESSION_BUDGET_SECONDS=4800 uv run pytest -vv -s -m "not gpu and not mps and not requires_vst"
 
 # Local mirror of .github/workflows/deflake-mps.yml — see that workflow for the rationale on each flag.
 # `pipefail` (target-scoped via bash) ensures pytest's non-zero exit propagates through `tee`.
@@ -136,187 +180,92 @@ install: ## End-to-end: install uv, create .venv (Python 3.12), install deps, se
 	@echo ""
 	@echo "Next: source .venv/bin/activate"
 
-SURGE_XT_VERSION := 1.3.4
-SURGE_XT_CACHE := $(HOME)/.cache/synth-setter/surge-xt-$(SURGE_XT_VERSION)
-SURGE_XT_RELEASE_URL := https://github.com/surge-synthesizer/releases-xt/releases/download/$(SURGE_XT_VERSION)
-SURGE_XT_LINUX_ASSET := surge-xt-linux-$(SURGE_XT_VERSION)-pluginsonly.tar.gz
-SURGE_XT_LINUX_MD5 := 0180f06ec7a8445b1c749471e29c702b
-SURGE_XT_MACOS_ASSET := surge-xt-macos-$(SURGE_XT_VERSION)-pluginsonly.zip
-SURGE_XT_MACOS_MD5 := 8afca4159d9b417c5e07ebc1a5e96ed3
-
-install-surge-xt: ## Download Surge XT VST3 into plugins/ (skipped if already present)
-	@set -e; \
-	DEST="plugins/Surge XT.vst3"; \
-	if [ -e "$$DEST" ]; then \
-		echo "$$DEST already exists — skipping. Remove it first to reinstall."; \
-		exit 0; \
-	fi; \
-	OS=$$(uname -s); ARCH=$$(uname -m); \
-	case "$$OS" in \
-		Linux) \
-			if [ "$$ARCH" != "x86_64" ]; then \
-				echo "ERROR: the Surge XT Linux release only ships an x86_64 build (detected: $$ARCH)." >&2; \
-				echo "Install via your package manager (e.g. apt install surge-xt) or build from source," >&2; \
-				echo "then symlink it: ln -s /path/to/Surge XT.vst3 plugins/" >&2; \
-				exit 1; \
-			fi; \
-			ASSET="$(SURGE_XT_LINUX_ASSET)"; EXPECTED_MD5="$(SURGE_XT_LINUX_MD5)" ;; \
-		Darwin) \
-			ASSET="$(SURGE_XT_MACOS_ASSET)"; EXPECTED_MD5="$(SURGE_XT_MACOS_MD5)" ;; \
-		*) echo "ERROR: Unsupported platform: $$OS" >&2; exit 1 ;; \
-	esac; \
-	mkdir -p "$(SURGE_XT_CACHE)" plugins; \
-	ARCHIVE="$(SURGE_XT_CACHE)/$$ASSET"; \
-	if [ ! -f "$$ARCHIVE" ]; then \
-		echo "Downloading $(SURGE_XT_RELEASE_URL)/$$ASSET"; \
-		curl -fSL -o "$$ARCHIVE" "$(SURGE_XT_RELEASE_URL)/$$ASSET"; \
-	else \
-		echo "Using cached $$ARCHIVE"; \
-	fi; \
-	if command -v md5sum >/dev/null 2>&1; then \
-		ACTUAL_MD5=$$(md5sum "$$ARCHIVE" | awk '{print $$1}'); \
-	elif command -v md5 >/dev/null 2>&1; then \
-		ACTUAL_MD5=$$(md5 -q "$$ARCHIVE"); \
-	else \
-		echo "ERROR: neither 'md5sum' (Linux) nor 'md5' (macOS) is available — cannot verify checksum" >&2; \
-		exit 1; \
-	fi; \
-	if [ "$$ACTUAL_MD5" != "$$EXPECTED_MD5" ]; then \
-		echo "ERROR: md5 mismatch for $$ARCHIVE" >&2; \
-		echo "  expected: $$EXPECTED_MD5" >&2; \
-		echo "  actual:   $$ACTUAL_MD5" >&2; \
-		echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; \
-		exit 1; \
-	fi; \
-	echo "md5 OK. Extracting Surge XT.vst3 into plugins/..."; \
-	case "$$OS" in \
-		Linux) tar -xzf "$$ARCHIVE" -C plugins/ "./Surge XT.vst3" ;; \
-		Darwin) unzip -q "$$ARCHIVE" "Surge XT.vst3/*" -d plugins/ ;; \
-	esac; \
-	echo "Installed $$DEST"
-
-# Plugin pins mirror the ARGs in docker/ubuntu22_04/Dockerfile;
-# tests/infra/test_install_plugins_targets.py fails when either side drifts.
-DEXED_VERSION := 0.9.8
-DEXED_SHA256 := 5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab
-OBXF_VERSION := v1.0.3
-OBXF_SHA256 := 72b60c83cf6426337031df744c34a047104a9d95f1feaf6cd048ecfa39f74c96
-SIX_SINES_VERSION := v1.1.0
-SIX_SINES_ASSET := six-sines-linux-2025-03-18-43d10b2.tgz
-SIX_SINES_SHA256 := fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421
+STUDIORACK := uv run synth-setter-plugins
 ULTRAMASTER_KR106_VERSION := v2.5.13
 ULTRAMASTER_KR106_GIT_REF := bc15caee5843ab238a25d0969e68d57db2b1615f
 
-# $(call install_fetched_synth,<Bundle>,<asset-url>,<sha256>): fetch the pinned asset,
-# verify its sha256, extract plugins/<Bundle>.vst3; non-x86_64 hosts skip (the image's amd64 gate).
+install-studiorack: ## Install the pinned Studiorack CLI and its locked dependencies
+	npm ci
 
-# Deliberately separate from install-surge-xt (per-OS assets, md5 upstream checksums there);
-# the cache is flat — no per-synth subdir — because asset filenames embed their version.
-define install_fetched_synth
-@set -e; \
-DEST="plugins/$(1).vst3"; \
-if [ -e "$$DEST" ]; then \
-	echo "$$DEST already exists — skipping. Remove it first to reinstall."; \
-	exit 0; \
-fi; \
-OS=$$(uname -s); ARCH=$$(uname -m); \
-if [ "$$OS" != "Linux" ] || [ "$$ARCH" != "x86_64" ]; then \
-	echo "skipping $(1): x86_64 Linux asset only (host: $$OS/$$ARCH)."; \
-	exit 0; \
-fi; \
-CACHE="$(HOME)/.cache/synth-setter"; \
-ASSET="$(notdir $(2))"; \
-mkdir -p "$$CACHE" plugins; \
-ARCHIVE="$$CACHE/$$ASSET"; \
-if [ ! -f "$$ARCHIVE" ]; then \
-	echo "Downloading $(2)"; \
-	curl -fSL -o "$$ARCHIVE" "$(2)"; \
-else \
-	echo "Using cached $$ARCHIVE"; \
-fi; \
-command -v sha256sum >/dev/null 2>&1 || { \
-	echo "ERROR: sha256sum not found — cannot verify checksum" >&2; exit 1; }; \
-echo "$(3)  $$ARCHIVE" | sha256sum -c - || { \
-	echo "Remove the cached file and retry: rm '$$ARCHIVE'" >&2; exit 1; }; \
-TMP="$$(mktemp -d)"; \
-trap 'rm -rf "$$TMP"' EXIT; \
-case "$$ASSET" in \
-	*.zip) unzip -q "$$ARCHIVE" -d "$$TMP" ;; \
-	*.tgz|*.tar.gz) tar -xzf "$$ARCHIVE" -C "$$TMP" ;; \
-	*) echo "ERROR: unsupported archive type: $$ASSET" >&2; exit 1 ;; \
-esac; \
-SRC="$$(find "$$TMP" -type d -name "$(1).vst3" | head -n 1)"; \
-if [ -z "$$SRC" ]; then \
-	echo "ERROR: $(1).vst3 not found in $$ASSET" >&2; exit 1; \
-fi; \
-mv "$$SRC" "$$DEST"; \
-echo "Installed $$DEST"
-endef
+install-surge-xt: install-studiorack ## Install pinned Surge XT through Studiorack
+	$(STUDIORACK) install --plugin surge-synthesizer/surge
 
-install-dexed: ## Download Dexed VST3 into plugins/ (skipped if already present)
-	$(call install_fetched_synth,Dexed,https://github.com/asb2m10/dexed/releases/download/v$(DEXED_VERSION)/dexed-$(DEXED_VERSION)-lnx.zip,$(DEXED_SHA256))
+install-cardinal: install-studiorack ## Install pinned Cardinal through its optional Studiorack manifest
+	$(STUDIORACK) --manifest studiorack-cardinal.json install --plugin distrho/cardinal
 
-install-obxf: ## Download OB-Xf VST3 into plugins/ (skipped if already present)
-	$(call install_fetched_synth,OB-Xf,https://github.com/surge-synthesizer/OB-Xf/releases/download/$(OBXF_VERSION)/ob-xf-Linux-$(OBXF_VERSION).zip,$(OBXF_SHA256))
+install-dexed: install-studiorack ## Install pinned Dexed through Studiorack
+	$(STUDIORACK) install --plugin asb2m10/dexed
 
-install-six-sines: ## Download Six Sines VST3 into plugins/ (skipped if already present)
-	$(call install_fetched_synth,Six Sines,https://github.com/baconpaul/six-sines/releases/download/$(SIX_SINES_VERSION)/$(SIX_SINES_ASSET),$(SIX_SINES_SHA256))
+install-obxf: install-studiorack ## Install pinned OB-Xf through Studiorack
+	$(STUDIORACK) install --plugin surge-synthesizer/ob-xf
 
-install-ultramaster-kr106: ## Build Ultramaster KR-106 VST3 into plugins/ (skipped if already present)
+install-six-sines: install-studiorack ## Install pinned Six Sines through Studiorack
+	$(STUDIORACK) install --plugin baconpaul/six-sines
+
+install-ultramaster-kr106: SHELL := /bin/bash
+install-ultramaster-kr106: install-studiorack ## Build and install pinned Ultramaster KR-106
 	@set -e; \
-	DEST="plugins/Ultramaster KR-106.vst3"; \
-	if [ -e "$$DEST" ]; then \
-		echo "$$DEST already exists — skipping. Remove it first to reinstall."; \
+	os="$$(uname -s)"; arch="$$(uname -m)"; \
+	if [[ "$$os" == "Darwin" ]]; then \
+		$(STUDIORACK) install --plugin kayrockscreenprinting/ultramaster-kr106; \
 		exit 0; \
 	fi; \
-	OS=$$(uname -s); ARCH=$$(uname -m); \
-	if [ "$$OS" != "Linux" ] || [ "$$ARCH" != "x86_64" ]; then \
-		echo "skipping Ultramaster KR-106: x86_64 Linux source build only (host: $$OS/$$ARCH)."; \
-		exit 0; \
+	if [[ "$$os" != "Linux" || "$$arch" != "x86_64" ]]; then \
+		echo "ERROR: Ultramaster KR-106 supports macOS or Linux x86_64 (host: $$os/$$arch)." >&2; \
+		exit 1; \
 	fi; \
-	command -v cmake >/dev/null 2>&1 || { echo "ERROR: cmake not found" >&2; exit 1; }; \
-	command -v git >/dev/null 2>&1 || { echo "ERROR: git not found" >&2; exit 1; }; \
-	CACHE="$(HOME)/.cache/synth-setter/ultramaster-kr106-$(ULTRAMASTER_KR106_VERSION)"; \
-	SRC="$$CACHE/src"; BUILD="$$CACHE/build"; \
-	if ! git -C "$$SRC" rev-parse --git-dir >/dev/null 2>&1; then \
-		rm -rf "$$SRC" "$$BUILD"; mkdir -p "$$SRC"; \
-		git -C "$$SRC" init; \
-		git -C "$$SRC" remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
+	command -v cmake >/dev/null 2>&1 || { echo "ERROR: cmake is required to build Ultramaster KR-106." >&2; exit 1; }; \
+	command -v git >/dev/null 2>&1 || { echo "ERROR: git is required to build Ultramaster KR-106." >&2; exit 1; }; \
+	command -v flock >/dev/null 2>&1 || { echo "ERROR: flock is required to build Ultramaster KR-106." >&2; exit 1; }; \
+	cache="$$HOME/.cache/synth-setter/ultramaster-kr106-$(ULTRAMASTER_KR106_VERSION)"; \
+	mkdir -p "$$cache"; \
+	exec 9>"$$cache/.install.lock"; \
+	flock 9; \
+	src="$$cache/src"; build="$$cache/build"; \
+	if ! git -C "$$src" rev-parse --git-dir >/dev/null 2>&1 || \
+		! git -C "$$src" remote get-url origin >/dev/null 2>&1; then \
+		rm -rf "$$src" "$$build"; \
+		mkdir -p "$$src"; \
+		git -C "$$src" init; \
+		git -C "$$src" remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
 	fi; \
-	git -C "$$SRC" remote set-url origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
-	git -C "$$SRC" fetch --depth 1 origin "$(ULTRAMASTER_KR106_GIT_REF)"; \
-	git -C "$$SRC" checkout --detach FETCH_HEAD; \
-	git -C "$$SRC" reset --hard FETCH_HEAD; \
-	git -C "$$SRC" submodule update --init --recursive --depth 1; \
-	cmake -S "$$SRC" -B "$$BUILD" -DCMAKE_BUILD_TYPE=Release -DKR106_COPY_AFTER_BUILD=OFF; \
-	MAKEFLAGS= cmake --build "$$BUILD" --config Release --target KR106_VST3 --parallel "$$(nproc)"; \
-	SRC_BUNDLE="$$BUILD/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3"; \
-	if [ ! -d "$$SRC_BUNDLE" ]; then \
-		echo "ERROR: $$SRC_BUNDLE not found after build" >&2; exit 1; \
+	git -C "$$src" remote set-url origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
+	git -C "$$src" fetch --depth 1 origin "$(ULTRAMASTER_KR106_GIT_REF)"; \
+	git -C "$$src" checkout --detach FETCH_HEAD; \
+	git -C "$$src" reset --hard FETCH_HEAD; \
+	git -C "$$src" clean -ffd; \
+	git -C "$$src" submodule update --init --recursive --depth 1 --force; \
+	git -C "$$src" submodule foreach --recursive 'git reset --hard && git clean -ffd'; \
+	cmake -S "$$src" -B "$$build" -DCMAKE_BUILD_TYPE=Release -DKR106_COPY_AFTER_BUILD=OFF; \
+	MAKEFLAGS= cmake --build "$$build" --config Release --target KR106_VST3 --parallel; \
+	bundle="$$build/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3"; \
+	if [[ ! -d "$$bundle" ]]; then \
+		echo "ERROR: $$bundle not found after build." >&2; \
+		exit 1; \
 	fi; \
-	mkdir -p plugins; \
-	cp -a "$$SRC_BUNDLE" "$$DEST"; \
-	echo "Installed $$DEST"
+	$(STUDIORACK) adopt \
+		--plugin kayrockscreenprinting/ultramaster-kr106 \
+		--bundle-path "$$bundle"; \
+	$(STUDIORACK) link --plugin kayrockscreenprinting/ultramaster-kr106
 
-install-plugins: install-surge-xt install-dexed install-obxf install-six-sines install-ultramaster-kr106 ## Install every VST3 the runtime docker image ships (Surge XT, Dexed, OB-Xf, Six Sines, Ultramaster KR-106)
+install-plugins: install-surge-xt install-dexed install-obxf install-six-sines install-ultramaster-kr106 ## Install every VST3 pinned in studiorack.json
 
-link-plugins: ## Mirror the primary checkout's plugins/ into the current worktree (no-op in primary)
+link-plugins: SHELL := /bin/bash
+link-plugins: ## Link installed Studiorack packages into the checkout's plugins/ namespace
 	@set -e; \
 	primary="$$(cd "$$(dirname "$$(git rev-parse --git-common-dir)")" && pwd)"; \
 	here="$$(git rev-parse --show-toplevel)"; \
-	if [ "$$primary" = "$$here" ]; then \
-		echo "In primary checkout — nothing to link."; exit 0; \
-	fi; \
-	if [ ! -d "$$primary/plugins" ]; then \
-		echo "No $$primary/plugins to mirror — run 'make install-surge-xt' in the primary first."; exit 0; \
-	fi; \
-	mkdir -p "$$here/plugins"; \
-	for entry in "$$primary"/plugins/*; do \
-		[ -e "$$entry" ] || [ -L "$$entry" ] || continue; \
-		name="$$(basename "$$entry")"; \
-		ln -sfn "$$entry" "$$here/plugins/$$name"; \
-		echo "linked plugins/$$name -> $$entry"; \
-	done
+	central="$$primary/plugins"; \
+	if [[ "$$primary" != "$$here" && -L "$$here/plugins" && "$$(readlink "$$here/plugins")" == "$$central" ]]; then \
+		[[ -d "$$central" ]] || { echo "ERROR: primary plugins directory is unavailable: $$central" >&2; exit 1; }; \
+		echo "plugins/ already linked -> $$central"; \
+	elif [[ "$$primary" != "$$here" && -d "$$central" && ! -e "$$here/plugins" && ! -L "$$here/plugins" ]]; then \
+		ln -s "$$central" "$$here/plugins"; \
+		echo "plugins/ linked -> $$central"; \
+	else \
+		$(STUDIORACK) link; \
+		$(STUDIORACK) --manifest studiorack-cardinal.json link; \
+	fi
 
 # Symlink this worktree's gitignored thoughts/ to the primary's central thoughts/
 # so qrspi docs from every worktree converge; migrates pre-existing files first.
@@ -466,4 +415,19 @@ docker-build-devcontainer-tools: ## Build devcontainer-tools image
 		--build-arg TARGETARCH=$(TARGETARCH) \
 		--target devcontainer-tools \
 		-t $(DOCKER_IMAGE):devcontainer-tools \
+		.
+
+docker-build-devcontainer-tools-dev-user: ## Build non-root devcontainer-tools-dev-user image
+	@if [ -z "$(GIT_REF)" ]; then echo "ERROR: GIT_REF is required."; exit 1; fi
+	DOCKER_BUILDKIT=1 docker buildx build \
+		-f $(DOCKER_FILE) \
+		$(_INTERNAL_BUILD_FLAGS) $(DOCKER_BUILD_FLAGS) \
+		--platform $(DOCKER_TARGETPLATFORM) \
+		--build-arg BUILD_MODE=$(DOCKER_BUILD_MODE) \
+		--build-arg BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
+		--build-arg SYNTH_PERMUTATIONS_GIT_REF=$(GIT_REF) \
+		--build-arg TORCH_BACKEND=$(DOCKER_TORCH_BACKEND) \
+		--build-arg TARGETARCH=$(TARGETARCH) \
+		--target devcontainer-tools-dev-user \
+		-t $(DOCKER_IMAGE):devcontainer-tools-dev-user \
 		.

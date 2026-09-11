@@ -7,32 +7,68 @@ cfg-entrypoint tests; unit tests for helper functions belong in sibling
 that no private ``synth_setter.cli`` helper is imported here.
 """
 
+import hashlib
+import json
 import logging
+import math
 import os
-from collections.abc import Callable
+import re
+import shlex
+import shutil
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from unittest.mock import PropertyMock, patch
 from uuid import UUID
 
 import hydra
+import lance
 import numpy as np
 import pandas as pd
 import pytest
 import torch
+import wandb
+from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
+from hydra.utils import instantiate
 from lightning.pytorch import Trainer
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf.errors import InterpolationKeyError
+from PIL import Image
 
 from synth_setter.cli.eval import evaluate
+from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
-from synth_setter.models.components.cnn import LogMelEncoder
+from synth_setter.models.components.audio_distance import MultichannelAudioDistance
+from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
+from synth_setter.models.components.differentiable_renderer import (
+    FlamoFDNDifferentiableRenderer,
+    TorchSynthDifferentiableRenderer,
+)
+from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
+from synth_setter.models.components.pretrained_encoder import (
+    ClapAudioEncoder,
+    PretrainedConditioningEncoder,
+)
+from synth_setter.models.components.pupujepa_encoder import PupuJepaConditioningEncoder
+from synth_setter.models.components.rendered_reward import SynthRenderedReward
+from synth_setter.models.components.same_encoder import SameAudioEncoder
+from synth_setter.models.components.spec_encoder import SpecEncoder
+from synth_setter.models.components.transformer import (
+    ApproxEquivTransformer,
+    GroupedParameterProjection,
+    LearntProjection,
+)
+from synth_setter.models.components.vector_projection import VectorProjection
+from synth_setter.models.slap_module import SLAPModule
+from synth_setter.models.vst_ff_module import VSTFeedForwardModule
+from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.models.vst_flow_ram_module import VSTFlowRAMModule
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.schemas.spec import DatasetSpec
-from synth_setter.pipeline.spec_io import write_spec_to_path
+from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot, GrowingSnapshot
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
 from synth_setter.utils.utils import register_resolvers
@@ -47,10 +83,17 @@ from tests.conftest import (
     REAL_VST_VARIANTS,
     _build_surge_xt_smoke_cfg,
     _SurgeSmokeVariant,
+    assert_clap_preserves_resampler_output,
+    assert_embedding_columns,
     assert_finite_train_loss,
     assert_log_per_param_mse_wired,
+    augment_lance_splits_with_all_embeddings,
+    augment_lance_splits_with_embedding,
     build_fake_flow_ast_pretrained_train_cfg,
     build_fake_train_cfg,
+    build_surge_xt_embedding_train_cfg,
+    compose_one_step_surge_flow,
+    flatten_lance_embedding_column,
     train_loss_keys,
 )
 from tests.evaluation._oracle_helpers import ORACLE_AUDIO_METRIC_BOUNDS
@@ -59,14 +102,24 @@ from tests.helpers.eval_fakes import (
     fake_metrics_csv,
     fake_postprocessing_subprocess,
 )
+from tests.helpers.generic_launcher import run_generic_launcher_command
+from tests.helpers.grouped_projection_training import (
+    GROUPED_PROJECTION_SEED,
+    build_grouped_projection_config,
+)
 from tests.helpers.noise_capture import NoiseCaptureCallback
 from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _RecordingWandbLogger
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
+from tests.helpers.wandb_offline import read_history_rows
+
+NUM_STEREO_AUDIO_METRICS = 6
 
 # Experiments cycled through the Surge XT VST smoke tests below. Single source of truth so
 # the parametrize lists on the two ``test_train_*_surge_xt`` tests cannot drift apart.
 _ORACLE_EXPERIMENT = "surge/fake_oracle"
+# The MPS-only threshold preserves the CPU oracle envelope; see #3354.
+_MPS_ORACLE_MLDR_MAX = 6.0
 _SURGE_SMOKE_EXPERIMENTS = (_ORACLE_EXPERIMENT, "surge/ffn_full")
 
 
@@ -117,6 +170,51 @@ def _record_successful_r2_uploads(
     return uploads
 
 
+def test_train_eval_only_experiment_raises_before_instantiation() -> None:
+    """The training entrypoint rejects prediction-only experiment presets."""
+    GlobalHydra.instance().clear()
+    with hydra.initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = hydra.compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=surge/eval_flow_sketch_nsynth"],
+        )
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(ValueError, match="evaluation-only experiment"):
+        train(cfg)
+
+
+def test_train_enabled_estimation_negative_seed_raises_before_instantiation(
+    cfg_train: DictConfig,
+) -> None:
+    """Calibration rejects a negative subset seed at the runtime boundary.
+
+    :param cfg_train: Valid training configuration mutated with an invalid seed.
+    """
+    with open_dict(cfg_train):
+        cfg_train.estimate_normalization_stats = True
+        cfg_train.seed = -1
+
+    with pytest.raises(ValueError, match="non-negative integer"):
+        train(cfg_train)
+
+
+def test_train_string_estimate_normalization_stats_raises_before_instantiation(
+    cfg_train: DictConfig,
+) -> None:
+    """The entrypoint rejects quoted booleans instead of enabling calibration.
+
+    :param cfg_train: Valid training configuration mutated with an invalid flag.
+    """
+    with open_dict(cfg_train):
+        cfg_train.estimate_normalization_stats = "false"
+
+    with pytest.raises(ValueError, match="must be a boolean"):
+        train(cfg_train)
+
+
+@pytest.mark.slow
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
@@ -132,7 +230,469 @@ def test_train_fast_dev_run_tiny_model_tiny_data(cfg_train: DictConfig) -> None:
     with open_dict(cfg_train):
         cfg_train.datamodule.num_workers = 2
         cfg_train.trainer.fast_dev_run = True
+
     train(cfg_train)
+
+
+def test_train_grouped_projection_writes_strictly_loadable_checkpoint(tmp_path: Path) -> None:
+    """Train the grouped Hydra selection through the real flow and Lance entrypoint.
+
+    :param tmp_path: Isolated dataset, checkpoint, and log root.
+    """
+    cfg = build_grouped_projection_config(tmp_path, config_name="train.yaml")
+    HydraConfig().set_config(cfg)
+
+    metric_dict, object_dict = train(cfg)
+
+    projection = object_dict["model"].vector_field.projection
+    assert isinstance(projection, GroupedParameterProjection)
+    assert projection.num_tokens == sum(1 for _ in param_specs["surge_4"].encoded_slices())
+    assert object_dict["trainer"].global_step == 1
+    assert torch.isfinite(metric_dict["train/loss"])
+    checkpoint = tmp_path / "checkpoints" / "last.ckpt"
+    assert checkpoint.is_file()
+
+    restored = instantiate(cfg.model)
+    checkpoint_state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    restored.load_state_dict(checkpoint_state["state_dict"], strict=True)
+    trained = object_dict["model"].cpu().eval()
+    restored.eval()
+    generator = torch.Generator().manual_seed(GROUPED_PROJECTION_SEED)
+    params = torch.randn(2, param_specs["surge_4"].encoded_width, generator=generator)
+    time = torch.rand(2, 1, generator=generator)
+    conditioning = torch.randn(2, 16, generator=generator)
+    with torch.no_grad():
+        trained_output = trained.vector_field(params, time, conditioning)
+        restored_output = restored.vector_field(params, time, conditioning)
+    torch.testing.assert_close(restored_output, trained_output, atol=0.0, rtol=0.0)
+
+
+@pytest.mark.slow
+def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Train the shipped pyFDN AST on stored mels and write a checkpoint.
+
+    :param cfg_pyfdn_train: One-step fixed-Householder pyFDN configuration.
+    """
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.trainer.limit_val_batches = 1
+        cfg_pyfdn_train.trainer.val_check_interval = 1
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    metrics, objects = train(cfg_pyfdn_train)
+
+    assert cfg_pyfdn_train.synth.param_spec_name == "pyfdn_n8_mono_householder"
+    assert cfg_pyfdn_train.model.num_params == 27
+    assert objects["trainer"].global_step == 1
+    assert torch.isfinite(metrics["train/per_param_weighted_velocity_mse/delays"])
+    assert torch.isfinite(metrics["val/per_param_mse_spec_quantized/delays"])
+    assert (Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt").is_file()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "synth", ["pyfdn_n8_mono_householder", "pyfdn_n8_mono_householder_vector"]
+)
+def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
+    cfg_dataset_pyfdn_householder: DictConfig,
+    tmp_path: Path,
+    synth: str,
+) -> None:
+    """Generate pyFDN data, train through FLAMO, then reload and evaluate its checkpoint.
+
+    :param cfg_dataset_pyfdn_householder: Real local pyFDN producer configuration.
+    :param tmp_path: Root for generated, checkpoint, metric, and audio artifacts.
+    :param synth: Feedback topology shared by data generation and differentiable training.
+    """
+    from synth_setter.data.vst.writers import make_lance_dataset
+    from synth_setter.pipeline.data.stats import finalize, fold_lance_shard_into_welford
+
+    with open_dict(cfg_dataset_pyfdn_householder):
+        cfg_dataset_pyfdn_householder.synth.name = synth
+        cfg_dataset_pyfdn_householder.synth.param_spec_name = synth
+        cfg_dataset_pyfdn_householder.train_val_test_sizes = [2, 2, 2]
+        cfg_dataset_pyfdn_householder.render.samples_per_shard = 2
+        cfg_dataset_pyfdn_householder.render.min_loudness = -100.0
+        cfg_dataset_pyfdn_householder.logger = None
+    spec = spec_from_cfg(cfg_dataset_pyfdn_householder)
+    dataset_root = tmp_path / "dataset"
+    dataset_root.mkdir()
+    for split, seed in (("train", 10), ("val", 20), ("test", 30)):
+        render = spec.render.model_copy(update={"base_seed": seed})
+        make_lance_dataset(str(dataset_root / f"{split}.lance"), render)
+    stats = fold_lance_shard_into_welford((0, 0, 0), dataset_root / "train.lance")
+    mean, std = finalize(stats, mask_degenerate=True)
+    np.savez(dataset_root / "stats.npz", mean=mean, std=std)
+
+    GlobalHydra.instance().clear()
+    with hydra.initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = hydra.compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=pyfdn/flow_audio_flamo", f"synth={synth}", "trainer=cpu"],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path / "run")
+        cfg.paths.log_dir = str(tmp_path / "run")
+        cfg.logger = None
+        cfg.seed = 123
+        cfg.training.val_audio_probe = False
+        cfg.test = False
+        cfg.datamodule.dataset_root = str(dataset_root)
+        cfg.datamodule.predict_file = str(dataset_root / "test.lance")
+        cfg.datamodule.batch_size = 1
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.pin_memory = False
+        cfg.datamodule.ot = False
+        cfg.model.audio_loss.t_min = 0.0
+        cfg.model.cfg_dropout_rate = 0.0
+        cfg.model.scheduler = None
+        cfg.model.encoder.d_model = 8
+        cfg.model.encoder.n_heads = 1
+        cfg.model.encoder.n_layers = 1
+        cfg.model.encoder.n_conditioning_outputs = 1
+        cfg.model.vector_field.d_model = 8
+        cfg.model.vector_field.num_heads = 1
+        cfg.model.vector_field.d_ff = 8
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.projection.num_tokens = 2
+        cfg.model.validation_sample_steps = 1
+        cfg.model.test_sample_steps = 1
+        cfg.trainer.max_epochs = 1
+        cfg.trainer.max_steps = 1
+        cfg.trainer.limit_train_batches = 1
+        cfg.trainer.limit_val_batches = 0
+        cfg.trainer.num_sanity_val_steps = 0
+        cfg.trainer.log_every_n_steps = 1
+        cfg.callbacks.model_checkpoint.save_top_k = 0
+        cfg.callbacks.model_checkpoint.save_last = True
+        if "lr_monitor" in cfg.callbacks:
+            del cfg.callbacks.lr_monitor
+    HydraConfig().set_config(cfg)
+    torch.manual_seed(cfg.seed)
+    initial_model = hydra.utils.instantiate(cfg.model)
+    assert isinstance(initial_model.audio_loss.renderer, FlamoFDNDifferentiableRenderer)
+    before = {
+        name: value.detach().clone()
+        for name, value in initial_model.vector_field.named_parameters()
+    }
+    del initial_model
+    train_metrics, objects = train(cfg)
+    checkpoint = Path(cfg.paths.output_dir) / "checkpoints" / "last.ckpt"
+    model = objects["model"]
+
+    assert isinstance(model, VSTFlowMatchingModule)
+    assert model.audio_loss is not None
+    assert isinstance(model.audio_loss.renderer, FlamoFDNDifferentiableRenderer)
+    assert checkpoint.is_file()
+    assert torch.isfinite(train_metrics["train/audio_loss_step"])
+    assert train_metrics["train/audio_loss_step"] > 0
+    assert torch.isfinite(train_metrics["train/audio_grad_ratio"])
+    assert train_metrics["train/audio_grad_ratio"] > 0
+    assert any(
+        not torch.equal(before[name], value.detach())
+        for name, value in model.vector_field.named_parameters()
+    )
+
+    datamodule = objects["datamodule"]
+    datamodule.setup(stage="fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    step = model._train_step(batch)
+    assert step.audio_term is not None
+    audio_gradients = torch.autograd.grad(
+        step.audio_term,
+        tuple(model.vector_field.parameters()),
+        allow_unused=True,
+    )
+    assert any(
+        gradient is not None
+        and torch.isfinite(gradient).all()
+        and torch.count_nonzero(gradient) > 0
+        for gradient in audio_gradients
+    )
+    datamodule.teardown(stage="fit")
+    del step, audio_gradients
+
+    with open_dict(cfg):
+        cfg.ckpt_path = str(checkpoint)
+        cfg.mode = "test"
+        cfg.trainer.limit_test_batches = 1
+    HydraConfig().set_config(cfg)
+    eval_metrics, _ = evaluate(cfg)
+
+    assert torch.isfinite(eval_metrics["test/param_mse"])
+
+    with open_dict(cfg):
+        cfg.mode = "predict"
+        cfg.trainer.limit_predict_batches = 1
+        cfg.callbacks.prediction_writer = {
+            "_target_": "synth_setter.utils.callbacks.PredictionWriter",
+            "output_dir": "${paths.output_dir}/predictions",
+            "write_interval": "batch",
+        }
+        cfg.evaluation = {
+            "render_vst": True,
+            "compute_metrics": True,
+            "rerender_target": True,
+            "no_params": False,
+            "num_workers": 1,
+            "upload_output_dir_uri": None,
+        }
+    HydraConfig().set_config(cfg)
+    audio_metrics, _ = evaluate(cfg)
+
+    sample_audio = Path(cfg.paths.output_dir) / "audio" / "sample_0"
+    import soundfile as sf
+
+    predicted, sample_rate = sf.read(sample_audio / "pred.wav")
+    target, target_sample_rate = sf.read(sample_audio / "target.wav")
+    assert sample_rate == target_sample_rate == 44_100
+    assert predicted.shape == target.shape == (176_400,)
+    assert np.isfinite(predicted).all() and np.any(predicted)
+    assert np.isfinite(target).all() and np.any(target)
+    assert math.isfinite(audio_metrics["audio/mss_mean"])
+    assert math.isfinite(audio_metrics["audio/pyfdn_match_impulse_response_mean"])
+    assert math.isfinite(audio_metrics["audio/pyfdn_match_energy_decay_mean"])
+
+    from synth_setter.models.vst_flow_finetune_module import VSTFlowFinetuneModule
+
+    finetune = VSTFlowFinetuneModule(
+        encoder=model.encoder,
+        vector_field=model.vector_field,
+        optimizer=torch.optim.Adam,
+        scheduler=None,
+        base_checkpoint=None,
+        num_params=cfg.model.num_params,
+        sample_rate=44_100,
+        signal_length=176_400,
+        render_batch_size=1,
+        control_t_min=0.0,
+        cfg_dropout_rate=0.0,
+        cost=MultichannelAudioDistance(
+            sample_rate=44_100,
+            spectral_weight=1.0,
+            channel_mldr_weight=0.0,
+            pair_mldr_weight=0.0,
+        ),
+        renderer=model.audio_loss.renderer,
+    )
+    assert isinstance(finetune.cost, MultichannelAudioDistance)
+    assert batch["audio"].ndim == 3
+    finetune_step = finetune._train_step(batch)
+    finetune_step.loss.backward()
+    assert torch.isfinite(finetune_step.loss)
+    assert any(
+        parameter.grad is not None and torch.count_nonzero(parameter.grad) > 0
+        for parameter in finetune.vector_field.control.parameters()
+    )
+    for stage in ("validation", "test", "predict"):
+        getattr(finetune, f"on_{stage}_batch_start")(batch, 0)
+        with torch.inference_mode():
+            sampled = finetune._sample(
+                finetune._get_conditioning_from_batch(batch), batch["noise"], 1, 1.0
+            )
+        assert sampled.shape == batch["params"].shape
+        assert torch.isfinite(sampled).all()
+        getattr(finetune, f"on_{stage}_batch_end")(None, batch, 0)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("cfg_pyfdn_train", "width", "control"),
+    [
+        (("pyfdn/flow", "pyfdn_n8_mono_kronecker"), 36, "kronecker_angles"),
+        (("pyfdn/flow", "pyfdn_n8_mono_householder_vector"), 35, "householder_vector"),
+    ],
+    indirect=["cfg_pyfdn_train"],
+)
+def test_train_pyfdn_derived_feedback_one_step_predicts_widened_row(
+    cfg_pyfdn_train: DictConfig, width: int, control: str
+) -> None:
+    """Selecting a derived-feedback synth widens the model head and its per-param metrics.
+
+    :param cfg_pyfdn_train: One-step configuration for the selected pyFDN identity.
+    :param width: Encoded row width the model head must predict.
+    :param control: Learned feedback-control group that must appear in the metrics.
+    """
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.trainer.limit_val_batches = 1
+        cfg_pyfdn_train.trainer.val_check_interval = 1
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    metrics, objects = train(cfg_pyfdn_train)
+
+    assert cfg_pyfdn_train.model.num_params == width
+    assert objects["trainer"].global_step == 1
+    assert torch.isfinite(metrics[f"train/per_param_weighted_velocity_mse/{control}"])
+    assert torch.isfinite(metrics[f"val/per_param_mse_spec_quantized/{control}"])
+    assert 0.0 <= metrics[f"val/per_param_abs_cosine_distance/{control}"].item() <= 1.0
+    assert 0.0 <= metrics["val/per_param_abs_cosine_distance/delays"].item() <= 1.0
+    assert torch.isfinite(metrics[f"val/per_param_mse/{control}"])
+    assert torch.isfinite(metrics[f"val_per_param_mse_best_swap/{control}"])
+    assert torch.isfinite(metrics[f"val/number_group_optimal_assignment_mse/{control}"])
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "cfg_pyfdn_train",
+    ["pyfdn/flow_ast_online", "pyfdn/flow_cepstrum_online"],
+    indirect=True,
+)
+def test_train_pyfdn_online_ast_one_step_uses_waveforms(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Train each waveform-in AST front end from stored pyFDN waveforms.
+
+    :param cfg_pyfdn_train: One-step online-AST or cepstral-AST pyFDN configuration.
+    """
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    _, objects = train(cfg_pyfdn_train)
+
+    assert cfg_pyfdn_train.model.conditioning == "audio"
+    assert objects["trainer"].global_step == 1
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("cfg_pyfdn_train", ["pyfdn/flow_ast_online"], indirect=True)
+def test_train_online_ast_estimates_stats_and_checkpoint_resume_reuses_them(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """The real entrypoint calibrates online AST and restores its checkpointed buffers.
+
+    :param cfg_pyfdn_train: Tiny waveform-conditioned pyFDN AST configuration.
+    """
+    import lance
+
+    dataset_root = Path(cfg_pyfdn_train.datamodule.dataset_root)
+    train_split = dataset_root / "train.lance"
+    lance.write_dataset(lance.dataset(str(train_split)).to_table(), train_split, mode="append")
+    dataset_stats = dataset_root / "stats.npz"
+    dataset_stats.unlink()
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.estimate_normalization_stats = True
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    _, first_objects = train(cfg_pyfdn_train)
+
+    output_stats = Path(cfg_pyfdn_train.paths.output_dir) / "stats.npz"
+    checkpoint = Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt"
+    assert output_stats.is_file()
+    assert first_objects["model"].encoder.frontend.normalization_enabled
+    assert checkpoint.is_file()
+
+    output_stats.unlink()
+    with open_dict(cfg_pyfdn_train):
+        cfg_pyfdn_train.ckpt_path = str(checkpoint)
+        cfg_pyfdn_train.trainer.max_steps = 2
+
+    _, resumed_objects = train(cfg_pyfdn_train)
+
+    assert resumed_objects["model"].encoder.frontend.normalization_enabled
+    assert not output_stats.exists()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "cfg_pyfdn_train",
+    ["pyfdn/flow_sketch", "pyfdn/flow_ast_online_sketch"],
+    indirect=True,
+)
+def test_train_pyfdn_sketch_experiment_one_step_uses_temporal_profile(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """Run each shipped pyFDN sketch experiment through the training entrypoint.
+
+    :param cfg_pyfdn_train: One-step pyFDN configuration with stored sketch profiles.
+    """
+    HydraConfig().set_config(cfg_pyfdn_train)
+
+    _, objects = train(cfg_pyfdn_train)
+
+    assert objects["trainer"].global_step == 1
+    assert objects["model"].sketch_tokens is not None
+    assert objects["datamodule"].sketch_controls.num_frames == 32
+
+
+def _assert_slap_train_artifacts(
+    cfg: DictConfig,
+    metric_dict: Mapping[str, torch.Tensor],
+    object_dict: Mapping[str, object],
+) -> Trainer:
+    """Assert finite SLAP fit, validation, checkpoint reload, and test outputs.
+
+    :param cfg: Training configuration carrying the output directory.
+    :param metric_dict: Metrics returned by the training entrypoint.
+    :param object_dict: Runtime objects returned by the training entrypoint.
+    :returns: Trainer that executed the SLAP run.
+    """
+    trainer = object_dict["trainer"]
+    assert isinstance(trainer, Trainer)
+    assert trainer.global_step == 1
+    assert isinstance(object_dict["model"], SLAPModule)
+    for metric_name in (
+        "loss/train/total_loss",
+        "loss/val/total_loss",
+        "loss/test/total_loss",
+    ):
+        assert metric_name in metric_dict
+        assert torch.isfinite(metric_dict[metric_name])
+
+    for stage in ("val", "test"):
+        assert metric_dict[f"retrieval/{stage}/gallery_size"] == 4
+        for direction in ("audio_to_param", "param_to_audio"):
+            assert 0 < metric_dict[f"retrieval/{stage}/{direction}/mrr"] <= 1
+            assert 0 <= metric_dict[f"retrieval/{stage}/{direction}/recall_at_1"] <= 1
+        for modality in ("audio", "param"):
+            assert metric_dict[f"retrieval/{stage}/{modality}/embedding_variance"] > 0
+
+    checkpoint_callback = trainer.checkpoint_callback
+    assert isinstance(checkpoint_callback, ValidationAlignedModelCheckpoint)
+    best_checkpoint = Path(checkpoint_callback.best_model_path)
+    assert best_checkpoint.parent == Path(cfg.paths.output_dir) / "checkpoints"
+    assert best_checkpoint.stat().st_size > 0
+    checkpoint = torch.load(best_checkpoint, map_location="cpu", weights_only=False)
+    assert checkpoint["state_dict"]["_ema_optimizer_steps"].item() == trainer.global_step
+    model = object_dict["model"]
+    assert isinstance(model, SLAPModule)
+    assert model._ema_optimizer_steps.item() == trainer.global_step
+    for name, value in model.state_dict().items():
+        if name.startswith(("audio_ema.", "param_ema.")):
+            torch.testing.assert_close(value.cpu(), checkpoint["state_dict"][name], rtol=0, atol=0)
+    return trainer
+
+
+@pytest.mark.gpu
+@RunIf(min_gpus=1)
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "cfg_slap_train_lance",
+    ["surge/slap_ast_audio_vst_ff_param"],
+    indirect=True,
+)
+def test_train_slap_experiment_end_to_end(
+    cfg_slap_train_lance: DictConfig,
+) -> None:
+    """Run each shipped SLAP experiment through fit, reload, and test on one GPU.
+
+    :param cfg_slap_train_lance: Tiny real Lance training configuration.
+    """
+    with open_dict(cfg_slap_train_lance):
+        cfg_slap_train_lance.trainer.accelerator = "gpu"
+        cfg_slap_train_lance.trainer.devices = 1
+        cfg_slap_train_lance.trainer.precision = "32-true"
+    HydraConfig().set_config(cfg_slap_train_lance)
+
+    metric_dict, object_dict = train(cfg_slap_train_lance)
+
+    trainer = _assert_slap_train_artifacts(
+        cfg_slap_train_lance,
+        metric_dict,
+        object_dict,
+    )
+    assert trainer.strategy.root_device.type == "cuda"
 
 
 @pytest.mark.parametrize(
@@ -179,33 +739,357 @@ def test_train_torchsynth_experiment_renders_audio_online(
     assert "train/loss" in metric_dict
     assert torch.isfinite(metric_dict["train/loss"])
     batch = next(iter(object_dict["datamodule"].train_dataloader()))
-    audio, params, *_ = batch
+    audio, params = batch["audio"], batch["params"]
     assert audio.shape == (1, cfg_torchsynth_train.datamodule.signal_length)
     assert audio.shape[-1] == 176_400
     assert params.shape == (1, cfg_torchsynth_train.datamodule.num_params)
     assert torch.isfinite(audio).all()
-    assert isinstance(object_dict["model"].net.encoder, LogMelEncoder)
+    assert torch.pi == math.pi
+    assert isinstance(object_dict["model"].net.encoder, SpecEncoder)
 
 
+@pytest.mark.slow
+def test_train_torchsynth_clap_online_advances_one_cpu_step(
+    cfg_torchsynth_clap_online_train: DictConfig,
+) -> None:
+    """Train through online CLAP conditioning with a real offline backbone.
+
+    :param cfg_torchsynth_clap_online_train: Tiny production-path CLAP configuration.
+    """
+    HydraConfig().set_config(cfg_torchsynth_clap_online_train)
+
+    metric_dict, object_dict = train(cfg_torchsynth_clap_online_train)
+
+    assert object_dict["trainer"].global_step == 1
+    assert_finite_train_loss(metric_dict)
+    assert torch.isfinite(metric_dict["train/slot_cosine"])
+    model = object_dict["model"]
+    encoder = model.encoder
+    assert isinstance(model.audio_loss, AudioFeedbackLoss)
+    assert isinstance(encoder, PretrainedConditioningEncoder)
+    assert isinstance(encoder.backbone, ClapAudioEncoder)
+    assert isinstance(encoder.head, VectorProjection)
+    assert encoder.head.n_conditioning_outputs == len(model.vector_field.layers) == 2
+    assert encoder.backbone.out_dim == 8
+    assert not encoder.backbone.clap.training
+    assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
+    assert_clap_preserves_resampler_output(
+        encoder.backbone, cfg_torchsynth_clap_online_train.model.encoder.backbone.checkpoint
+    )
+
+
+@pytest.mark.slow
+def test_train_torchsynth_same_online_advances_one_cpu_step(
+    cfg_torchsynth_same_online_train: DictConfig,
+) -> None:
+    """Run the workflow-default TorchSynth SAME experiment for one CPU step.
+
+    :param cfg_torchsynth_same_online_train: Tiny production-path SAME configuration.
+    """
+    HydraConfig().set_config(cfg_torchsynth_same_online_train)
+
+    metric_dict, object_dict = train(cfg_torchsynth_same_online_train)
+
+    assert object_dict["trainer"].global_step == 1
+    assert_finite_train_loss(metric_dict)
+    assert torch.isfinite(metric_dict["train/slot_cosine"])
+    model = object_dict["model"]
+    encoder = model.encoder
+    assert isinstance(model.audio_loss, AudioFeedbackLoss)
+    assert isinstance(encoder, PretrainedConditioningEncoder)
+    assert isinstance(encoder.backbone, SameAudioEncoder)
+    assert isinstance(encoder.head, EmbeddingPool)
+    assert encoder.head.n_conditioning_outputs == len(model.vector_field.layers) == 2
+    assert not encoder.backbone.autoencoder.training
+    assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
+    assert any(parameter.requires_grad for parameter in encoder.head.parameters())
+
+
+@pytest.mark.slow
+def test_generic_launcher_runs_workflow_default_train_entrypoint(
+    cfg_torchsynth_same_online_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Run one workflow-default training step through the decorated launcher CLI.
+
+    :param cfg_torchsynth_same_online_train: Tiny SAME configuration supplying checkpoints.
+    :param tmp_path: Output root for launcher and worker subprocesses.
+    """
+    repo_root = Path(__file__).parents[1]
+    cfg = cfg_torchsynth_same_online_train
+    worker_command = shlex.join(
+        [
+            "exec",
+            "synth-setter-train",
+            "experiment=torchsynth/flow_audio_same",
+            "trainer=cpu",
+            "callbacks=none",
+            "logger=[]",
+            f"paths.root_dir={repo_root}",
+            f"paths.output_dir={tmp_path / 'train'}",
+            f"paths.log_dir={tmp_path / 'train'}",
+            f"hydra.run.dir={tmp_path / 'train'}",
+            "test=false",
+            "training.val_audio_probe=false",
+            "datamodule.train_val_test_sizes=[1,1,1]",
+            "datamodule.batch_size=1",
+            "datamodule.num_workers=0",
+            "datamodule.signal_length=4096",
+            "+trainer.max_epochs=1",
+            "+trainer.max_steps=1",
+            "+trainer.limit_train_batches=1",
+            "trainer.limit_val_batches=0",
+            "+trainer.num_sanity_val_steps=0",
+            "model.compile=false",
+            "model.cfg_dropout_rate=0.0",
+            "model.vector_field.d_model=8",
+            "model.vector_field.num_heads=1",
+            "model.vector_field.d_ff=8",
+            "model.vector_field.num_layers=1",
+            "model.vector_field.projection.num_tokens=2",
+            "model.encoder.out_dim=8",
+            f"model.encoder.backbone.checkpoint={cfg.model.encoder.backbone.checkpoint}",
+            "model.encoder.backbone.checkpoint_sha256=null",
+            "model.encoder.head.embed_dim=8",
+            "model.encoder.head.max_seq_len=8",
+            "model.encoder.head.num_heads=1",
+            "model.audio_loss.t_min=0.0",
+            "model.audio_loss.distance.encoder.checkpoint="
+            f"{cfg.model.audio_loss.distance.encoder.checkpoint}",
+            "+model.audio_loss.distance.encoder.checkpoint_sha256=null",
+        ]
+    )
+
+    result = run_generic_launcher_command(tmp_path, worker_command, repo_root)
+
+    assert result.returncode == 0, result.stderr
+    assert "max_steps=1" in result.stdout
+
+
+@pytest.mark.slow
+def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
+    cfg_torchsynth_flow_audio_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Train one real audio-feedback step and retain its logged metrics and checkpoint.
+
+    :param cfg_torchsynth_flow_audio_train: Composed tiny production flow-audio config.
+    :param tmp_path: Output root containing CSV and checkpoint artifacts.
+    """
+    HydraConfig().set_config(cfg_torchsynth_flow_audio_train)
+
+    metric_dict, object_dict = train(cfg_torchsynth_flow_audio_train)
+
+    model = object_dict["model"]
+    trainer = object_dict["trainer"]
+    assert isinstance(model.audio_loss, AudioFeedbackLoss)
+    assert isinstance(model.audio_loss.renderer, TorchSynthDifferentiableRenderer)
+    assert isinstance(model.audio_loss.distance, MultichannelAudioDistance)
+    assert model.audio_loss.distance.channel_mldr_weight > 0.0
+    assert model.audio_loss.distance.pair_mldr_weight > 0.0
+    assert trainer.global_step == 1
+    for prefix in ("train/loss", "train/audio_loss"):
+        values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
+        assert values, f"no {prefix} metric in {sorted(metric_dict)}"
+        assert all(torch.isfinite(value).all() for value in values)
+    assert torch.isfinite(
+        metric_dict["val/number_group_optimal_assignment_mse/adsr_1.attack"]
+    ).all()
+
+    checkpoint = tmp_path / "checkpoints" / "last.ckpt"
+    assert checkpoint.is_file()
+    metrics_files = list(tmp_path.glob("csv/**/metrics.csv"))
+    assert len(metrics_files) == 1
+    logged = pd.read_csv(metrics_files[0])
+    for prefix in ("train/loss", "train/audio_loss"):
+        columns = [column for column in logged if column.startswith(prefix)]
+        assert columns, f"no {prefix} column in {list(logged)}"
+        values = logged[columns].to_numpy(dtype=float)
+        logged_values = values[~np.isnan(values)]
+        assert logged_values.size > 0
+        assert np.isfinite(logged_values).all()
+
+
+@pytest.mark.slow
+def test_train_torchsynth_flow_ram_post_trains_a_trained_flow_checkpoint(
+    cfg_torchsynth_flow_train: DictConfig,
+    cfg_torchsynth_flow_ram_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Pretrain one flow step, then post-train its checkpoint with one real RAM step.
+
+    Chains the two entrypoint runs the operator would: the checkpoint the first run writes is
+    the ``base_checkpoint`` the second consumes, so the post-training path is exercised against
+    a Lightning-produced checkpoint rather than a hand-saved state dict.
+
+    :param cfg_torchsynth_flow_train: Composed tiny production flow config.
+    :param cfg_torchsynth_flow_ram_train: Composed tiny production RAM post-training config.
+    :param tmp_path: Output root for both runs.
+    """
+    with open_dict(cfg_torchsynth_flow_train):
+        cfg_torchsynth_flow_train.paths.output_dir = str(tmp_path / "base")
+        cfg_torchsynth_flow_train.paths.log_dir = str(tmp_path / "base")
+    HydraConfig().set_config(cfg_torchsynth_flow_train)
+    train(cfg_torchsynth_flow_train)
+    base_checkpoint = tmp_path / "base" / "checkpoints" / "last.ckpt"
+    assert base_checkpoint.is_file()
+
+    with open_dict(cfg_torchsynth_flow_ram_train):
+        cfg_torchsynth_flow_ram_train.paths.output_dir = str(tmp_path / "ram")
+        cfg_torchsynth_flow_ram_train.paths.log_dir = str(tmp_path / "ram")
+        cfg_torchsynth_flow_ram_train.model.base_checkpoint = str(base_checkpoint)
+    HydraConfig().set_config(cfg_torchsynth_flow_ram_train)
+    metric_dict, object_dict = train(cfg_torchsynth_flow_ram_train)
+
+    model = object_dict["model"]
+    assert isinstance(model, VSTFlowRAMModule)
+    assert object_dict["trainer"].global_step == 1
+    for prefix in ("train/loss", "train/reward"):
+        values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
+        assert values, f"no {prefix} metric in {sorted(metric_dict)}"
+        assert all(torch.isfinite(value).all() for value in values)
+    assert torch.isfinite(metric_dict["val/param_mse"]).all()
+
+    # The frozen anchor is the trained flow, not a fresh initialisation.
+    pretrained = torch.load(base_checkpoint, map_location="cpu", weights_only=False)["state_dict"]
+    for name, value in model.reference_field.state_dict().items():
+        torch.testing.assert_close(value, pretrained[f"vector_field.{name}"], msg=name)
+
+    assert (tmp_path / "ram" / "checkpoints" / "last.ckpt").is_file()
+    metrics_files = list((tmp_path / "ram").glob("csv/**/metrics.csv"))
+    assert len(metrics_files) == 1
+    logged = pd.read_csv(metrics_files[0])
+    reward_columns = [column for column in logged if column.startswith("train/reward")]
+    assert reward_columns, f"no train/reward column in {list(logged)}"
+    rewards = logged[reward_columns].to_numpy(dtype=float)
+    assert np.isfinite(rewards[~np.isnan(rewards)]).all()
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
+@pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
+def test_train_surge_flow_ram_post_trains_a_trained_flow_through_surgepy(
+    fake_surge_smoke_datasets: Path, tmp_path: Path
+) -> None:
+    """Pretrain a surge_simple flow, then post-train its checkpoint with a surgepy-scored RAM step.
+
+    Chains the two entrypoint runs the operator would over the same local Lance splits; the reward
+    re-renders sampled and target rows in-process through surgepy.
+
+    :param fake_surge_smoke_datasets: Tiny loadable Lance train/validation/test splits.
+    :param tmp_path: Output root for both runs.
+    """
+    base_cfg = compose_one_step_surge_flow(
+        "flow_simple", fake_surge_smoke_datasets, tmp_path / "base"
+    )
+    HydraConfig().set_config(base_cfg)
+    train(base_cfg)
+    base_checkpoint = tmp_path / "base" / "checkpoints" / "last.ckpt"
+    assert base_checkpoint.is_file()
+
+    ram_cfg = compose_one_step_surge_flow(
+        "flow_ram_simple",
+        fake_surge_smoke_datasets,
+        tmp_path / "ram",
+        f"model.base_checkpoint={base_checkpoint}",
+        "model.num_samples_per_row=2",
+        "model.num_targets_per_sample=2",
+        "model.sampling_steps=1",
+    )
+    HydraConfig().set_config(ram_cfg)
+    metric_dict, object_dict = train(ram_cfg)
+
+    model = object_dict["model"]
+    assert isinstance(model, VSTFlowRAMModule)
+    assert isinstance(model.reward, SynthRenderedReward)
+    assert object_dict["trainer"].global_step == 1
+    for prefix in ("train/loss", "train/reward"):
+        values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
+        assert values, f"no {prefix} metric in {sorted(metric_dict)}"
+        assert all(torch.isfinite(value).all() for value in values)
+    assert torch.isfinite(metric_dict["val/param_mse"]).all()
+    checkpoint_callback = object_dict["trainer"].checkpoint_callback
+    assert isinstance(checkpoint_callback, ValidationAlignedModelCheckpoint)
+    best_checkpoint = Path(checkpoint_callback.best_model_path)
+    assert best_checkpoint.is_file()
+    assert best_checkpoint.stat().st_size > 0
+    assert (tmp_path / "ram" / "checkpoints" / "last.ckpt").is_file()
+
+
+@pytest.mark.slow
+def test_train_torchsynth_flow_endpoint_one_step_writes_stamped_checkpoint(
+    cfg_torchsynth_flow_endpoint_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Train one endpoint-parameterized step, then evaluate the stamped checkpoint it wrote.
+
+    :param cfg_torchsynth_flow_endpoint_train: Composed tiny endpoint flow config.
+    :param tmp_path: Output root containing the checkpoint and evaluation artifacts.
+    """
+    with open_dict(cfg_torchsynth_flow_endpoint_train):
+        cfg_torchsynth_flow_endpoint_train.model.seeded_evaluation = True
+    HydraConfig().set_config(cfg_torchsynth_flow_endpoint_train)
+
+    metric_dict, object_dict = train(cfg_torchsynth_flow_endpoint_train)
+
+    assert object_dict["trainer"].global_step == 1
+    assert object_dict["model"].hparams.seeded_evaluation is True
+    for key in ("train/loss", "val/param_mse"):
+        values = [value for name, value in metric_dict.items() if name.startswith(key)]
+        assert values, f"no {key} metric in {sorted(metric_dict)}"
+        assert all(torch.isfinite(value).all() for value in values)
+    assert any(
+        name.startswith("train/per_param_weighted_endpoint_mse/") for name in metric_dict
+    ), sorted(metric_dict)
+    assert any(name.startswith("train/per_param_endpoint_mse/") for name in metric_dict), sorted(
+        metric_dict
+    )
+
+    checkpoint_path = tmp_path / "checkpoints" / "last.ckpt"
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert checkpoint["parameterization"] == "endpoint"
+
+    eval_cfg = cfg_torchsynth_flow_endpoint_train.copy()
+    with open_dict(eval_cfg):
+        eval_cfg.paths.output_dir = str(tmp_path / "evaluation")
+        eval_cfg.paths.log_dir = str(tmp_path / "evaluation")
+        eval_cfg.ckpt_path = str(checkpoint_path)
+        eval_cfg.mode = "validate"
+    HydraConfig().set_config(eval_cfg)
+    eval_metric_dict, eval_object_dict = evaluate(eval_cfg)
+
+    assert eval_object_dict["model"].hparams["parameterization"] == "endpoint"
+    assert torch.isfinite(eval_metric_dict["val/param_mse"])
+    assert torch.isfinite(eval_metric_dict["val/endpoint_mse/equal_bin_mean"])
+    assert all(
+        f"val/endpoint_mse/t_{index:02d}" in eval_metric_dict for index in range(5, 100, 10)
+    )
+
+
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
+@pytest.mark.slow
 def test_train_torchsynth_resample_per_epoch_completes_multi_epoch_fit(
     cfg_torchsynth_train: DictConfig,
 ) -> None:
-    """Train two epochs with per-epoch resampling through the real entrypoint.
+    """Train two epochs with a persistent render worker through the real entrypoint.
 
-    Pins that Lightning's fit loop accepts the fresh-index train sampler across
-    epoch boundaries (one ``iter()`` per epoch on the same loader).
+    Pins that Lightning's fit loop accepts the fresh-index train sampler across epoch boundaries
+    while reusing the same worker process.
 
     :param cfg_torchsynth_train: Composed CPU TorchSynth smoke configuration.
     """
     HydraConfig().set_config(cfg_torchsynth_train)
     with open_dict(cfg_torchsynth_train):
+        cfg_torchsynth_train.datamodule.num_workers = 1
         cfg_torchsynth_train.datamodule.resample_train_per_epoch = True
         cfg_torchsynth_train.trainer.fast_dev_run = False
         cfg_torchsynth_train.trainer.max_epochs = 2
-    metric_dict, _ = train(cfg_torchsynth_train)
+    metric_dict, object_dict = train(cfg_torchsynth_train)
 
     assert "train/loss" in metric_dict
     assert torch.isfinite(metric_dict["train/loss"])
+    assert object_dict["datamodule"].train_dataloader().persistent_workers is True
 
 
 @pytest.mark.gpu
@@ -236,6 +1120,40 @@ def test_train_fast_dev_run_gpu_compile(cfg_train: DictConfig) -> None:
         cfg_train.trainer.accelerator = "gpu"
         cfg_train.model.compile = True
     train(cfg_train)
+
+
+def test_train_cpu_compile_writes_clean_checkpoint(
+    tmp_path: Path,
+    cfg_train: DictConfig,
+) -> None:
+    """Compiled training persists uncompiled-layout keys evaluation loads strictly.
+
+    :param tmp_path: Training output directory containing the checkpoint.
+    :param cfg_train: Tiny TorchSynth CPU training configuration.
+    """
+    with open_dict(cfg_train):
+        cfg_train.datamodule.signal_length = 512
+        cfg_train.model.net.channels = 2
+        cfg_train.model.net.encoder_blocks = 1
+        cfg_train.model.net.hidden_dim = 8
+        cfg_train.model.net.norm = "ln"
+        cfg_train.model.net.trunk_blocks = 1
+        cfg_train.model.compile = True
+        cfg_train.test = False
+        cfg_train.trainer.limit_train_batches = 1
+        cfg_train.trainer.limit_val_batches = 1
+
+    HydraConfig().set_config(cfg_train)
+    train(cfg_train)
+
+    checkpoint = torch.load(
+        tmp_path / "checkpoints" / "last.ckpt",
+        map_location="cpu",
+        weights_only=False,
+    )
+    state_dict = checkpoint["state_dict"]
+    assert state_dict
+    assert all("_orig_mod" not in key for key in state_dict)
 
 
 @pytest.mark.gpu
@@ -392,6 +1310,232 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
     datamodule.teardown("fit")
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("identity", "width"),
+    [
+        ("pyfdn_pitchshift_n8_mono_householder", 45),
+        ("pyfdn_gotz_n8_mono_fixed_delays", 144),
+        ("pyfdn_gotz_n8_mono_learned_delays", 152),
+        ("pyfdn_gotz_n8_mono_fixed_delays_givens", 172),
+        ("pyfdn_gotz_n8_mono_learned_delays_givens", 180),
+    ],
+)
+def test_train_pyfdn_identity_uses_spec_width_batches(
+    tmp_path: Path, identity: str, width: int
+) -> None:
+    """The train entrypoint resolves each non-default pyFDN synth and its model width.
+
+    :param tmp_path: Pinned as the one-step training output directory.
+    :param identity: Registered pyFDN synth and ParamSpec name.
+    :param width: Encoded width every training batch must carry.
+    """
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name=identity)
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1
+    assert_log_per_param_mse_wired(trainer, identity)
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["params"].shape == (2, width)
+    datamodule.teardown("fit")
+
+
+@pytest.mark.slow
+def test_train_pyfdn_diffvox_identity_uses_82_coordinate_batches(tmp_path: Path) -> None:
+    """The train entrypoint resolves the DiffVox synth and model width.
+
+    :param tmp_path: Pinned as the one-step training output directory.
+    """
+    identity = "pyfdn_diffvox"
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name=identity)
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1
+    assert_log_per_param_mse_wired(trainer, identity)
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    assert batch["params"].shape == (2, 82)
+    datamodule.teardown("fit")
+
+
+@pytest.mark.slow
+def test_train_file_uri_hydrates_marker_staged_local_dataset_root(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """The train entrypoint consumes projected splits from a marker-staged file URI.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    (source / ".synth-setter-stage-complete").touch()
+    destination = tmp_path / "local-dataset"
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+
+    HydraConfig().set_config(cfg_train_lance)
+    metric_dict, object_dict = train(cfg_train_lance)
+
+    assert object_dict["trainer"].global_step > 0
+    assert torch.isfinite(metric_dict["train/loss"])
+    hydrated_root = object_dict["datamodule"].dataset_root
+    assert (hydrated_root / ".synth-setter-stage-complete").is_file()
+
+
+@pytest.mark.slow
+def test_train_file_uri_without_completion_marker_raises_before_hydration(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """The training entrypoint rejects an unfinalized hydration source.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    (source / "dataset.complete").unlink()
+    destination = tmp_path / "local-dataset"
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+
+    HydraConfig().set_config(cfg_train_lance)
+    with pytest.raises(FileNotFoundError, match="dataset.complete"):
+        train(cfg_train_lance)
+
+    assert not destination.exists()
+
+
+@pytest.mark.slow
+def test_train_row_limited_hydration_evicts_materialized_file_cache(
+    cfg_train_lance: DictConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row-limited file-URI hydration reaches the POSIX cache-advice boundary.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    :param monkeypatch: Records cache advice and isolates the rclone sidecar boundary.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    destination = tmp_path / "row-limited-data"
+    advised_fds: list[int] = []
+
+    def copy_stats(_source_uri: str, dest_path: Path, exclude: str | None = None) -> None:
+        del _source_uri, exclude
+        dest_path.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / "stats.npz", dest_path / "stats.npz")
+
+    def record_advice(fd: int, _offset: int, _length: int, _advice: int) -> None:
+        advised_fds.append(fd)
+
+    monkeypatch.setattr(
+        "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+        copy_stats,
+    )
+    monkeypatch.setattr(os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    monkeypatch.setattr(os, "posix_fadvise", record_advice, raising=False)
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+        cfg_train_lance.datamodule.download_dataset_row_limit = 2
+        cfg_train_lance.datamodule.high_memory_materialization = True
+        cfg_train_lance.datamodule.batch_size = 2
+        cfg_train_lance.datamodule.num_workers = 0
+
+    HydraConfig().set_config(cfg_train_lance)
+    _, object_dict = train(cfg_train_lance)
+
+    assert object_dict["trainer"].global_step > 0
+    assert object_dict["datamodule"].high_memory_materialization is True
+    assert advised_fds
+
+
+@pytest.mark.slow
+def test_train_row_limited_file_uri_hydration_without_txids(
+    cfg_train_lance: DictConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The train entrypoint consumes latest-snapshot row-limited hydration.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the fresh local hydration destination.
+    :param monkeypatch: Replaces only the separately tested rclone sidecar boundary.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    destination = tmp_path / "row-limited-data"
+
+    def copy_stats(_source_uri: str, dest_path: Path, exclude: str | None = None) -> None:
+        del _source_uri, exclude
+        dest_path.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / "stats.npz", dest_path / "stats.npz")
+
+    monkeypatch.setattr(
+        "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+        copy_stats,
+    )
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+        cfg_train_lance.datamodule.download_dataset_row_limit = 2
+        cfg_train_lance.datamodule.batch_size = 2
+        cfg_train_lance.datamodule.num_workers = 0
+
+    HydraConfig().set_config(cfg_train_lance)
+    metric_dict, object_dict = train(cfg_train_lance)
+
+    assert object_dict["trainer"].global_step > 0
+    assert "train/loss" in metric_dict
+    assert torch.isfinite(metric_dict["train/loss"])
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    try:
+        batch = next(iter(datamodule.train_dataloader()))
+        assert len(datamodule.train_dataset) == 2
+    finally:
+        datamodule.teardown("fit")
+    assert batch["params"].shape[0] == 2
+    assert torch.isfinite(batch["params"]).all()
+    assert batch["mel"] is not None
+    assert torch.isfinite(batch["mel"]).all()
+
+
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
+@pytest.mark.slow
+def test_train_prefetch_factor_override_advances_with_spawn_workers(tmp_path: Path) -> None:
+    """An explicit ``datamodule.prefetch_factor`` reaches train's composed spawn loaders.
+
+    Drives the real ``train(cfg)`` entrypoint in fake mode with spawn workers
+    so the non-default prefetch depth governs live worker buffering.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
+    """
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name="surge_simple")
+    with open_dict(cfg):
+        cfg.datamodule.num_workers = 2
+        cfg.datamodule.prefetch_factor = 3
+
+    HydraConfig().set_config(cfg)
+    _, object_dict = train(cfg)
+
+    trainer = object_dict["trainer"]
+    assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
+    assert object_dict["datamodule"].prefetch_factor == 3
+
+
+@pytest.mark.slow
 def test_train_legacy_vst_groups_wire_per_param_callback(tmp_path: Path) -> None:
     """Legacy model and callback aliases run through the train entrypoint.
 
@@ -410,24 +1554,23 @@ def test_train_legacy_vst_groups_wire_per_param_callback(tmp_path: Path) -> None
     assert_log_per_param_mse_wired(object_dict["trainer"], "surge_simple")
 
 
-def test_train_val_audio_probe_spec_mismatch_fails_at_configure_time(tmp_path: Path) -> None:
-    """The real train entrypoint dies at configure time on a probe/model spec mismatch.
+def test_train_without_synth_group_fails_loudly_at_configure_time(tmp_path: Path) -> None:
+    """The real train entrypoint dies at configure time when the identity group is missing.
 
-    The guard kills a launch whose probe cannot decode the model's predictions
-    before a single training step runs (#1990).
+    Identity interpolates from the root ``synth`` group (#2565), so a probe/model
+    spec mismatch is no longer expressible; a VST launch without the group dies
+    on the first ``${synth.param_spec_name}`` read before a training step runs.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
     """
     cfg = build_fake_train_cfg(tmp_path, param_spec_name="surge_simple")
     with open_dict(cfg):
         cfg.training.val_audio_probe = True
-        cfg.render = {
-            "param_spec_name": "surge_xt",
-            "plugin_state_path": "presets/surge-base.vstpreset",
-        }
+        cfg.render = {"sample_rate": 44100, "channels": 2}
+        del cfg.synth
 
     HydraConfig().set_config(cfg)
-    with pytest.raises(ValueError, match="param_spec_name"):
+    with pytest.raises(InterpolationKeyError, match="synth.param_spec_name"):
         train(cfg)
 
 
@@ -470,6 +1613,91 @@ def test_train_surge_simple_flow_default_width_matches_fake_batch(
 
 
 @pytest.mark.slow
+def test_train_flowmol3_checkpoint_rejects_uniform_resume(tmp_path: Path) -> None:
+    """A train-produced FlowMol3 checkpoint rejects a uniform resume.
+
+    :param tmp_path: Hydra output and checkpoint directory; no dataset is read.
+    """
+    cfg = build_fake_train_cfg(
+        tmp_path,
+        param_spec_name="cardinal",
+        model_group="vst_flow",
+    )
+    with open_dict(cfg):
+        cfg.model.compile = False
+        cfg.model.endpoint_time_weighting = "flowmol3"
+        cfg.model.parameterization = "endpoint"
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 16
+        cfg.model.vector_field.num_heads = 1
+        cfg.model.vector_field.d_ff = 16
+        cfg.model.vector_field.projection.num_tokens = 2
+        cfg.trainer.max_steps = 1
+        cfg.test = False
+
+    HydraConfig().set_config(cfg)
+    train(cfg)
+
+    checkpoint_path = tmp_path / "checkpoints" / "last.ckpt"
+    checkpoint = torch.load(checkpoint_path, weights_only=False)
+    assert checkpoint["endpoint_time_weighting"] == "flowmol3"
+
+    with open_dict(cfg):
+        cfg.ckpt_path = str(checkpoint_path)
+        cfg.model.endpoint_time_weighting = "uniform"
+        cfg.trainer.max_steps = 2
+    HydraConfig().set_config(cfg)
+
+    with pytest.raises(ValueError, match="endpoint_time_weighting"):
+        train(cfg)
+
+
+@pytest.mark.slow
+def test_train_cardinal_mixed_endpoint_time_weighting_overfits_fixed_batch(
+    tmp_path: Path,
+) -> None:
+    """The weighted mixed endpoint model overfits one deterministic batch.
+
+    :param tmp_path: Hydra output and log directory; no dataset is read.
+    """
+    cfg = build_fake_train_cfg(
+        tmp_path,
+        param_spec_name="cardinal",
+        model_group="vst_flow",
+    )
+    with open_dict(cfg):
+        cfg.model.compile = False
+        cfg.model.endpoint_loss = "mixed"
+        cfg.model.endpoint_time_weighting = "flowmol3"
+        cfg.model.parameterization = "endpoint"
+        cfg.model.encoder.d_model = 16
+        cfg.model.encoder.n_heads = 1
+        cfg.model.encoder.n_layers = 1
+        cfg.model.encoder.n_conditioning_outputs = 2
+        cfg.model.encoder.patch_size = 128
+        cfg.model.encoder.patch_stride = 127
+        cfg.model.vector_field.num_layers = 1
+        cfg.model.vector_field.d_model = 16
+        cfg.model.vector_field.num_heads = 1
+        cfg.model.vector_field.d_ff = 16
+        cfg.model.vector_field.projection.num_tokens = 2
+        cfg.model.cfg_dropout_rate = 0.0
+        cfg.model.optimizer.lr = 0.01
+        cfg.datamodule.repeat_first_batch = True
+        cfg.trainer.max_steps = 200
+        cfg.test = False
+
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step == 200
+    assert object_dict["model"].hparams["endpoint_time_weighting"] == "flowmol3"
+    assert metric_dict["train/loss_step"].item() < 0.05
+    assert metric_dict["train/per_param_endpoint_mse/parameter_1_v"].item() < 0.05
+    assert metric_dict["train/endpoint_mse"].item() < 0.1
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize("experiment", ["surge/ffn_simple", "surge/flow_simple"])
 @pytest.mark.parametrize("param_spec_name", ["surge_simple"], indirect=True)
 def test_train_runpod_experiment_default_datamodule_advances(
@@ -488,27 +1716,38 @@ def test_train_runpod_experiment_default_datamodule_advances(
         param_spec_name="surge_simple",
         experiment=experiment,
         datamodule_group=None,
+        callbacks_override=None,
     )
     with open_dict(cfg):
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
         cfg.datamodule.dataset_root = str(fake_surge_smoke_datasets)
+        cfg.trainer.val_check_interval = 1
 
     HydraConfig().set_config(cfg)
     metric_dict, object_dict = train(cfg)
 
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
+    assert_log_per_param_mse_wired(object_dict["trainer"], "surge_simple")
+    assert torch.isfinite(metric_dict["val/per_param_mse/a_amp_eg_attack"])
 
 
+@pytest.mark.slow
 def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) -> None:
     """Train one real flow step through the offline pretrained-AST config.
 
     The loss must come out finite: ``global_step`` advances even past a NaN loss.
+    Validation exercises the production param-spec wiring and requires
+    swap and signed pitch diagnostics beside ``val/param_mse``.
 
     :param tmp_path: Hydra output and log directory; no dataset is read.
     """
     cfg = build_fake_flow_ast_pretrained_train_cfg(tmp_path)
+    with open_dict(cfg):
+        cfg.trainer.limit_val_batches = 1
+        cfg.trainer.val_check_interval = 1
+        cfg.model.validation_sample_steps = 1
 
     HydraConfig().set_config(cfg)
     metric_dict, object_dict = train(cfg)
@@ -516,9 +1755,91 @@ def test_train_flow_simple_with_ast_pretrained_encoder_advances(tmp_path: Path) 
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
     assert_finite_train_loss(metric_dict)
+    assert "val/param_mse" in metric_dict
+    assert "val/param_mse_best_swap" in metric_dict
+    assert torch.isfinite(metric_dict["val/pitch_residual_continuous_mean_semitones"])
+    assert torch.isfinite(metric_dict["val/pitch_residual_floor_mean_semitones"])
+    assert torch.isfinite(metric_dict["val/pitch_residual_nearest_mean_semitones"])
 
     encoder = object_dict["model"].encoder
     assert isinstance(encoder, PretrainedASTEncoder)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.parametrize("accelerator", ["cpu"], indirect=True)
+@pytest.mark.parametrize("param_spec_name", ["surge_4"], indirect=True)
+@pytest.mark.parametrize("experiment_name", ["surge/flow_simple"], indirect=True)
+@pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)
+def test_train_flow_persists_projection_images_to_wandb(
+    cfg_surge_real_train: DictConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real flow fit persists both projection plots as decodable W&B media.
+
+    :param cfg_surge_real_train: One-step flow config over a real Surge XT render.
+    :param tmp_path: Isolated W&B run and media directory.
+    :param monkeypatch: Pins W&B to hermetic offline storage.
+    """
+    for key in [key for key in os.environ if key.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+
+    with open_dict(cfg_surge_real_train):
+        cfg_surge_real_train.model.compile = False
+        cfg_surge_real_train.model.vector_field.d_model = 32
+        cfg_surge_real_train.model.vector_field.d_ff = 32
+        cfg_surge_real_train.model.vector_field.num_layers = 1
+        cfg_surge_real_train.model.vector_field.projection.num_tokens = 8
+        cfg_surge_real_train.trainer.fast_dev_run = False
+        cfg_surge_real_train.trainer.limit_val_batches = 0
+        cfg_surge_real_train.trainer.enable_checkpointing = False
+        cfg_surge_real_train.callbacks = {
+            "plot_proj_ii": {
+                "_target_": "synth_setter.utils.callbacks.PlotLearntProjection",
+                "after_val": False,
+                "every_n_steps": 1,
+            }
+        }
+        cfg_surge_real_train.logger = {
+            "wandb": {
+                "_target_": "lightning.pytorch.loggers.wandb.WandbLogger",
+                "offline": True,
+                "save_dir": str(tmp_path),
+                "project": "plot-learnt-projection-test",
+                "id": "plot-learnt-projection",
+            }
+        }
+
+    HydraConfig().set_config(cfg_surge_real_train)
+    _, object_dict = train(cfg_surge_real_train)
+    wandb.finish()
+
+    model = object_dict["model"]
+    assert isinstance(model, VSTFlowMatchingModule)
+    assert isinstance(model.vector_field.projection, LearntProjection)
+    run_dir = next((tmp_path / "wandb").glob("offline-run-*-plot-learnt-projection"))
+    wandb_binary = next(run_dir.glob("run-*.wandb"))
+    rows = read_history_rows(
+        wandb_binary,
+        until=lambda history: all(
+            any(f"{key}/filenames" in row for row in history) for key in ("assignment", "value")
+        ),
+    )
+    for key in ("assignment", "value"):
+        row = next(row for row in rows if f"{key}/filenames" in row)
+        assert json.loads(row[f"{key}/_type"]) == "images/separated"
+        filename = json.loads(row[f"{key}/filenames"])[0]
+        with Image.open(run_dir / "files" / filename) as image:
+            image.load()
+            assert image.format == "PNG"
+            assert image.width == json.loads(row[f"{key}/width"])
+            assert image.height == json.loads(row[f"{key}/height"])
+            assert image.width > 0
+            assert image.height > 0
 
 
 @pytest.mark.requires_vst
@@ -531,7 +1852,7 @@ def test_train_surge_xt(cfg_surge_real_train: DictConfig, experiment_name: str) 
     Asserts the trainer advanced and produced a finite ``train/loss`` — catches silent
     no-op trainers and NaN/Inf regressions that a bare ``train()`` call would not. The
     ``surge/fake_oracle`` leg additionally pins ``train/loss`` to exactly zero (the
-    oracle constructs its loss as ``0.0 * net(mel_spec).sum()`` — any drift means the
+    oracle constructs its loss as ``0.0 * net(mel).sum()`` — any drift means the
     oracle stopped being an oracle); meaningful loss-progression coverage comes from
     the ``surge/ffn_full`` leg. Both train through the real Surge XT render.
 
@@ -549,6 +1870,34 @@ def test_train_surge_xt(cfg_surge_real_train: DictConfig, experiment_name: str) 
 
     if experiment_name == _ORACLE_EXPERIMENT:
         _assert_oracle_zero_train_loss(metric_dict)
+
+
+@pytest.mark.mps
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.parametrize("accelerator", ["mps"], indirect=True)
+@pytest.mark.parametrize("experiment_name", ["surge/test-mps-flow"], indirect=True)
+@pytest.mark.parametrize("surge_smoke_variant", REAL_VST_VARIANTS, indirect=True)
+def test_train_surge_flow_mps_uses_eight_layer_production_field(
+    cfg_surge_real_train: DictConfig,
+) -> None:
+    """Train one real MPS flow step with the eight-layer production vector field.
+
+    :param cfg_surge_real_train: Surge XT flow smoke config over a real rendered dataset.
+    """
+    with open_dict(cfg_surge_real_train):
+        cfg_surge_real_train.trainer.limit_val_batches = 0
+
+    HydraConfig().set_config(cfg_surge_real_train)
+    metric_dict, object_dict = train(cfg_surge_real_train)
+
+    model = object_dict["model"]
+    assert isinstance(model, VSTFlowMatchingModule)
+    vector_field = model.vector_field
+    assert isinstance(vector_field, ApproxEquivTransformer)
+    assert len(vector_field.layers) == 8
+    assert object_dict["trainer"].global_step == 1
+    assert_finite_train_loss(metric_dict)
 
 
 @pytest.mark.requires_vst
@@ -576,15 +1925,14 @@ def test_train_eval_surge_xt(
     """
     from pedalboard.io import AudioFile
 
-    NUM_AUDIO_METRICS = 4  # mss, wmfcc, sot, rms
     METRICS_FILE_EXPECTATIONS = {
         "aggregated_metrics.csv": {
-            "rows": NUM_AUDIO_METRICS,
+            "rows": NUM_STEREO_AUDIO_METRICS,
             "columns": {"mean", "std"},
         },
         "metrics.csv": {
             "rows": NUM_FIXTURE_SAMPLES,
-            "columns": {"mss", "wmfcc", "sot", "rms"},
+            "columns": {"mss", "wmfcc", "sot", "rms", "mldr", "mldr_mid_side"},
         },
     }
 
@@ -661,9 +2009,6 @@ def test_train_eval_surge_xt(
         # zero — bounds absorb that jitter while still failing on a real regression.
         per_sample = pd.read_csv(metrics_dir / "metrics.csv")
         bounds = ORACLE_AUDIO_METRIC_BOUNDS
-        assert per_sample["mss"].max() < bounds.mss_max, (
-            f"oracle mss too high: {per_sample['mss'].tolist()}"
-        )
         assert per_sample["wmfcc"].max() < bounds.wmfcc_max, (
             f"oracle wmfcc too high: {per_sample['wmfcc'].tolist()}"
         )
@@ -673,6 +2018,22 @@ def test_train_eval_surge_xt(
         assert per_sample["rms"].min() > bounds.rms_min, (
             f"oracle rms too low: {per_sample['rms'].tolist()}"
         )
+        max_mldr = per_sample["mldr"].max()
+        mldr_max = (
+            _MPS_ORACLE_MLDR_MAX
+            if cfg_surge_real_train.trainer.accelerator == "mps"
+            else bounds.mldr_max
+        )
+        assert max_mldr < mldr_max, f"oracle mldr too high: {per_sample['mldr'].tolist()}"
+
+        max_mss = per_sample["mss"].max()
+        if cfg_surge_real_train.trainer.accelerator == "mps" and max_mss >= bounds.mss_max:
+            # Independent Surge renders randomize phase/amplitude; quarantine only the known MPS outlier.
+            pytest.xfail(
+                "https://github.com/tinaudio/synth-setter/issues/1875: independent stochastic "
+                f"Surge renders changed phase/amplitude (MPS oracle MSS={max_mss})"
+            )
+        assert max_mss < bounds.mss_max, f"oracle mss too high: {per_sample['mss'].tolist()}"
 
 
 @pytest.mark.requires_vst
@@ -690,8 +2051,8 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
 ) -> None:
     """Training resumes from a ``ckpt_path`` pinned as ``${wandb:...}``, downloaded from the live registry.
 
-    Exercises the exact train-side seam the wandb_checkpoint split protects: ``train.py`` reads
-    ``cfg.get("ckpt_path")`` into ``trainer.fit(ckpt_path=...)``. A first one-step run produces a
+    Exercises the train-side checkpoint seam: ``train.py`` reads ``cfg.get("ckpt_path")`` into
+    ``trainer.fit(ckpt_path=...)``. A first one-step run produces a
     real Lightning checkpoint, published to ``tinaudio/synth-setter-citest``; a second run pins
     that artifact via ``${wandb:...}`` and must download + resume it, advancing ``global_step``.
     Proves the resolver works through the real W&B API on the train entrypoint, not just a fake.
@@ -731,21 +2092,105 @@ def test_train_resumes_from_wandb_resolved_checkpoint(
     )
 
 
+@pytest.mark.slow
+def test_train_growing_config_adopts_active_snapshot(cfg_train_lance: DictConfig) -> None:
+    """The public train entrypoint adopts the configured immutable growing version.
+
+    :param cfg_train_lance: Composed tiny Lance training configuration.
+    """
+    dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
+    growing_root = dataset_root.parent / "growing"
+    dataset_path = growing_root / "train.lance"
+    shutil.copytree(dataset_root / "train.lance", dataset_path)
+    local = lance.dataset(dataset_path)
+    transaction = local.read_transaction(local.version)
+    assert transaction is not None
+    version_root = growing_root / "versions/7"
+    version_root.mkdir(parents=True)
+    shutil.copyfile(dataset_root / "stats.npz", version_root / "stats.npz")
+    np.savez(
+        version_root / "welford.npz",
+        count=np.int64(2),
+        mean=np.zeros((1,), dtype=np.float32),
+        m2=np.ones((1,), dtype=np.float32),
+    )
+    stats_sha = hashlib.sha256((version_root / "stats.npz").read_bytes()).hexdigest()
+    welford_sha = hashlib.sha256((version_root / "welford.npz").read_bytes()).hexdigest()
+    remote = GrowingSnapshot(
+        branch="growing",
+        branch_uri="s3://example/train.lance/tree/growing",
+        version=7,
+        baseline_version=1,
+        baseline_transaction="baseline-tx",
+        transaction="remote-tx-7",
+        baseline_train_shards=1,
+        max_train_shards=500,
+        num_extra_shards=1,
+        high_watermark=2,
+        dataset_spec_fingerprint="entrypoint-fingerprint",
+        row_count=local.count_rows(),
+        fragment_count=len(local.get_fragments()),
+        schema_fingerprint="remote-schema",
+        stats_sha256=stats_sha,
+        welford_sha256=welford_sha,
+    )
+    (version_root / "snapshot.json").write_text(remote.model_dump_json())
+    active_path = growing_root / "active.json"
+    active_path.write_text(
+        ActiveGrowingSnapshot(
+            branch=remote.branch,
+            remote_version=remote.version,
+            remote_transaction=remote.transaction,
+            local_version=local.version,
+            local_transaction=transaction.uuid,
+            dataset_path=str(dataset_path),
+            version_stats_path=str(version_root),
+            dataset_spec_fingerprint=remote.dataset_spec_fingerprint,
+            row_count=remote.row_count,
+            fragment_count=remote.fragment_count,
+            schema_fingerprint=hashlib.sha256(local.schema.serialize().to_pybytes()).hexdigest(),
+            stats_sha256=stats_sha,
+            welford_sha256=welford_sha,
+            high_watermark=remote.high_watermark,
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.training.growing_active_record = str(active_path)
+        cfg_train_lance.training.growing_refresh_epoch_interval = 1
+        cfg_train_lance.datamodule.num_workers = 0
+        cfg_train_lance.datamodule.persistent_workers = False
+    HydraConfig().set_config(cfg_train_lance)
+
+    _, object_dict = train(cfg_train_lance)
+
+    datamodule = object_dict["datamodule"]
+    assert datamodule.state_dict()["growing_active_snapshot"]["remote_version"] == 7
+    assert datamodule.state_dict()["growing_history"] == (7,)
+
+
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
-def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> None:
-    """Run one spawned-worker train, val, and test step from Lance shards.
+def test_train_fast_dev_run_lance_datamodule(
+    cfg_train_lance: DictConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run train, validation, and test steps with split-specific Lance workers.
 
     Exercises config wiring, ``LanceVSTDataModule`` setup, and real Lance batch
-    reads end-to-end through the in-process ``train(cfg)`` entrypoint with
-    spawned workers; the Hydra composition path lives on the ``cfg_train_lance``
-    fixture. Also pins the
+    reads end-to-end through the in-process ``train(cfg)`` entrypoint. Training
+    and test use a worker while validation uses the in-process default; the Hydra
+    composition path lives on the ``cfg_train_lance`` fixture. Also pins the
     Dataset-API migration's two e2e-visible contracts on the live datamodule:
     splits open as directory datasets, and a column accepts unsorted fancy
     indices returning rows in the requested order.
 
     :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
+    :param monkeypatch: Fixes worker memory below the automatic materialization threshold.
     """
+    monkeypatch.setattr(
+        "synth_setter.utils.utils._effective_available_memory_bytes",
+        lambda: 31 * 1024**3,
+    )
     with open_dict(cfg_train_lance):
         cfg_train_lance.datamodule.num_workers = 1
     HydraConfig().set_config(cfg_train_lance)
@@ -753,37 +2198,236 @@ def test_train_fast_dev_run_lance_datamodule(cfg_train_lance: DictConfig) -> Non
 
     # Pin the Dataset-API migration e2e: the split the datamodule trained over
     # is a Lance dataset directory, not the legacy single ``.lance`` file.
-    train_split = Path(object_dict["datamodule"].dataset_root) / "train.lance"
+    datamodule = object_dict["datamodule"]
+    train_split = Path(datamodule.dataset_root) / "train.lance"
     assert train_split.is_dir()
+    assert datamodule.num_workers == 1
+    assert datamodule.val_num_workers == 0
+    assert datamodule.high_memory_materialization is False
 
 
-@pytest.mark.dataloader_multiprocess
-@pytest.mark.xdist_group(name="dataloader-multiprocess")
-def test_train_lance_records_dataset_lineage_from_local_spec(
-    cfg_train_lance: DictConfig,
-    dataset_spec_factory: Callable[..., DatasetSpec],
+@pytest.mark.parametrize(
+    "cfg_train_sketch_lance",
+    ["surge/flow_sketch_cfg_ablation"],
+    indirect=True,
+)
+def test_train_flow_sketch_cfg_ablation_returns_finite_loss(
+    cfg_train_sketch_lance: DictConfig,
 ) -> None:
-    """A real Lance training run records its local dataset artifact as a W&B input.
+    """Consume the ablation config through the real training entrypoint.
 
-    :param cfg_train_lance: Composed Lance training configuration.
-    :param dataset_spec_factory: Factory producing the frozen dataset provenance.
+    :param cfg_train_sketch_lance: Ablation config over local sketch Lance splits.
+    """
+    HydraConfig().set_config(cfg_train_sketch_lance)
+    metric_dict, object_dict = train(cfg_train_sketch_lance)
+
+    assert torch.isfinite(metric_dict["train/loss"])
+    assert object_dict["trainer"].global_step == 1
+    assert object_dict["model"].sketch_tokens is not None
+    assert cfg_train_sketch_lance.consumed_train_config_id == "flow_sketch_prelim"
+
+
+@pytest.mark.parametrize("profile", ["tiv_online_gpu", "tiv_online_cpu"])
+def test_train_fast_dev_run_tiv_online_extracts_audio_controls(
+    cfg_train_sketch_lance: DictConfig,
+    profile: str,
+) -> None:
+    """Run both online TIV configurations through real training on Lance audio.
+
+    :param cfg_train_sketch_lance: Tiny real Lance flow-training configuration.
+    :param profile: User-selectable sketch configuration to train.
+    """
+    if profile == "tiv_online_cpu":
+        pytest.importorskip("essentia")
+    sketch_config = OmegaConf.load(
+        Path(__file__).parents[1] / "src/synth_setter/configs/sketch" / f"{profile}.yaml"
+    )
+    cfg_train_sketch_lance.model.sketch_controls = sketch_config.model.sketch_controls
+    HydraConfig().set_config(cfg_train_sketch_lance)
+
+    metric_dict, object_dict = train(cfg_train_sketch_lance)
+
+    datamodule = object_dict["datamodule"]
+    model = object_dict["model"]
+    trainer = object_dict["trainer"]
+    assert datamodule.sketch_controls.profile == "tiv"
+    assert "audio" in datamodule.projection["train"]
+    assert "audio" in datamodule.projection["val"]
+    assert "audio" in datamodule.projection["test"]
+    assert "sketch" not in datamodule.projection["train"]
+    assert "sketch" not in datamodule.projection["val"]
+    assert "sketch" not in datamodule.projection["test"]
+    assert model.sketch_tokens.layout.num_controls == 12
+    assert torch.count_nonzero(model.sketch_tokens.projections["tiv"].weight) > 0
+    assert torch.isfinite(metric_dict["train/loss"])
+
+    datamodule.setup("fit")
+    try:
+        batch = next(iter(datamodule.train_dataloader()))
+        transferred = trainer.strategy.batch_to_device(batch)
+    finally:
+        datamodule.teardown("fit")
+    controls = transferred["sketch_ctrl"]
+    assert isinstance(controls, torch.Tensor)
+    assert torch.count_nonzero(controls) > 0
+
+
+def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(
+    cfg_train_sketch_lance: DictConfig,
+) -> None:
+    """Route a composed sketch CFG scale through real validation sampling.
+
+    Drives the full sketch stack end-to-end on real Lance shards: projected
+    ``sketch_ctrl`` reads, conditioning collation, control-token injection, and
+    independent sketch guidance during validation.
+
+    :param cfg_train_sketch_lance: Composed pooled-sketch training config over
+        generated m2l+sketch Lance splits.
+    """
+    assert cfg_train_sketch_lance.run_name == "flow1k_prelim_sketch"
+    with open_dict(cfg_train_sketch_lance):
+        cfg_train_sketch_lance.model.validation_sketch_cfg_strength = 0.0
+        cfg_train_sketch_lance.model.test_sketch_cfg_strength = 0.0
+    HydraConfig().set_config(cfg_train_sketch_lance)
+    metric_dict, object_dict = train(cfg_train_sketch_lance)
+
+    model = object_dict["model"]
+    datamodule = object_dict["datamodule"]
+    assert model.sketch_tokens is not None
+    assert model.hparams.cfg_dropout_rate == 0.1
+    assert model.hparams.sketch_dropout_rate == 0.1
+    assert model.hparams.all_conditioning_dropout_rate == 0.1
+    assert object_dict["datamodule"].sketch_controls is not None
+    assert datamodule.sketch_controls is not None
+    assert datamodule.sketch_controls.num_frames == 32
+    assert torch.isfinite(metric_dict["train/loss"])
+
+    torch.manual_seed(11)
+    with torch.no_grad():
+        for projection in model.sketch_tokens.projections.values():
+            projection.weight.normal_()
+    trainer = object_dict["trainer"]
+    torch.manual_seed(17)
+    sketch_disabled = trainer.validate(model, datamodule, verbose=False)[0]["val/param_mse"]
+    model.hparams.validation_sketch_cfg_strength = 8.0
+    torch.manual_seed(17)
+    sketch_guided = trainer.validate(model, datamodule, verbose=False)[0]["val/param_mse"]
+
+    model.hparams.test_sketch_cfg_strength = 0.0
+    torch.manual_seed(19)
+    test_sketch_disabled = trainer.test(model, datamodule, verbose=False)[0]["test/param_mse"]
+    model.hparams.test_sketch_cfg_strength = 8.0
+    torch.manual_seed(19)
+    test_sketch_guided = trainer.test(model, datamodule, verbose=False)[0]["test/param_mse"]
+
+    datamodule.setup("test")
+    predict_loader = datamodule.test_dataloader()
+    model.hparams.test_sketch_cfg_strength = 0.0
+    torch.manual_seed(23)
+    predict_sketch_disabled = trainer.predict(model, dataloaders=predict_loader)[0][0]
+    model.hparams.test_sketch_cfg_strength = 8.0
+    torch.manual_seed(23)
+    predict_sketch_guided = trainer.predict(model, dataloaders=predict_loader)[0][0]
+
+    assert math.isfinite(sketch_disabled)
+    assert math.isfinite(sketch_guided)
+    assert math.isfinite(test_sketch_disabled)
+    assert math.isfinite(test_sketch_guided)
+    assert torch.isfinite(predict_sketch_disabled).all()
+    assert torch.isfinite(predict_sketch_guided).all()
+    assert sketch_disabled != sketch_guided
+    assert test_sketch_disabled != test_sketch_guided
+    assert not torch.allclose(predict_sketch_disabled, predict_sketch_guided)
+
+
+def test_train_fit_mode_partial_lance_root_does_not_build_test_split(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """Real training completes without opening a test split during fit.
+
+    :param cfg_train_lance: Composed ``datamodule=surge_lance`` training config.
     """
     dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
-    write_spec_to_path(
-        dataset_spec_factory(
-            task_name="lineage-lance",
-            train_val_test_sizes=[4, 4, 0],
-            r2={"bucket": "intermediate-data"},
-            render={"samples_per_shard": 4},
-        ),
-        dataset_root / "input_spec.json",
-    )
+    shutil.rmtree(dataset_root / "test.lance")
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.test = False
+        cfg_train_lance.datamodule.num_workers = 0
+    HydraConfig().set_config(cfg_train_lance)
+
+    _, object_dict = train(cfg_train_lance)
+
+    with pytest.raises(RuntimeError, match="test split was not built"):
+        object_dict["datamodule"].test_dataloader()
+
+
+def test_train_experiment_labels_offline_run_preserves_display_metadata(
+    cfg_train_wandb_labels: DictConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real training step logs the selected experiment's name and tags.
+
+    :param cfg_train_wandb_labels: Tiny Lance workload with production W&B metadata.
+    :param monkeypatch: Forces offline W&B for the training run.
+    """
+    import wandb
+
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    wandb.teardown()
+    HydraConfig().set_config(cfg_train_wandb_labels)
+    try:
+        _, objects = train(cfg_train_wandb_labels)
+        run = objects["logger"][0].experiment
+        assert objects["trainer"].global_step == 1
+        assert run.name == "surge-simple-onehot_ffn"
+        assert {"surge", "surge-simple-onehot", "ffn"} <= set(run.tags)
+    finally:
+        wandb.finish()
+        wandb.teardown()
+
+
+def test_train_wandb_config_resolves_scheduler_max_steps(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """A production training config records the scheduler's effective step count.
+
+    :param cfg_train_lance: Composed Lance training configuration.
+    """
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.trainer.fast_dev_run = False
+        cfg_train_lance.trainer.limit_train_batches = 1
+        cfg_train_lance.trainer.limit_val_batches = 1
+        cfg_train_lance.trainer.limit_test_batches = 1
     HydraConfig().set_config(cfg_train_lance)
     logger = _RecordingWandbLogger()
     with patch("synth_setter.cli.train.instantiate_loggers", return_value=[logger]):
         train(cfg_train_lance)
 
-    assert logger.used_artifacts == ["data-lineage-lance:lineage-lance-20260520T000000000Z"]
+    assert logger.recorded_config["model"]["scheduler"]["T_max"] == 1
+
+
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
+def test_train_lance_records_dataset_lineage_from_legacy_local_spec(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """A real Lance training run records a schema-drifted dataset as a W&B input.
+
+    :param cfg_train_lance: Composed Lance training configuration.
+    """
+    legacy_spec = {
+        "task_name": "surge-simple-lance-440k-20k-20k",
+        "run_id": "surge-simple-lance-440k-20k-20k-20260706T005448315Z",
+        "render": {"synth": {"name": "surge_simple"}},
+    }
+    dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
+    (dataset_root / "input_spec.json").write_text(json.dumps(legacy_spec), encoding="utf-8")
+    HydraConfig().set_config(cfg_train_lance)
+    logger = _RecordingWandbLogger()
+    with patch("synth_setter.cli.train.instantiate_loggers", return_value=[logger]):
+        train(cfg_train_lance)
+
+    assert logger.used_artifacts == [
+        "data-surge-simple-lance-440k-20k-20k:surge-simple-lance-440k-20k-20k-20260706T005448315Z"
+    ]
 
 
 def test_train_same_seed_reproduces_noise_stream(cfg_train_lance: DictConfig) -> None:
@@ -927,7 +2571,7 @@ def test_train_eval_surge_fake_writes_audio_and_metrics_outputs(
 
     metrics_dir = tmp_path / "metrics"
     for metrics_file, expected_rows in {
-        "aggregated_metrics.csv": 4,
+        "aggregated_metrics.csv": NUM_STEREO_AUDIO_METRICS,
         "metrics.csv": NUM_FIXTURE_SAMPLES,
     }.items():
         assert (metrics_dir / metrics_file).is_file(), f"{metrics_file} not found"
@@ -1085,7 +2729,7 @@ def test_train_mirrors_checkpoints_to_r2_mid_run_when_enabled(
 ) -> None:
     """Prove a periodic upload precedes the final flush and preserves checkpoint bytes.
 
-    :param cfg_train: Tiny CPU training cfg (ksin/ffn, ``save_last``).
+    :param cfg_train: Tiny CPU TorchSynth config with ``save_last`` enabled.
     :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
     :param monkeypatch: Stubs the R2 auth-ping and wraps the upload to record URIs.
     """
@@ -1201,7 +2845,7 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     """
     import concurrent.futures
 
-    from synth_setter.data.vst.param_spec_registry import plugin_state_paths
+    from synth_setter.synth_spec import SynthName, resolve_synth
     from synth_setter.utils.callbacks import ValAudioProbe
 
     monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
@@ -1210,19 +2854,18 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     # fake_r2_remote chdirs into tmp_path, so the render config's repo-relative
     # plugin/preset paths must be absolutized before they are handed to the renderer.
     workspace = operator_workspace()
+    plugin_path = Path(PLUGIN_PATH)
+    resolved_plugin_path = plugin_path if plugin_path.is_absolute() else workspace / plugin_path
+    registered_synth = resolve_synth(SynthName(param_spec_name))
+    probe_synth = registered_synth.model_copy(
+        update={
+            "plugin_path": str(resolved_plugin_path),
+            "plugin_state_path": str(workspace / registered_synth.plugin_state_path),
+        }
+    )
     probe_samples = 2
     with open_dict(cfg_surge_real_train):
-        cfg_surge_real_train.render = {
-            "param_spec_name": param_spec_name,
-            "plugin_path": str(
-                Path(PLUGIN_PATH) if Path(PLUGIN_PATH).is_absolute() else workspace / PLUGIN_PATH
-            ),
-            "plugin_state_path": str(workspace / plugin_state_paths[param_spec_name]),
-            "sample_rate": _SURGE_FIXTURE_SAMPLE_RATE,
-            "channels": _SURGE_FIXTURE_CHANNELS,
-            "velocity": 100,
-            "signal_duration_seconds": _SURGE_FIXTURE_DURATION_SECONDS,
-        }
+        cfg_surge_real_train.synth = probe_synth.model_dump(mode="json")
         # Smoke builder leaves the datamodule spec at surge_xt; re-pin to the fixture
         # spec so the configure-time spec-match guard (#1990) passes.
         cfg_surge_real_train.datamodule.param_spec_name = param_spec_name
@@ -1233,7 +2876,12 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
         cfg_surge_real_train.trainer.num_sanity_val_steps = 0
 
     HydraConfig().set_config(cfg_surge_real_train)
-    _, object_dict = train(cfg_surge_real_train)
+    metric_dict, object_dict = train(cfg_surge_real_train)
+
+    assert metric_dict["val/param_mse_spec_quantized"].item() == pytest.approx(0.0, abs=1e-12)
+    assert metric_dict["val/per_param_mse_spec_quantized/a_amp_eg_attack"].item() == pytest.approx(
+        0.0, abs=1e-12
+    )
 
     probes = [cb for cb in object_dict["trainer"].callbacks if isinstance(cb, ValAudioProbe)]
     assert len(probes) == 1, "val_audio_probe=auto did not wire exactly one ValAudioProbe"
@@ -1255,10 +2903,14 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
             wav = sample_dir / wav_name
             assert wav.is_file(), f"{wav} was not rendered"
             assert wav.stat().st_size > 0, f"{wav} is empty"
+        rendered_params = pd.read_csv(sample_dir / "params.csv", index_col=0)
+        assert rendered_params.at["a_amp_eg_attack", "pred_effective"] == pytest.approx(
+            rendered_params.at["a_amp_eg_attack", "target"]
+        )
 
     assert set(metrics) == {
         f"val_audio/{name}_{stat}"
-        for name in ("mss", "wmfcc", "sot", "rms")
+        for name in ("mss", "wmfcc", "sot", "rms", "mldr")
         for stat in ("mean", "std")
     }
     bounds = ORACLE_AUDIO_METRIC_BOUNDS
@@ -1266,15 +2918,126 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
     assert metrics["val_audio/wmfcc_mean"] < bounds.wmfcc_max
     assert metrics["val_audio/sot_mean"] < bounds.sot_max
     assert metrics["val_audio/rms_mean"] > bounds.rms_min
+    assert metrics["val_audio/mldr_mean"] < bounds.mldr_max
 
     uploaded = fake_r2_remote / cfg_surge_real_train.r2.bucket / "probes"
     landed = sorted(p.relative_to(uploaded).as_posix() for p in uploaded.rglob("*") if p.is_file())
     assert landed, f"probe snapshot never reached {uploaded}"
+    # Launch namespace between config_id and step dirs keeps concurrent runs apart (#2230).
+    launch_scoped = re.compile(r"^[^/]+/[^/]+-[0-9a-f]{32}/step-\d+/")
+    assert all(launch_scoped.match(p) for p in landed), f"snapshot not launch-scoped: {landed}"
     assert any(p.endswith("pred.wav") for p in landed), f"no pred.wav in snapshot: {landed}"
     assert any(p.endswith("aggregated_metrics.csv") for p in landed), f"no metrics: {landed}"
     assert not [p for p in landed if p.endswith(".pt")], (
         f"raw prediction tensors must stay local, but reached R2: {landed}"
     )
+
+
+def _materialize_fake_probe_stage(argv: list[str], _stage: str, timeout: float) -> None:
+    """Materialize the prediction or metrics output expected by an audio probe.
+
+    :param argv: Captured subprocess arguments identifying the probe stage and output path.
+    :param _stage: Unused human-readable stage name.
+    :param timeout: Positive stage timeout supplied by the caller.
+    """
+    assert timeout > 0
+    from synth_setter.evaluation import audio_probe
+
+    if audio_probe._PREDICT_VST_AUDIO_MODULE in argv:
+        module_index = argv.index(audio_probe._PREDICT_VST_AUDIO_MODULE)
+        sample_dir = Path(argv[module_index + 2]) / "sample_0"
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        (sample_dir / "pred.wav").write_bytes(b"RIFF-pred")
+        (sample_dir / "target.wav").write_bytes(b"RIFF-target")
+        return
+
+    module_index = argv.index(audio_probe._COMPUTE_AUDIO_METRICS_MODULE)
+    metrics_dir = Path(argv[module_index + 2])
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    (metrics_dir / "aggregated_metrics.csv").write_text(
+        ",mean,std\nmss,0.1,0.01\nwmfcc,0.2,0.02\nsot,0.3,0.03\nrms,0.4,0.04\n"
+    )
+
+
+def _run_fake_probe_launch(cfg: DictConfig, output_dir: Path) -> None:
+    """Run one training launch and require its validation probe to complete.
+
+    :param cfg: Config copied and pointed at the launch output directory.
+    :param output_dir: Launch-specific Hydra output and log directory.
+    """
+    from synth_setter.utils.callbacks import ValAudioProbe
+
+    launch_cfg = cfg.copy()
+    with open_dict(launch_cfg):
+        launch_cfg.paths.output_dir = str(output_dir)
+        launch_cfg.paths.log_dir = str(output_dir)
+    HydraConfig().set_config(launch_cfg)
+    _, object_dict = train(launch_cfg)
+
+    probes = [cb for cb in object_dict["trainer"].callbacks if isinstance(cb, ValAudioProbe)]
+    assert len(probes) == 1
+    probe = probes[0]
+    assert probe._future is not None
+    assert probe._future.result(timeout=120)["val_audio/mss_mean"] == 0.1
+
+
+@pytest.mark.fake_vst
+@pytest.mark.parametrize("experiment_name", [_ORACLE_EXPERIMENT], indirect=True)
+@pytest.mark.parametrize("surge_smoke_variant", FAKE_VST_VARIANTS[:1], indirect=True)
+def test_train_same_config_launches_upload_isolated_val_audio_probes(
+    cfg_surge_fake_train: DictConfig,
+    param_spec_name: str,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Two same-config launches archive complete probe snapshots without overwriting.
+
+    :param cfg_surge_fake_train: One-step oracle config backed by tiny fake-VST data.
+    :param param_spec_name: Parameter spec shared by the data, model, and probe.
+    :param fake_r2_remote: Local filesystem backing the real ``r2:`` rclone remote.
+    :param monkeypatch: Replaces only the unavailable VST/metrics subprocess stages.
+    :param tmp_path: Parent for separate local launch output directories.
+    """
+    from synth_setter.evaluation import audio_probe
+
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(audio_probe, "_run_captured", _materialize_fake_probe_stage)
+    # Never loaded (the probe's render stage is stubbed), but they must exist: the
+    # probe pre-flight rejects a launch whose render artifacts resolve nowhere.
+    stub_bundle = tmp_path / "plugins" / "fake.vst3"
+    stub_bundle.mkdir(parents=True)
+    stub_preset = tmp_path / "presets" / "fake.vstpreset"
+    stub_preset.parent.mkdir(parents=True)
+    stub_preset.write_bytes(b"stub preset")
+    with open_dict(cfg_surge_fake_train):
+        cfg_surge_fake_train.synth.name = param_spec_name
+        cfg_surge_fake_train.synth.param_spec_name = param_spec_name
+        cfg_surge_fake_train.synth.plugin_state_path = str(stub_preset)
+        cfg_surge_fake_train.synth.plugin_path = str(stub_bundle)
+        cfg_surge_fake_train.render.sample_rate = _SURGE_FIXTURE_SAMPLE_RATE
+        cfg_surge_fake_train.render.channels = _SURGE_FIXTURE_CHANNELS
+        cfg_surge_fake_train.render.velocity = 100
+        cfg_surge_fake_train.render.signal_duration_seconds = _SURGE_FIXTURE_DURATION_SECONDS
+        cfg_surge_fake_train.datamodule.param_spec_name = param_spec_name
+        cfg_surge_fake_train.training.val_audio_probe_samples = 1
+        cfg_surge_fake_train.trainer.val_check_interval = 1
+        cfg_surge_fake_train.trainer.num_sanity_val_steps = 0
+
+    for launch_number in (1, 2):
+        _run_fake_probe_launch(cfg_surge_fake_train, tmp_path / f"launch-{launch_number}")
+
+    config_id = resolve_run_config_id(cfg_surge_fake_train)
+    uploaded = fake_r2_remote / cfg_surge_fake_train.r2.bucket / "probes" / config_id
+    namespaces = sorted(path for path in uploaded.iterdir() if path.is_dir())
+    assert len(namespaces) == 2
+    for namespace in namespaces:
+        pred_wavs = list(namespace.rglob("pred.wav"))
+        metrics_files = list(namespace.rglob("aggregated_metrics.csv"))
+        assert len(pred_wavs) == 1
+        assert pred_wavs[0].read_bytes() == b"RIFF-pred"
+        assert len(metrics_files) == 1
+        assert not pd.read_csv(metrics_files[0]).empty
 
 
 @pytest.mark.slow
@@ -1628,3 +3391,334 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     # A fresh id is minted (no recovered one) and continuity is NOT pinned.
     assert second_logger_cfg.id is not None
     assert second_logger_cfg.resume is None
+
+
+_ALL_EMBEDDING_CONDITIONING_PROFILES = (
+    "clap",
+    "m2l",
+    "same_s",
+    "same_l",
+    "ssondo",
+    "t5gemma",
+    "matpac_plus",
+    "meanaudio_16k",
+)
+
+
+def _assert_conditioning_checkpoint_validates(cfg: DictConfig, output_dir: Path) -> None:
+    """Validate a trained embedding-conditioned checkpoint.
+
+    :param cfg: Training config that produced the checkpoint.
+    :param output_dir: Training output directory containing ``last.ckpt``.
+    """
+    checkpoint_path = output_dir / "checkpoints" / "last.ckpt"
+    assert checkpoint_path.is_file()
+
+    eval_cfg = cfg.copy()
+    eval_output_dir = output_dir / "evaluation"
+    with open_dict(eval_cfg):
+        eval_cfg.paths.output_dir = str(eval_output_dir)
+        eval_cfg.paths.log_dir = str(eval_output_dir)
+        eval_cfg.ckpt_path = str(checkpoint_path)
+        eval_cfg.mode = "validate"
+        eval_cfg.trainer.limit_val_batches = 1
+    HydraConfig().set_config(eval_cfg)
+    try:
+        eval_metric_dict, _ = evaluate(eval_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert torch.isfinite(eval_metric_dict["val/param_mse"])
+
+
+def _assert_t5gemma_feed_forward_checkpoint_validates(
+    output_dir: Path, dataset_root: Path, param_spec_name: str
+) -> None:
+    """Train the T5Gemma feed-forward model, then validate the checkpoint it produced.
+
+    :param output_dir: Training output dir; evaluation runs from its ``evaluation`` child.
+    :param dataset_root: Lance root already carrying the real ``t5gemma`` column.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    cfg = build_surge_xt_embedding_train_cfg(
+        output_dir,
+        dataset_root,
+        param_spec_name=param_spec_name,
+        conditioning="t5gemma",
+        architecture="feed_forward",
+    )
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    trainer = object_dict["trainer"]
+    assert isinstance(object_dict["model"], VSTFeedForwardModule)
+    assert trainer.global_step >= 1, (
+        f"T5Gemma feed-forward trainer did not advance: global_step={trainer.global_step}"
+    )
+    assert_finite_train_loss(metric_dict)
+
+    checkpoint_path = output_dir / "checkpoints" / "last.ckpt"
+    assert checkpoint_path.is_file()
+
+    eval_cfg = cfg.copy()
+    eval_output_dir = output_dir / "evaluation"
+    with open_dict(eval_cfg):
+        eval_cfg.paths.output_dir = str(eval_output_dir)
+        eval_cfg.paths.log_dir = str(eval_output_dir)
+        eval_cfg.ckpt_path = str(checkpoint_path)
+        eval_cfg.mode = "validate"
+        eval_cfg.trainer.limit_val_batches = 1
+    HydraConfig().set_config(eval_cfg)
+    try:
+        eval_metric_dict, eval_object_dict = evaluate(eval_cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert isinstance(eval_object_dict["model"], VSTFeedForwardModule)
+    assert torch.isfinite(eval_metric_dict["val/param_mse"])
+
+
+def _assert_model_predictions_depend_on_conditioning(
+    object_dict: dict[str, Any],
+) -> None:
+    """Assert the trained model keeps a gradient path from conditioning.
+
+    :param object_dict: Objects returned by the train entrypoint.
+    """
+    model = object_dict["model"]
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    conditioning = batch[model._conditioning_key].detach().requires_grad_(True)
+    predictions = model._sample(
+        conditioning,
+        torch.zeros_like(batch["params"]),
+        steps=1,
+        cfg_strength=1.0,
+    )
+
+    gradient = torch.autograd.grad(predictions.square().sum(), conditioning)[0]
+
+    assert torch.isfinite(gradient).all()
+    assert torch.count_nonzero(gradient) > 0
+
+
+def _assert_model_predictions_change_with_conditioning(object_dict: dict[str, Any]) -> None:
+    """Assert conditioning rows alter predictions under identical noise.
+
+    :param object_dict: Objects returned by the train entrypoint.
+    """
+    model = object_dict["model"]
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    conditioning = batch[model._conditioning_key]
+    noise = torch.zeros_like(batch["params"])
+
+    predictions = model._sample(conditioning, noise, steps=1, cfg_strength=1.0)
+    swapped_predictions = model._sample(
+        conditioning.roll(1, dims=0),
+        noise,
+        steps=1,
+        cfg_strength=1.0,
+    )
+
+    assert torch.isfinite(predictions).all()
+    assert torch.isfinite(swapped_predictions).all()
+    assert not torch.allclose(predictions, swapped_predictions, equal_nan=True)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.network
+def test_train_pupujepa_large_cached_conditioning_returns_finite_loss(
+    tmp_path: Path,
+    surge_xt_embedding_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train one real step from cached PupuJEPA Large sequences.
+
+    :param tmp_path: Training output directory.
+    :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    dataset_root = augment_lance_splits_with_embedding(
+        surge_xt_embedding_smoke_datasets, "pupujepa_large"
+    )
+    cfg = build_surge_xt_embedding_train_cfg(
+        tmp_path,
+        dataset_root,
+        param_spec_name=param_spec_name,
+        conditioning="pupujepa_large",
+    )
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    _assert_model_predictions_depend_on_conditioning(object_dict)
+
+
+@pytest.mark.slow
+@pytest.mark.network
+def test_train_pupujepa_large_online_conditioning_returns_finite_loss(
+    cfg_torchsynth_pupujepa_large_online_train: DictConfig,
+) -> None:
+    """Train one real-weight step through online PupuJEPA Large conditioning.
+
+    :param cfg_torchsynth_pupujepa_large_online_train: Two-row production-path config.
+    """
+    cfg = cfg_torchsynth_pupujepa_large_online_train
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    _assert_model_predictions_change_with_conditioning(object_dict)
+
+
+def test_train_pupujepa_tiny_scratch_conditioning_trains_backbone_and_checkpoints_it(
+    cfg_torchsynth_pupujepa_tiny_scratch_train: DictConfig, tmp_path: Path
+) -> None:
+    """One step through from-scratch PupuJEPA moves the teacher and keeps it in the checkpoint.
+
+    :param cfg_torchsynth_pupujepa_tiny_scratch_train: Two-row checkpoint-free config.
+    :param tmp_path: Checkpoint output directory.
+    """
+    cfg = cfg_torchsynth_pupujepa_tiny_scratch_train
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = train(cfg)
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    model = object_dict["model"]
+    assert isinstance(model.encoder, PupuJepaConditioningEncoder)
+    assert all(parameter.requires_grad for parameter in model.encoder.backbone.parameters())
+    checkpoint_path = tmp_path / "scratch.ckpt"
+    object_dict["trainer"].save_checkpoint(checkpoint_path)
+    state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)["state_dict"]
+    assert any(key.startswith("encoder.backbone.teacher_model.") for key in state)
+    _assert_model_predictions_change_with_conditioning(object_dict)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.integration_r2
+@pytest.mark.r2
+def test_train_matpac_plus_flattened_lance_returns_finite_loss(
+    tmp_path: Path,
+    surge_xt_embedding_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train through the flattened MATPAC++ layout written in production.
+
+    :param tmp_path: Training output directory.
+    :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    dataset_root = augment_lance_splits_with_embedding(
+        surge_xt_embedding_smoke_datasets, "matpac_plus"
+    )
+    flatten_lance_embedding_column(dataset_root, "matpac_plus")
+    cfg = build_surge_xt_embedding_train_cfg(
+        tmp_path,
+        dataset_root,
+        param_spec_name=param_spec_name,
+        conditioning="matpac_plus",
+    )
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+def test_train_cqt_cached_conditioning_returns_finite_loss(
+    tmp_path: Path,
+    surge_xt_embedding_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train through CQT features written by the production augmentation path.
+
+    :param tmp_path: Training output directory.
+    :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    dataset_root = augment_lance_splits_with_embedding(surge_xt_embedding_smoke_datasets, "cqt")
+    cfg = build_surge_xt_embedding_train_cfg(
+        tmp_path,
+        dataset_root,
+        param_spec_name=param_spec_name,
+        conditioning="cqt",
+    )
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
+@pytest.mark.integration_r2
+@pytest.mark.r2
+def test_train_all_embedding_conditioning_and_eval_real_e2e(
+    local_embedding_checkpoints: dict[str, str],
+    tmp_path: Path,
+    surge_xt_embedding_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train every profile and validate their downstream conditioning paths.
+
+    :param local_embedding_checkpoints: Preflighted real model directories.
+    :param tmp_path: Per-profile training output parent.
+    :param surge_xt_embedding_smoke_datasets: Two-row real-VST Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    dataset_root = augment_lance_splits_with_all_embeddings(
+        surge_xt_embedding_smoke_datasets,
+        local_embedding_checkpoints,
+        param_spec_name,
+    )
+    assert_embedding_columns(dataset_root)
+
+    for conditioning in _ALL_EMBEDDING_CONDITIONING_PROFILES:
+        cfg = build_surge_xt_embedding_train_cfg(
+            tmp_path / conditioning,
+            dataset_root,
+            param_spec_name=param_spec_name,
+            conditioning=conditioning,
+        )
+        HydraConfig().set_config(cfg)
+        try:
+            metric_dict, object_dict = train(cfg)
+        finally:
+            GlobalHydra.instance().clear()
+
+        trainer = object_dict["trainer"]
+        assert trainer.global_step >= 1, (
+            f"{conditioning} trainer did not advance: global_step={trainer.global_step}"
+        )
+        assert_finite_train_loss(metric_dict)
+        if conditioning in {"ssondo", "meanaudio_16k"}:
+            _assert_model_predictions_depend_on_conditioning(object_dict)
+        if conditioning == "ssondo":
+            _assert_conditioning_checkpoint_validates(cfg, tmp_path / conditioning)
+
+    _assert_t5gemma_feed_forward_checkpoint_validates(
+        tmp_path / "t5gemma-feed-forward", dataset_root, param_spec_name
+    )

@@ -1,0 +1,8 @@
+# DEBUG variant: rclone-process-exit canary — uploads a tiny sentinel to R2
+# with the production worker's flags and exits; fails before the production
+# smoke does if rclone stops exiting cleanly post-upload again (#735 bug #2).
+defaults:
+  - /skypilot_launch/compute/runpod/smoke@_here_
+  - _self_
+name: runpod-debug-rclone
+run_script: debug-rclone.sh

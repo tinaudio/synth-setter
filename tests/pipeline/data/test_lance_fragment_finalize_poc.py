@@ -37,6 +37,7 @@ from synth_setter.data.vst.shapes import (
     PARAM_ARRAY_FIELD,
 )
 from synth_setter.pipeline.data.lance_shard import (
+    commit_lance_branch,
     commit_lance_dataset,
     iter_lance_column_rows,
     lance_fragment,
@@ -44,6 +45,7 @@ from synth_setter.pipeline.data.lance_shard import (
     record_batch_from_arrays,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
+from tests.helpers.lance_fixtures import with_preview_columns
 
 # Small shapes; every element is a distinct value exactly representable as
 # float16 (<= 2048), so equality is exact across the writer dtypes.
@@ -59,7 +61,7 @@ _VALUE_STRIDE = 1000
 _METADATA = ShardMetadata(
     velocity=100,
     signal_duration_seconds=1.0,
-    sample_rate=100,
+    sample_rate=8000,
     channels=2,
     min_loudness=-55.0,
     base_seed=42,
@@ -95,7 +97,11 @@ def _worker_writes_fragment(
     :param arrays: One shard's field arrays.
     :returns: The live fragment metadata and its sidecar JSON string.
     """
-    batch = record_batch_from_arrays(arrays, schema)
+    batch = record_batch_from_arrays(
+        with_preview_columns(arrays, _METADATA.sample_rate),
+        schema,
+        debug=None,
+    )
     frag = lance_fragment(split_uri, schema, batch)
     return frag, json.dumps(frag.to_json())
 
@@ -202,6 +208,55 @@ def test_recommitting_winner_set_is_idempotent(tmp_path: Path) -> None:
     np.testing.assert_array_equal(decoded[PARAM_ARRAY_FIELD], written[PARAM_ARRAY_FIELD])
 
 
+def test_branch_overwrite_uses_branch_data_namespace_and_preserves_versions(
+    tmp_path: Path,
+) -> None:
+    """A branch overwrite reads branch-staged fragments without changing main.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    schema = lance_schema(_FIELD_SHAPES, _METADATA)
+    train_uri = tmp_path / "train.lance"
+    baseline = _worker_writes_fragment(train_uri, schema, _arange_arrays(0))[0]
+    commit_lance_dataset(train_uri, schema, [baseline])
+    branch = lance.dataset(str(train_uri)).create_branch("append-test", 1)
+    old_branch_version = branch.version
+
+    replacement_arrays = _arange_arrays(_VALUE_STRIDE)
+    replacement = _worker_writes_fragment(
+        Path(branch.uri), schema, replacement_arrays
+    )[0]
+    published = commit_lance_branch(branch, schema, [replacement])
+
+    assert published.version > old_branch_version
+    np.testing.assert_array_equal(
+        np.stack(
+            list(
+                published.checkout_version(old_branch_version)
+                .to_table(columns=[PARAM_ARRAY_FIELD])[PARAM_ARRAY_FIELD]
+                .to_numpy(zero_copy_only=False)
+            )
+        ),
+        _arange_arrays(0)[PARAM_ARRAY_FIELD],
+    )
+    np.testing.assert_array_equal(
+        np.stack(
+            published.to_table(columns=[PARAM_ARRAY_FIELD])[PARAM_ARRAY_FIELD].to_numpy(
+                zero_copy_only=False
+            )
+        ),
+        replacement_arrays[PARAM_ARRAY_FIELD],
+    )
+    np.testing.assert_array_equal(
+        np.stack(
+            lance.dataset(str(train_uri))
+            .to_table(columns=[PARAM_ARRAY_FIELD])[PARAM_ARRAY_FIELD]
+            .to_numpy(zero_copy_only=False)
+        ),
+        _arange_arrays(0)[PARAM_ARRAY_FIELD],
+    )
+
+
 def test_fragment_not_colocated_with_dataset_fails_on_read(tmp_path: Path) -> None:
     """A dangling fragment commit fails on read even though ``count_rows`` passes.
 
@@ -221,5 +276,7 @@ def test_fragment_not_colocated_with_dataset_fails_on_read(tmp_path: Path) -> No
     # Manifest metadata reports rows even though the data file is absent...
     assert lance.dataset(str(train_uri)).count_rows() == _ROWS_PER_SHARD
     # ...but an actual read fails, proving the co-location requirement.
-    with pytest.raises(pa.ArrowInvalid, match="LanceError|Object at location"):
+    with pytest.raises(
+        pa.ArrowInvalid, match="LanceError|Object at location|External error: Not found:"
+    ):
         list(iter_lance_column_rows(train_uri, PARAM_ARRAY_FIELD))

@@ -45,7 +45,10 @@ class ImageConfig(BaseModel, strict=True, extra="forbid"):
         description="Commit SHA the build is tied to (provenance label and tag input)."
     )
     issue_number: int = Field(
-        description="GitHub issue this build is tied to; appears in image tags and OCI labels."
+        description=(
+            "GitHub issue this build is tied to; appears in image tags and "
+            "Open Container Initiative labels."
+        )
     )
     image_config_id: str = Field(
         description="Derived from the YAML config filename stem (e.g. `runpod-h100.yaml` → `runpod-h100`)."

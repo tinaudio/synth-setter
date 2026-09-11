@@ -30,7 +30,7 @@ fence or surrounding prose:
   "target": "<assigned target>",
   "findings": [
     {
-      "severity": "block or warn",
+      "severity": "block, warn, or nit",
       "path": "<repository-relative changed path>",
       "line": 42,
       "description": "<self-contained failure scenario or concern>"

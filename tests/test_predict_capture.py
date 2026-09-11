@@ -466,7 +466,7 @@ class TestComputeCaptureMel:
         dataset = AudioFolderDataset(root=str(tmp_path), files=[capture_wav])
 
         assert dataset.files == [capture_wav]
-        assert dataset[0]["mel_spec"].shape == (2, 128, 401)
+        assert dataset[0]["mel"].shape == (2, 128, 401)
 
     def test_mel_matches_audio_folder_dataset_for_same_file(self, capture_wav: Path):
         """The CLI mel equals AudioFolderDataset's mel for the same file.
@@ -479,7 +479,7 @@ class TestComputeCaptureMel:
         mel = compute_capture_mel(capture_wav)
 
         assert mel.shape == (2, 128, 401)
-        assert torch.equal(mel, expected_item["mel_spec"])
+        assert torch.equal(mel, expected_item["mel"])
 
 
 @pytest.mark.slow

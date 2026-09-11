@@ -74,16 +74,22 @@ RUN case "${BUILD_MODE}" in \
       *) echo "ERROR: BUILD_MODE must be source or prebuilt (got '${BUILD_MODE}')" >&2; exit 1 ;; \
     esac
 # Install base build tools (gcc-12, g++-12, ninja, flex) shared by all builder stages.
+# The Azure-local mirror avoids archive.ubuntu.com timeouts on GitHub runners.
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+    sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g' /etc/apt/sources.list && \
+    apt-get update --error-on=any && apt-get install -y --no-install-recommends \
   software-properties-common \
+  sudo \
   gcc-12 \
   g++-12 \
   git \
+  make \
   ninja-build \
-  flex
-
+  flex \
+  wget
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12 && \
+    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
 
 # ==========================================
 # Source build: installs CMake 3.28 and JUCE prerequisites, clones
@@ -144,8 +150,6 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
               rpm
 
 # Finally, pick gcc12
-RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
-RUN update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
 
 RUN chmod 777 /home/build
 RUN mkdir /home/build/dev
@@ -181,88 +185,7 @@ RUN rm -rf /home/build/plugin/surge /home/build/cmake-install
 # installs it together with its runtime dependencies.
 # ==========================================
 FROM builder-base AS builder-install-surge-from-prebuilt
-WORKDIR /home/build
-COPY --from=arch-vars /artifacts/surge-package-filepath.txt /surge-package-filepath.txt
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends wget
-RUN pkg="$(cat /surge-package-filepath.txt)"; \
-    echo $pkg; \
-    wget "https://github.com/surge-synthesizer/releases-xt/releases/download/${pkg}"
-
-# Add any additional dependencies needed to install the prebuilt package
-# TODO: check to see which of the installs below are actually needed to install the prebuilt package,  remove the ones that aren't needed.
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    git \
-    cmake \
-    libcairo-dev \
-    libxkbcommon-x11-dev \
-    libxkbcommon-dev \
-    libxcb-cursor-dev \
-    libxcb-keysyms1-dev \
-    libxcb-util-dev \
-    libxrandr-dev \
-    libxinerama-dev \
-    libxcursor-dev \
-    libasound2-dev \
-    libjack-jackd2-dev
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    pkg="$(cat /surge-package-filepath.txt)" && \
-    fname="${pkg##*/}" && \
-    apt-get update && apt-get install -y --no-install-recommends "./${fname}" && \
-    rm "./${fname}"
-
-# ==========================================
-# VST3 synth fetch: SHA256-pinned prebuilt Linux VST3 bundles, staged under
-# /plugins-staging for the runtime stage to copy. Upstream ships x86_64-only
-# binaries, so non-amd64 builds stage nothing and downstream steps skip.
-# Version pins are glibc-bound: Ubuntu 22.04 ships glibc 2.35, so assets
-# built against glibc 2.38 (Ubuntu 24.04 runners) cannot load (#1649).
-# License: these third-party binaries ship in the published GHCR image —
-# review upstream license/redistribution terms before adding or bumping an
-# asset (Dexed: GPL-3.0; OB-Xf: GPL-3.0; Six Sines: MIT).
-# ==========================================
-FROM ${BASE_IMAGE} AS vst3-synths-fetch
-SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
-ARG TARGETARCH
-RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    unzip \
-    wget
-WORKDIR /plugins-staging
-
-ARG DEXED_VERSION=0.9.8
-ARG DEXED_SHA256=5d026f53504f9303ae2a4a635cf6fdfc50ab9c947cbc0a20ecb5c8f323402dab
-RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Dexed: x86_64-only asset" >&2; exit 0; fi; \
-    wget -q -O /tmp/dexed.zip "https://github.com/asb2m10/dexed/releases/download/v${DEXED_VERSION}/dexed-${DEXED_VERSION}-lnx.zip" && \
-    echo "${DEXED_SHA256}  /tmp/dexed.zip" | sha256sum -c - && \
-    unzip -q /tmp/dexed.zip -d /tmp/dexed && \
-    mv "/tmp/dexed/dexed-${DEXED_VERSION}-lnx/Dexed.vst3" . && \
-    rm -rf /tmp/dexed.zip /tmp/dexed
-
-ARG OBXF_VERSION=v1.0.3
-ARG OBXF_SHA256=72b60c83cf6426337031df744c34a047104a9d95f1feaf6cd048ecfa39f74c96
-RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping OB-Xf: x86_64-only asset" >&2; exit 0; fi; \
-    wget -q -O /tmp/obxf.zip "https://github.com/surge-synthesizer/OB-Xf/releases/download/${OBXF_VERSION}/ob-xf-Linux-${OBXF_VERSION}.zip" && \
-    echo "${OBXF_SHA256}  /tmp/obxf.zip" | sha256sum -c - && \
-    unzip -q /tmp/obxf.zip "obxf_products/OB-Xf.vst3/*" -d /tmp/obxf && \
-    mv "/tmp/obxf/obxf_products/OB-Xf.vst3" . && \
-    rm -rf /tmp/obxf.zip /tmp/obxf
-
-ARG SIX_SINES_VERSION=v1.1.0
-ARG SIX_SINES_ASSET=six-sines-linux-2025-03-18-43d10b2.tgz
-ARG SIX_SINES_SHA256=fae7c1c325fde7ed49c978358397cb4bcf69012c4e6eefe2a5968fe6a36d0421
-RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping Six Sines: x86_64-only asset" >&2; exit 0; fi; \
-    wget -q -O /tmp/six-sines.tgz "https://github.com/baconpaul/six-sines/releases/download/${SIX_SINES_VERSION}/${SIX_SINES_ASSET}" && \
-    echo "${SIX_SINES_SHA256}  /tmp/six-sines.tgz" | sha256sum -c - && \
-    tar -xzf /tmp/six-sines.tgz -C . "./Six Sines.vst3" && \
-    rm /tmp/six-sines.tgz
+# Prebuilt VST3 packages are installed together by Studiorack after Python deps land.
 
 # ==========================================
 # KR106 source build: upstream release ZIPs require glibc 2.38, so build the
@@ -334,13 +257,7 @@ RUN curl -fsSL \
 # Python base: Python + venv on top of the chosen Surge install.
 # ==========================================
 FROM builder-install-surge-from-${BUILD_MODE} AS python-base
-# Surge XT is the only bundle present here; the amd64-only fetched synths land
-# downstream (vst3-synths-fetch COPY), gated and load-validated there.
-RUN ls /usr/lib/vst3/ && test -n "$(ls -A /usr/lib/vst3/Surge\ XT.vst3 2>/dev/null)" \
-    || (echo "ERROR: Surge XT.vst3 not found in /usr/lib/vst3/" >&2; exit 1)
-
-# Point tests and ensure_plugin_symlinks.sh at the system VST3 path baked above,
-# so container callers don't have to pass `-e SYNTH_SETTER_PLUGIN_PATH=...`.
+# Point tests and managed alias restoration at the stable VST3 path.
 ENV SYNTH_SETTER_PLUGIN_PATH="/usr/lib/vst3/Surge XT.vst3"
 
 # Install build-time system Python and uv; the runtime venv is created below.
@@ -407,26 +324,44 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # `fusermount3`); the two packages are mutually exclusive (fuse3 Breaks fuse)
 # on 22.04, so install only `fuse`. The launch path must also grant
 # --device=/dev/fuse --cap-add=SYS_ADMIN.
+COPY --chmod=755 scripts/docker/run_after_apt_update.sh /usr/local/bin/
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-      xvfb \
-      xauth \
-      dbus-x11 \
-      xsettingsd \
-      libgl1-mesa-dri \
-      libgl1-mesa-glx \
-      mesa-utils \
-      openbox \
-      x11-utils \
-      x11-xserver-utils \
-      rclone \
-      fuse \
-      rsync \
-      openssh-client \
-      python3-pip \
-      unzip; \
+    run_after_apt_update.sh \
+      apt-get install -y --no-install-recommends \
+        dbus-x11 \
+        fuse \
+        libasound2 \
+        libcairo2 \
+        libcurl4 \
+        libfontconfig1 \
+        libfreetype6 \
+        libgl1-mesa-dri \
+        libgl1-mesa-glx \
+        libgtk-3-0 \
+        libjack-jackd2-0 \
+        libx11-6 \
+        libxcb-cursor0 \
+        libxcb-keysyms1 \
+        libxcb-util1 \
+        libxcursor1 \
+        libxinerama1 \
+        libxkbcommon-x11-0 \
+        libxrandr2 \
+        mesa-utils \
+        openbox \
+        openssh-client \
+        python3-pip \
+        rclone \
+        rsync \
+        unzip \
+        x11-utils \
+        x11-xserver-utils \
+        xauth \
+        xclip \
+        xdg-utils \
+        xsettingsd \
+        xvfb; \
     apt-get clean; \
     rm -rf /var/lib/apt/lists/*
 
@@ -457,41 +392,92 @@ RUN case "${TARGETARCH:-}" in \
     pueue --version && \
     pueued --version
 
-WORKDIR /artifacts
+# ==========================================
+# Studiorack-managed VST3 installation. Archive packages stay versioned under
+# /opt/studiorack; stable /usr/lib/vst3 aliases keep serialized render specs portable.
+# The core patch recognizes Linux VST3 bundles without a macOS Info.plist; remove it
+# when https://github.com/open-audio-stack/open-audio-stack-core/issues/82 and
+# https://github.com/open-audio-stack/open-audio-stack-core/issues/83 through #85 ship.
+# Surge source mode and KR-106 retain source fallbacks because the registry has no
+# Surge arm64 artifact and KR-106 binaries require newer glibc than Ubuntu 22.04.
+# ==========================================
+FROM builder-install-synth-setter-deps AS builder-install-studiorack-plugins
+SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
+ARG BUILD_MODE
+ARG TARGETARCH
+COPY --from=node:24.15.0-bookworm-slim /usr/local/ /usr/local/
+COPY --from=synth-setter-src /home/build/synth-setter/package.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/package-lock.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/studiorack.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/studiorack.lock.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/studiorack-cardinal.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/studiorack-cardinal.lock.json /artifacts/studiorack/
+COPY --from=synth-setter-src /home/build/synth-setter/scripts/studiorack/patch-core.mjs /artifacts/studiorack/scripts/studiorack/patch-core.mjs
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/__init__.py /artifacts/studiorack-src/synth_setter/__init__.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_integrity.py /artifacts/studiorack-src/synth_setter/plugin_integrity.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_manager.py /artifacts/studiorack-src/synth_setter/plugin_manager.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/plugin_runtime.py /artifacts/studiorack-src/synth_setter/plugin_runtime.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/cli/__init__.py /artifacts/studiorack-src/synth_setter/cli/__init__.py
+COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/cli/plugins.py /artifacts/studiorack-src/synth_setter/cli/plugins.py
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/run-linux-vst-headless.sh /artifacts/
+WORKDIR /artifacts/studiorack
+RUN npm ci
+ENV STUDIORACK_PLUGINS_DIR=/opt/studiorack
+RUN if [[ "${TARGETARCH:-}" == "amd64" ]]; then \
+      packages=( \
+        --plugin asb2m10/dexed \
+        --plugin baconpaul/six-sines \
+        --plugin surge-synthesizer/ob-xf \
+      ); \
+      if [[ "${BUILD_MODE}" == "prebuilt" ]]; then \
+        packages+=(--plugin surge-synthesizer/surge); \
+      fi; \
+      PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
+        --manifest /artifacts/studiorack/studiorack.json \
+        --links-dir /usr/lib/vst3 install "${packages[@]}"; \
+      PYTHONPATH=/artifacts/studiorack-src /artifacts/run-linux-vst-headless.sh \
+        python -m synth_setter.cli.plugins \
+        --manifest /artifacts/studiorack/studiorack-cardinal.json \
+        --links-dir /usr/lib/vst3 install --plugin distrho/cardinal; \
+    fi
+COPY --from=builder-build-ultramaster-kr106 /plugins-staging/ /usr/lib/vst3/
+RUN if [[ "${BUILD_MODE}" == "source" ]]; then \
+      PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
+        --manifest /artifacts/studiorack/studiorack.json adopt \
+        --plugin surge-synthesizer/surge \
+        --bundle-path "/usr/lib/vst3/Surge XT.vst3"; \
+    fi && \
+    PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
+      --manifest /artifacts/studiorack/studiorack.json adopt \
+      --plugin kayrockscreenprinting/ultramaster-kr106 \
+      --bundle-path "/usr/lib/vst3/Ultramaster KR-106.vst3" && \
+    PYTHONPATH=/artifacts/studiorack-src python -m synth_setter.cli.plugins \
+      --manifest /artifacts/studiorack/studiorack.json \
+      --links-dir /usr/lib/vst3 link \
+      --plugin surge-synthesizer/surge \
+      --plugin kayrockscreenprinting/ultramaster-kr106
+
+WORKDIR /artifacts
 COPY --from=synth-setter-src /home/build/synth-setter/src/synth_setter/scripts/load_vst3_check.py /artifacts/
 RUN chmod +x ./run-linux-vst-headless.sh
-# Validate that Surge XT loads correctly under headless X11
 RUN ./run-linux-vst-headless.sh \
     python -X faulthandler load_vst3_check.py "/usr/lib/vst3/Surge XT.vst3"
-
 RUN mkdir -p /home/build/synth-setter/plugins && \
     ln -s "/usr/lib/vst3/Surge XT.vst3" "/home/build/synth-setter/plugins/Surge XT.vst3"
-
-COPY --from=vst3-synths-fetch /plugins-staging/ /usr/lib/vst3/
-COPY --from=builder-build-ultramaster-kr106 /plugins-staging/ /usr/lib/vst3/
-# Presence gate for the bundles the image must ship: Surge XT on every arch,
-# bundled plugin synths on amd64 only. Load-validation follows.
-RUN for bundle in "Surge XT" "Dexed" "OB-Xf" "Six Sines" "Ultramaster KR-106"; do \
+RUN for bundle in "Surge XT" "CardinalSynth" "Dexed" "OB-Xf" "Six Sines" "Ultramaster KR-106"; do \
       if [[ "$bundle" != "Surge XT" && "${TARGETARCH:-}" != "amd64" ]]; then \
-        echo "skipping ${bundle}.vst3 presence check on ${TARGETARCH:-<unset>}" >&2; continue; \
+        continue; \
       fi; \
       [[ -d "/usr/lib/vst3/${bundle}.vst3" ]] \
         || { echo "ERROR: ${bundle}.vst3 not found in /usr/lib/vst3/" >&2; exit 1; }; \
     done
-
-# Validate each bundled synth loads under headless X11 — one wrapper run per
-# plugin, since sequential in-process loads crash order-dependently (#1649) —
-# then symlink it into plugins/ like Surge XT above. No-op on non-amd64.
-# Entries are "bundle|plugin_name" (the "|" is required; empty name = sole plugin).
-RUN if [ "${TARGETARCH:-}" != "amd64" ]; then echo "skipping VST3 synth validation on ${TARGETARCH:-<unset>}" >&2; exit 0; fi; \
-    for entry in "Dexed|" "OB-Xf|" "Six Sines|Six Sines" "Ultramaster KR-106|Ultramaster KR-106"; do \
+RUN if [[ "${TARGETARCH:-}" != "amd64" ]]; then exit 0; fi; \
+    for entry in "CardinalSynth|" "Dexed|" "OB-Xf|" "Six Sines|Six Sines" "Ultramaster KR-106|Ultramaster KR-106"; do \
       name="${entry%%|*}"; \
       ./run-linux-vst-headless.sh \
         python -X faulthandler load_vst3_check.py "/usr/lib/vst3/${name}.vst3" "${entry#*|}" && \
       ln -s "/usr/lib/vst3/${name}.vst3" "/home/build/synth-setter/plugins/${name}.vst3" || exit 1; \
     done
-
 WORKDIR /home/build/synth-setter
 
 # ==========================================
@@ -505,16 +491,18 @@ WORKDIR /home/build/synth-setter
 # Useful for CI or one-off runs without mounting local source.
 # Usage: make docker-build-dev-snapshot GIT_REF=<sha>
 # ==========================================
-FROM builder-install-synth-setter-deps AS dev-base
+FROM builder-install-studiorack-plugins AS dev-base
 
 ARG SYNTH_PERMUTATIONS_GIT_REF
 ENV SYNTH_PERMUTATIONS_GIT_REF=${SYNTH_PERMUTATIONS_GIT_REF}
 
-# unzip: the in-image pytest run exercises the Makefile install-plugins
-# targets, whose recipes unpack cached .zip archives (#1789).
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends git ca-certificates jq unzip
+    apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+      faust \
+      git \
+      jq
 
 WORKDIR /home/build/synth-setter
 
@@ -539,9 +527,16 @@ RUN git init && \
 # deps are already in the venv; this step installs the package editable.
 RUN uv pip install --no-deps -e .
 
-# Run not-slow unit tests: no VST or R2 needed, but the infra-marked
-# install-plugins tests shell out to the real Makefile recipes (tar/unzip).
-RUN pytest -k "not slow" -v
+# Reuse the patched, lockfile-pinned Studiorack graph installed by the parent stage.
+RUN ln -s /artifacts/studiorack/node_modules node_modules
+
+# The in-image pytest runs the Pi hook suite, which needs a Node that strips
+# TypeScript inline (--experimental-strip-types, Node >= 22.6). npm/npx are not
+# needed here; the `devcontainer-tools` stage adds them for the Codex CLI.
+COPY --from=node:22-bullseye-slim /usr/local/bin/node /usr/local/bin/node
+
+# Run CPU unit tests after the managed plugins pass their load checks.
+RUN pytest -m "not slow and not gpu and not mps" -v
 
 # No ENTRYPOINT: SkyPilot's RunPod backend launches the pod with
 # `dockerArgs: "bash -c '<base64-setup>'"`, and a baked-in ENTRYPOINT would
@@ -553,8 +548,11 @@ RUN pytest -k "not slow" -v
 CMD ["/bin/bash"]
 
 # ==========================================
-# devcontainer-tools: dev-base + CLI tools + non-root user.
-# Published as tinaudio/synth-setter:devcontainer-tools.
+# devcontainer-tools: dev-base + CLI tools, defaulting to root so SkyPilot's
+# RunPod backend can bootstrap sshd. Tools that live under /home/dev are still
+# installed as the dev user mid-stage; the stage ends with USER root.
+# Published as tinaudio/synth-setter:devcontainer-tools; the non-root
+# devcontainer-tools-dev-user stage derives from it.
 # ==========================================
 FROM dev-base AS devcontainer-tools
 
@@ -562,10 +560,15 @@ FROM dev-base AS devcontainer-tools
 RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lib,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
+      btop \
       bubblewrap \
       curl \
+      emacs-nox \
+      fd-find \
+      ripgrep \
       tmux \
       xz-utils \
+  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
@@ -591,9 +594,8 @@ RUN case "${TARGETARCH:-}" in \
     rm "/tmp/${package}" && \
     infisical --version
 
-# Install Node.js and the system Codex CLI.
+# Install npm and the system Codex CLI; `node` itself comes from `dev-base`.
 ARG CODEX_VERSION=latest
-COPY --from=node:22-bullseye-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=node:22-bullseye-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
@@ -604,22 +606,20 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && codex --version
 
 # Zellij terminal multiplexer (https://github.com/zellij-org/zellij) — not in
-# the Ubuntu 22.04 apt repos, so install the upstream static musl binary,
-# verified against a pinned per-arch SHA256 (run `sha256sum` on the release
-# tarballs to refresh these when bumping ZELLIJ_VERSION).
-ARG ZELLIJ_VERSION=v0.44.3
-ARG ZELLIJ_SHA256_X86_64=0f7c346788627f506c0a28296517768633cff24fc822a739f8264b640ecad751
-ARG ZELLIJ_SHA256_AARCH64=15e6534d42644d66973d136c590c49739dcfd6a1a2a0d3d917973f16c81b45fb
+# the Ubuntu 22.04 apt repos, so install the latest upstream static musl binary
+# and verify it against the release's per-architecture checksum.
 RUN case "${TARGETARCH:-}" in \
-      amd64) zellij_arch=x86_64;  zellij_sha=${ZELLIJ_SHA256_X86_64}  ;; \
-      arm64) zellij_arch=aarch64; zellij_sha=${ZELLIJ_SHA256_AARCH64} ;; \
+      amd64) zellij_arch=x86_64 ;; \
+      arm64) zellij_arch=aarch64 ;; \
       *) echo "ERROR: unsupported TARGETARCH for zellij: ${TARGETARCH:-<unset>}" >&2; exit 1 ;; \
     esac && \
-    url="https://github.com/zellij-org/zellij/releases/download/${ZELLIJ_VERSION}/zellij-${zellij_arch}-unknown-linux-musl.tar.gz" && \
-    wget -q -O /tmp/zellij.tar.gz "$url" && \
-    echo "${zellij_sha}  /tmp/zellij.tar.gz" | sha256sum -c - && \
+    base_url="https://github.com/zellij-org/zellij/releases/latest/download" && \
+    wget -q -O /tmp/zellij.tar.gz "${base_url}/zellij-${zellij_arch}-unknown-linux-musl.tar.gz" && \
+    wget -q -O /tmp/zellij.sha256 "${base_url}/zellij-${zellij_arch}-unknown-linux-musl.sha256sum" && \
     tar -xzf /tmp/zellij.tar.gz -C /usr/local/bin zellij && \
-    rm /tmp/zellij.tar.gz && \
+    zellij_sha=$(cut -d ' ' -f 1 /tmp/zellij.sha256) && \
+    echo "${zellij_sha}  /usr/local/bin/zellij" | sha256sum -c - && \
+    rm /tmp/zellij.tar.gz /tmp/zellij.sha256 && \
     chmod +x /usr/local/bin/zellij && \
     zellij --version
 
@@ -647,11 +647,23 @@ USER $USERNAME
 
 # Appended, not prepended: root-default devcontainer sessions must not resolve
 # these dev-writable dirs ahead of system binaries.
-ENV PATH="$PATH:/home/${USERNAME}/.npm-global/bin:/home/${USERNAME}/.local/bin"
+ENV PATH="$PATH:/home/${USERNAME}/.npm-global/bin:/home/${USERNAME}/.local/bin:/home/${USERNAME}/.config/emacs/bin"
 
 # wandb's default staging dir (~/.local/share/wandb) isn't writable at runtime in
 # the devcontainer (see #1423); stage under .cache, which wandb creates on demand.
 ENV WANDB_DATA_DIR="/home/${USERNAME}/.cache/wandb"
+
+# Pin Doom because its default branch is a rolling release without stable tags.
+ARG DOOM_EMACS_GIT_SHA=04b2956bafd883e5da7c530f8e0fbd22b1fe7af8
+RUN export HOME="/home/${USERNAME}" \
+ && mkdir -p "$HOME/.config/emacs" "$HOME/.local/bin" \
+ && git -C "$HOME/.config/emacs" init \
+ && git -C "$HOME/.config/emacs" remote add origin https://github.com/doomemacs/doomemacs.git \
+ && git -C "$HOME/.config/emacs" fetch --depth 1 origin "$DOOM_EMACS_GIT_SHA" \
+ && git -C "$HOME/.config/emacs" checkout --detach "$DOOM_EMACS_GIT_SHA" \
+ && git -C "$HOME/.config/emacs" submodule update --init --recursive \
+ && doom install --force --no-env --no-hooks \
+ && test "$(doom version --short)" = "2.2.0"
 
 # dev's `npm install -g` would EACCES on the root-owned global tree (/usr/local),
 # so the user-owned agents use a writable prefix. $HOME is unset after USER, so
@@ -691,6 +703,17 @@ RUN export HOME="/home/${USERNAME}" \
  && bash /tmp/agy-install.sh \
  && rm /tmp/agy-install.sh \
  && agy --version
+
+# Default the image back to root: SkyPilot's RunPod backend runs the container
+# start command as the image's USER and installs sshd there, which needs root
+# (a non-root default leaves the pod stuck in INIT). Local devcontainers use the
+# devcontainer-tools-dev-user stage below (or devcontainer.json's remoteUser).
+USER root
+
+# devcontainer-tools-dev-user: non-root default for local VS Code devcontainers.
+FROM devcontainer-tools AS devcontainer-tools-dev-user
+ARG USERNAME=dev
+USER $USERNAME
 
 FROM dev-base AS freeze-deps
 # Record package versions for audit / reproducibility

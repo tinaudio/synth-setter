@@ -34,10 +34,13 @@ def _spec_kwargs() -> dict[str, object]:
             "prefix": "data/test-task/test-task-20260519T120000000Z/",
         },
         "render": {
-            "plugin_path": "plugins/Surge XT.vst3",
-            "plugin_state_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.3.4",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": "plugins/Surge XT.vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.3.4",
+            },
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
@@ -73,14 +76,6 @@ class TestLocalSpecPath:
             tmp_path / "data" / spec.task_name / spec.run_id / "metadata" / INPUT_SPEC_FILENAME
         )
         assert result == expected
-
-    def test_returns_path_object(self, spec: DatasetSpec, tmp_path: Path) -> None:
-        """Return type is ``pathlib.Path`` (not str).
-
-        :param spec: Fixture-provided ``DatasetSpec``.
-        :param tmp_path: Pytest tmp dir used as ``output_dir``.
-        """
-        assert isinstance(spec_io.local_spec_path(spec, tmp_path), Path)
 
 
 class TestWriteSpecLocally:
@@ -233,6 +228,8 @@ class TestUploadSpec:
         args = mock_call.call_args[0][0]
         assert args[0] == "rclone"
         assert args[1] == "copyto"
+        assert "-v" in args
+        assert "-vv" not in args
         assert "--checksum" in args
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args

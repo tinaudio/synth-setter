@@ -15,10 +15,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # Pinned image: the floating binfmt:latest rolled to qemu v10.2.x, whose
+      # user-mode emulation segfaults in dpkg's libc-bin configure step. Refs #2577.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+          image: docker.io/tonistiigi/binfmt:qemu-v9.2.2
 
       - name: Set up Python 3.12.13
         uses: actions/setup-python@v6
@@ -37,6 +40,11 @@ jobs:
 
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
+
+      # File-URI hydration tests need only the binary; the nightly suite never
+      # configures the R2 remote or receives storage credentials.
+      - name: Install rclone
+        uses: ./.github/actions/install-rclone
 
       # ubuntu-latest has no CUDA/MPS device and no Surge XT VST3; gpu/mps/
       # requires_vst suites run on dev-snapshot via sibling workflows — see #1279.

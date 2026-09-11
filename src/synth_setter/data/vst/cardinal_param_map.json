@@ -1,0 +1,128 @@
+{
+  "plugin": "Cardinal Synth",
+  "param_spec_name": "cardinal",
+  "preset_resource": "presets/cardinal-base.vstpreset",
+  "preset_sha256": "88905bce2ec97d23af321ea66fdc04e6ea86951184e456f434d83f49ef87ae9a",
+  "pedalboard": {
+    "plugin_version": "0.26.2",
+    "parameter_count": 2119
+  },
+  "clap": null,
+  "dawdreamer": {
+    "plugin_version": "0.26.2",
+    "parameter_count": 2119
+  },
+  "surgepy_preset_resource": null,
+  "surgepy_preset_sha256": null,
+  "surgepy": null,
+  "params": {
+    "parameter_1_v": {
+      "pedalboard": {
+        "index": 2080,
+        "name": "Parameter 1"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 2080,
+        "name": "Parameter 1"
+      },
+      "surgepy": null
+    },
+    "parameter_2_v": {
+      "pedalboard": {
+        "index": 2081,
+        "name": "Parameter 2"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 2081,
+        "name": "Parameter 2"
+      },
+      "surgepy": null
+    },
+    "parameter_3_v": {
+      "pedalboard": {
+        "index": 2082,
+        "name": "Parameter 3"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 2082,
+        "name": "Parameter 3"
+      },
+      "surgepy": null
+    },
+    "parameter_4_v": {
+      "pedalboard": {
+        "index": 2083,
+        "name": "Parameter 4"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 2083,
+        "name": "Parameter 4"
+      },
+      "surgepy": null
+    },
+    "parameter_5_v": {
+      "pedalboard": {
+        "index": 2084,
+        "name": "Parameter 5"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 2084,
+        "name": "Parameter 5"
+      },
+      "surgepy": null
+    },
+    "parameter_6_v": {
+      "pedalboard": {
+        "index": 2085,
+        "name": "Parameter 6"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 2085,
+        "name": "Parameter 6"
+      },
+      "surgepy": null
+    },
+    "parameter_7_v": {
+      "pedalboard": {
+        "index": 2086,
+        "name": "Parameter 7"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 2086,
+        "name": "Parameter 7"
+      },
+      "surgepy": null
+    },
+    "parameter_8_v": {
+      "pedalboard": {
+        "index": 2087,
+        "name": "Parameter 8"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 2087,
+        "name": "Parameter 8"
+      },
+      "surgepy": null
+    },
+    "parameter_9_v": {
+      "pedalboard": {
+        "index": 2088,
+        "name": "Parameter 9"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 2088,
+        "name": "Parameter 9"
+      },
+      "surgepy": null
+    }
+  }
+}

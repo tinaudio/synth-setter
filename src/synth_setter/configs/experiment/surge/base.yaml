@@ -5,7 +5,8 @@
 
 defaults:
   - override /datamodule: surge_simple
-  - override /callbacks: default_vst
+  - override /synth: surge_simple
+  - override /callbacks: [default_vst, log_per_param_mse]
   - override /trainer: gpu
   - _self_
 
@@ -16,6 +17,8 @@ experiment_name: surge-full
 
 tags:
   - surge
+  - ${experiment_name}
+  - ${run_name}
 
 seed: 3123123
 

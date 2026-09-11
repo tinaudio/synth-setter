@@ -1,0 +1,15 @@
+# @package _global_
+
+# Raw-audio conditioning through the AST: the same trainable backbone the stored-mel VST
+# path uses, over a mel the encoder computes from the waveform.
+defaults:
+  - override /model/encoder: ast_online
+
+datamodule:
+  conditioning: audio
+
+model:
+  conditioning: audio
+  vector_field:
+    # The AST emits a token sequence, so conditioning width is the backbone's d_model.
+    conditioning_dim: ${model.encoder.backbone.d_model}

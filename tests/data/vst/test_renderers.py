@@ -9,7 +9,12 @@ from typing import cast
 import numpy as np
 import pytest
 
-from synth_setter.data.vst.generate_vst_dataset import generate_sample
+from synth_setter.data.vst.generate_vst_dataset import (
+    AudioAmplitudeError,
+    _reject_clipped_audio,
+    audio_uuid,
+    generate_sample,
+)
 from synth_setter.data.vst.param_map import (
     BackendSnapshot,
     DawDreamerParamRef,
@@ -24,6 +29,7 @@ from synth_setter.data.vst.renderers import (
     PedalboardRenderer,
 )
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.renderer_backend import FlushBlocks
 
 
 def _test_param_map(params: dict[str, tuple[int, str]], count: int) -> SynthParamMap:
@@ -130,6 +136,9 @@ def test_generate_sample_uses_common_renderer_backend() -> None:
     )
 
     assert sample.audio.shape == (44100, 2)
+    persisted_audio = np.asarray(sample.audio.T, dtype=np.float16)
+    assert sample.audio_uuid == audio_uuid(persisted_audio)
+    assert sample.audio_mp3
 
 
 def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,26 +177,23 @@ def test_pedalboard_renderer_uses_common_render_contract(monkeypatch: pytest.Mon
             32,
             2,
         ),
-        "kwargs": {"plugin_state_path": "preset.vstpreset", "plugin": None, "warmup": False},
+        "kwargs": {
+            "plugin_state_path": "preset.vstpreset",
+            "plugin": None,
+            "warmup": False,
+            "flush_blocks": None,
+        },
     }
 
 
-@pytest.mark.parametrize(
-    "audio",
-    [
-        np.array([[0.0, np.nan], [0.0, 0.0]], dtype=np.float32),
-        np.array([[0.0, 1.01], [0.0, 0.0]], dtype=np.float32),
-    ],
-)
-def test_pedalboard_renderer_rejects_invalid_audio(
+def test_pedalboard_renderer_rejects_nonfinite_audio(
     monkeypatch: pytest.MonkeyPatch,
-    audio: np.ndarray,
 ) -> None:
-    """The shared renderer contract rejects unsafe Pedalboard output.
+    """The shared renderer contract rejects nonfinite Pedalboard output.
 
     :param monkeypatch: Patches the Pedalboard render seam.
-    :param audio: Invalid backend output under test.
     """
+    audio = np.array([[0.0, np.nan], [0.0, 0.0]], dtype=np.float32)
     monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *args, **kwargs: audio)
     renderer = PedalboardRenderer(
         plugin_path="plugin.vst3",
@@ -198,6 +204,29 @@ def test_pedalboard_renderer_rejects_invalid_audio(
 
     with pytest.raises(ValueError, match="rendered audio"):
         renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
+
+
+def test_pedalboard_renderer_accepts_clipping_that_dataset_generation_rejects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Amplitude acceptance belongs to generation rather than the renderer contract.
+
+    :param monkeypatch: Patches the Pedalboard render seam.
+    """
+    audio = np.array([[0.0, 1.01], [0.0, 0.0]], dtype=np.float32)
+    monkeypatch.setattr("synth_setter.data.vst.core.render_params", lambda *args, **kwargs: audio)
+    renderer = PedalboardRenderer(
+        plugin_path="plugin.vst3",
+        sample_rate=2,
+        channels=2,
+        signal_duration_seconds=1.0,
+    )
+
+    rendered = renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
+
+    assert rendered is audio
+    with pytest.raises(AudioAmplitudeError, match=r"within \[-1, 1\]"):
+        _reject_clipped_audio(rendered)
 
 
 def test_dawdreamer_renderer_loads_graph_and_renders_audio(
@@ -215,6 +244,7 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
             self.parameters: dict[int, float] = {}
             self.midi: list[tuple[int, int, float, float]] = []
             self.midi_history: list[tuple[int, int, float, float]] = []
+            self.settled = True
 
         def set_parameter(self, name: int, value: float) -> None:
             """Record a parameter assignment.
@@ -225,16 +255,21 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
             self.parameters[name] = value
 
         def get_parameters_description(self) -> list[dict[str, object]]:
-            """Return one named parameter with its host index.
+            """Return preset-dependent parameter identities.
 
-            :returns: The fixed indexed host enumeration used for parameter dispatch.
+            :returns: Stale aliases until restored preset processing completes.
             """
+            oscillator_names = (
+                ("A Osc 1 Sawtooth", "A Osc 1 Pulse", "A Osc 1 Triangle", "A Osc 1 Width")
+                if self.settled
+                else ("A Osc 1 Shape", "A Osc 1 Width 1", "A Osc 1 Width 2", "A Osc 1 Sub Mix")
+            )
             return [
                 {"index": 0, "name": "A Filter 1 Cutoff"},
-                {"index": 1, "name": "A Osc 1 Shape"},
-                {"index": 2, "name": "A Osc 1 Width 1"},
-                {"index": 3, "name": "A Osc 1 Width 2"},
-                {"index": 4, "name": "A Osc 1 Sub Mix"},
+                {"index": 1, "name": oscillator_names[0]},
+                {"index": 2, "name": oscillator_names[1]},
+                {"index": 3, "name": oscillator_names[2]},
+                {"index": 4, "name": oscillator_names[3]},
             ]
 
         def add_midi_note(self, pitch: int, velocity: int, start: float, duration: float) -> None:
@@ -254,11 +289,12 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
             self.midi.clear()
 
         def load_vst3_preset(self, path: str) -> None:
-            """Record the loaded VST3 preset path.
+            """Record the preset and expose stale identities until processing settles it.
 
             :param path: Preset path.
             """
             self.preset = path
+            self.settled = False
 
     class FakeEngine:
         """Minimal DawDreamer engine surface used by the backend contract test."""
@@ -272,6 +308,7 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
             self.sample_rate = sample_rate
             self.block_size = block_size
             self.processor = FakeProcessor()
+            self.render_count = 0
             self.rendered_duration = 0.0
 
         def make_plugin_processor(self, name: str, path: str) -> FakeProcessor:
@@ -293,11 +330,14 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
             self.graph = graph
 
         def render(self, duration: float) -> None:
-            """Record the requested render duration.
+            """Advance preset state and record the requested duration.
 
             :param duration: Duration in seconds.
             """
+            self.render_count += 1
             self.rendered_duration = duration
+            if self.render_count == 2:
+                self.processor.settled = True
 
         def get_audio(self) -> np.ndarray:
             """Return deterministic stereo test audio.
@@ -311,10 +351,10 @@ def test_dawdreamer_renderer_loads_graph_and_renders_audio(
     parameter_map = _test_param_map(
         {
             "a_filter_1_cutoff": (0, "A Filter 1 Cutoff"),
-            "a_osc_1_sawtooth": (1, "A Osc 1 Shape"),
-            "a_osc_1_pulse": (2, "A Osc 1 Width 1"),
-            "a_osc_1_triangle": (3, "A Osc 1 Width 2"),
-            "a_osc_1_width": (4, "A Osc 1 Sub Mix"),
+            "a_osc_1_sawtooth": (1, "A Osc 1 Sawtooth"),
+            "a_osc_1_pulse": (2, "A Osc 1 Pulse"),
+            "a_osc_1_triangle": (3, "A Osc 1 Triangle"),
+            "a_osc_1_width": (4, "A Osc 1 Width"),
         },
         5,
     )
@@ -617,6 +657,12 @@ def test_dawdreamer_renderer_rejects_provenance_drift(
             :param graph: Graph definition.
             """
 
+        def render(self, duration: float) -> None:
+            """Accept the post-preset settle render.
+
+            :param duration: Duration in seconds.
+            """
+
     monkeypatch.setitem(sys.modules, "dawdreamer", types.SimpleNamespace(RenderEngine=FakeEngine))
     monkeypatch.setattr("synth_setter.data.vst.core.extract_renderer_version", lambda path: "actual")
     parameter_map = _test_param_map({"cutoff": (0, "Cutoff")}, 1)
@@ -765,7 +811,6 @@ def test_dawdreamer_renderer_once_cadence_reuses_loaded_plugin(
         (np.zeros((2, 3), dtype=np.float32), "sample count"),
         (np.array([[0.0, np.nan], [0.0, 0.0]], dtype=np.float32), "finite"),
         (np.array([[0.0, np.inf], [0.0, 0.0]], dtype=np.float32), "finite"),
-        (np.array([[0.0, 1.0001], [0.0, 0.0]], dtype=np.float32), r"\[-1, 1\]"),
     ],
 )
 def test_dawdreamer_renderer_rejects_invalid_audio(
@@ -773,7 +818,7 @@ def test_dawdreamer_renderer_rejects_invalid_audio(
     audio: np.ndarray,
     message: str,
 ) -> None:
-    """Malformed or unsafe backend audio fails before reaching dataset writers.
+    """Malformed backend audio fails before reaching dataset writers.
 
     :param monkeypatch: Installs a fake DawDreamer module.
     :param audio: Invalid backend output under test.
@@ -910,3 +955,119 @@ def test_dawdreamer_renderer_accepts_full_scale_audio(
     audio = renderer.render({"cutoff": 0.5}, 60, 100, (0.0, 0.25))
 
     assert np.array_equal(audio, np.array([[-1.0, 1.0], [1.0, -1.0]], dtype=np.float32))
+
+
+def test_dawdreamer_renderer_flush_blocks_settle_around_the_note_render(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Post-param blocks run before the note is scheduled; post-render blocks run after it is cleared.
+
+    :param monkeypatch: Installs a fake DawDreamer module recording every engine callback.
+    """
+
+    class FakeProcessor:
+        """Track the scheduled MIDI so the engine can record it per callback."""
+
+        def __init__(self) -> None:
+            self.notes: list[tuple[int, int, float, float]] = []
+
+        def get_parameters_description(self) -> list[dict[str, object]]:
+            """Expose one mapped parameter.
+
+            :returns: The fixed indexed host enumeration used for parameter dispatch.
+            """
+            return [{"index": 0, "name": "Cutoff"}]
+
+        def clear_midi(self) -> None:
+            """Drop every scheduled note."""
+            self.notes.clear()
+
+        def load_vst3_preset(self, path: str) -> None:
+            """Accept the preset path.
+
+            :param path: Preset path.
+            """
+
+        def set_parameter(self, index: int, value: float) -> None:
+            """Accept a normalized parameter assignment.
+
+            :param index: Host parameter index.
+            :param value: Normalized parameter value.
+            """
+
+        def add_midi_note(self, pitch: int, velocity: int, start: float, duration: float) -> None:
+            """Schedule one note.
+
+            :param pitch: MIDI pitch.
+            :param velocity: MIDI velocity.
+            :param start: Note start time in seconds.
+            :param duration: Note duration in seconds.
+            """
+            self.notes.append((pitch, velocity, start, duration))
+
+    class FakeEngine:
+        """Record ``(duration, scheduled note count)`` for every engine callback."""
+
+        def __init__(self, sample_rate: float, block_size: int) -> None:
+            """Create one fake plugin graph.
+
+            :param sample_rate: Render sample rate.
+            :param block_size: Render block size.
+            """
+            self.processor = FakeProcessor()
+            self.callbacks: list[tuple[float, int]] = []
+
+        def make_plugin_processor(self, name: str, path: str) -> FakeProcessor:
+            """Return the engine-owned processor.
+
+            :param name: Graph processor name.
+            :param path: Plugin path.
+            :returns: The engine-owned processor.
+            """
+            return self.processor
+
+        def load_graph(self, graph: object) -> None:
+            """Accept a fake graph.
+
+            :param graph: Graph definition.
+            """
+
+        def render(self, duration: float) -> None:
+            """Record one callback with the notes scheduled at that moment.
+
+            :param duration: Render duration in seconds.
+            """
+            self.callbacks.append((duration, len(self.processor.notes)))
+
+        def get_audio(self) -> np.ndarray:
+            """Return valid stereo audio.
+
+            :returns: Deterministic non-silent stereo audio.
+            """
+            return np.full((2, 4), 0.25, dtype=np.float32)
+
+    monkeypatch.setitem(sys.modules, "dawdreamer", types.SimpleNamespace(RenderEngine=FakeEngine))
+    renderer = DawDreamerRenderer(
+        plugin_path="plugin.vst3",
+        sample_rate=4,
+        channels=2,
+        signal_duration_seconds=1.0,
+        plugin_state_path="preset.vstpreset",
+        parameter_map=_test_param_map({"cutoff": (0, "Cutoff")}, 1),
+        block_size=2,
+        flush_blocks=FlushBlocks(post_load=1, post_param=2, post_render=3),
+    )
+
+    renderer.render({"cutoff": 0.25}, 60, 100, (0.0, 0.25))
+
+    engine = cast(FakeEngine, renderer.engine)
+    block = pytest.approx(0.5)
+    assert engine.callbacks == [
+        (block, 0),
+        (block, 0),
+        (block, 0),
+        (1.0, 1),
+        (block, 0),
+        (block, 0),
+        (block, 0),
+    ]

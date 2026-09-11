@@ -135,7 +135,7 @@ def _run_cli(
     """Subprocess-invoke ``synth-setter-generate-dataset`` with offline wandb.
 
     Pins the smoke-shard experiment, the system Surge VST3 (so the
-    ``renderer_version`` probe and the actual render-subprocess have a real
+    runtime-version probe and the actual render subprocess have a real
     plugin to load), a unique ``r2.prefix``, and the Hydra run dir (which
     flows into the wandb logger's ``save_dir`` via
     ``${paths.output_dir}``). ``WANDB_MODE=offline`` keeps the run hermetic.
@@ -157,7 +157,7 @@ def _run_cli(
     """
     overrides = [
         "experiment=generate_dataset/smoke-shard",
-        f"render.plugin_path={_SURGE_VST3}",
+        f"synth.plugin_path={_SURGE_VST3}",
         f"+r2.prefix={r2_prefix}",
         f"hydra.run.dir={hydra_run_dir}",
     ]
@@ -184,17 +184,20 @@ def _run_cli(
 
 
 def _find_offline_run_dir(hydra_run_dir: Path) -> Path:
-    """Locate the single ``wandb/offline-run-*`` dir under the Hydra run dir.
+    """Locate the single generate-stage ``wandb/offline-run-*`` dir under the Hydra run dir.
 
     The wandb logger's ``save_dir`` resolves to ``paths.output_dir`` which
     Hydra populates from ``hydra.run.dir``, so the offline run materializes
-    at ``<hydra_run_dir>/wandb/offline-run-*``.
+    at ``<hydra_run_dir>/wandb/offline-run-*``. An inline finalize writes its
+    own ``offline-run-*-<run_id>-finalize`` sibling there, which is excluded.
 
     :param hydra_run_dir: The Hydra run dir passed to ``_run_cli``.
-    :returns: The single offline-run directory; fails the assertion if zero
-        or more than one matches.
+    :returns: The single generate offline-run directory; fails the assertion
+        if zero or more than one matches.
     """
-    candidates = sorted(hydra_run_dir.glob("wandb/offline-run-*"))
+    candidates = sorted(
+        d for d in hydra_run_dir.glob("wandb/offline-run-*") if not d.name.endswith("-finalize")
+    )
     assert len(candidates) == 1, (
         f"expected exactly one offline run dir under {hydra_run_dir}/wandb/; got {candidates}"
     )

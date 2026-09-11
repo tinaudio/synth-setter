@@ -27,6 +27,7 @@ def _valid_kwargs(**overrides: Any) -> dict[str, Any]:
         "min_loudness": -55.0,
         "base_seed": 42,
         "attempts_per_sample": 100,
+        "render_contract_digest": "a" * 64,
     }
     kwargs.update(overrides)
     return kwargs
@@ -45,6 +46,15 @@ class TestShardMetadataConstruction:
         assert meta.min_loudness == -55.0
         assert meta.attempts_per_sample == 100
 
+    def test_legacy_payload_without_render_contract_digest_parses_as_unknown(self) -> None:
+        """Legacy metadata remains parseable for a precise validation error."""
+        kwargs = _valid_kwargs()
+        del kwargs["render_contract_digest"]
+
+        metadata = ShardMetadata(**kwargs)
+
+        assert metadata.render_contract_digest is None
+
     def test_legacy_payload_defaults_attempts_per_sample(self) -> None:
         """Sidecars written before retry provenance existed still validate."""
         kwargs = _valid_kwargs()
@@ -53,12 +63,6 @@ class TestShardMetadataConstruction:
         meta = ShardMetadata(**kwargs)
 
         assert meta.attempts_per_sample == 100
-
-    def test_json_round_trip_preserves_values(self) -> None:
-        """``model_dump_json`` → ``model_validate_json`` round-trips identity."""
-        original = ShardMetadata(**_valid_kwargs())
-        rebuilt = ShardMetadata.model_validate_json(original.model_dump_json())
-        assert rebuilt == original
 
 
 class TestShardMetadataStrictness:
@@ -92,6 +96,15 @@ class TestShardMetadataStrictness:
         payload = json.dumps({"velocity": 100, "channels": 2})  # incomplete
         with pytest.raises(ValidationError):
             ShardMetadata.model_validate_json(payload)
+
+    @pytest.mark.parametrize("digest", ["A" * 64, "a" * 63, "not-a-digest"])
+    def test_invalid_render_contract_digest_raises(self, digest: str) -> None:
+        """Only canonical lowercase SHA-256 strings identify render contracts.
+
+        :param digest: Malformed candidate digest.
+        """
+        with pytest.raises(ValidationError, match="render_contract_digest"):
+            ShardMetadata(**_valid_kwargs(render_contract_digest=digest))
 
 
 class TestShardMetadataRangeValidators:

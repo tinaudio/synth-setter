@@ -1,0 +1,20 @@
+# Smoke-tier Vast.ai pool. Same contract as runpod/smoke.
+#
+# Vast auth: ~/.config/vastai/vast_api_key, written by
+# scripts/skypilot/write_provider_creds.sh --provider vast from VAST_API_KEY.
+#
+# Known upstream quirk: SkyPilot 0.12 installs an unpinned vastai-sdk on a
+# fresh jobs controller, and vastai-sdk 1.x drops VastAI.api_key_access,
+# failing every region. Fix by downgrading on the controller:
+# pip install "vastai-sdk==0.2.5" (pinned locally in pyproject).
+name: vast-smoke
+resources:
+  - cloud: vast
+    accelerators:
+      RTX3080: 1
+      RTX3090: 1
+      RTXA4000: 1
+      A40: 1
+      RTX4090: 1
+    use_spot: false
+    disk_size: 50

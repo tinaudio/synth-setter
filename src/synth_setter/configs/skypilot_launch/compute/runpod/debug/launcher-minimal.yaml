@@ -1,0 +1,9 @@
+# DEBUG variant: launcher-target minimal worker. Identical pool /
+# spec-shipping contract to runpod/smoke; only the run block differs (a
+# one-line echo), isolating "the launcher's launch flow on RunPod" from
+# "the worker's render flow".
+defaults:
+  - /skypilot_launch/compute/runpod/smoke@_here_
+  - _self_
+name: runpod-debug-launcher-minimal
+run_script: debug-launcher-minimal.sh

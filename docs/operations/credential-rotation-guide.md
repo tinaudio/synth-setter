@@ -30,12 +30,15 @@ ______________________________________________________________________
 | `WANDB_API_KEY`                      | Training, evaluation, promotion (runtime env var) | GitHub Secrets, `.env`     |
 | `GITHUB_TOKEN`                       | CI workflows (automatic)                          | Automatic per workflow run |
 | `RUNPOD_API_KEY`                     | Pipeline orchestration                            | GitHub Secrets, `.env`     |
+| `VAST_API_KEY`                       | Alternative pipeline orchestration                | `.env`                     |
 | `DOCKERHUB_USERNAME`                 | CI image push workflows                           | GitHub Secrets             |
 | `DOCKERHUB_TOKEN`                    | CI image push workflows                           | GitHub Secrets             |
 | `APPROVAL_BOT_APP_ID`                | Auto-approve workflow, release workflow           | GitHub Secrets             |
 | `APPROVAL_BOT_PRIVATE_KEY`           | Auto-approve workflow, release workflow           | GitHub Secrets             |
 | `ANTHROPIC_API_KEY`                  | (currently unused; retained for possible revival) | GitHub Secrets             |
-| `CLAUDE_CODE_OAUTH_TOKEN`            | `claude` + `claude-repo-review-full` workflows    | GitHub Secrets             |
+| `CLAUDE_CODE_OAUTH_TOKEN`            | `claude` workflow                                 | GitHub Secrets             |
+| `GIT_PAT`                            | Private review-skill checkout                     | GitHub Secrets             |
+| `PI_AUTH_JSON`                       | Pi-native automatic PR review                     | GitHub Secrets             |
 
 ______________________________________________________________________
 
@@ -96,7 +99,7 @@ ______________________________________________________________________
 **What:** The Cloudflare account ID, written to `~/.cloudflare/accountid`
 by `scripts/skypilot/write_provider_creds.sh` so SkyPilot's R2 storage
 adaptor can address the account once #749 is unblocked. Required by every
-launcher invocation (`skypilot-local`, `runpod`, `oci`). Stored as a secret
+launcher invocation (`skypilot-local`, `runpod`, `vast`). Stored as a secret
 for the same reason as the R2 endpoint — to avoid embedding the account ID
 in git history.
 
@@ -200,6 +203,30 @@ curl -s -H "Authorization: Bearer $RUNPOD_API_KEY" \
 
 ______________________________________________________________________
 
+### Vast.ai (`VAST_API_KEY`)
+
+**What:** API key for managing GPU workers on Vast.ai through SkyPilot.
+
+**Where stored:**
+
+- Local `.env` files on developer machines
+
+**Rotation steps:**
+
+1. Log in to the [Vast.ai account portal](https://cloud.vast.ai/).
+2. Create a replacement API key.
+3. Update local `.env` files on developer machines.
+4. Delete the old API key.
+
+**Verification:**
+
+```bash
+bash scripts/skypilot/write_provider_creds.sh --provider vast
+sky check vast
+```
+
+______________________________________________________________________
+
 ### Docker Hub (`DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`)
 
 **What:** Docker Hub credentials for pushing images from CI workflows.
@@ -257,12 +284,47 @@ confirm it succeeds.
 
 ______________________________________________________________________
 
+### Pi PR review (`PI_AUTH_JSON`, `GIT_PAT`)
+
+**What:** `PI_AUTH_JSON` contains the Pi credentials for the approved
+`openai-codex`, `kimi-coding`, and `openrouter` review pool. `GIT_PAT` gives the
+automatic review workflow read-only Contents access to private
+`tinaudio/skills`. The workflow loads either secret only when `ktinubu` is the
+author, initial actor, and rerun actor for a same-repository PR event.
+
+**Where stored:**
+
+- GitHub Secrets: `PI_AUTH_JSON`, `GIT_PAT`
+- Local Pi credentials: `~/.pi/agent/auth.json`
+
+**Rotation steps:**
+
+1. Authenticate the three approved Pi providers locally.
+2. Replace `PI_AUTH_JSON` without printing its contents:
+   `jq -c '{"openai-codex": .["openai-codex"], "openrouter": .openrouter, "kimi-coding": .["kimi-coding"]}' ~/.pi/agent/auth.json | gh secret set PI_AUTH_JSON --repo tinaudio/synth-setter`.
+3. For `GIT_PAT`, create a fine-grained token restricted to `tinaudio/skills`
+   with read-only Contents access, update the secret, then revoke the old token.
+
+**Verification:**
+
+From a trusted same-repository PR branch, push the current commit and watch its
+checks:
+
+```bash
+git push origin HEAD
+PR=$(gh pr view --json number -q .number)
+gh pr checks "${PR}" --watch
+```
+
+Confirm `Pi Repo Review (Full)` checks out `tinaudio/skills`, posts a review for
+the current head, and completes after any deferred follow-up result is written.
+
 ### Anthropic (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`)
 
 **What:** `CLAUDE_CODE_OAUTH_TOKEN` authenticates `anthropics/claude-code-action`
-in the `claude` (`@claude` mentions) and `claude-repo-review-full` (PR review)
-workflows, which post to PRs and issues. `ANTHROPIC_API_KEY` is currently
-unused; the secret stays registered for possible future API-keyed workflows.
+in the `claude` workflow for `@claude` mentions. `ANTHROPIC_API_KEY` is
+currently unused; the secret stays registered for possible future API-keyed
+workflows.
 
 **Where stored:**
 
@@ -279,8 +341,8 @@ unused; the secret stays registered for possible future API-keyed workflows.
 
 **Verification:**
 
-Push any commit to an open PR (or re-run its latest `Claude Repo Review (Full)`
-run) and confirm the run completes and posts review findings to the PR.
+Mention `@claude` in an issue or PR comment and confirm the `Claude Code`
+workflow completes.
 
 ______________________________________________________________________
 
@@ -299,10 +361,15 @@ audit):
   `.env`
 - [ ] **RunPod:** Create new API key, update `RUNPOD_API_KEY` in GitHub Secrets
   and `.env`, delete old key
+- [ ] **Vast.ai:** Create new API key, update `VAST_API_KEY` in `.env`, delete
+  old key
 - [ ] **Docker Hub:** Create new access token, update `DOCKERHUB_TOKEN` (and
   `DOCKERHUB_USERNAME` if needed) in GitHub Secrets, revoke old token
 - [ ] **Approval Bot:** Generate new private key, update
   `APPROVAL_BOT_PRIVATE_KEY` in GitHub Secrets, delete old key
+- [ ] **Pi review:** Refresh `PI_AUTH_JSON`; replace `GIT_PAT` with a token
+  restricted to read-only Contents access on `tinaudio/skills`; revoke the old
+  credentials
 - [ ] **Anthropic:** Create new API key, update `ANTHROPIC_API_KEY` in GitHub
   Secrets, revoke old key
 - [ ] **CI verification:** Run a full CI pass to confirm all workflows succeed

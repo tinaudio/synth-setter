@@ -1,5 +1,0 @@
-defaults:
-  - surge_xt
-
-param_spec_name: surge_simple
-plugin_state_path: presets/surge-simple.vstpreset

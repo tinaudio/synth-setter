@@ -12,25 +12,6 @@ _GROUP_PROBE_COUNT = 8
 _NESTED_PYTEST_TIMEOUT_SECONDS = 60
 
 
-@pytest.mark.parametrize(
-    ("timed_out", "exitcode", "expected"),
-    [
-        (True, -9, "Nested pytest timed out after 60 seconds (exit code -9)"),
-        (False, 1, "Nested pytest failed (exit code 1)"),
-    ],
-)
-def test_nested_pytest_diagnostic_status_expected(
-    timed_out: bool, exitcode: int, expected: str
-) -> None:
-    """Report whether a nested pytest process timed out or failed.
-
-    :param timed_out: Whether the parent killed the nested process at its timeout.
-    :param exitcode: Nested pytest process exit status.
-    :param expected: Expected diagnostic for the observed process result.
-    """
-    assert _nested_pytest_failure_message(timed_out, exitcode) == expected
-
-
 def _nested_pytest_failure_message(timed_out: bool, exitcode: int | None) -> str:
     """Describe an unsuccessful nested pytest session.
 

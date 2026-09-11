@@ -8,8 +8,8 @@ to top-level via interpolation or only exist for Hydra runtime — must validate
 ``DatasetSpec`` and JSON round-trip without drift.
 
 The list is curated rather than auto-discovered: ``configs/experiment/`` also holds
-train-side configs (top-level files like ``time_weighting.yaml`` and the nested
-``kosc/``, ``ksin/``, ``surge/``, … subdirectories) that compose ``train.yaml``, not
+train-side configs (such as the nested ``surge/`` and ``torchsynth/``
+subdirectories) that compose ``train.yaml``, not
 ``dataset.yaml``, and would not validate as ``DatasetSpec``. Add a new entry here when
 landing a new datagen experiment under ``configs/experiment/generate_dataset/``.
 """
@@ -34,6 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/10-1k-shards": "10-1k-shards",
     "generate_dataset/ci-materialize-test": "ci-materialize-test",
+    "generate_dataset/faust-shimmer-fdn-lance-50k": "faust-shimmer-fdn-lance-50k",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
     "generate_dataset/smoke-shard": "smoke-shard",
     "generate_dataset/smoke-shard-lance": "smoke-shard-lance",
@@ -42,6 +43,11 @@ DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/surge-xt-lance-10k-2k-1k": "surge-xt-lance-10k-2k-1k",
     "generate_dataset/surge-xt-lance-2m-40k-10k": "surge-xt-lance-2m-40k-10k",
     "generate_dataset/surge-xt-dawdreamer-smoke": "surge-xt-dawdreamer-smoke",
+    "generate_dataset/ultramaster-kr106-lance-2m-40k-10k": ("ultramaster-kr106-lance-2m-40k-10k"),
+    "generate_dataset/ultramaster-kr106-lance-smoke": "ultramaster-kr106-lance-smoke",
+    "generate_dataset/ultramaster-kr106-single-note-lance-smoke": (
+        "ultramaster-kr106-single-note-lance-smoke"
+    ),
     "generate_dataset/smoke-shard-with-finalize": "smoke-shard",
     "generate_dataset/smoke-shard-with-oracle-eval": "smoke-shard",
 }
@@ -87,11 +93,34 @@ def test_experiment_yaml_json_round_trips(experiment: str) -> None:
     assert restored == spec
 
 
+def test_param_language_spec_round_trip_preserves_dimension() -> None:
+    """A generated parameter-language field remains valid for its consumer."""
+    spec = _compose_dataset_spec("generate_dataset/smoke-shard-lance")
+    payload = spec.model_dump(mode="json")
+    payload["param_language_dimension"] = 128
+
+    produced = DatasetSpec.model_validate(payload).model_dump_json()
+    consumed = DatasetSpec.model_validate_json(produced)
+
+    assert consumed.param_language_dimension == 128
+
+
 def test_dataset_experiments_use_independent_split_seed_streams() -> None:
     """Newly composed datasets opt into size-stable split streams."""
     spec = _compose_dataset_spec("generate_dataset/smoke-shard-lance")
 
     assert spec.train_val_test_seeds == (42, 43, 44)
+
+
+def test_faust_shimmer_fdn_experiment_composes_fifty_thousand_impulse_responses() -> None:
+    """The impulse experiment schedules exactly five train-only Lance shards."""
+    spec = _compose_dataset_spec("generate_dataset/faust-shimmer-fdn-lance-50k")
+
+    assert spec.render.synth.name == "faust_shimmer_fdn"
+    assert spec.render.renderer_backend == "dawdreamer"
+    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.train_val_test_sizes == (50_000, 0, 0)
+    assert spec.split_shard_ranges == {"train": (0, 5), "val": (5, 5), "test": (5, 5)}
 
 
 def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() -> None:
@@ -104,6 +133,32 @@ def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() ->
     assert spec.train_val_test_sizes == (1, 0, 0)
 
 
+def test_ultramaster_kr106_single_note_smoke_uses_curated_fresh_identity() -> None:
+    """The single-note smoke run reloads its fresh identity for every row."""
+    spec = _compose_dataset_spec("generate_dataset/ultramaster-kr106-single-note-lance-smoke")
+
+    assert spec.render.synth.name == "ultramaster_kr106_single_note"
+    assert spec.render.param_spec_name == "ultramaster_kr106_single_note"
+    assert spec.render.renderer_backend == "dawdreamer"
+    assert spec.render.gui_toggle_cadence == "never"
+    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.samples_per_render_batch == 1
+    assert spec.num_params == 80
+    assert spec.train_val_test_sizes == (20, 0, 0)
+
+
+def test_ultramaster_kr106_smoke_experiment_renders_twenty_lance_rows() -> None:
+    """The KR-106 smoke run uses its full spec and one restart-safe shard."""
+    spec = _compose_dataset_spec("generate_dataset/ultramaster-kr106-lance-smoke")
+
+    assert spec.render.synth.name == "ultramaster_kr106"
+    assert spec.render.renderer_backend == "dawdreamer"
+    assert spec.render.gui_toggle_cadence == "never"
+    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.samples_per_shard == 20
+    assert spec.train_val_test_sizes == (20, 0, 0)
+
+
 @pytest.mark.parametrize(
     ("experiment", "expected_ranges"),
     [
@@ -113,6 +168,10 @@ def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() ->
         ),
         (  # [2000000, 40000, 10000] at samples_per_shard=2500 → 800/16/4 shards
             "generate_dataset/surge-xt-lance-2m-40k-10k",
+            {"train": (0, 800), "val": (800, 816), "test": (816, 820)},
+        ),
+        (
+            "generate_dataset/ultramaster-kr106-lance-2m-40k-10k",
             {"train": (0, 800), "val": (800, 816), "test": (816, 820)},
         ),
     ],
@@ -131,3 +190,13 @@ def test_full_scale_lance_experiment_composes_expected_split_shard_ranges(
         (each span is ``split_size // samples_per_shard``).
     """
     assert _compose_dataset_spec(experiment).split_shard_ranges == expected_ranges
+
+
+def test_ultramaster_kr106_full_scale_experiment_uses_distributed_queue() -> None:
+    """KR-106 production generation uploads queue-claimed shards without retaining them."""
+    spec = _compose_dataset_spec("generate_dataset/ultramaster-kr106-lance-2m-40k-10k")
+
+    assert spec.train_val_test_sizes == (2_000_000, 40_000, 10_000)
+    assert spec.render.parallel is True
+    assert spec.render.retain_local_shards is False
+    assert spec.use_shard_queue is True

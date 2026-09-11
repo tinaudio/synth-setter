@@ -36,7 +36,8 @@ from synth_setter.pipeline.data.lance_staging import (
 )
 from synth_setter.pipeline.schemas.lance_attempt import LanceFragmentSidecar
 from synth_setter.pipeline.schemas.r2_location import parse_shard_staging_dir
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
+from tests.helpers.lance_fixtures import with_preview_columns
 
 pytestmark = pytest.mark.usefixtures("fake_r2_remote")
 
@@ -58,14 +59,17 @@ def tiny_lance_spec(
             "base_seed": 42,
             "r2": {"bucket": "intermediate-data"},
             "render": {
-                "plugin_path": "plugins/Surge XT.vst3",
-                "plugin_state_path": "presets/surge-base.vstpreset",
-                "param_spec_name": "surge_simple",
-                "renderer_version": "1.3.4",
-                "sample_rate": 100,
+                "synth": {
+                    "name": "surge_simple",
+                    "param_spec_name": "surge_simple",
+                    "plugin_path": "plugins/Surge XT.vst3",
+                    "plugin_state_path": "presets/surge-base.vstpreset",
+                    "synth_version": "1.3.4",
+                },
+                "sample_rate": 8000,
                 "channels": 2,
                 "velocity": 100,
-                "signal_duration_seconds": 0.5,
+                "signal_duration_seconds": 0.01,
                 "min_loudness": -55.0,
                 "samples_per_render_batch": 2,
                 "samples_per_shard": 2,
@@ -102,7 +106,12 @@ def shard_arrays(spec: DatasetSpec, shard_id: int, value_offset: int = 0) -> dic
 
 
 def write_local_shard(
-    spec: DatasetSpec, shard_id: int, work_dir: Path, *, value_offset: int = 0
+    spec: DatasetSpec,
+    shard_id: int,
+    work_dir: Path,
+    *,
+    value_offset: int = 0,
+    shard: ShardSpec | None = None,
 ) -> Path:
     """Write one shard's local Lance dataset exactly as the worker's renderer does.
 
@@ -110,13 +119,21 @@ def write_local_shard(
     :param shard_id: Logical shard to materialize.
     :param work_dir: Local scratch directory for the shard dataset.
     :param value_offset: Extra value offset distinguishing duplicate attempts.
+    :param shard: Explicit identity for growing shards outside ``spec.shards``.
     :returns: Path of the written ``shard-NNNNNN.lance`` dataset directory.
     """
-    shard = spec.shards[shard_id]
+    shard = spec.shards[shard_id] if shard is None else shard
     render = spec.render_for_shard(shard)
     metadata = render.shard_metadata()
     schema = lance_schema(dataset_field_shapes(render, spec.num_params), metadata)
-    batch = record_batch_from_arrays(shard_arrays(spec, shard_id, value_offset), schema)
+    batch = record_batch_from_arrays(
+        with_preview_columns(
+            shard_arrays(spec, shard_id, value_offset),
+            render.sample_rate,
+        ),
+        schema,
+        debug=None,
+    )
     shard_path = work_dir / shard.filename
     write_lance_dataset(shard_path, schema, [batch])
     return shard_path
@@ -367,7 +384,17 @@ def test_stage_attempt_rejects_local_shard_with_wrong_row_count(
         for field in DATASET_FIELD_NAMES
     }
     shard_path = tmp_path / shard.filename
-    write_lance_dataset(shard_path, schema, [record_batch_from_arrays(oversized, schema)])
+    write_lance_dataset(
+        shard_path,
+        schema,
+        [
+            record_batch_from_arrays(
+                with_preview_columns(oversized, render.sample_rate),
+                schema,
+                debug=None,
+            )
+        ],
+    )
 
     with pytest.raises(ValueError, match="row"):
         stage_lance_shard_attempt(spec, shard, shard_path, worker_id="pod-a", attempt_uuid="a1b2")
@@ -387,13 +414,14 @@ def test_stage_attempt_rejects_local_shard_with_schema_drift(
     shard = spec.shards[0]
     render = spec.render.model_copy(update={"base_seed": shard.seed})
     expected = lance_schema(dataset_field_shapes(render, spec.num_params), render.shard_metadata())
+    batch = record_batch_from_arrays(
+        with_preview_columns(shard_arrays(spec, 0), render.sample_rate),
+        expected,
+        debug=None,
+    ).replace_schema_metadata(None)
     drifted = expected.remove_metadata()
     shard_path = tmp_path / shard.filename
-    write_lance_dataset(
-        shard_path,
-        drifted,
-        [record_batch_from_arrays(shard_arrays(spec, 0), drifted)],
-    )
+    write_lance_dataset(shard_path, drifted, [batch])
 
     with pytest.raises(ValueError, match="schema does not match"):
         stage_lance_shard_attempt(spec, shard, shard_path, worker_id="pod-a", attempt_uuid="a1b2")

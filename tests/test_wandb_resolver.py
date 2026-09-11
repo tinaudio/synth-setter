@@ -397,7 +397,7 @@ def test_eval_ckpt_path_wandb_override_resolves_to_cached_checkpoint(
             cfg = compose(
                 config_name="eval.yaml",
                 overrides=[
-                    "datamodule=ksin",
+                    "datamodule=torchsynth",
                     "model=ffn",
                     "trainer=cpu",
                     "ckpt_path=${wandb:entity/project/model-x:latest}",
@@ -413,12 +413,7 @@ def test_eval_ckpt_path_wandb_override_resolves_to_cached_checkpoint(
         GlobalHydra.instance().clear()
 
 
-# Surge wandb_checkpoint overlays and the ``model-{config_id}`` artifact each pins, where
-# config_id is the experiment basename (see ``resolve_run_config_id``). Pins the
-# ckpt-wiring contract: a launcher composing ``experiment=surge/wandb_checkpoint/<name>``
-# inherits a ``${wandb:tinaudio/synth-setter/model-<name>:latest}`` ckpt_path with no CLI
-# override, while the train-side ``surge/<name>`` config carries no ckpt_path.
-_WIRED_PREDICT_EXPERIMENTS: tuple[str, ...] = (
+_SURGE_CHECKPOINT_EXPERIMENTS: tuple[str, ...] = (
     "ffn_full",
     "ffn_simple",
     "flow_full",
@@ -430,17 +425,11 @@ _WIRED_PREDICT_EXPERIMENTS: tuple[str, ...] = (
 )
 
 
-@pytest.mark.parametrize("experiment", _WIRED_PREDICT_EXPERIMENTS)
-def test_surge_experiment_pins_wandb_model_artifact_ckpt(
+@pytest.mark.parametrize("experiment", _SURGE_CHECKPOINT_EXPERIMENTS)
+def test_eval_surge_experiment_resolves_explicit_wandb_model_artifact_ckpt(
     experiment: str, workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Each surge wandb_checkpoint overlay resolves ``ckpt_path`` to its ``model-<id>`` artifact.
-
-    Composes ``experiment=surge/wandb_checkpoint/<name>`` with no ``ckpt_path`` CLI override,
-    proving the overlay alone pins ``${wandb:tinaudio/synth-setter/model-<name>:latest}`` —
-    the config-pinned replacement for ``get-ckpt-from-wandb.sh``. The fake artifact's download
-    dir name encodes the ref slug, so the assertion confirms the per-experiment artifact id
-    reached the resolver.
+    """An explicit W&B checkpoint override resolves for each Surge experiment.
 
     :param experiment: Surge experiment basename, also the ``model-<id>`` artifact id.
     :param workspace: Temp ``$PROJECT_ROOT`` the cache lands under.
@@ -454,7 +443,11 @@ def test_surge_experiment_pins_wandb_model_artifact_ckpt(
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             cfg = compose(
                 config_name="eval.yaml",
-                overrides=[f"experiment=surge/wandb_checkpoint/{experiment}", "trainer=cpu"],
+                overrides=[
+                    f"experiment=surge/{experiment}",
+                    f"ckpt_path=${{wandb:tinaudio/synth-setter/model-{experiment}:latest}}",
+                    "trainer=cpu",
+                ],
             )
             raw_container = cast("dict[str, Any]", OmegaConf.to_container(cfg, resolve=False))
             raw_ckpt = raw_container["ckpt_path"]
@@ -469,15 +462,14 @@ def test_surge_experiment_pins_wandb_model_artifact_ckpt(
         GlobalHydra.instance().clear()
 
 
-@pytest.mark.parametrize("experiment", _WIRED_PREDICT_EXPERIMENTS)
+@pytest.mark.parametrize("experiment", _SURGE_CHECKPOINT_EXPERIMENTS)
 def test_train_surge_experiment_composes_null_ckpt_without_wandb_resolution(
     experiment: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The shared surge experiment composes a null ckpt under train.yaml and never resolves W&B.
 
-    Regression guard for the wandb_checkpoint overlay split (#128): the ``${wandb:...}`` pin
-    lives only in the predict-side ``surge/wandb_checkpoint/<id>`` overlay, never in the shared
-    ``surge/<id>`` experiment that ``train.yaml`` composes. Were it to leak back, ``train.py``'s
+    The ``${wandb:...}`` pin belongs at the evaluation call site, never in the shared
+    ``surge/<id>`` experiment that ``train.yaml`` composes. Were it to leak in, ``train.py``'s
     ``trainer.fit(ckpt_path=cfg.get("ckpt_path"))`` would resolve the artifact (needing a W&B
     key) and silently resume from the published model. Fast + key-free so regular CI catches the
     regression at PR time, not just the MPS smoke leg.

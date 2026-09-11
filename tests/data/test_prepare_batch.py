@@ -18,6 +18,11 @@ import numpy as np
 import pytest
 import torch
 
+from synth_setter.conditioning import (
+    NUM_SKETCH_CONTROLS,
+    NUM_SKETCH_TRACK_ROWS,
+    SKETCH_PITCH_SLICE,
+)
 from synth_setter.data.ot import _hungarian_match
 from synth_setter.data.vst_datamodule import RawBatch, prepare_batch
 
@@ -26,6 +31,8 @@ _BATCH = 8
 _MEL_SHAPE = (_BATCH, 2, 4, 6)
 _AUDIO_SHAPE = (_BATCH, 2, 16)
 _M2L_SHAPE = (_BATCH, 3, 7)
+_SKETCH_FRAMES = 4
+_SKETCH_SHAPE = (_BATCH, NUM_SKETCH_CONTROLS, _SKETCH_FRAMES)
 
 
 def _unwrap(maybe_tensor: torch.Tensor | None) -> torch.Tensor:
@@ -69,7 +76,7 @@ def _reference_prepare_batch(
     :param rescale_params: Whether to map params ``[0, 1] -> [-1, 1]``.
     :param ot: Whether to Hungarian-match noise to params.
     :param seed: Seed for the golden's own noise generator.
-    :returns: ``{"mel_spec", "m2l", "params", "noise", "audio"}`` tensors.
+    :returns: ``{"mel", "m2l", "params", "noise", "audio"}`` tensors.
     """
     audio_raw = raw.get("audio")
     if audio_raw is not None:
@@ -79,12 +86,12 @@ def _reference_prepare_batch(
 
     mel_raw = raw.get("mel_spec")
     if mel_raw is not None:
-        mel_spec = mel_raw
+        mel = mel_raw
         if mean is not None and std is not None:
-            mel_spec = (mel_spec - mean) / std
-        mel_spec = torch.from_numpy(mel_spec).to(dtype=torch.float32)
+            mel = (mel - mean) / std
+        mel = torch.from_numpy(mel).to(dtype=torch.float32)
     else:
-        mel_spec = None
+        mel = None
 
     m2l_raw = raw.get("music2latent")
     if m2l_raw is not None:
@@ -98,12 +105,12 @@ def _reference_prepare_batch(
     param_array = torch.from_numpy(param_raw).to(dtype=torch.float32)
     noise = torch.randn(param_array.shape, generator=torch.Generator().manual_seed(seed))
     if ot:
-        noise, param_array, mel_spec, m2l, audio = _hungarian_match(
-            noise, param_array, mel_spec, m2l, audio
+        noise, param_array, mel, m2l, audio = _hungarian_match(
+            noise, param_array, mel, m2l, audio
         )
 
     return dict(
-        mel_spec=mel_spec.contiguous() if mel_spec is not None else None,
+        mel=mel.contiguous() if mel is not None else None,
         m2l=m2l.contiguous() if m2l is not None else None,
         params=param_array.contiguous(),
         noise=noise.contiguous(),
@@ -116,6 +123,7 @@ def _make_raw(
     read_mel: bool = True,
     read_m2l: bool = False,
     read_audio: bool = False,
+    read_sketch: bool = False,
     seed: int = 7,
 ) -> RawBatch:
     """Build a deterministic ``raw`` batch for the given read flags.
@@ -123,6 +131,7 @@ def _make_raw(
     :param read_mel: Whether to include a ``mel_spec`` array.
     :param read_m2l: Whether to include a ``music2latent`` array.
     :param read_audio: Whether to include an ``audio`` array.
+    :param read_sketch: Whether to include an in-contract ``sketch_ctrl`` array.
     :param seed: Seed for the NumPy generator backing every array.
     :returns: ``raw`` batch with ``param_array`` always present.
     """
@@ -136,10 +145,21 @@ def _make_raw(
         raw["music2latent"] = rng.standard_normal(_M2L_SHAPE).astype(np.float32)
     if read_audio:
         raw["audio"] = rng.uniform(-1.0, 1.0, _AUDIO_SHAPE).astype(np.float32)
+    if read_sketch:
+        sketch = np.empty(_SKETCH_SHAPE, dtype=np.float32)
+        sketch[:, :NUM_SKETCH_TRACK_ROWS] = rng.uniform(
+            -1.0, 1.0, (_BATCH, NUM_SKETCH_TRACK_ROWS, _SKETCH_FRAMES)
+        )
+        sketch[:, SKETCH_PITCH_SLICE] = rng.random(
+            (_BATCH, NUM_SKETCH_CONTROLS - NUM_SKETCH_TRACK_ROWS, _SKETCH_FRAMES)
+        )
+        raw["sketch_ctrl"] = sketch
     return raw
 
 
-@pytest.mark.parametrize("column", ["param_array", "mel_spec", "music2latent", "audio"])
+@pytest.mark.parametrize(
+    "column", ["param_array", "mel_spec", "music2latent", "audio", "sketch_ctrl"]
+)
 @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
 def test_prepare_batch_nonfinite_column_raises_value_error(
     column: str, value: float
@@ -149,16 +169,19 @@ def test_prepare_batch_nonfinite_column_raises_value_error(
     :param column: Raw column corrupted with a non-finite value.
     :param value: Non-finite value injected into the raw column.
     """
-    raw = _make_raw(read_mel=True, read_m2l=True, read_audio=True)
+    raw = _make_raw(read_mel=True, read_m2l=True, read_audio=True, read_sketch=True)
     arrays = {
         "param_array": raw["param_array"],
         "mel_spec": raw.get("mel_spec"),
         "music2latent": raw.get("music2latent"),
         "audio": raw.get("audio"),
+        "sketch_ctrl": raw.get("sketch_ctrl"),
     }
     array = arrays[column]
     assert array is not None
-    array.flat[0] = value
+    # Corrupt the last row: split validation samples only row 0, so a first-row
+    # probe would pass even with the batch-boundary check absent.
+    array[-1].flat[0] = value
 
     with pytest.raises(ValueError, match=rf"{column} contains non-finite values"):
         prepare_batch(
@@ -209,6 +232,26 @@ def test_prepare_batch_float32_cast_overflow_raises_value_error() -> None:
         )
 
 
+def test_prepare_batch_conditioning_float32_overflow_raises_value_error() -> None:
+    """Finite embeddings must remain finite after model-facing conversion."""
+    raw = _make_raw(read_mel=False)
+    conditioning = np.ones((_BATCH, 3), dtype=np.float64)
+    conditioning.flat[0] = float(np.finfo(np.float32).max) * 2
+    raw["conditioning"] = conditioning
+
+    with pytest.raises(
+        ValueError, match="conditioning float32 conversion produced non-finite values"
+    ):
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator(),
+        )
+
+
 @pytest.mark.parametrize("value", [-0.01, 1.01])
 def test_prepare_batch_parameter_out_of_range_raises_value_error(value: float) -> None:
     """Stored parameters outside their normalized range fail before rescaling.
@@ -248,6 +291,52 @@ def test_prepare_batch_parameter_range_endpoints_are_valid(value: float) -> None
     )
 
     assert _unwrap(batch["params"])[0, 0].item() == value
+
+
+@pytest.mark.parametrize("value", [-1.01, 1.01])
+def test_prepare_batch_sketch_track_out_of_range_raises_value_error(value: float) -> None:
+    """A loudness or centroid row outside the stored scale fails before tokenization.
+
+    :param value: Invalid track value placed in the batch's last row.
+    """
+    raw = _make_raw(read_sketch=True)
+    sketch = _unwrap_array(raw.get("sketch_ctrl"))
+    sketch[-1, NUM_SKETCH_TRACK_ROWS - 1, 0] = value
+
+    with pytest.raises(
+        ValueError, match=r"sketch_ctrl loudness/centroid values must be within \[-1, 1\]"
+    ):
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator(),
+        )
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01])
+def test_prepare_batch_sketch_pitch_out_of_range_raises_value_error(value: float) -> None:
+    """A pitch activation outside ``[0, 1]`` fails before zero-binning.
+
+    :param value: Invalid activation placed in the batch's last row.
+    """
+    raw = _make_raw(read_sketch=True)
+    sketch = _unwrap_array(raw.get("sketch_ctrl"))
+    sketch[-1, SKETCH_PITCH_SLICE.start, 0] = value
+
+    with pytest.raises(
+        ValueError, match=r"sketch_ctrl pitch activations must be within \[0, 1\]"
+    ):
+        prepare_batch(
+            raw,
+            mean=None,
+            std=None,
+            rescale_params=True,
+            ot=False,
+            generator=torch.Generator(),
+        )
 
 
 @pytest.mark.parametrize("value", [-1.01, 1.01])
@@ -314,7 +403,7 @@ def test_prepare_batch_is_pure_and_pinned() -> None:
         generator=torch.Generator().manual_seed(seed),
     )
 
-    for key in ("mel_spec", "params", "noise", "audio"):
+    for key in ("mel", "params", "noise", "audio"):
         # atol=rtol=0: every step (affine mel norm, x*2-1, seeded noise, integer
         # row permutation from Hungarian) is exact, so bit-equality must hold.
         torch.testing.assert_close(out[key], golden[key], atol=0.0, rtol=0.0)
@@ -347,7 +436,7 @@ def test_prepare_batch_same_seed_yields_identical_output(ot: bool) -> None:
         ot=ot,
         generator=torch.Generator().manual_seed(42),
     )
-    for key in ("params", "noise", "mel_spec"):
+    for key in ("params", "noise", "mel"):
         torch.testing.assert_close(first[key], second[key], atol=0.0, rtol=0.0)
     # The unread slots must stay None across calls, not silently materialize.
     assert first["audio"] is None and second["audio"] is None
@@ -397,8 +486,18 @@ def test_prepare_batch_modality_slots_match_read_flags(
         ot=False,
         generator=torch.Generator().manual_seed(0),
     )
-    assert set(out.keys()) == {"mel_spec", "m2l", "params", "noise", "audio"}
-    assert (out["mel_spec"] is not None) == read_mel
+    assert set(out.keys()) == {
+        "mel",
+        "m2l",
+        "conditioning",
+        "sketch_ctrl",
+        "params",
+        "noise",
+        "audio",
+    }
+    assert out["conditioning"] is None
+    assert out["sketch_ctrl"] is None
+    assert (out["mel"] is not None) == read_mel
     assert (out["m2l"] is not None) == read_m2l
     assert (out["audio"] is not None) == read_audio
     assert _unwrap(out["params"]).shape == (_BATCH, _NUM_PARAMS)
@@ -455,7 +554,7 @@ def test_prepare_batch_normalizes_mel_only_when_mean_and_std_set(
             rescale_params=False,
             ot=False,
             generator=torch.Generator().manual_seed(0),
-        )["mel_spec"]
+        )["mel"]
     )
     expected = (3.0 - 1.0) / 2.0 if (mean_set and std_set) else 3.0
     assert torch.allclose(out, torch.full_like(out, expected))
@@ -510,7 +609,7 @@ def test_prepare_batch_ot_true_matches_reference_hungarian() -> None:
         ot=True,
         generator=torch.Generator().manual_seed(seed),
     )
-    for key in ("noise", "params", "mel_spec", "audio"):
+    for key in ("noise", "params", "mel", "audio"):
         torch.testing.assert_close(out[key], golden[key], atol=0.0, rtol=0.0)
 
 
@@ -532,7 +631,7 @@ def test_prepare_batch_ot_false_passes_through_unpermuted() -> None:
     expected_mel = torch.from_numpy(_unwrap_array(raw.get("mel_spec"))).to(dtype=torch.float32)
     expected_audio = torch.from_numpy(_unwrap_array(raw.get("audio"))).to(dtype=torch.float32)
     torch.testing.assert_close(out["params"], expected_params, atol=0.0, rtol=0.0)
-    torch.testing.assert_close(out["mel_spec"], expected_mel, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(out["mel"], expected_mel, atol=0.0, rtol=0.0)
     torch.testing.assert_close(out["audio"], expected_audio, atol=0.0, rtol=0.0)
     # randn here vs empty_like().normal_() in production: bit-equality is
     # guarded by test_noise_draw_apis_same_seed_bit_identical.

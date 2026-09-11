@@ -1,22 +1,23 @@
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import librosa
 import numpy as np
 from loguru import logger
+from pydantic import Field
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from pyloudnorm import Meter
 
-from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
-from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
-from synth_setter.data.vst.renderers import AudioAmplitudeError, AudioRenderer
-from synth_setter.data.vst.seeding import rng_for_sample
-from synth_setter.data.vst.shapes import (
-    MEL_N_MELS,
-    MEL_WINDOW,
-    mel_hop_length,
-    mel_n_fft,
+from synth_setter.data.vst.audio_preview import (
+    DEFAULT_MP3_BITRATE_KBPS,
+    audio_uuid,
+    encode_audio_to_mp3,
 )
+from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
+from synth_setter.data.vst.param_spec import ParameterValue, ParamSpec, require_note_params
+from synth_setter.data.vst.renderers import AudioRenderer, NonFiniteAudioError
+from synth_setter.data.vst.seeding import seed_for_sample
+from synth_setter.data.vst.shapes import make_spectrogram as make_spectrogram
 from synth_setter.pipeline.schemas.render_metrics import render_metrics_path
 from synth_setter.pipeline.schemas.shard_metadata import DEFAULT_ATTEMPTS_PER_SAMPLE
 from synth_setter.pipeline.schemas.spec import (
@@ -52,8 +53,8 @@ class SampleSeed:
 
 @dataclass
 class VSTDataSample:
-    synth_params: dict[str, float]
-    note_params: NoteParams
+    synth_params: Mapping[str, ParameterValue]
+    note_params: Mapping[str, object]
 
     sample_rate: float
     channels: int
@@ -62,30 +63,42 @@ class VSTDataSample:
 
     audio: np.ndarray
     mel_spec: np.ndarray
+    audio_dtype: str = "float16"
+    audio_mp3: bytes = field(init=False)
+    audio_uuid: str = field(init=False)
     param_array: np.ndarray = field(init=False)
+    # Concrete sampler seed consumed for this row; fully fixed renders consume none.
+    sampler_seed: int | None = None
     # Loudness-gate attempt the accepted draw came from (#884).
     attempt: int = 0
     # Per-draw rejection counts carried to the shard writer for aggregation.
     clipped_rejections: int = 0
+    non_finite_rejections: int = 0
     silent_rejections: int = 0
 
     def __post_init__(self) -> None:
+        persisted_audio = np.ascontiguousarray(self.audio.T, dtype=self.audio_dtype)
+        self.audio_mp3 = encode_audio_to_mp3(
+            persisted_audio,
+            int(self.sample_rate),
+            DEFAULT_MP3_BITRATE_KBPS,
+        )
+        self.audio_uuid = audio_uuid(persisted_audio)
         self.param_array = self.param_spec.encode(self.synth_params, self.note_params)
 
 
-def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
-    """Per-channel mel-spectrogram in dB; STFT params come from module-level constants."""
-    spec = librosa.feature.melspectrogram(
-        y=audio,
-        sr=sample_rate,
-        n_mels=MEL_N_MELS,
-        n_fft=mel_n_fft(sample_rate),
-        hop_length=mel_hop_length(sample_rate),
-        window=MEL_WINDOW,
-        center=True,
-    )
-    spec_db = librosa.power_to_db(spec, ref=np.max)
-    return spec_db
+class AudioAmplitudeError(ValueError):
+    """Rendered audio exceeded the dataset storage range."""
+
+
+def _reject_clipped_audio(audio: np.ndarray) -> None:
+    """Reject audio outside the dataset's normalized storage range.
+
+    :param audio: Channel-leading renderer output shaped ``(channels, samples)``.
+    :raises AudioAmplitudeError: If any sample lies outside [-1, 1].
+    """
+    if np.any(np.abs(audio) > 1.0):
+        raise AudioAmplitudeError("rendered audio samples must be within [-1, 1]")
 
 
 def generate_sample(
@@ -93,11 +106,12 @@ def generate_sample(
     velocity: int,
     min_loudness: float,
     param_spec: ParamSpec,
-    fixed_synth_params: dict[str, float] | None = None,
-    fixed_note_params: NoteParams | None = None,
+    fixed_synth_params: Mapping[str, ParameterValue] | None = None,
+    fixed_note_params: Mapping[str, object] | None = None,
     *,
     warmup: bool = False,
     seed: SampleSeed | None = None,
+    audio_dtype: str = "float16",
 ) -> VSTDataSample:
     """Render a single VST sample, retrying silent draws up to the attempt budget.
 
@@ -110,8 +124,8 @@ def generate_sample(
     ``min_loudness``. When only ``fixed_note_params`` (or nothing) is supplied, the
     synth is re-sampled per attempt and the loop is meaningful.
 
-    With ``seed`` set, sampling draws from
-    ``rng_for_sample(seed.master_seed, seed.sample_idx, attempt)`` so a given row is
+    With ``seed`` set, sampling draws from a generator initialized with
+    ``seed_for_sample(seed.master_seed, seed.sample_idx, attempt)`` so a given row is
     reproducible regardless of worker/order/retry history (#884); ``seed=None`` draws
     from a fresh non-deterministic generator and uses the default attempt budget.
 
@@ -127,27 +141,31 @@ def generate_sample(
         retry loop drops ``warmup`` to ``False`` after the first attempt so a
         retrying sample never exceeds the per-shard cadence budget (#714).
     :param seed: Per-sample seeding inputs; ``None`` samples non-deterministically.
+    :param audio_dtype: Physical dtype used to derive previews from the persisted audio values.
     :returns: The accepted sample, with ``attempt`` set to the winning retry.
     :raises ValueError: If the attempt budget is nonpositive, or a
         ``fixed_synth_params`` render fell below ``min_loudness``.
     :raises AudioAmplitudeError: A ``fixed_synth_params`` render clipped outside
         [-1, 1]; on the sampling path clipping rejects the draw and retries.
-    :raises RuntimeError: The sampling path produced no accepted render (silent
-        or clipped) for the whole attempt budget.
+    :raises NonFiniteAudioError: A ``fixed_synth_params`` render contains NaN or infinity.
+    :raises RuntimeError: The sampling path produced no accepted render for the whole
+        attempt budget.
     """
     max_attempts = seed.max_attempts if seed is not None else DEFAULT_MAX_ATTEMPTS
     if max_attempts < 1:
         raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
     clipped_rejections = 0
+    non_finite_rejections = 0
     silent_rejections = 0
     for attempt in range(max_attempts):
+        sampler_seed = None
         if fixed_synth_params is None or fixed_note_params is None:
             logger.debug("sampling params")
-            rng = (
-                rng_for_sample(seed.master_seed, seed.sample_idx, attempt)
-                if seed is not None
-                else None
-            )
+            if seed is not None:
+                sampler_seed = seed_for_sample(seed.master_seed, seed.sample_idx, attempt)
+                rng = np.random.default_rng(sampler_seed)
+            else:
+                rng = None
             sampled_synth, sampled_note = param_spec.sample(rng)
             synth_params = fixed_synth_params if fixed_synth_params is not None else sampled_synth
             note_params = fixed_note_params if fixed_note_params is not None else sampled_note
@@ -155,14 +173,16 @@ def generate_sample(
             synth_params = fixed_synth_params
             note_params = fixed_note_params
 
+        midi_params = require_note_params(note_params)
         try:
             output = renderer.render(
                 synth_params,
-                note_params["pitch"],
+                midi_params["pitch"],
                 velocity,
-                note_params["note_start_and_end"],
+                midi_params["note_start_and_end"],
                 warmup=warmup,
             )
+            _reject_clipped_audio(output)
         except AudioAmplitudeError:
             # Clipping is a property of the sampled patch: reject the draw like
             # the loudness gate instead of killing the shard (#2001). With fixed
@@ -172,6 +192,13 @@ def generate_sample(
             warmup = False
             clipped_rejections += 1
             logger.debug("rendered audio clipped outside [-1, 1], skipping")
+            continue
+        except NonFiniteAudioError:
+            if fixed_synth_params is not None:
+                raise
+            warmup = False
+            non_finite_rejections += 1
+            logger.debug("rendered audio contained non-finite samples, skipping")
             continue
         warmup = False
 
@@ -203,8 +230,11 @@ def generate_sample(
             sample_rate=renderer.sample_rate,
             channels=renderer.channels,
             param_spec=param_spec,
+            audio_dtype=audio_dtype,
+            sampler_seed=sampler_seed,
             attempt=attempt,
             clipped_rejections=clipped_rejections,
+            non_finite_rejections=non_finite_rejections,
             silent_rejections=silent_rejections,
         )
 
@@ -217,7 +247,8 @@ def generate_sample(
     raise RuntimeError(
         f"sample {failed_idx} produced no accepted render after {max_attempts} attempts "
         f"(silent rejections: {silent_rejections}; clipped rejections: "
-        f"{clipped_rejections}). {seed_hint}Raise the per-sample attempt budget "
+        f"{clipped_rejections}; non-finite rejections: {non_finite_rejections}). "
+        f"{seed_hint}Raise the per-sample attempt budget "
         f"(``attempts_per_sample`` / ``SampleSeed.max_attempts``) or lower min_loudness."
     )
 
@@ -227,9 +258,19 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
 
     Inherits every ``RenderConfig`` field so the CLI flag set tracks the model
     automatically — adding or removing a field on ``RenderConfig`` extends or
-    shrinks the CLI surface without a parallel update here. Adds ``data_file``
-    as the sole positional arg (the destination shard path; its ``.lance``
-    suffix selects the Lance writer via ``OutputFormat.from_extension``).
+    shrinks the CLI surface without a parallel update here.
+
+    .. attribute :: model_config
+
+        Strict pydantic-settings CLI behavior.
+
+    .. attribute :: data_file
+
+        Destination Lance dataset path.
+
+    .. attribute :: shard_id
+
+        Optional launcher-supplied shard identity for row provenance.
     """
 
     model_config = SettingsConfigDict(
@@ -241,6 +282,7 @@ class _GenerateCliArgs(RenderConfig, BaseSettings):
     )
 
     data_file: CliPositionalArg[str]
+    shard_id: int | None = Field(default=None, ge=0)
 
 
 def main() -> None:
@@ -255,7 +297,7 @@ def main() -> None:
     from synth_setter.data.vst.writers import make_lance_dataset
 
     args = CliApp.run(_GenerateCliArgs)
-    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file"}))
+    render_cfg = RenderConfig(**args.model_dump(exclude={"data_file", "shard_id"}))
     ensure_dawdreamer_runtime(render_cfg.renderer_backend)
 
     suffix = Path(args.data_file).suffix
@@ -264,7 +306,7 @@ def main() -> None:
 
     metrics_path = render_metrics_path(args.data_file)
     metrics_path.unlink(missing_ok=True)
-    metrics = make_lance_dataset(args.data_file, render_cfg)
+    metrics = make_lance_dataset(args.data_file, render_cfg, shard_id=args.shard_id)
     metrics_path.write_text(metrics.model_dump_json())
 
 

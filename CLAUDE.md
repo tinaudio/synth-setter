@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-synth-setter: synth inversion, sound matching, and preset-exploration tools — Python 3.12.13, PyTorch Lightning, Hydra, with a distributed data pipeline on SkyPilot-managed compute (RunPod + Vast + OCI) stored in Cloudflare R2.
+synth-setter: synth inversion, sound matching, and preset-exploration tools — Python 3.12.13, PyTorch Lightning, Hydra, with a distributed data pipeline on SkyPilot-managed compute (RunPod + Vast + local Kubernetes) stored in Cloudflare R2.
 
 Shared agent instructions for Claude and Codex; AGENTS.md is the canonical source. Architecture: [docs/architecture.md](docs/architecture.md).
 
@@ -13,7 +13,7 @@ Shared agent instructions for Claude and Codex; AGENTS.md is the canonical sourc
 
 <important if="you hit an error or clearly-wrong behavior outside your current task's scope">
 
-Out-of-scope error (red test on `main`, unrelated crash, silently-wrong result, stale doc, misfiring hook)? Don't fix it inline (scope creep) or drop it silently — **file a bug** via `/github-taxonomy` (`type: Bug`, `fix(<domain>):` title, as a sub-issue of the relevant Phase — ask which if none fits), then continue your task; note what you saw, expected, and how to reproduce, and surface the `[#N](…)` in your reply. The higher the impact, the more this matters. If it blocks you, ask how to proceed.
+Out-of-scope error (red test on `main`, unrelated crash, silently-wrong result, stale doc, misfiring hook)? Don't fix it inline (scope creep) or drop it silently — **file a bug in `tinaudio/synth-setter`** via `/github-taxonomy` (`type: Bug`, `fix(<domain>):` title, as a sub-issue of the relevant Phase — ask which if none fits), then continue your task; note what you saw, expected, and how to reproduce, and surface the `[#N](…)` in your reply. **Never create GitHub issues in external repositories.** Report external defects to the user and, when tracking is needed, file locally; reference an upstream issue only after verifying it already exists. The higher the impact, the more this matters. If it blocks you, ask how to proceed.
 </important>
 
 <important if="you need to run commands to build, test, lint, or format">
@@ -58,6 +58,10 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 
 - Test names: `test_<what>_<condition>_<expected>`.
 - `@pytest.mark.slow` marks slow tests.
+- A test must be able to fail for exactly one interesting reason. Don't test
+  helpers defined in the test file, freeze config into literals, or assert that
+  a mock returned its own `return_value` —
+  [docs/testing/test-quality.md](docs/testing/test-quality.md).
 - Mutation testing: [docs/testing/mutmut.md](docs/testing/mutmut.md).
 
 </important>
@@ -65,6 +69,7 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 <important if="you are committing">
 
 - Conventional commits, gitlint-enforced. `internal-feat:` / `internal-fix:` for unreleased code (no version bump). Scope is skill-bound — see `/github-taxonomy`.
+- **`feat:` / `fix:` / `perf:` / `revert:` are release-reserved** — they cut a semantic-release version bump on merge. Use `internal-feat:` / `internal-fix:` for logic PRs; only a deliberate release PR carries a release type, with the command prefixed `RELEASE_INTENT=1` (enforced by `agent/hooks/pr-title-guard.sh` on `gh pr create|edit` and the `release-type-guard` commit-msg hook).
 - Run `make format` first; pre-commit (ruff, ruff-format, pydoclint, prettier, mdformat, gitlint) is authoritative. **Never `--no-verify` / `-n`**, and never suppress a rule to make CI green — fix the underlying cause.
 - **Never add `Co-Authored-By` or agent-attribution trailers** ("Generated with …", "Claude …"). A `PreToolUse` hook (`agent/hooks/git-commit-trailer-check.sh`) blocks them.
 - **Verify the branch before push:** `git branch --show-current` must match the target PR branch.
@@ -78,7 +83,7 @@ Invoke in order: `/tdd-implementation` (drive it test-first) → `/code-health` 
 Documented exception: `src/synth_setter/data/vst/*_param_spec.py` are codespell-excluded — they embed verbatim host parameter labels (load-bearing onehot keys that can't be spell-corrected); `synth-setter-introspect-plugin` self-documents each module, and scoping to per-line `# codespell:ignore` (codespell ≥2.3.0) is tracked in #1674.
 </important>
 
-<important if="you are editing GitHub Actions workflows (.github/workflows/*.yml) or SkyPilot compute configs (src/synth_setter/configs/compute/*.yaml)">
+<important if="you are editing GitHub Actions workflows (.github/workflows/*.yml) or SkyPilot compute configs (src/synth_setter/configs/skypilot_launch/compute/**/*.yaml)">
 
 Put comments **above** the step, never inside a `run:` / `setup:` block scalar — the body is bash, and a stray `'`, `` ` ``, `$`, or `\` in a comment has caused unintended shell expansion. A `PreToolUse` hook (`agent/hooks/no-yaml-run-comments.sh`) enforces this.
 </important>
@@ -90,12 +95,20 @@ Grep ALL file types, not just `.py` — include `.yaml`/`.yml`, `.md`, `.json`, 
 
 <important if="you are opening or driving a pull request">
 
+- **Keep auxiliary work in separate PRs** (AGENTS.md "Keep auxiliary work in separate PRs"). Extract independently useful non-core refactors, cleanup, and pre-existing bug fixes, even when required by the main work. Open prerequisite PRs first and base the main PR on the auxiliary branch; link both PRs and save the prerequisite tip SHA before merging. After fetching `origin`, rebase only dependent commits with `git rebase --onto origin/main <saved-prerequisite-tip-sha>` (safe after squash merges), push with `--force-with-lease`, and retarget to `main`; repeat in dependency order. Non-prerequisite work gets an independent PR. Keep regressions introduced by the current PR, and directly supporting tests/docs, in that PR; continue tracking out-of-scope bugs via `/github-taxonomy`.
+
 - **Link a taxonomy-compliant issue** in the body via `Closes #N` / `Fixes #N` / `Refs #N` / `Part of #N` (use `Refs` for partial fixes; `Fixes` auto-closes). Every issue traces to an Epic via Phase → Task / Bug / Feature. See `/github-taxonomy`.
+
 - **PR titles stand alone** — name the specific subject, not just the action; readers don't open the issue.
-- **Pre-PR review is temporarily advisory:** run `/repo-review-full-no-comments` when the review automation is healthy and address every BLOCK/WARN. The local `pre-pr-review-gate.sh` implementation remains available for repair, but its `PreToolUse` registration is suspended while [#2020](https://github.com/tinaudio/synth-setter/issues/2020) is unresolved. Server-side tests, metadata checks, branch protection, and Copilot review continue to gate merges.
+
+- **Pre-PR review is temporarily advisory:** run `/repo-review-full-no-comments` when the review automation is healthy and address every BLOCK/WARN (NIT findings are advisory and gate nothing). The local `pre-pr-review-gate.sh` implementation remains available for repair, but its `PreToolUse` registration is suspended while [#2020](https://github.com/tinaudio/synth-setter/issues/2020) is unresolved. Server-side tests, metadata checks, branch protection, and Copilot review continue to gate merges.
+
 - **After every push, drive `/pr-readiness` until all four gates hold:** CI green ∧ `mergeable=MERGEABLE` ∧ every review comment has an inline reply ∧ no fresh Copilot findings. Run the readiness probe once, then use `--loop` only for `WAIT`; stop polling on `ACTION_REQUIRED` or `ERROR`. Full procedure: [docs/pr-readiness-loop.md](docs/pr-readiness-loop.md). A `Stop` hook (`agent/hooks/pr-readiness-stop.sh`, `PR_READINESS_GATE`: `block` default / `warn` / `off`) runs the same probe and blocks ending the turn while gates 1-3 fail; gate 4 (Copilot) is advisory.
+
 - **Reply inline on every open review comment** (humans, Copilot, and the Claude CI review) with a fix-commit SHA or justification, via `/pr-review-resolver`. Verification evidence goes through `/pr-checkbox`.
+
 - **Advisory rewakes carry an origin-HEAD stamp** — compare the `<sha7>` in a `doc-drift` rewake to `git rev-parse HEAD`. If they differ the advisory crossed sessions: read it for context, but don't treat it as current-PR work.
+
 - **In chat**, use full markdown links for refs (`[#N](https://github.com/tinaudio/synth-setter/issues/N)`); in PR / issue bodies use bare `Fixes #N` so auto-close works.
 
 </important>

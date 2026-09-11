@@ -5,7 +5,6 @@ defaults:
   - model_summary
   - rich_progress_bar
   # - plot_loss
-  - plot_pos_enc
   - plot_proj
   - plot_projii
   - _self_
@@ -13,11 +12,7 @@ defaults:
 model_checkpoint:
   dirpath: ${paths.output_dir}/checkpoints
   filename: "epoch_{epoch:03d}"
-  monitor: "val/loss"
+  monitor: "val/param_mse"
   mode: "min"
   save_last: True
   auto_insert_metric_name: False
-# early_stopping:
-#   monitor: "val/chamfer"
-#   patience: 50
-#   mode: "min"

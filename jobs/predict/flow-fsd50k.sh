@@ -21,13 +21,15 @@
 rm -rf ~/.triton/cache
 mamba activate perm
 module load gcc
+experiment=flow_full
 python -m synth_setter.cli.eval \
-    experiment=surge/wandb_checkpoint/flow_full \
+    experiment="surge/${experiment}" \
+    ckpt_path="\${wandb:tinaudio/synth-setter/model-${experiment}:latest}" \
     model.test_cfg_strength=2.0 \
     model.test_sample_steps=100 \
     paths.log_dir=/data/EECS-C4DM-Fazekas/benhayes/surge-preds/flow_fsd/ \
     datamodule=fsd \
-    callbacks=eval_surge \
+    'callbacks=[eval_surge,log_per_param_mse]' \
     mode=predict \
     datamodule.batch_size=1024 \
     datamodule.num_workers=11

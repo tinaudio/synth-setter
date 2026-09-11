@@ -13,13 +13,12 @@ startfile = "src/synth_setter/cli/train.py"
 # tweaks (collapsing sweeps to a single run).
 _SWEEP_OVERRIDES: tuple[str, ...] = (
     "model=ffn",  # satisfies `model: ???` in configs/train.yaml
-    "datamodule=ksin",  # satisfies `datamodule: ???` in configs/train.yaml
+    "datamodule=torchsynth",  # satisfies `datamodule: ???` in configs/train.yaml
     "+run_name=sweep",  # consumed by hydra.run.dir interpolation
     "logger=[]",  # silence wandb/tensorboard for throwaway runs
     "~callbacks.lr_monitor",  # #517: LearningRateMonitor crashes with empty logger
 )
-# Shrink ksin split + disable worker MP — ksin's default sizes blow out
-# torch.multiprocessing shmem when DDP forks the dataloader.
+# Keep the online split and worker count small for DDP simulation.
 _DDP_SIM_SPLIT: tuple[int, int, int] = (100, 100, 100)
 _DDP_SIM_NUM_WORKERS = 0
 

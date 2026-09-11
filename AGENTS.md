@@ -6,7 +6,7 @@ Canonical agent instructions for synth-setter. Shared by Claude and Codex.
 
 synth-setter: synth inversion, sound matching, preset exploration tools.
 Python 3.12.13, PyTorch Lightning, Hydra, distributed data pipeline on
-SkyPilot-managed compute (RunPod + Vast + OCI), stored in Cloudflare R2.
+SkyPilot-managed compute (RunPod + Vast + local Kubernetes), stored in Cloudflare R2.
 Architecture: [docs/architecture.md](docs/architecture.md).
 
 ## Always
@@ -33,13 +33,23 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   and confirm it matches the target PR branch. A hook prints the branch on
   every `git commit`; don't ignore it.
 - **Pre-commit hooks must not be skipped** — see [`### Commits`](#commits).
+- **Never create GitHub issues in external repositories.** Report external
+  defects to the user and, when tracking is needed, file the issue in
+  `tinaudio/synth-setter`; existing upstream issues may be referenced only
+  after verifying that they already exist.
 - **Pi provider policy:** project-local Pi sessions and Pi subagents use
-  `openai-codex` or the pinned `kimi-coding` / `openrouter` free-pool review
-  models only. Do not select Anthropic models or launch Anthropic-backed Pi
-  subagents; keep `.pi/settings.json`, `.pi/APPEND_SYSTEM.md`, and Pi agent
-  briefs aligned.
+  `openai-codex` or the pinned Meta Muse-Spark-1.3 secondary-review model
+  only. Agent `model` arguments use a fully qualified
+  `provider/model-id` selector; default to `openai-codex/gpt-5.6-sol`, never
+  the provider-only `openai-codex`. Do not select Anthropic models or launch
+  Anthropic-backed Pi subagents; keep `.pi/settings.json`,
+  `.pi/APPEND_SYSTEM.md`, and Pi agent briefs aligned.
 - **Never run `make docker-*` or RunPod commands without asking.** These
   spend money and burn cluster state.
+- **Command lookups:** For “give me the command” requests, start at
+  [`docs/reference/cli.md`](docs/reference/cli.md). Consult the linked config
+  only if needed. Don’t broaden into repository searches or live-state checks
+  unless requested or necessary to resolve a specific ambiguity.
 - **Check the RunPod balance before launching jobs** — exhaustion shows up as
   jobs stuck in STARTING with no visible cause. Run
   `uv run python -c "from synth_setter.pipeline.skypilot_launch import _check_runpod_balance; _check_runpod_balance(); print('balance preflight passed')"`.
@@ -52,9 +62,10 @@ Architecture: [docs/architecture.md](docs/architecture.md).
 Hit an error or clearly-wrong behavior **outside your task's scope** — a red
 test on `main`, an unrelated crash, a silently-wrong result, a stale doc, a
 misfiring hook? Don't fix it inline (scope creep) or drop it silently. **File
-a bug** via `/github-taxonomy` (`type: Bug`, `fix(<domain>):` title, as a
-sub-issue of the relevant Phase — ask which if none fits), then continue your
-task; note what you saw, expected, and how to reproduce, and surface the
+a bug in `tinaudio/synth-setter`** via `/github-taxonomy` (`type: Bug`,
+`fix(<domain>):` title, as a sub-issue of the relevant Phase — ask which if none
+fits), then continue your task. Note what you saw, expected, and how to
+reproduce, and surface the
 `[#N](…)` in your reply. The higher the impact, the more this matters. If it
 blocks you, ask how to proceed.
 
@@ -62,6 +73,8 @@ blocks you, ask how to proceed.
 
 - Pydantic `BaseModel(strict=True)` at trust boundaries (config parsing, JSON
   from R2, worker reports). Dataclasses for internal typed containers.
+- New callables under `src/synth_setter/models/` use jaxtyping tensor annotations
+  and `@jaxtyped(typechecker=beartype)`; bare `torch.Tensor` annotations are forbidden.
 - `structlog` in pipeline code; stdlib `logging` elsewhere.
 - All `rclone` operations use `--checksum`.
 - **Lance distributed-write exception:** workers may write only uncommitted
@@ -84,8 +97,12 @@ full rules in the `comment-hygiene` skill.
 
 ## Testing
 
-- `make test-fast` is the default CPU loop; `@pytest.mark.slow` for slow.
+- `make test-fast` is the curated two-minute CPU loop; `make test-medium` runs all non-slow CPU tests; `@pytest.mark.slow` for slow.
 - Test names: `test_<what>_<condition>_<expected>`.
+- A test must be able to fail for exactly one interesting reason. Don't test
+  helpers defined in the test file, freeze config into literals, or assert that
+  a mock returned its own `return_value` —
+  [docs/testing/test-quality.md](docs/testing/test-quality.md).
 - Mutation testing: [docs/testing/mutmut.md](docs/testing/mutmut.md).
 
 ## Design defaults
@@ -110,6 +127,14 @@ Pure docs edits are exempt; no other exemptions.
 
 - Conventional commits, gitlint-enforced. `internal-feat:` / `internal-fix:`
   for unreleased code (no version bump).
+- **`feat:` / `fix:` / `perf:` / `revert:` are release-reserved.** They cut a
+  semantic-release version bump on merge (PR title = squash-merge subject), so
+  use them only when a release is deliberate — typically one `feat:` config/gate
+  PR after a chain of `internal-feat:` logic PRs. Enforcement: a `PreToolUse`
+  hook (`agent/hooks/pr-title-guard.sh`, `PR_TITLE_GUARD`: `block` default /
+  `warn` / `off`) gates `gh pr create` / `gh pr edit` titles, and a commit-msg
+  hook (`release-type-guard` in `.pre-commit-config.yaml`) gates commit
+  subjects. Deliberate release: prefix the command with `RELEASE_INTENT=1`.
 - Scope is skill-bound — see `/github-taxonomy`.
 - **Never `--no-verify` / `-n`.** Pre-commit and gitlint must run. Hooks
   work inside worktrees.
@@ -141,16 +166,42 @@ in `.pydoclint-baseline.txt`. If a check fails on a file your PR touches,
 the remediation is to fix the underlying lint — never register the file as
 exempt.
 
+`.model-typing-baseline.txt` is also append-frozen and contains only the
+violations tracked by #2645. Remove entries as callables adopt jaxtyping and
+beartype; never add entries for new violations.
+
 ## YAML `run:` block scalars are bash
 
 In GitHub Actions workflows (`.github/workflows/*.{yml,yaml}`) and SkyPilot
-task configs (`src/synth_setter/configs/compute/*.yaml`'s `run:` / `setup:` blocks), comments
+task configs (`src/synth_setter/configs/skypilot_launch/compute/*.yaml`'s `run:` / `setup:` blocks), comments
 go **above** the step, never inside the block scalar. The block-scalar body
 is bash and stray `'`, `` ` ``, `$`, or `\` inside a comment has caused
 unintended shell expansion. A `PreToolUse` hook
 (`agent/hooks/no-yaml-run-comments.sh`) enforces this.
 
 ## PRs
+
+### Keep auxiliary work in separate PRs
+
+- **Separate helpful but non-core changes from the main PR.** Extract
+  independently useful refactors, cleanup, and fixes for pre-existing bugs into
+  auxiliary PRs, even when they are necessary prerequisites for the main work.
+  Fix regressions introduced by the current PR in that PR; keep directly
+  supporting tests and docs with their behavior change.
+- **Stack prerequisites below the main PR.** Open the auxiliary PR against
+  `main`, then base the dependent main PR on the auxiliary branch so its diff
+  contains only the core change. Link the dependency in both PR bodies and save
+  the prerequisite tip SHA before merging it first. Then fetch `origin` and,
+  from the dependent branch, run
+  `git rebase --onto origin/main <saved-prerequisite-tip-sha>` to replay only
+  its own commits, including after a squash merge. Push with `--force-with-lease`
+  and retarget the main PR to `main`. For multiple prerequisites, repeat in
+  dependency order.
+- Non-core work that is not a prerequisite belongs in an independent PR, not
+  in the stack. Continue to file out-of-scope bugs via `/github-taxonomy`;
+  separating a prerequisite fix does not replace its tracking issue.
+
+### Submission and readiness
 
 - **Every PR body links a taxonomy-compliant issue** via `Closes #N`,
   `Fixes #N`, `Refs #N`, or `Part of #N`. Use `Refs #N` for partial fixes
@@ -161,7 +212,8 @@ unintended shell expansion. A `PreToolUse` hook
   has the canonical title rule and examples.
 - **Pre-PR review is temporarily advisory.** Run
   `/repo-review-full-no-comments` before `gh pr create` when the review
-  automation is healthy, and address every BLOCK/WARN. The local
+  automation is healthy, and address every BLOCK/WARN (NIT findings are
+  advisory and gate nothing). The local
   `pre-pr-review-gate.sh` implementation and tests remain available for repair,
   but its `PreToolUse` registration is suspended while [#2020](https://github.com/tinaudio/synth-setter/issues/2020)
   is unresolved. Server-side tests, metadata checks, branch protection, and
@@ -262,7 +314,8 @@ than "SKIP: requires VST / R2".
 ## Commands
 
 ```bash
-make test-fast       # CPU-only fast tests
+make test-fast       # curated CPU tests, two-minute budget
+make test-medium     # all non-slow CPU tests
 make test-full-cpu   # all CPU tests
 make test-full-gpu   # GPU + CPU, serial
 make format          # pre-commit hooks

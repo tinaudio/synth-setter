@@ -10,7 +10,7 @@ import pytest
 
 from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
 from synth_setter.data.vst.torchsynth_param_spec import (
-    DEFAULT_NORMALIZED_ROW,
+    DEFAULT_NORMALIZED_PATCH,
     DEFAULT_PATCH,
     INFERABLE_SPEC,
     NUM_PARAMS,
@@ -166,13 +166,13 @@ def test_default_patch_covers_exactly_the_inferable_params_within_range() -> Non
         assert param.minimum <= value <= param.maximum, f"{param.module}.{param.name}"
 
 
-def test_default_normalized_row_round_trips_the_default_patch() -> None:
-    """The precomputed normalized row denormalizes back to the human baseline patch."""
-    assert len(DEFAULT_NORMALIZED_ROW) == NUM_PARAMS
-    for normalized, param in zip(DEFAULT_NORMALIZED_ROW, INFERABLE_SPEC, strict=True):
+def test_default_normalized_patch_round_trips_the_default_patch() -> None:
+    """The precomputed normalized patch denormalizes back to the human baseline patch."""
+    assert len(DEFAULT_NORMALIZED_PATCH) == NUM_PARAMS
+    for param in INFERABLE_SPEC:
+        normalized = DEFAULT_NORMALIZED_PATCH[param.key]
         assert 0.0 <= normalized <= 1.0
-        expected = DEFAULT_PATCH[f"{param.module}.{param.name}"]
-        assert param.from_0to1(normalized) == pytest.approx(expected, abs=1e-6)
+        assert param.from_0to1(normalized) == pytest.approx(DEFAULT_PATCH[param.key], abs=1e-6)
 
 
 def test_default_patch_disables_modulation_except_amp_envelope_routing() -> None:

@@ -11,13 +11,13 @@ ______________________________________________________________________
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | Experiment config             | Hydra YAML composition                                                                                                                                                                                                                                                                                              | Deferred — class constructors at `hydra.utils.instantiate()`                                                                                                                                                              | git (`src/synth_setter/configs/experiment/`)                                                                                       | `src/synth_setter/configs/experiment/surge/flow_simple.yaml`                      |
 | Pipeline input + runtime spec | Pydantic `BaseModel(strict=True, frozen=True, extra="forbid")` — `DatasetSpec` unifies the prior config + materialized-spec split. All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) are strict; JSON round-trip coercions (`list→tuple`, `str→datetime`) are handled by explicit per-field validators. | Parse-time — Hydra `compose` → `spec_from_cfg()` (#887, #912, #917 unified the prior `DatasetConfig` + `DatasetPipelineSpec` split into one model that is both the validated input *and* the materialized artifact on R2) | git (`src/synth_setter/configs/experiment/generate_dataset/`) for input; R2 (`{r2.prefix}input_spec.json`) for the serialized JSON | `src/synth_setter/configs/experiment/generate_dataset/surge-simple-480k-10k.yaml` |
-| Cloud infrastructure          | SkyPilot Task YAML                                                                                                                                                                                                                                                                                                  | Launcher script (not Hydra)                                                                                                                                                                                               | git (`src/synth_setter/configs/compute/`)                                                                                          | `src/synth_setter/configs/compute/runpod-template.yaml`                           |
+| Cloud infrastructure          | Hydra compute option → pydantic `ComputeConfig`                                                                                                                                                                                                                                                                     | Parse-time — Hydra compose → `ComputeConfig` (strict pydantic)                                                                                                                                                            | git (`src/synth_setter/configs/skypilot_launch/compute/`)                                                                          | `src/synth_setter/configs/skypilot_launch/compute/runpod/smoke.yaml`              |
 | Secrets / credentials         | Environment variables                                                                                                                                                                                                                                                                                               | Runtime                                                                                                                                                                                                                   | `.env` (local), CI secrets                                                                                                         | `WANDB_API_KEY`                                                                   |
 
 ### Why These Boundaries
 
 - **Pydantic strict** at trust boundaries — where data enters from external sources (user config YAML, JSON from R2, worker reports). Catches type errors, missing fields, and invalid values at parse time.
-- **Hydra DictConfig** for training — composable experiment configs validated by class constructors at instantiation. Hydra handles defaults, overrides, and interpolation natively.
+- **Hydra DictConfig** for training — composable experiment configs validated by class constructors at instantiation. Hydra handles defaults, overrides, and interpolation natively. The shared `feature_flags` list is an exception: train and eval resolve its integer IDs through a strict Pydantic registry before setup begins.
 - **Plain YAML for cloud infrastructure** — consumed by a launcher script that calls provider APIs before the training job starts. Different program, different time, no Hydra composition needed.
 - **No training input spec** — training is a single long-running job with no distributed coordination. The data pipeline's spec exists for reconciliation across hundreds of parallel workers; training has no equivalent need. Provenance is captured by W&B run metadata + frozen `config.yaml` in R2.
 
@@ -36,7 +36,7 @@ src/synth_setter/configs/experiment/generate_dataset/{id}.yaml → Hydra compose
         → <hydra_output_dir>/data/<task_name>/<run_id>/metadata/input_spec.json (operator-side artifact)
     → r2_io.ensure_r2_env_loaded(sky_cfg.env_file)   (dotenv + auth ping)
     → spec_io.upload_spec(spec) → R2 at {r2.prefix}input_spec.json (one canonical write per main())
-    → branch on sky_cfg.compute_template:
+    → branch on sky_cfg.compute:
         ├─ None: generate(spec, Path(cfg.paths.output_dir), loggers) — renders + uploads shards
         └─ set:  dispatch_via_skypilot — injects spec.r2.input_spec_uri() as WORKER_SPEC_URI;
                  worker pod runs generate(spec, work_dir, loggers) which renders + uploads shards (no spec re-upload)
@@ -46,6 +46,8 @@ src/synth_setter/configs/experiment/generate_dataset/{id}.yaml → Hydra compose
 - `DatasetSpec` is the unified model: the same frozen Pydantic instance is both the validated input and the materialized artifact (`DatasetConfig` + `DatasetPipelineSpec` were unified in #887)
 - Runtime state (git SHA, renderer version, and split seed positions) auto-fills via `default_factory` fields (`git_sha`, `is_repo_dirty`, `created_at`, plus `run_id` and `r2` via the `_default_run_id` / `_default_r2_location` factories; `r2.prefix` is derived by `_fill_default_r2_prefix` in a `mode='before'` model validator). See [Deterministic Dataset Seeding](../design/deterministic-seeding.md) for the seed contract.
 - Spec is the reproducibility unit and reconciliation target
+- `experiment=pyfdn/flow_audio_flamo` injects a FLAMO differentiable renderer into audio feedback; dataset generation and evaluation still use pyFDN. Its factory adapts the fixed Householder, Householder-vector and Kronecker `BasicFDNParamSpec` identities at 44.1 kHz; the general renderer accepts complete multichannel `BasicFDN` builds and preserves every input/output transfer path. Gains, continuous feedback coordinates and DC/Nyquist RT controls are differentiable; integer delays and reflection choices have zero gradient. See [pyFDN flow audio feedback](../experiments/pyfdn-flow-audio.md) for the channel contract and advanced-effect exclusions. The FFT period defaults to the next power of two above twice the output length; increase `model.audio_loss.renderer.fft_size` to reduce circular tail aliasing. Single-device and `model.compile=false` restrictions remain. The real local generation → training → checkpoint reload → evaluation test runs in the existing PR CPU-slow CI job without R2 credentials.
+- `render=pyfdn synth=pyfdn_n8_mono_householder` selects the native pyFDN backend with feedback fixed to pyFDN's order-8 Householder reflection of the all-ones vector. The model learns the remaining 27 coordinates, while every rendered feedback matrix stays orthogonal by construction. `synth=pyfdn_n8_mono_kronecker` keeps those 27 and learns nine more (36 coordinates): three kernel angles, each carried as a (cos θ, sin θ) pair so the ±π seam never appears in the loss, and three rotate/reflect flags that build the Kronecker feedback matrix of Coppola (DAFx26), so all-reflect at π/4 is the order-8 Hadamard and a zero angle decouples the network at that level. `synth=pyfdn_n8_mono_householder_vector` instead learns the eight-entry reflection vector itself (35 coordinates); the all-ones vector reproduces the fixed Householder, and only the vector's direction matters. `synth=pyfdn_pitchshift_n8_mono_householder` selects a separate 45-coordinate pitch-shift shimmer contract with the same fixed feedback: longer delay lines, ten learnable graphic-EQ RT values, transpose, window size, and an eight-line active mask. Its post-delay buffer remains derived as twice the predicted window. `synth=pyfdn_gotz_n8_mono_fixed_delays` and `synth=pyfdn_gotz_n8_mono_learned_delays` select the Götz et al. ([arXiv:2510.23158](https://arxiv.org/abs/2510.23158)) reverb: a learnable orthogonal feedback matrix (28 bounded continuous `feedback_skew` coordinates through the matrix exponential), per-line eleven-section graphic-EQ attenuation from command gains at or below 0 dB, an eleven-section ±12 dB tone-correction GEQ on the excitation, and a direct path delayed by two samples. The fixed variant keeps the paper's coprime delays (809–1499 samples) constant at 144 coordinates; the learned variant adds eight delay coordinates over that same range. This follows §2.2.2's explicit `U = exp{Tr(p_U) - Tr(p_U)^T}` mapping; the fixed Householder matrix described in §3.4 belongs to the N=6 Lee ARP-net baseline, not the proposed N=8 method. A single learned Householder vector is not substituted for the skew exponential because it spans only a reflection family, while the 28 skew coordinates span order-8 special orthogonal feedback matrices. `synth=pyfdn_gotz_n8_mono_fixed_delays_givens` and `synth=pyfdn_gotz_n8_mono_learned_delays_givens` retain that Götz topology but replace `feedback_skew` with 28 periodic `feedback_givens_angles`. Each angle uses a `(cos θ, sin θ)` model pair, giving widths 172 and 180 respectively; unlike the bounded skew coordinates, native Givens angles are periodic. The fixed product is `G_01 @ G_02 @ ... @ G_67` in lexicographic plane order, with each plane block `[[cos θ, -sin θ], [sin θ, cos θ]]`. This Givens option is an alternative SO(8) parameterization, not the exact parameterization in the paper, and makes no claim about learning performance. Compose the continuous and Givens fixed-delay choices exactly with `uv run synth-setter-train experiment=pyfdn/flow synth=pyfdn_gotz_n8_mono_fixed_delays --cfg job` and `uv run synth-setter-train experiment=pyfdn/flow synth=pyfdn_gotz_n8_mono_fixed_delays_givens --cfg job`; replace `fixed_delays` with `learned_delays` for the corresponding learned-delay identity. All eight variants render four-second, 44.1 kHz mono impulse responses by default through the shared `AudioRenderer` acceptance loop. `render=pyfdn_diffvox synth=pyfdn_diffvox` (`experiment=pyfdn/diffvox_flow`) selects the 82-coordinate DiffVox vocal chain ([arXiv:2504.14735](https://arxiv.org/abs/2504.14735)): a six-band parametric EQ, a direct panner, a ping-pong delay send with an in-loop low-pass, and a six-line FDN reverb send with a learned orthogonal feedback matrix, ten-band GEQ decay, and a four-band tone EQ. The reference compressor/expander is omitted, and it is the one pyFDN identity that renders stereo (`channels: 2`). Set `render.pyfdn_excitation=chirp` to use the canonical in-process chirp instead. MIDI fields are fixed compatibility stubs; R2 stores only generated dataset outputs.
 - **Config drift protection (planned):** the design doc specifies that re-passing `--config` for a `run_id` that already has a spec should error — but this is not yet enforced. The current implementation always generates a new `run_id` and writes a fresh spec. Tracked in [#386](https://github.com/tinaudio/synth-setter/issues/386).
 - **Path note:** `storage-provenance-spec.md` §3a documents the target path as `metadata/input_spec.json`, but the current implementation uploads to `{r2.prefix}input_spec.json` (`r2.prefix` already ends in `/` — see `make_r2_prefix` in `src/synth_setter/pipeline/schemas/prefix.py`; no `metadata/` subdirectory). Tracked in [#385](https://github.com/tinaudio/synth-setter/issues/385).
 - **Worker env:** `dispatch_via_skypilot` injects the canonical `spec.r2.input_spec_uri()` as `WORKER_SPEC_URI` into each worker pod's env. The canonical provenance copy at `{r2.prefix}input_spec.json` is written by `spec_io.upload_spec`, called once from `main()` on the launcher host before the dispatch branch fires, so the URI resolves before any worker boots. Workers do not re-upload the spec. See `storage-provenance-spec.md` §3a "Materialized spec: two destinations" for the consumer table.
@@ -54,9 +56,12 @@ Reference: `data-pipeline.md` §14.5
 
 ### 2.2 Data Finalization
 
+For the operational command, see [Finalize a dataset](cli.md#finalize-a-dataset).
+The composed configuration flow is:
+
 ```
-synth-setter-finalize-dataset dataset_root_uri=r2://…/<task_name>/<run_id>/
-  → @hydra.main composes DictConfig from src/synth_setter/configs/finalize_dataset.yaml
+src/synth_setter/configs/finalize_dataset.yaml
+  → @hydra.main composes DictConfig
     → load_spec_from_root(cfg.dataset_root_uri) → DatasetSpec (joins input_spec.json under the root; the frozen spec generate uploaded)
       → r2_io.object_size(spec.r2.dataset_complete_marker_uri()) probe (idempotency short-circuit)
       → assert_r2_prefix_matches(…) (advisory: warns on a non-canonical prefix, never aborts — custom prefixes like the oracle-eval e2e's test-runs/ are legitimate)
@@ -74,24 +79,39 @@ Reference: `data-pipeline.md` §14.5 (finalize stage)
 ### 2.3 Training
 
 ```
-train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger, r2, render, ...)
+train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger, r2, synth, render, ...)
   → Hydra composes DictConfig
     → hydra.utils.instantiate() → LightningModule, DataModule, Trainer
       → trainer.fit(model, datamodule)
 ```
 
 - No intermediate spec — Hydra instantiates directly to Python objects
+- `feature_flags` defaults to `[]`; each integer ID resolves to a registered number, full environment-variable name, and description before training setup, then exports that name with value `1`
 - Provenance: W&B config (hyperparams, `github_sha`) + frozen `config.yaml` in R2
 - Resume: Lightning native `ckpt_path=` with W&B artifact download
 - Single-job model — no reconciliation, no distributed coordination
-- `datamodule.num_workers` applies to *each* dataloader, so enabling validation
-  doubles the live worker count — size it against host RAM, not core count
-  (measured ~1.4 GB per Lance worker; see `getting-started.md` §8)
-- VST configs set `datamodule.persistent_workers=true`; it is effective only when
-  `num_workers > 0`, so CPU debugging with `num_workers=0` needs no extra override
-- `render:` defaults to `null`; a render group (e.g. `render=surge_xt`) is required when
+- `datamodule.num_workers` controls train, test, and predict workers;
+  `datamodule.val_num_workers` controls validation and defaults to `0`. Size any
+  positive counts against host RAM, not core count (measured ~1.4 GB per Lance
+  worker; see `getting-started.md` §8)
+- VST configs set `datamodule.persistent_workers=true`; it is effective per loader
+  only when that loader's worker count is positive
+- `datamodule.download_dataset_root_uri` hydrates a finalized `r2://` or absolute
+  `file://` root into a request-addressed child of `dataset_root`. The source must
+  contain `dataset.complete`; optional per-split transaction pins select snapshots,
+  and `download_dataset_row_limit` must be positive when set
+- `render:` defaults to `null`; a render group (e.g. `render=vst`) is required when
   `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement —
   under the default `val_audio_probe: auto` the probe just stays off without one
+- `synth:` defaults to `null`; VST runs select the root identity group
+  (e.g. `synth=surge_xt`, usually via the experiment's defaults) that VST
+  datamodules, models, callbacks, and the render pipeline all resolve —
+  identity's single home (#2565)
+- `synth=ultramaster_kr106_onehot` opts into the 250-column KR-106 schema, where
+  only the five-value `voices` control changes from scalar to onehot encoding.
+  The existing `synth=ultramaster_kr106` identity remains the 246-column default.
+  Datasets and checkpoints are width-specific: regenerate them only under the
+  new identity rather than relabeling existing KR-106 artifacts.
 
 Reference: `training-pipeline.md` §4–5
 
@@ -99,14 +119,16 @@ Reference: `training-pipeline.md` §4–5
 
 ```
 eval.yaml + experiment config (pins model + data + checkpoint)
-  + evaluation: {render_vst, compute_metrics, rerender_target, num_workers, shuffle_seed}
-  + render: {param_spec_name, plugin_state_path, plugin_path?}   # required when render_vst=true
+  + evaluation: {render_vst, compute_metrics, rerender_target, no_params, num_workers, shuffle_seed}
+  + synth: {name, param_spec_name, format, plugin_path, plugin_state_path, synth_version, source_sha256}  # required when render_vst=true
+  + render: {renderer_backend, backend_version, backend knobs}                                      # required when render_vst=true
   → Hydra composes DictConfig → predict (→ render → metrics if mode=predict and gates on)
 ```
 
 - Experiment config pins everything: model checkpoint (W&B artifact ref), data config, eval settings
+- `feature_flags` follows the training contract: integer IDs resolve before checkpoint access and selected full names are exported with value `1`
 - `evaluation:` block (in `src/synth_setter/configs/eval.yaml`) gates the in-process render and metrics phases — both default off so `mode=test`/`mode=validate` runs are unchanged
-- `render:` defaults entry composes a renderer config group (e.g. `render=surge_xt`) and supplies the VST plugin/preset/param-spec that `_run_predict_postprocessing` forwards to the render subprocess
+- `render:` composes a backend-knob group and the root `synth:` group supplies the VST plugin/preset/param-spec (`synth=surge_xt render=vst`); `_run_predict_postprocessing` joins the two and forwards them to the render subprocess
 - No eval spec — configs are the source of truth
 - Full provenance in R2 path: `eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/`
 
@@ -114,24 +136,39 @@ Reference: `eval-pipeline.md` §4–5
 
 ### 2.5 Cloud Infrastructure
 
-`dispatch_via_skypilot` is the single entry point a `synth-setter-*` CLI takes
-to dispatch onto SkyPilot. Each console script that supports compute carries
-a `skypilot_launch` sub-config (today: `synth-setter-generate-dataset`; more
-entrypoints are expected to follow). Setting
-`skypilot_launch.compute_template=<path>` flips the command from "run
-in-process" to "materialize the spec, then dispatch via SkyPilot" — no
-separate launcher invocation is involved.
+`dispatch_via_skypilot` is the shared programmatic boundary for SkyPilot.
+Dataset generation composes its `skypilot_launch` subtree inline; arbitrary
+commands use the Hydra-native `synth-setter-skypilot-launch` endpoint with
+`skypilot_launch/compute=<option>` and a quoted `skypilot_launch.cmd` value.
 
-#### Dispatch flow
+#### Generic dispatch
+
+See [Launch with SkyPilot](cli.md#launch-with-skypilot) for the operational
+commands. The launcher prepends repository checkout synchronization under
+`skypilot_launch.worker_checkout_dir` (default `/home/build/synth-setter`) before
+executing `cmd`. Override that field for worker images with a different checkout
+location. Every literal `${...}` intended for the worker command—including
+shell environment expansion—must be written `\${...}` so the launcher does not
+treat it as OmegaConf interpolation. An unescaped value fails with a
+`skypilot_launch.cmd` diagnostic before dispatch.
+
+`load_launch_config` and `configs/launch/*.yaml` remain only for compatibility
+with manual Python callers during migration; their removal is tracked by
+[#2780](https://github.com/tinaudio/synth-setter/issues/2780).
+
+#### Dataset dispatch flow
+
+See [Generate a dataset](cli.md#generate-a-dataset) and
+[Launch with SkyPilot](cli.md#launch-with-skypilot) for the operational commands.
+The configuration flow is:
 
 ```
-synth-setter-generate-dataset experiment=… skypilot_launch.compute_template=src/synth_setter/configs/compute/runpod-template.yaml
-  → @hydra.main composes DictConfig → spec_from_cfg → DatasetSpec
+@hydra.main composes DictConfig → spec_from_cfg → DatasetSpec
     → write_spec_locally(spec, Path(cfg.paths.output_dir))
     → upload_spec(spec) → R2 at {r2.prefix}input_spec.json
     → sky_cfg.extra_envs["WORKER_SPEC_URI"] = spec.r2.input_spec_uri()
     → dispatch_via_skypilot(sky_cfg)
-      → SkyPilot provisions pod (RunPod, OCI, kubernetes via `sky local up`)
+      → SkyPilot provisions compute (RunPod, Vast.ai, or local Kubernetes via `sky local up`)
         → pod runs: cd /home/build/synth-setter
                     && bash scripts/sync_worker_checkout.sh
                     && exec synth-setter-generate-dataset-from-hydra <pinned hydra overrides>
@@ -147,8 +184,9 @@ synth-setter-generate-dataset experiment=… skypilot_launch.compute_template=sr
   Hydra overrides the operator composed with, and the `from_hydra` entrypoint
   on the worker rebuilds the spec from those — so worker re-execution is
   deterministic regardless of operator argv.
-- The canonical `WORKER_SPEC_URI` is forwarded via `task.update_envs(...)`
-  primarily for downstream validate-time consumers (validate-spec /
+- The canonical `WORKER_SPEC_URI` is merged into each rank's env with
+  `task.update_envs(...)` after `sky.Task.from_yaml_config(...)`, primarily
+  for downstream validate-time consumers (validate-spec /
   validate-shard CI jobs read it off the workflow output). The worker itself
   doesn't fetch the JSON. `task.update_file_mounts` is avoided because
   SkyPilot's RunPod backend rejects programmatic file_mounts with a
@@ -174,7 +212,6 @@ ______________________________________________________________________
 | GPU selection       | `gpu_type_id` from catalog               | Query: `gpu_name=RTX_4090 num_gpus>=1 gpu_ram>=24`                           |
 | Pricing model       | Fixed $/hr per GPU type                  | Market-based: on-demand or bid (interruptible)                               |
 | Spot / preemptible  | Community cloud (cheaper, less reliable) | `--type=bid` with custom bid price                                           |
-| Persistent storage  | Network volumes (`networkVolumeId`)      | Volumes (create new or attach existing by ID)                                |
 | Docker image        | `image_name` parameter                   | `image` parameter                                                            |
 | Environment vars    | `env` dict (key-value pairs)             | Docker-flag format: `"-e KEY=VALUE"`                                         |
 | Startup command     | `docker_args` string                     | `onstart` script (SSH mode) or `args` array (args mode)                      |
@@ -189,37 +226,36 @@ ______________________________________________________________________
 
 ### Config Shape
 
-The RunPod template exists today (data-pipeline smoke). Vast.ai template not yet implemented.
+Compute options are Hydra configs under
+`src/synth_setter/configs/skypilot_launch/compute/`, validated by the strict
+pydantic `ComputeConfig` model. `build_task_doc` produces the native task-YAML
+mapping consumed by `sky.Task.from_yaml_config`.
 
-**RunPod** (`src/synth_setter/configs/compute/runpod-template.yaml`) — landed. Abridged
-shape (see the file for the full template):
+**RunPod** (`skypilot_launch/compute/runpod/smoke.yaml`) — abridged shape
+(see the file for the full option):
 
-The launcher injects `image_id` per-launch via `sky_cfg.worker_image_tag` (default `"dev-snapshot"`) for non-OCI backends, so the template omits a literal `image_id:` entry and relies on the per-launch injection:
+The builder pins `image_id: docker:<image>` per-launch from
+`sky_cfg.worker_image_tag` (default `"devcontainer-tools"`) for RunPod and
+Vast.ai, so the option carries no literal image pin. Worker env
+(`RCLONE_CONFIG_R2_*`, `WANDB_API_KEY`, `WORKER_GIT_REF`, per-rank
+`SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS`) rides in the task
+env at construction — no placeholder `envs:` block is needed.
 
 ```yaml
+name: runpod-smoke
 resources:
-  cloud: runpod
-  accelerators: RTXA4000:1
-  use_spot: false
-  disk_size: 50
-
-envs:
-  RCLONE_CONFIG_R2_TYPE: ""           # the 5 RCLONE_CONFIG_R2_* keys + WANDB_API_KEY
-  RCLONE_CONFIG_R2_PROVIDER: ""       # are injected at launch time from
-  RCLONE_CONFIG_R2_ACCESS_KEY_ID: ""  # .env or process env (see _WORKER_ENV_KEYS).
-  RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ""
-  RCLONE_CONFIG_R2_ENDPOINT: ""
-  WANDB_API_KEY: ""
-  WORKER_GIT_REF: ""                  # PR-CI bake-lag bypass for sync_worker_checkout.sh
-  SYNTH_SETTER_WORKER_RANK: ""        # per-rank partition (synthesized per-rank by _launch_one_rank_from_doc)
-  SYNTH_SETTER_NUM_WORKERS: ""
-
-# No `run:` block — the launcher's `_build_worker_cmd` constructs the cd +
-# sync_worker_checkout.sh + `exec synth-setter-generate-dataset-from-hydra
-# <pinned hydra overrides>` one-liner and injects it via the Task's `run`
-# field at dispatch time. Adding a `run:` block here is rejected by
-# `_load_compute_template_with_cmd`.
+  - cloud: runpod
+    accelerators:
+      RTXA4000: 1
+    use_spot: false
+    disk_size: 50
 ```
+
+The option declares no run block — the launcher's `_build_worker_cmd`
+constructs the cd + sync_worker_checkout.sh + `exec synth-setter-generate-dataset-from-hydra <pinned hydra overrides>` one-liner
+and `build_task_doc` sets it as the task's `run`. An option carrying a
+`run_script:` (debug canaries) rejects an injected cmd instead of silently
+dropping it.
 
 The canonical spec is uploaded to R2 by `cli/generate_dataset.py`'s `main()`
 (via `spec_io.upload_spec`) before dispatch; `task.update_file_mounts(...)`
@@ -230,7 +266,8 @@ validate-shard jobs, which read it via the workflow output rather than off
 the pod); the worker process itself re-builds the spec via Hydra compose on
 the injected overrides rather than fetching the JSON at boot.
 
-**Vast.ai** (`src/synth_setter/configs/compute/vast-template.yaml`) — planned, not implemented:
+**Vast.ai** (`skypilot_launch/compute/vast/smoke.yaml`) — landed; an
+earlier plan sketched a raw Vast API shape that was never used:
 
 ```yaml
 provider: vast
@@ -280,15 +317,16 @@ Gaps are configuration inputs that design docs specify or that standard practice
 | `logger.wandb.job_type`  | string | `"training"` instead of empty                                                          | storage-provenance-spec §7  |
 | `logger.wandb.resume`    | string | `"allow"` for W&B resume support                                                       | training-pipeline.md §5.3   |
 
-Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train), which logs the canonical `model-{config_id}` artifact. At train end the best checkpoint is uploaded to R2 (`_upload_best_checkpoint`) at `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` and the artifact references it as an `s3://` URI; `training.upload_checkpoints_uri` optionally overrides the target (default `null` = auto-derive). Dataset `run.use_artifact()` lineage is wired via `use_input_artifacts()` (train/eval), which reads the validated `task_name` and `run_id` from `input_spec.json` under the configured remote root or local `datamodule.dataset_root`, and consumes `data-{task_name}:{run_id}`; a root without that spec records no dataset edge. Evaluation retains the optional `consumed_train_config_id` model edge.
+Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train), which logs the canonical `model-{config_id}` artifact. At train end the best checkpoint is uploaded to R2 (`_upload_best_checkpoint`) at `r2://{r2.bucket}/checkpoints/{training_config_id}/{training_run_id}/{launch_uuid}/model.ckpt` and the artifact references it as an `s3://` URI; `training.upload_checkpoints_uri` optionally overrides the target (default `null` = auto-derive). Dataset `run.use_artifact()` lineage is wired via `record_input_lineage()` (train/eval), which reads the validated `task_name` and `run_id` from `input_spec.json` under the configured remote root or local `datamodule.dataset_root`, and consumes `data-{task_name}:{run_id}`; a root without that spec records no dataset edge and marks the run `lineage-incomplete`. Evaluation retains the optional `consumed_train_config_id` model edge.
 
 ### 5.3 Data Portability
 
-| Input                                  | Type           | What's Needed                                                                                                  | Reference                                                 |
-| -------------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `datamodule.dataset_root`              | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets         | training-pipeline.md §6.1                                 |
-| `datamodule.download_dataset_root_uri` | string \| null | Optional `r2://` directory URI; `prepare_data()` no-clobber-copies it into `dataset_root` before training/eval | `src/synth_setter/data/vst_datamodule.py` §`prepare_data` |
-| `datamodule.stats_file`                | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open  | `nsynth.yaml` / `fsd.yaml`                                |
+| Input                                    | Type           | What's Needed                                                                                                                                                                           | Reference                                                 |
+| ---------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `datamodule.dataset_root`                | string         | Defaults to `${paths.output_dir}/data` (Hydra per-run dir); CLI/experiment override for fixed datasets                                                                                  | training-pipeline.md §6.1                                 |
+| `datamodule.download_dataset_root_uri`   | string \| null | Optional finalized `r2://` or absolute `file://` root; `prepare_data()` projects its loader columns into a request-addressed child of `dataset_root` after verifying `dataset.complete` | `src/synth_setter/data/vst_datamodule.py` §`prepare_data` |
+| `datamodule.high_memory_materialization` | boolean        | Defaults to `false`; enables high-memory Lance scanner and writer tuning for full-data launches                                                                                         | `src/synth_setter/pipeline/data/lance_materialize.py`     |
+| `datamodule.stats_file`                  | string         | Hardcoded paths removed (now `???` in `nsynth.yaml`/`fsd.yaml`); replace with run-id-aware default still open                                                                           | `nsynth.yaml` / `fsd.yaml`                                |
 
 ### 5.4 Hardware & Compute
 
@@ -304,15 +342,15 @@ Model `run.log_artifact()` lineage is wired via `_log_model_artifact()` (train),
 
 ### 5.5 Cloud Infrastructure
 
-| Input                               | Type               | What's Needed                                                                                                                                          | Reference                                             |
-| ----------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- |
-| RunPod config                       | SkyPilot Task YAML | Landed for the data pipeline smoke at `src/synth_setter/configs/compute/runpod-template.yaml`; training launcher still uses the legacy RunPod-API path | data-pipeline.md §14, training-pipeline.md Appendix D |
-| Vast.ai config                      | SkyPilot Task YAML | Planned — `src/synth_setter/configs/compute/vast-template.yaml` not yet authored                                                                       | new provider                                          |
-| `src/synth_setter/configs/compute/` | directory          | SkyPilot Task templates for the data pipeline launcher (RunPod landed; Vast.ai planned)                                                                | —                                                     |
-| `make train`                        | Makefile target    | Training shorthand with EXPERIMENT arg                                                                                                                 | training-pipeline.md §2                               |
-| `make docker-train`                 | Makefile target    | Docker training shorthand                                                                                                                              | training-pipeline.md §2                               |
-| `make runpod-train`                 | Makefile target    | RunPod launcher shorthand                                                                                                                              | training-pipeline.md §2                               |
-| `make resume`                       | Makefile target    | Resume from W&B artifact with EXPERIMENT + RUN_ID                                                                                                      | training-pipeline.md §2                               |
+| Input                                               | Type                 | What's Needed                                                                                                                                      | Reference                                                                                                                                 |
+| --------------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| RunPod config                                       | Hydra compute option | Smoke, 750 GB training, and H100-SXM/H200-SXM/B200 `training-hclass` options live under `src/synth_setter/configs/skypilot_launch/compute/runpod/` | [SkyPilot compute integration](../design/skypilot-compute-integration.md#41-compute-options-srcsynth_setterconfigsskypilot_launchcompute) |
+| Vast.ai config                                      | Hydra compute option | `skypilot_launch/compute/vast/smoke.yaml`                                                                                                          | new provider                                                                                                                              |
+| `src/synth_setter/configs/skypilot_launch/compute/` | directory            | Compute options for the data pipeline launcher (RunPod, Vast.ai, local Kubernetes)                                                                 | —                                                                                                                                         |
+| `make train`                                        | Makefile target      | Training shorthand with EXPERIMENT arg                                                                                                             | training-pipeline.md §2                                                                                                                   |
+| `make docker-train`                                 | Makefile target      | Docker training shorthand                                                                                                                          | training-pipeline.md §2                                                                                                                   |
+| `make runpod-train`                                 | Makefile target      | RunPod launcher shorthand                                                                                                                          | training-pipeline.md §2                                                                                                                   |
+| `make resume`                                       | Makefile target      | Resume from W&B artifact with EXPERIMENT + RUN_ID                                                                                                  | training-pipeline.md §2                                                                                                                   |
 
 ### 5.6 Other
 

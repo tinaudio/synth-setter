@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Recreate the plugins/<plugin>.vst3 symlink that `docker run -v $(pwd):...`
-# overlays. Override target via SYNTH_SETTER_PLUGIN_PATH.
+# Restore checkout-local aliases from exact Studiorack package installs.
 set -euo pipefail
 
-target="${SYNTH_SETTER_PLUGIN_PATH:-/usr/lib/vst3/Surge XT.vst3}"
-if [[ ! -e "$target" ]]; then
-  echo "ensure_plugin_symlinks.sh: target does not exist: $target" >&2
-  exit 1
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+plugin_cli=(
+  env "PYTHONPATH=${repo_root}/src" python -m synth_setter.cli.plugins
+  --manifest "${repo_root}/studiorack.json"
+  --links-dir "${repo_root}/plugins"
+)
+if [[ -d "/usr/lib/vst3/Surge XT.vst3" ]]; then
+  "${plugin_cli[@]}" adopt \
+    --plugin surge-synthesizer/surge \
+    --bundle-path "/usr/lib/vst3/Surge XT.vst3"
 fi
-mkdir -p plugins
-ln -sf "$target" "plugins/$(basename "$target")"
+"${plugin_cli[@]}" link --plugin surge-synthesizer/surge

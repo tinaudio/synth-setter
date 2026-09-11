@@ -1,0 +1,112 @@
+# Approval gate for the param_shift embedder: the real writer renders a real torchsynth
+# shard and the real add-embeddings CLI augments it, with nothing faked or mocked.
+# torchsynth renders in-process, so no plugin bundle and no R2 credential is involved.
+name: param_shift Embedder E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/synth_setter/pipeline/data/param_shift.py"
+      - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/pipeline/data/tinymu.py"
+      - "src/synth_setter/pipeline/data/lance_shard.py"
+      - "src/synth_setter/pipeline/schemas/add_embeddings_config.py"
+      - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/configs/add_embeddings.yaml"
+      - "src/synth_setter/configs/render/**"
+      - "src/synth_setter/configs/synth/**"
+      - "src/synth_setter/data/vst/shapes.py"
+      - "src/synth_setter/data/vst/param_spec.py"
+      - "src/synth_setter/data/vst/param_spec_registry.py"
+      - "src/synth_setter/data/vst/renderers.py"
+      - "src/synth_setter/data/vst/seeding.py"
+      - "src/synth_setter/data/vst/torchsynth_param_spec.py"
+      - "src/synth_setter/data/vst/writers.py"
+      - "src/synth_setter/evaluation/compute_audio_metrics.py"
+      - "src/synth_setter/renderer_factory.py"
+      - "src/synth_setter/synth_spec.py"
+      - "tests/conftest.py"
+      - "tests/pipeline/data/test_param_shift.py"
+      - "tests/pipeline/data/test_param_shift_e2e.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "codecov.yml"
+      - ".github/workflows/test-param-shift-embedder.yml"
+  pull_request:
+    paths:
+      - "src/synth_setter/pipeline/data/param_shift.py"
+      - "src/synth_setter/pipeline/data/add_embeddings.py"
+      - "src/synth_setter/pipeline/data/tinymu.py"
+      - "src/synth_setter/pipeline/data/lance_shard.py"
+      - "src/synth_setter/pipeline/schemas/add_embeddings_config.py"
+      - "src/synth_setter/pipeline/schemas/spec.py"
+      - "src/synth_setter/configs/add_embeddings.yaml"
+      - "src/synth_setter/configs/render/**"
+      - "src/synth_setter/configs/synth/**"
+      - "src/synth_setter/data/vst/shapes.py"
+      - "src/synth_setter/data/vst/param_spec.py"
+      - "src/synth_setter/data/vst/param_spec_registry.py"
+      - "src/synth_setter/data/vst/renderers.py"
+      - "src/synth_setter/data/vst/seeding.py"
+      - "src/synth_setter/data/vst/torchsynth_param_spec.py"
+      - "src/synth_setter/data/vst/writers.py"
+      - "src/synth_setter/evaluation/compute_audio_metrics.py"
+      - "src/synth_setter/renderer_factory.py"
+      - "src/synth_setter/synth_spec.py"
+      - "tests/conftest.py"
+      - "tests/pipeline/data/test_param_shift.py"
+      - "tests/pipeline/data/test_param_shift_e2e.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "codecov.yml"
+      - ".github/workflows/test-param-shift-embedder.yml"
+
+concurrency:
+  group: param-shift-embedder-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  param_shift_e2e:
+    name: Real render-and-score production path
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install uv and Python 3.12.13
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          python-version: "3.12.13"
+
+      - name: Install dependencies (uv sync --frozen, CPU torch)
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
+
+      # Both suites run together: the unit tests pin the shift arithmetic that the e2e's
+      # reproduction check relies on, so a failure in either invalidates the gate.
+      - name: Run param_shift production-path e2e (real renderer, real CLI)
+        env:
+          PYTEST_SESSION_BUDGET_SECONDS: "1500"
+        run: |
+          uv run --no-sync pytest \
+            tests/pipeline/data/test_param_shift.py \
+            tests/pipeline/data/test_param_shift_e2e.py \
+            -vv \
+            --cov=src \
+            --cov-branch \
+            --cov-report=xml
+
+      - name: Upload coverage to Codecov
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: ./.github/actions/upload-coverage
+        with:
+          flags: param-shift-e2e
+          token: ${{ secrets.CODECOV_TOKEN }}

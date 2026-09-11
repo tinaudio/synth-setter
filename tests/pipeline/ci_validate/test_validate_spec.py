@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import pytest
+
 from synth_setter.pipeline.ci.validate_spec import (
     _REQUIRED_RENDER_FIELDS,
+    _REQUIRED_SYNTH_FIELDS,
     _REQUIRED_TOP_LEVEL_FIELDS,
     validate_structure,
     validate_test_values,
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.synth_spec import SynthSpec
 
 
 def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> dict:
@@ -34,16 +38,25 @@ def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> di
             "prefix": "data/test/test-20260328T120000000Z/",
         },
         "render": {
-            "plugin_path": "plugins/Surge XT.vst3",
-            "plugin_state_path": "presets/surge-base.vstpreset",
-            "param_spec_name": "surge_simple",
-            "renderer_version": "1.3.4",
+            "synth": {
+                "name": "surge_simple",
+                "param_spec_name": "surge_simple",
+                "plugin_path": "plugins/Surge XT.vst3",
+                "format": "vst3",
+                "plugin_state_path": "presets/surge-base.vstpreset",
+                "synth_version": "1.3.4",
+                "source_sha256": None,
+            },
             "renderer_backend": "pedalboard",
+            "backend_version": "0.9.22",
+            "render_contract_version": 2,
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
             "signal_duration_seconds": 4.0,
             "min_loudness": -55.0,
+            "audio_dtype": "float16",
+            "mel_spec_dtype": "float32",
             "samples_per_render_batch": 32,
             "samples_per_shard": 32,
             "max_retries": 0,
@@ -51,6 +64,7 @@ def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> di
             "sample_offset": 0,
             "attempts_per_sample": 100,
             "parallel": False,
+            "retain_local_shards": True,
             "plugin_reload_cadence": "render",
             "gui_toggle_cadence": "never",
             "param_sample_cadence": "sample",
@@ -87,6 +101,21 @@ class TestValidateStructure:
         spec = _make_valid_spec()
         assert validate_structure(spec) == []
 
+    def test_defaulted_storage_dtypes_may_be_omitted(self) -> None:
+        """Specs may omit fields supplied by RenderConfig defaults."""
+        spec = _make_valid_spec()
+        del spec["render"]["audio_dtype"]
+        del spec["render"]["mel_spec_dtype"]
+
+        assert validate_structure(spec) == []
+
+    def test_defaulted_local_shard_retention_may_be_omitted(self) -> None:
+        """Legacy specs may omit the safe local-retention default."""
+        spec = _make_valid_spec()
+        del spec["render"]["retain_local_shards"]
+
+        assert validate_structure(spec) == []
+
     def test_missing_field_returns_error(self) -> None:
         """Spec missing a required field returns a 'missing' error."""
         spec = _make_valid_spec()
@@ -100,10 +129,16 @@ class TestValidateStructure:
         spec = _make_valid_spec(git_sha="not-a-sha")
         assert any("git_sha" in e for e in validate_structure(spec))
 
-    def test_empty_renderer_version_returns_error(self) -> None:
-        """Empty render.renderer_version returns a renderer_version error."""
-        spec = _make_valid_spec(render={"renderer_version": ""})
-        assert any("renderer_version" in e for e in validate_structure(spec))
+    @pytest.mark.parametrize("value", ["", "  ", 1.3, None])
+    def test_invalid_synth_version_returns_specific_error(self, value: object) -> None:
+        """The version must be a nonblank string.
+
+        :param value: Invalid serialized version value.
+        """
+        spec = _make_valid_spec()
+        spec["render"]["synth"]["synth_version"] = value
+
+        assert "render.synth.synth_version must be a non-empty string" in validate_structure(spec)
 
     def test_empty_shards_returns_error(self) -> None:
         """Empty shards list returns a shards error."""
@@ -131,13 +166,40 @@ class TestValidateStructure:
         assert any("missing" in e and "r2" in e for e in errors)
 
     def test_required_top_level_fields_match_dataset_spec_model(self) -> None:
-        """Required top-level set is derived from DatasetSpec, not hand-mirrored."""
-        expected = set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields)
+        """Only optional parameter-language metadata may be omitted at the top level."""
+        expected = (set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields)) - {
+            "param_language_dimension"
+        }
         assert set(_REQUIRED_TOP_LEVEL_FIELDS) == expected
 
     def test_required_render_fields_match_render_config_model(self) -> None:
-        """Required render set is derived from RenderConfig, not hand-mirrored."""
-        assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields)
+        """Only backward-compatible storage fields may be omitted."""
+        assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
+            "audio_dtype",
+            "block_size",
+            "mel_spec_dtype",
+            "post_load_flush_blocks",
+            "post_param_flush_blocks",
+            "post_render_flush_blocks",
+            "pyfdn_excitation",
+            "retain_local_shards",
+            "v1_gui_toggle_cadence_omitted",
+            # Checked shape-aware so the nested identity can be validated.
+            "synth",
+        }
+
+    def test_required_synth_fields_match_synth_spec_model(self) -> None:
+        """Structural validation derives synth identity fields from the schema."""
+        assert set(_REQUIRED_SYNTH_FIELDS) == set(SynthSpec.model_fields)
+
+    def test_other_defaulted_render_field_remains_required(self) -> None:
+        """Platform-dependent defaults must be materialized in persisted specs."""
+        spec = _make_valid_spec()
+        del spec["render"]["gui_toggle_cadence"]
+
+        errors = validate_structure(spec)
+
+        assert any("gui_toggle_cadence" in error for error in errors)
 
 
 class TestValidateTestValues:
@@ -169,3 +231,38 @@ class TestValidateTestValues:
         spec = _make_valid_spec(output_format="parquet")
         errors = validate_test_values(spec)
         assert any("output_format" in e and "parquet" in e for e in errors)
+
+
+class TestSynthIdentityShape:
+    """Synth identity must use the canonical nested shape."""
+
+    @pytest.mark.parametrize("field", sorted(SynthSpec.model_fields))
+    def test_a_spec_missing_a_required_synth_field_is_rejected(self, field: str) -> None:
+        """Every schema-required identity field is enforced structurally.
+
+        :param field: Required identity field removed from the payload.
+        """
+        spec = _make_valid_spec()
+        del spec["render"]["synth"][field]
+
+        errors = validate_structure(spec)
+
+        assert any("missing required synth fields" in error and field in error for error in errors)
+
+    def test_a_spec_with_no_nested_identity_is_rejected(self) -> None:
+        """A missing nested synth mapping is a structural error."""
+        spec = _make_valid_spec()
+        del spec["render"]["synth"]
+
+        errors = validate_structure(spec)
+
+        assert any("render.synth must be a mapping" in error for error in errors)
+
+    def test_test_values_flag_a_wrong_param_spec_in_the_nested_shape(self) -> None:
+        """A nested identity naming the wrong spec is still caught."""
+        spec = _make_valid_spec()
+        render = dict(spec["render"])
+        render["synth"] = {**render["synth"], "param_spec_name": "surge_xt"}  # type: ignore[dict-item]
+        spec["render"] = render
+
+        assert any("param_spec_name" in e for e in validate_test_values(spec))

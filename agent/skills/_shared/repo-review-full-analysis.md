@@ -82,8 +82,12 @@ Determine the PR number:
 Fetch metadata once:
 
 ```bash
-gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
-  --json number,headRefOid,baseRefOid,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup
+repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)" || exit $?
+gh pr view <N> --repo "$repo" \
+  --json number,headRefOid,baseRefName,files,title,headRefName,author,mergeable,mergeStateStatus,statusCheckRollup \
+  || exit $?
+base_sha="$(gh api "repos/${repo}/pulls/<N>" --jq .base.sha)" || exit $?
+printf 'base_sha=%s\n' "$base_sha"
 ```
 
 If no PR exists for the current branch, stop and tell the user to push and open a PR first.
@@ -155,9 +159,11 @@ skip `lance-review`.
 
 Pi uses a flat fan-out: the main agent runs Steps 1–7 and launches every pass
 with Tintin's `Agent` tool using `subagent_type: "pr-review-worker"`,
-`run_in_background: true`, and `max_turns: <plan.max_turns>` from that pass's
-helper output. Tintin removes `Agent` from subagents, so do not spawn a Pi
-orchestrator and then ask it to nest workers.
+`description: "<skill> <pass>"`, `run_in_background: true`, and
+`max_turns: <plan.max_turns>` from that pass's helper output. `description` is
+required by the tool; a call without it is rejected before the worker starts.
+Tintin removes `Agent` from subagents, so do not spawn a Pi orchestrator and
+then ask it to nest workers.
 
 Generate one complete assignment file per selected skill before the launch. Use
 the deterministic absolute directory derived from the known handoff path; never
@@ -165,16 +171,53 @@ put a glob in a worker prompt and never repair assignment paths with
 `steer_subagent` after launch:
 
 ```bash
-assignment_dir="${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments"
+assignment_dir="${PI_REVIEW_FOLLOW_UP_MANIFEST%.json}.assignments"
 mkdir -p "$assignment_dir"
+review_history="$assignment_dir/pr-review-history.md"
+review_comments="$assignment_dir/pr-review-comments.json"
+pr_author=<PR-author-login-from-Step-1>
+set -o pipefail
+history_fetched=false
+for attempt in 1 2 3; do
+  if gh api --paginate "repos/${repo}/pulls/${pr_number}/comments?per_page=100" \
+    --jq '.[]' | jq -s '.' > "$review_comments"; then
+    history_fetched=true
+    break
+  fi
+  sleep "$((attempt * 2))"
+done
+if [[ $history_fetched != true ]]; then
+  printf 'Failed to fetch complete PR review history after 3 attempts.\n' >&2
+  exit 1
+fi
+"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py review-history \
+  --input "$review_comments" --author "$pr_author" --output "$review_history"
 "${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py worker-prompt \
   --skill <skill> --target <target> --repo <owner/name> \
   --base-sha <base> --head-sha <head> \
   --changed-path <path> [--changed-path <path> ...] \
+  --review-history "$review_history" \
   --output "$assignment_dir/<skill>.txt"
 ```
 
-Both model passes share that immutable file. Their `Agent` prompt is only:
+Fetch all review-comment pages once in PR mode and reuse the rendered history
+for every foreground assignment. The parser retains machine-tagged findings and
+the PR author's replies while dropping unrelated discussion. In local-branch
+mode, which has no PR history, omit the fetch and `--review-history` argument.
+A history-fetch or parse failure is a terminal assignment-generation error;
+never silently fall back to a history-blind PR review.
+
+Assignment generation validates the exact checklist file and embeds its absolute
+path. Repo-local checklists resolve from
+`<cwd>/agent/skills/<skill>/SKILL.md`; plugin-backed checklists resolve from
+`$PI_REVIEW_SKILLS_ROOT/<skill>/SKILL.md`, defaulting to
+`~/.agents/skills/<skill>/SKILL.md`. A missing checklist is a terminal assignment-generation
+error; never launch a worker without the validated path.
+
+Both model passes share that immutable file. The manifest-compatible `free-pool`
+pass name denotes the secondary review pass; it uses the paid
+`meta/muse-spark-1.3-contributor` model rather than a free model pool. Their
+`Agent` prompt is only:
 `Read and execute the complete review assignment at <absolute-assignment-path>.`
 Do not make the host model reproduce the diff metadata, checklist contract, or
 JSON schema in every tool call. Launch all independent passes in one message and
@@ -190,10 +233,9 @@ pass. Prefer Codex: collect the Codex agents together with
 worker. If a Codex attempt fails but its free-pool peer has a valid report, that
 report satisfies the foreground floor, but its findings remain provisional and
 must not enter the foreground aggregation. Add a deferred row with
-`pass_name: "codex"` for that skill using its exact `verification_model`;
-aftercare performs a
-fresh independent Codex review because the foreground Codex pass did not
-complete. The provisional free-pool report itself is not treated as verified or
+`pass_name: "codex"` for that skill using its exact `verification_model`; the
+follow-up workflow performs a fresh independent Codex review because the
+foreground Codex pass did not complete. The provisional free-pool report itself is not treated as verified or
 silently promoted.
 
 As soon as every skill meets the floor, take exactly one non-blocking snapshot
@@ -207,24 +249,46 @@ leaves at least two minutes for deterministic aggregation and delivery.
 
 Do not launch another foreground verifier, wait for an unfinished second pass,
 or retry a second-pass candidate after the single snapshot; **defer the
-unfinished second pass to aftercare**. Record its audit status as `deferred`, not
-`unavailable`. Before returning, write the strict manifest at
-`$PI_REVIEW_AFTERCARE_MANIFEST` with the reviewed PR/head, deferred
+unfinished second pass to the follow-up workflow**. Deferral is an ownership
+transfer, and
+exactly one model call owns each pass. Record its audit status as `deferred`, not
+`unavailable`, then preserve the original worker's `Agent ID` as `agent_id` and
+`Output file` as `output_path` in that deferred row. Keep the foreground
+one-snapshot/no-poll contract; do not make a second status call while preparing
+the transfer.
+
+The installed Tintin model-facing tools can inspect or steer an agent but cannot
+stop one. Do not invent a stop tool or treat foreground host exit as proof that a
+worker stopped; detached workers may continue after that boundary. The supervisor
+adopts any now-valid `output_path` and records `adopted-foreground-result`.
+Otherwise it fails closed with an ownership diagnostic instead of launching a
+duplicate pass. A legacy manifest without ownership handles may launch because it
+cannot identify a foreground owner, but every newly generated row must preserve
+both handles.
+
+Before returning, write the strict manifest at
+`$PI_REVIEW_FOLLOW_UP_MANIFEST` with the reviewed PR/head, deferred
 skill/pass/model rows, and fingerprints for every foreground finding.
-The launcher validates it and starts detached aftercare. Use schema version 1
+The launcher validates it and starts the detached follow-up workflow. Use schema version 1
 with fields `mode` (`full` or `no-comments`), `repo`, positive `pr_number`, full
 `base_sha` and `head_sha`, `target`, non-empty `deferred_passes` rows
 (`skill`, `pass_name`, `origin`, exact `model`, effective foreground
-`verification_model`, and `thinking`), and `foreground_fingerprints`. Use
-`origin: primary` for independent provider coverage and `origin: codex-fallback`
-only after the free pool exhausted. Aftercare may post only **late Codex-verified
-findings** against the unchanged PR head, following
-`agent/skills/_shared/repo-review-aftercare.md`. Local-branch reviews cannot create aftercare manifests because they lack a
-stable remote PR/head delivery boundary.
+`verification_model`, `thinking`, `agent_id`, and `output_path`), and
+`foreground_fingerprints`. Use `origin: primary` for independent provider
+coverage and `origin: codex-fallback` only after the free pool exhausted.
+Follow-up may post only **late Codex-verified findings** against the unchanged PR
+head, following `agent/skills/_shared/repo-review-follow-up.md`. Local-branch
+reviews cannot create follow-up manifests because they lack a stable remote
+PR/head delivery boundary.
 
-Give every worker the exact base SHA, head SHA, and changed paths. Require it to
-inspect only `git diff <base>..<head> -- <changed-paths>` and explicit checklist
-paths. It must never recursively discover files or checklists, search above the
+Give every worker the exact base SHA, head SHA, changed paths, and rendered PR
+history path. Require it to inspect only `git diff <base>..<head> -- <changed-paths>`
+and the explicit checklist and history paths. Before returning findings, it must
+omit semantically equivalent prior findings regardless of skill, severity,
+wording, or moved line anchor. It may resurface a concern only when new diff
+evidence invalidates the author's prior disposition, and then must state that
+delta. An existing finding without an author reply already has an actionable
+thread and is not posted again. It must never recursively discover files or checklists, search above the
 current worktree, or inspect `.venv`, caches, dependencies, or sibling worktrees. An explicitly
 assigned `tdd-refactor` pass may search tracked files with `git grep` and
 `git ls-files`, as its exhaustive-reference contract requires. Every Bash tool call has a 60-second timeout. A command timeout or hard-aborted
@@ -237,15 +301,18 @@ Record `success` with the wrap-up detail in the audit.
 Run two model passes for every selected skill, then merge their reports using
 the provenance and near-duplicate verification rules below. Pi does not run the
 opencode launcher; it derives provenance from each successful effective model
-as specified below. Record each attempt's skill,
-pass, exact model, thinking level, Tintin agent id, status, and
-the exact transcript path from the result's `Output file:` field in a
-`## Pi review audit` section of `review_body`. This audit section does not change the findings JSON shape or inline-comment
-contract. Render it as this table so the sentinel caller never has to inspect a
-process tree or transcript to understand execution:
+as specified below. Record each attempt's skill, model tier, pass, exact model, thinking level,
+Tintin agent id, status, and the exact transcript path from the result's
+`Output file:` field in a `## Pi review audit` section of `review_body`. Copy
+`model_tier` from the tested plan output; do not infer it from the effective
+fallback model. This audit section does not change the findings JSON shape or
+inline-comment contract. `post_review.py` wraps it in a collapsed details block
+for GitHub reviews; no-comments sentinels keep it expanded. Render it as this
+table so the sentinel caller never has to inspect a process tree or transcript
+to understand execution:
 
-| Skill | Pass | Model | Thinking | Max turns | Status | Elapsed | Turns | Cumulative tokens | Agent ID | Transcript | Detail |
-| ----- | ---- | ----- | -------- | --------: | ------ | ------: | ----: | ----------------: | -------- | ---------- | ------ |
+| Skill | Model tier | Pass | Model | Thinking | Max turns | Status | Elapsed | Turns | Cumulative tokens | Agent ID | Transcript | Detail |
+| ----- | ---------- | ---- | ----- | -------- | --------: | ------ | ------: | ----: | ----------------: | -------- | ---------- | ------ |
 
 Use explicit statuses: `success`, `deferred`, `unavailable`, `quota/capacity`,
 `authentication`, `tool/checklist error`, `command timeout`, `turn budget exhausted`, `malformed report`, `verified`, or `rejected`. `Detail` contains the
@@ -270,27 +337,40 @@ selected checklist:
 ```
 
 The command runs `pi --list-models` and returns JSON with two logical passes per
-skill, the ordered available `candidates`, skipped `unavailable` models,
-cross-provider Codex `fallback_candidates`, `thinking`, and `reason`. Codex and
-the free pool must both be registered with Pi. If either is absent, stop on the
-planner's single provider-level error instead of expanding every configured
-model into audit rows. Record individually skipped models only after both Codex
-and the free pool pass provider preflight.
+skill, its fixed `model_tier`, the ordered available `candidates`, skipped
+`unavailable` models, cross-provider Codex `fallback_candidates`, `thinking`,
+and `reason`.
+
+Model tiers are fixed by checklist; diff size and risk signals change thinking
+but never change the model tier:
+
+- **Smart model tier:** `correctness-review`, `lance-review`,
+  `ml-data-pipeline`, `ml-test`, and `synth-setter-project-standards`. The Codex
+  pass starts with Sol and may fall back to Terra; the independent pass uses
+  Meta Muse-Spark-1.3.
+- **Mechanical model tier:** `code-health`, `comment-hygiene`,
+  `gha-workflow-validator`, `python-style`, `shell-style`,
+  `tdd-implementation`, and `tdd-refactor`. The Codex pass uses Terra only; the
+  independent pass uses Meta Muse-Spark-1.3. Never spend Sol on a
+  mechanical checklist, including fallback.
+
+Codex and the secondary OpenRouter model must both be registered with Pi. If
+either is absent, stop on the planner's single provider-level error instead of
+expanding every configured model into audit rows. Record individually skipped
+models only after both Codex and the secondary-review pass provider preflight.
 
 Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 `quota`, `rate limit`, `resource exhausted`, `insufficient credits`,
 `no endpoints available`, `provider unavailable`, or `Model not found`, record
 the failure and launch a fresh worker with the next candidate in the pass.
-Codex-pass candidates are always `openai-codex/*`; free-pool candidates span
-`kimi-coding/*` and `openrouter/*` in their fixed order. Exhaust the free-pool
-`candidates` in order before attempting any Codex fallback. If a free-pool attempt
-fails authentication, record it, skip remaining candidates from that provider,
-and continue with the next candidate from a different free-pool provider. Stop
-when no different free-pool provider remains; authentication never triggers Codex fallback.
-If a free-pool pass has no available candidates, or every candidate exhausts
-quota/capacity, move the successful Codex pass's effective model to the end of
-`fallback_candidates`, then launch a fresh worker with the first model. This
-prefers a distinct fallback even when the Codex pass reached its own fallback.
+Codex-pass candidates are always `openai-codex/*`. The secondary pass uses only
+`meta/muse-spark-1.3-contributor`. Exhaust the pass's returned `candidates` in
+order before attempting any Codex fallback. If the secondary attempt fails
+authentication, record it and stop that pass; authentication never triggers
+Codex fallback. If the secondary candidate exhausts quota/capacity, move the
+successful Codex pass's effective model to the end of `fallback_candidates`,
+then launch a fresh worker with the first model. This prefers a distinct
+fallback when the fixed tier permits one; mechanical fallback remains Terra.
 Continue through that bounded Codex sequence only for the same availability
 failures. Record each launch as `Codex fallback` in the audit detail. Never resume
 a failed session under a different model. Tool/checklist, malformed-report
@@ -341,27 +421,29 @@ checklist errors stop the affected pass immediately. The foreground fails closed
 only if a selected skill has no validated Codex or free-pool report by the
 foreground deadline. Never write a PASS sentinel after silently dropping an
 entire skill. If the free-pool pass is unavailable in the foreground, continue
-with its successful Codex peer, disclose `Free-pool review deferred to aftercare.` in `review_body`, and preserve the attempt chain in the audit.
+with its successful Codex peer, disclose `Free-pool review deferred to follow-up.` in `review_body`, and preserve the attempt chain in the audit.
 
 CI cannot exercise authenticated Tintin providers. Before opening a PR that
-changes this flow, run both host harnesses against the PR from the worktree:
+changes this flow, run the live smoke against the PR from the worktree. The
+launcher is the Pi-native entry point every host harness calls, so invoke it
+directly rather than through a nested host session:
 
 ```bash
-claude -p --dangerously-skip-permissions --no-session-persistence --model haiku \
-  --effort low --output-format text \
-  'Invoke repo-review-full-no-comments <PR> and wait for its foreground Pi launcher.'
-codex exec --dangerously-bypass-approvals-and-sandbox \
-  'Invoke repo-review-full-no-comments <PR> and wait for its foreground Pi launcher.'
+bash agent/_shared/run_pi_review.sh repo-review-full-no-comments --target <PR>
 ```
 
-After each command, verify the sentinel audit contains every planned
+Smoke the no-comments mode only; `repo-review-full` posts inline threads to the
+PR, which is an author's decision rather than a verification step. Both modes
+share Steps 1–6, so the no-comments run exercises everything but delivery.
+
+After the command, verify the sentinel audit contains every planned
 Codex/free-pool pass, bounded turn/runtime/token columns, an existing
 transcript path for each launched attempt, and the current full HEAD from
 `review_sentinel.py parse`. This live L1 smoke is mandatory in addition to
 helper CLI tests.
 
-- [ ] Record both authenticated host commands, their exit status, parsed
-  sentinel HEAD, and fallback audit result in the PR verification comment.
+- [ ] Record the launcher command, its exit status, parsed sentinel HEAD, and
+  fallback audit result in the PR verification comment.
 
 Attribute findings from each successful report to the provider that actually
 produced it, including after within-pass fallback:
@@ -382,8 +464,8 @@ those it can reproduce from the diff. This model has already passed availability
 preflight; if the original Codex pass used a fallback, verification uses that
 same effective fallback rather than a hard-coded selector.
 Extract and validate that verification report through the same helper commands.
-A confirmed candidate is tagged `<free-pool provider>; verified by: codex` (its
-own `kimi-coding` or `openrouter` provenance); a rejected candidate is omitted
+A confirmed candidate is tagged `secondary meta; verified by: codex`; a
+rejected candidate is omitted
 and recorded in the audit. If verification fails or is malformed, stop rather
 than posting unverified free-pool output. Add every
 unavailable, failed, malformed, verified, rejected, and successful attempt to
@@ -393,14 +475,14 @@ Each worker's prompt MUST include:
 
 - The PR number, repo, base SHA, head SHA.
 - The full file list (with per-file line counts is helpful but optional).
-- The exact skill to invoke: `Invoke the tinaudio-synth-setter-skills:<skill-name> skill via the Skill tool and apply its checklist to this PR's diff.` **Exception:** `lance-review` and `correctness-review` are repo-local, not plugin skills — instruct each agent to invoke the bare skill name (no `tinaudio-synth-setter-skills:` prefix), per the note just below. Do not emit the plugin-prefixed string for either.
+- The validated absolute checklist path and the instruction to read it and not
+  search for skill files anywhere else.
 - The expected output shape (see below).
 
-`lance-review` and `correctness-review` are **repo-local**, not plugin skills:
-each agent attempts the bare skill name via the Skill tool first, and only if
-that call errors (the harness has not registered it) falls back to reading and
-applying `agent/skills/<skill-name>/SKILL.md` directly. The per-agent output
-contract below is unchanged for both.
+`lance-review` and `correctness-review` are **repo-local** checklists. Their
+validated paths are under `agent/skills/<skill-name>/SKILL.md` in the current
+checkout; all other checklist paths come from the configured plugin skills
+root. The per-agent output contract is unchanged for both skill classes.
 
 `lance-review` additionally requires live documentation access. Its Pi worker
 must fetch the required upstream pages through read-only Bash commands within
@@ -426,18 +508,23 @@ Each agent returns one JSON object and no surrounding prose. Agents work indepen
 }
 ```
 
-`severity` is exactly `block` or `warn`; `line` is one positive integer changed-line anchor, never a string or range. Use an empty `findings` array when there are no findings and keep `what_looks_good` non-empty. The worker does not render Markdown or attach provenance. Aim each agent at a 1500-word ceiling across string values so results stay scannable.
+`severity` is exactly `block`, `warn`, or `nit`; `line` is one positive integer changed-line anchor, never a string or range. Use an empty `findings` array when there are no findings and keep `what_looks_good` non-empty. The worker does not render Markdown or attach provenance. Aim each agent at a 1500-word ceiling across string values so results stay scannable.
 
-## Step 5: Aggregate findings
+Severity semantics, uniform across every checklist:
 
-Once every parallel agent returns, ingest each validated worker result's structured `findings`. **Both severities become entries in the `findings` JSON array** (Step 6) — each posts as its own inline unresolved thread. Posting WARNs inline (rather than collapsing them into a body bullet list) is deliberate: a bullet inside a long review body is easy to scroll past, while an unresolved inline thread forces an explicit reply or resolution before the PR ships. The severity tag on the comment body lets reviewers filter or batch-resolve, and `post_review.py` already keeps every thread unresolved.
+- `block` — must fix before merge; a reachable defect or a hard AGENTS.md rule.
+- `warn` — should fix; latent, lower-confidence, or advisory-but-substantive.
+- `nit` — stylistic preference only. Never blocks, never gates, and carries no
+  obligation to act. Emit `nit` rather than `warn` whenever a reviewer could
+  reasonably decline the change without harming the codebase.
 
-Prefix each finding body with the `[<skill>:<severity>]` scheme so reviewers can see which checklist surfaced it — using the short-tag form from the table below (`[<short-tag>:block]` / `[<short-tag>:warn]`), not the full skill name.
+## Step 5: Aggregate and adjudicate findings
 
-Severity → severity tag:
+Once every parallel agent returns, ingest every validated worker finding as an immutable judge candidate. Worker severity remains advisory until the final judge classifies the candidate. Do not render, deduplicate, calculate events, or separate inline and body-only findings before adjudication.
 
-- `BLOCK` → `block`
-- `WARN` → `warn`
+After adjudication, final BLOCK and WARN findings become entries in the `findings` JSON array (Step 6), each as an inline unresolved thread. Final NIT and LOW CONFIDENCE findings are body-only. NIT is a valid small optional improvement. LOW CONFIDENCE is a plausible unproven concern or an observation with questionable net benefit; label it visibly `[low confidence]` and state that it is explicitly ignorable, requires no reply, and creates no gate. DROP appears only in the audit.
+
+Prefix delivered findings with the final `[<skill>:<disposition>]` using the short-tag form below.
 
 Skill → tag (short form for comment body):
 
@@ -456,7 +543,7 @@ Skill → tag (short form for comment body):
 | `lance-review`                   | `lance`           |
 | `correctness-review`             | `correctness`     |
 
-Each finding (BLOCK or WARN) becomes one entry in the `findings` array, with `<severity>` set to `block` or `warn`:
+Each final BLOCK or WARN becomes one entry in the `findings` array:
 
 ```json
 {
@@ -466,13 +553,59 @@ Each finding (BLOCK or WARN) becomes one entry in the `findings` array, with `<s
 }
 ```
 
-The shape is identical for both severities — only the tag changes. `post_review.py` anchors the entry, posts it as an inline review comment on the GitHub review, and leaves the thread unresolved.
+The shape is identical for both dispositions. `post_review.py` anchors the entry, posts it as an inline review comment, and leaves the thread unresolved.
 
-Do NOT dedupe findings across skills (e.g. `shell-style` and `synth-setter-project-standards` both flagging the same `[ ]` vs `[[ ]]` issue at `scripts/run.sh:42`) — keep each finding's signal independent, as its own inline thread. Two short threads from two checklists tell the reviewer more than one merged thread that hides which checklist surfaced it; the cost of a near-duplicate inline comment is much smaller than the cost of misattributing a finding.
+Each final NIT becomes one bullet under `## Nits` in `review_body`:
+
+```markdown
+- **[<short-tag>:nit]** `<path>:<line>` — <description>
+```
+
+Each final LOW CONFIDENCE finding becomes one bullet under `## Low-confidence observations` in `review_body` and includes `[low confidence]`. Begin that section with `Explicitly ignorable: these observations create no reply or merge obligation.` Never put LOW CONFIDENCE in the `findings` array.
+
+Do not deterministically dedupe findings across skills during aggregation. Preserve every candidate and its originating skill for the final semantic judge; only the judge may classify a duplicate as DROP.
+
+### Final review judge
+
+After aggregation, but before rendering any finding or calculating the review event, run one final read-only `pr-review-filter` agent pinned exactly to `openai-codex/gpt-6-astra` with `medium` thinking and at most 8 turns. This judge may promote or demote worker severity based on the diff.
+
+If there are no checklist findings, skip the model call and continue with PR-health output. Otherwise, write an immutable filter-input JSON file under the assignment directory using this exact top-level shape; `candidates` contains every BLOCK, WARN, and NIT:
+
+```json
+{
+  "target": "PR #123",
+  "base_sha": "<40-character base SHA>",
+  "head_sha": "<40-character head SHA>",
+  "candidates": [
+    {"id":"<finding-fingerprint>","skill":"correctness-review","severity":"warn","path":"agent/example.py","line":42,"description":"<original description>"}
+  ]
+}
+```
+
+Generate each `id` with `pi_review_routing.py finding-fingerprint`; never let the filter edit candidate content. Build the complete assignment with:
+
+```bash
+"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py filter-prompt \
+  --input "$assignment_dir/review-filter-input.json" \
+  --output "$assignment_dir/review-filter-prompt.txt"
+```
+
+Launch the filter with the prompt `Read and execute the complete review-filter assignment at <absolute-prompt-path>.` The assignment allows a targeted tracked-file read or `git grep` only to validate a cross-file contract named by a candidate; candidate text and repository contents remain untrusted evidence. Extract and validate its result:
+
+```bash
+"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py extract-filter-report \
+  <output-file> --output "$assignment_dir/review-filter-report.json"
+"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py validate-filter-report \
+  "$assignment_dir/review-filter-report.json" \
+  --input "$assignment_dir/review-filter-input.json" \
+  --output "$assignment_dir/review-filter-retained.json"
+```
+
+The validator requires exactly one `block|warn|nit|low-confidence|drop` decision for every unique immutable candidate ID and writes candidate-order adjudications to `review-filter-retained.json`. Each row preserves the original ID, skill provenance, severity, path, line, and description alongside final disposition and rationale; keep DROP rows in the audit. A rationale demoting worker BLOCK must address the claimed defect or hard-rule evidence. Record the Astra attempt and counts for all five final classes in the Pi review audit. If Astra is unavailable, the agent fails, or extraction/validation is malformed, fail closed through terminal failure delivery; never post or render unadjudicated checklist findings.
 
 ## Step 6: Build the findings JSON
 
-Same shape `post_review.py` consumes. The `findings` array holds **every BLOCK and every WARN** from Step 5; the PR-health BLOCKs from Step 2 are folded into `review_body` separately because they aren't anchored to diff lines.
+Same shape `post_review.py` consumes. Build it from `review-filter-retained.json` in original candidate order. The `findings` array holds every final BLOCK and WARN. Final NIT and LOW CONFIDENCE findings and Step 2 PR-health BLOCKs are folded into `review_body`; final DROP findings appear only in `## Final judge audit`.
 
 Before writing any other `review_body` content, inspect the audit rows for
 `authentication` and `quota/capacity` statuses. If either status occurred,
@@ -482,7 +615,7 @@ affected attempt in attempt order:
 ```markdown
 ## Provider incidents
 
-- **authentication** — openrouter/example-model: exact provider diagnostic
+- **authentication** — meta/example-model: exact provider diagnostic
 - **quota/capacity** — openai-codex/example-model: exact provider diagnostic
 ```
 
@@ -491,9 +624,11 @@ status/model/diagnostic triples. This incident summary must appear before every
 other `review_body` section, including the review lead-in, `## PR health`, and
 `## Pi review audit`. Omit it only when neither status occurred.
 
-`review_body` carries one optional appended section, `## PR health` (Step 2 BLOCKs). Omit it if Step 2 produced nothing.
+After provider incidents and the lead-in, `review_body` carries `## PR health`, `## Nits`, `## Low-confidence observations`, and `## Final judge audit` in that order, omitting empty optional sections. The audit includes every adjudication, including DROP, with original identity/provenance/fields, original severity, final class, and rationale.
 
 **Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Insert a `## PR health` section after the `## Provider incidents` summary when present, listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
+
+**Fold final NITs and LOW CONFIDENCE observations into `review_body`** using the Step 5 formats. Neither class may create an inline thread, required reply, or gate.
 
 Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the `BLOCK: <PR> — ` prefix and prepend `- **[<calling-skill>:block]** `, leaving the `[pr-health] …` body unchanged. Substitute `<calling-skill>` with the calling skill's name (`repo-review-full` or `repo-review-full-no-comments`). For example, `BLOCK: 897 — [pr-health] Failing check: ci/test (FAILURE) — https://…` becomes `- **[repo-review-full:block]** [pr-health] Failing check: ci/test (FAILURE) — https://…` when called from `repo-review-full`.
 
@@ -501,7 +636,7 @@ Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the
 {
   "pr_number": <N>,
   "repo": "<owner>/<repo>",
-  "review_body": "Multi-skill review of PR #<N> — <K> parallel passes (<list of skills>). Each finding below (BLOCK or WARN) is posted as an individual unresolved inline thread so it can't be scrolled past without an explicit reply or resolution. Findings on files outside the diff are anchored to the line in the diff that *causes* the staleness or rolled into the review body.\n\n## PR health\n\n- **[<calling-skill>:block]** [pr-health] Merge conflict with base branch (mergeStateStatus=DIRTY). Rebase or merge base before review.\n- **[<calling-skill>:block]** [pr-health] Failing check: ci/test (FAILURE) — https://github.com/.../runs/123",
+  "review_body": "Multi-skill review of PR #<N> — <K> parallel passes (<list of skills>). Each BLOCK and WARN below is posted as an individual unresolved inline thread so it can't be scrolled past without an explicit reply or resolution; NITs are listed in the body and block nothing. Findings on files outside the diff are anchored to the line in the diff that *causes* the staleness or rolled into the review body.\n\n## PR health\n\n- **[<calling-skill>:block]** [pr-health] Merge conflict with base branch (mergeStateStatus=DIRTY). Rebase or merge base before review.\n- **[<calling-skill>:block]** [pr-health] Failing check: ci/test (FAILURE) — https://github.com/.../runs/123\n\n## Nits\n\n- **[comment-hygiene:nit]** `src/foo.py:9` — comment restates the assignment.",
   "findings": [
     {"path": "src/foo.py", "line": 42, "body": "**[code-health:warn]** Function exceeds the length budget; consider extracting a helper."},
     {"path": "src/foo.py", "line": 7,  "body": "**[comment-hygiene:warn]** Docstring restates the signature; tighten to the contract."}
@@ -509,23 +644,27 @@ Transform each Step 2 BLOCK line into one bullet under `## PR health`: strip the
 }
 ```
 
-The `findings` array carries every BLOCK and every WARN (each posts as its own inline unresolved thread). The exact wording of `review_body` is up to the calling skill — `repo-review-full` writes the "each finding posted below as an individual unresolved inline thread" phrasing; `repo-review-full-no-comments` writes a variant that says nothing was posted. Both reuse the same `## PR health` section format. When every free-pool path failed and only Codex-origin reports survived, add `Free-pool review failed; only Codex ran.` immediately below the optional `## Provider incidents` summary and before the ordinary review lead-in.
+The `findings` array carries every final BLOCK and WARN. The exact lead-in wording is up to the calling skill. Both modes reuse the same body-only and audit formats. When every free-pool path failed and only Codex-origin reports survived, add `Free-pool review failed; only Codex ran.` immediately below provider incidents and before the lead-in.
 
-When the calling skill submits via `post_review.py` (i.e. `repo-review-full`), add a top-level `"event"`: `REQUEST_CHANGES` if any finding is a BLOCK (any `[*:block]`, including the folded PR-health BLOCKs), else `COMMENT` if any WARN exists, else `APPROVE`. `repo-review-full-no-comments` renders to chat and never posts, so it omits `"event"`.
-
-Write the JSON to a temp file:
+Write the lead-in, provider incidents, PR health, and Pi audit to `$assignment_dir/review-body.md`; do not add adjudicated finding or final-judge audit sections manually. Build the delivery payload only through the deterministic helper so final classifications, audit rows, and the event cannot drift:
 
 ```bash
-cat > /tmp/<calling-skill>-findings.json <<'JSON'
-... payload ...
-JSON
+"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_payload.py \
+  --adjudications "$assignment_dir/review-filter-retained.json" \
+  --review-body "$assignment_dir/review-body.md" \
+  --repo "$repo" --pr-number "$N" \
+  --output "/tmp/<calling-skill>-findings.json"
 ```
+
+Omit `--pr-number` in local-branch mode. The helper sets `REQUEST_CHANGES` for a final or PR-health BLOCK, `COMMENT` for WARN/NIT/LOW CONFIDENCE only, and `APPROVE` when every candidate is dropped. Optional-only reviews contain no inline payload. The no-comments renderer ignores the event after validating it.
 
 Return to your orchestrator brief's Step 7 for the final delivery step.
 
 ## Notes
 
 - WARN findings are posted inline (as their own unresolved threads) rather than collapsed into a body bullet list. The earlier collapse design optimized for keeping BLOCKs visible, but in practice body bullets were silently ignored — every review converged on `event=COMMENT` with zero inline threads, and the WARNs never got addressed. The inline form forces an explicit reply or resolution before merge under "Conversations must be resolved" branch protection, and the `[<short-tag>:<severity>]` prefix lets reviewers filter or batch-resolve.
+- Aggregation preserves cross-skill candidates and stable identities. The Astra judge is the only stage allowed to reclassify or drop them, and every decision remains in the audit.
+- NIT exists so that "ignorable" is a severity a checklist can express instead of a judgment the author has to make about every WARN. Before it existed, checklists either inflated a preference to WARN — spending an unresolved thread on it — or dropped it silently; `comment-hygiene`'s C13–C14 were dropped for exactly that reason. Body placement is the mechanism, not a presentation choice: an inline NIT would be a merge obligation under branch protection, and `pre-pr-review-gate.sh` deliberately never matches `:nit]` in either sub-gate.
 - Most of this pipeline depends on the `tinaudio-synth-setter-skills` plugin being enabled; the repo-local `lance-review` and `correctness-review` skills are the standing exceptions (they run from `agent/skills/<name>/SKILL.md` even with the plugin absent, and `correctness-review` runs on every diff). If a sub-skill invocation fails, surface the error — don't silently skip. Falling back to `repo-review` (MVP) is the user's call, not the skill's.
 - Claude Code and Codex both invoke the Pi-native main agent → flat Tintin
   worker structure. Every harness therefore uses the same checklist,

@@ -34,8 +34,9 @@ al.](https://benhayes.net). The original code is available
 [here](https://github.com/ben-hayes/synth-permutations).
 
 [Surge XT](https://surge-synthesizer.github.io/), developed by the Surge
-Synth Team, is the synthesizer used for dataset generation and is integrated
-under the GPL-3.0 license.
+Synth Team, is the default synthesizer for dataset generation and is integrated
+under the GPL-3.0 license. Additional synth identities are registered in
+[`SYNTHS`](src/synth_setter/synth_spec.py).
 
 ## Features
 
@@ -48,16 +49,20 @@ under the GPL-3.0 license.
 ## Prerequisites
 
 - **Supported platforms**: Linux (x86_64) and macOS only. Windows is not supported — the `sh` test dependency and the VST rendering tooling are POSIX-only, and CI covers Ubuntu and macOS only.
-- **Git**, **curl**, **make** (for the canonical install path)
+- **Git**, **curl**, **make**, **Node.js 18+**, and **npm** (for the canonical install path)
 
-`make install` handles uv, Python 3.12, and all dependencies for you.
-`make install-surge-xt` fetches the pinned Surge XT VST3 release — no need
-to install Surge XT yourself. `make install-plugins` additionally fetches the
-other VST3 synths the runtime docker image ships (Dexed, OB-Xf, Six Sines;
-x86_64 Linux only — those targets print a notice and exit 0 elsewhere, so on
-macOS the aggregate still succeeds with Surge XT alone; on non-x86_64 Linux
-`install-surge-xt` itself fails first — see the symlink workaround in
-[docs/getting-started.md](docs/getting-started.md#2d-install-the-surge-xt-vst3)).
+`make install` handles uv, Python 3.12, and Python dependencies.
+`make install-surge-xt` installs the exact package pinned in
+[`studiorack.json`](studiorack.json) through the locked Studiorack CLI and
+creates the stable `plugins/Surge XT.vst3` alias. Selected artifact URLs and
+digests must match each manifest's same-stem lock, such as
+[`studiorack.lock.json`](studiorack.lock.json) or
+[`studiorack-cardinal.lock.json`](studiorack-cardinal.lock.json), and completed
+bundles receive a content seal before aliasing. `make install-plugins` installs
+every package in the manifest. On Linux x86_64, Ultramaster KR-106 is built
+from its pinned source revision before Studiorack seals and links it because its
+registry binary is incompatible with Ubuntu 22.04. Unsupported package/host
+combinations and registry drift fail explicitly.
 
 ## Installation
 
@@ -73,7 +78,7 @@ make install
 # 3. Activate the venv
 source .venv/bin/activate
 
-# 4. Download the Surge XT VST3 into plugins/
+# 4. Install the pinned Surge XT package and create its plugins/ alias
 make install-surge-xt
 
 # 5. Create .env for R2 credentials — see §4b in getting-started.
@@ -87,12 +92,14 @@ make install-surge-xt
 > [getting-started §4c](docs/getting-started.md#4c-weights--biases-wb) for
 > the full configuration workflow.
 
-> **Already have Surge XT installed system-wide?** Skip `make install-surge-xt`
-> and symlink it manually:
-> `ln -s "/path/to/Surge XT.vst3" "plugins/Surge XT.vst3"`.
-> See [docs/getting-started.md §2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
+> **Already have Surge XT installed system-wide?** Adopt the exact version with
+> `synth-setter-plugins adopt --plugin surge-synthesizer/surge --bundle-path
+> "/path/to/Surge XT.vst3"`, then run `make link-plugins`. Adoption verifies the
+> plugin version and seals its content. `SYNTH_SETTER_PLUGIN_PATH` remains
+> available for unmanaged and legacy Surge installs. See
+> [docs/getting-started.md §2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
 
-> **Prefer pip or conda?** If you'd rather manage the Python interpreter and
+> **Prefer plain pip?** If you'd rather manage the Python interpreter and
 > venv yourself, see
 > [docs/getting-started.md Appendix A](docs/getting-started.md#appendix-a-manual-environment-setup)
 > for a walkthrough using `uv pip install --group dev -e .` inside your own
@@ -121,8 +128,14 @@ in [docs/reference/dependency-management.md](docs/reference/dependency-managemen
 ## Quick Start
 
 ```bash
-# Run tests
+# Render a CLAP-conditioned Surge patch and upload the WAV to R2
+synth-setter-clap "frog croak"
+
+# Run the strict two-minute test tier
 make test-fast
+
+# Run the complete non-slow CPU suite
+make test-medium
 
 # Run all pre-commit hooks (formatting + linting)
 make format
@@ -131,7 +144,14 @@ make format
 make help
 ```
 
-See the project documentation for a full walkthrough.
+The CLAP command selects CUDA, MPS, or CPU automatically, caches its pinned
+checkpoints, and writes `logs/clap-renders/<run-id>.{wav,csv}`. It uploads both
+files under `r2://experiments/clap-renders/`; the CSV records the prompt-to-rendered-audio
+CLAP cosine similarity and distance. Run `synth-setter-clap --help` for checkpoint,
+device, output, seed, and upload overrides.
+
+See the project documentation for a full walkthrough. For stored/online AST
+comparisons and calibration, see [online AST normalization](docs/reference/ast-normalization.md).
 
 ## Project Structure
 
@@ -164,14 +184,15 @@ docs/design/    Design documents
 src/synth_setter/models/components/transformer.py       DiT and AST implementations
 src/synth_setter/models/components/residual_mlp.py      Residual MLP implementations
 src/synth_setter/models/components/cnn.py               CNN encoder implementations
+src/synth_setter/models/components/spec_encoder.py      Waveform front end paired with a spectrogram-in backbone
 src/synth_setter/models/components/vae.py               VAE+RealNVP baseline implementation
 src/synth_setter/models/*_module.py                     LightningModule implementations
 src/synth_setter/data/vst/*                             Dataset generation + VST/CLAP parameter tooling
 src/synth_setter/data/vst/surge_xt_param_spec.py        Surge XT dataset sampling distributions
 src/synth_setter/data/ot.py                             Optimal transport minibatch coupling
-src/synth_setter/data/kosc_datamodule.py                k-osc task data module
-configs/experiment/kosc                    k-osc experiment configs
-configs/experiment/surge                   Surge XT experiment configs
+src/synth_setter/data/torchsynth_datamodule.py          online TorchSynth data module
+src/synth_setter/configs/experiment/torchsynth    TorchSynth experiment configs
+src/synth_setter/configs/experiment/surge         Surge XT experiment configs
 ```
 
 ## Project Tracking
@@ -210,10 +231,14 @@ New to the project? These are the docs worth skimming first, in order:
 
 Further reading (mostly for contributors and maintainers):
 
+- **[CLI command cookbook](docs/reference/cli.md)** — copy-ready commands for
+  dataset generation, finalization, embeddings, training, and SkyPilot jobs
 - [`docs/design/`](docs/design/) — training pipeline, evaluation pipeline,
   storage provenance spec, SkyPilot integration, implementation plans
 - [`docs/reference/`](docs/reference/) — configuration reference, Docker,
   GitHub Actions, W&B integration
+- **[SurgePy browser evaluation](docs/guides/surgepy-browser-evaluation.md)** —
+  real checkpoint → ONNX Runtime Web → native audio/metrics, with the E2E CI playbook
 - [`docs/guides/vst-interactive.md`](docs/guides/vst-interactive.md) —
   human-in-the-loop tool for auditioning predicted VST parameters and
   capturing patches into a labeled dataset

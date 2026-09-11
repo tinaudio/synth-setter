@@ -8,7 +8,7 @@ stream object storage natively: pass ``storage_options`` (see
 Typical usage::
 
     loader = lance_map_dataloader("data/train.lance", batch_size=128, shuffle=True)
-    for batch in loader:  # {"mel_spec": (128, C, 128, F) tensor, ...}
+    for batch in loader:  # raw stored columns: {"mel_spec": (128, C, 128, F) tensor, ...}
         ...
 """
 
@@ -57,7 +57,30 @@ def _column_to_tensor(array: pa.Array | pa.ChunkedArray, name: str) -> torch.Ten
     return torch.from_numpy(values if values.flags.writeable else values.copy())
 
 
-def _batch_to_shaped_tensors(
+def _expand_column(
+    array: pa.Array | pa.ChunkedArray, name: str, out: dict[str, torch.Tensor]
+) -> None:
+    """Convert one column into ``out``, flattening struct children to dotted keys.
+
+    Normalizes Lance's projection asymmetry: ``take`` returns a (pruned) struct
+    while a scanner's dotted projection returns flat ``parent.child`` columns —
+    both land under identical ``parent.child`` keys.
+
+    :param array: Column values for one batch.
+    :param name: Column name; struct children append ``.child``.
+    :param out: Destination mapping receiving one tensor per leaf column.
+    """
+    if isinstance(array, pa.ChunkedArray):
+        array = array.combine_chunks()
+    if pa.types.is_struct(array.type):
+        struct = cast(pa.StructArray, array)
+        for index, field in enumerate(struct.type):
+            _expand_column(struct.field(index), f"{name}.{field.name}", out)
+        return
+    out[name] = _column_to_tensor(array, name)
+
+
+def batch_to_shaped_tensors(
     batch: pa.RecordBatch | dict[str, Any],
     *,
     hf_converter: dict[str, Any] | None = None,
@@ -77,7 +100,10 @@ def _batch_to_shaped_tensors(
     del hf_converter, use_blob_api, kwargs
     if isinstance(batch, dict):
         raise TypeError("blob columns are not supported by the lance_torch dataloaders")
-    return {name: _column_to_tensor(batch[name], name) for name in batch.column_names}
+    tensors: dict[str, torch.Tensor] = {}
+    for name in batch.column_names:
+        _expand_column(batch[name], name, tensors)
+    return tensors
 
 
 def _dataset_options(storage_options: dict[str, str] | None) -> dict[str, dict[str, str]] | None:
@@ -103,15 +129,29 @@ class LanceMapDataset(SafeLanceDataset):
         *,
         columns: Sequence[str] | None = None,
         storage_options: dict[str, str] | None = None,
-    ):
+        version: int | None = None,
+        include_sample_id: bool = False,
+    ) -> None:
         """Open the dataset lazily for map-style access.
 
         :param uri: Dataset directory (local path or ``s3://`` URI).
         :param columns: Columns each item carries; ``None`` reads all.
         :param storage_options: Object-store config for a cloud ``uri`` (see
             :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
+        :param version: Exact local Lance version retained across worker reopens.
+        :param include_sample_id: Add int64 row offsets scoped to this pinned split version.
+        :raises ValueError: If the source already contains the reserved ``sample_id`` column.
         """
-        super().__init__(str(uri), dataset_options=_dataset_options(storage_options))
+        options: dict[str, Any] = _dataset_options(storage_options) or {}
+        if version is not None:
+            options["version"] = version
+        if include_sample_id:
+            snapshot = lance.dataset(str(uri), **options)
+            if "sample_id" in snapshot.schema.names:
+                raise ValueError("sample_id is reserved for transient source row identities")
+            options["version"] = snapshot.version
+        super().__init__(str(uri), dataset_options=options)
+        self._include_sample_id = include_sample_id
         self._columns = list(columns) if columns is not None else None
         self._opening_pid: int | None = None
 
@@ -132,7 +172,12 @@ class LanceMapDataset(SafeLanceDataset):
             self._ds = lance.dataset(self.uri, **self.dataset_options)
             self._opening_pid = current_pid
         table = self._ds.take(list(indices), columns=self._columns)
-        return {name: _column_to_tensor(table[name], name) for name in table.column_names}
+        tensors: dict[str, torch.Tensor] = {}
+        for name in table.column_names:
+            _expand_column(table[name], name, tensors)
+        if self._include_sample_id:
+            tensors["sample_id"] = torch.tensor(indices, dtype=torch.int64)
+        return tensors
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         """Fetch one row as a dict of per-row tensors.
@@ -163,6 +208,7 @@ def map_dataloader_over(
     pin_memory: bool = False,
     drop_last: bool = False,
     persistent_workers: bool = False,
+    prefetch_factor: int | None = None,
 ) -> DataLoader:
     """Wrap an existing map-style dataset in a (spawn-safe) DataLoader.
 
@@ -180,15 +226,17 @@ def map_dataloader_over(
     :param pin_memory: Whether DataLoader pins tensors before returning them.
     :param drop_last: Whether to discard a shorter final batch.
     :param persistent_workers: Whether worker processes survive across iterator resets.
-    :returns: DataLoader over ``dataset``. Worker persistence is disabled when
-        ``num_workers`` is zero.
+    :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
+        PyTorch's default.
+    :returns: DataLoader over ``dataset``. Worker persistence and prefetch depth
+        are disabled when ``num_workers`` is zero.
     """
     effective_collate = collate_fn or _prebatched_collate
     effective_persistence = persistent_workers and num_workers > 0
     effective_shuffle = None if sampler is not None else shuffle
     if num_workers == 0:
-        # get_safe_loader requires workers; plain DataLoader supports in-process loading.
-        # Cast bridges __getitems__' column dict with DataLoader's list-oriented stub.
+        # In-process loading needs plain DataLoader; get_safe_loader requires workers.
+        # Cast bridges its list-oriented stub; PyTorch forbids prefetch_factor without workers.
         typed_collate = cast(Callable[[list[object]], object], effective_collate)
         return DataLoader(
             dataset,
@@ -210,6 +258,7 @@ def map_dataloader_over(
         pin_memory=pin_memory,
         drop_last=drop_last,
         persistent_workers=effective_persistence,
+        prefetch_factor=prefetch_factor,
     )
 
 
@@ -226,6 +275,7 @@ def lance_map_dataloader(
     pin_memory: bool = False,
     drop_last: bool = False,
     persistent_workers: bool = False,
+    prefetch_factor: int | None = None,
 ) -> DataLoader:
     """Build a map-style DataLoader (random access, shuffling, DDP-samplable).
 
@@ -241,9 +291,11 @@ def lance_map_dataloader(
     :param pin_memory: Whether DataLoader pins tensors before returning them.
     :param drop_last: Whether to discard a shorter final batch.
     :param persistent_workers: Whether worker processes survive across iterator resets.
+    :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
+        PyTorch's default.
     :returns: DataLoader yielding ``{column: (<=batch_size, *inner_shape) tensor}`` —
         the final batch is shorter when the row count is not divisible by ``batch_size``.
-        Worker persistence is disabled when ``num_workers`` is zero.
+        Worker persistence and prefetch depth are disabled when ``num_workers`` is zero.
     """
     dataset = LanceMapDataset(uri, columns=columns, storage_options=storage_options)
     logger.info(
@@ -264,6 +316,7 @@ def lance_map_dataloader(
         pin_memory=pin_memory,
         drop_last=drop_last,
         persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
     )
 
 
@@ -320,7 +373,7 @@ def lance_iterable_dataloader(
         dataset_options=_dataset_options(storage_options),
         columns=list(columns) if columns is not None else None,
         shard_granularity="batch",
-        to_tensor_fn=_batch_to_shaped_tensors,
+        to_tensor_fn=batch_to_shaped_tensors,
         sampler=sampler,
     )
     return DataLoader(dataset, batch_size=None, num_workers=0)

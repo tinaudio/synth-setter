@@ -12,8 +12,10 @@ import glob
 import json
 import os
 import re
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import wandb
@@ -132,7 +134,7 @@ def test_generate_logs_spec_as_hyperparams_and_artifact_offline(
 
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
-        lambda _path: spec.render.renderer_version,
+        lambda _path: spec.render.synth.synth_version,
     )
     _stub_complete_attempts(monkeypatch)
 
@@ -196,7 +198,7 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
 
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
-        lambda _path: spec.render.renderer_version,
+        lambda _path: spec.render.synth.synth_version,
     )
     _stub_complete_attempts(monkeypatch)
 
@@ -251,6 +253,75 @@ def test_generate_logs_per_shard_and_summary_metrics_offline(
     assert json.loads(summary["generation/samples_per_second"]) == 0.0, summary
 
 
+def test_generate_logs_badwindow_failure_before_fail_fast_exit_offline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dataset_spec_factory: Callable[..., DatasetSpec],
+) -> None:
+    """A fatal X11 warmup failure reaches W&B before generation exits.
+
+    :param tmp_path: Per-test render and offline W&B directory.
+    :param monkeypatch: Pins offline W&B, storage, and renderer boundaries.
+    :param dataset_spec_factory: Shared ``DatasetSpec`` factory.
+    """
+    _offline_wandb_env(monkeypatch, tmp_path)
+    spec = _build_spec(dataset_spec_factory)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.extract_renderer_version",
+        lambda _path: spec.render.synth.synth_version,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset.write_rendering_marker",
+        lambda *_args, **_kwargs: None,
+    )
+    badwindow_output = (
+        b"X Error of failed request:  BadWindow (invalid Window parameter)\n"
+        b"  Major opcode of failed request:  20 (X_GetProperty)\n"
+    )
+
+    def _raise_badwindow(_args: list[str]) -> None:
+        raise subprocess.CalledProcessError(
+            1,
+            "generate_vst_dataset.py",
+            output=badwindow_output,
+        )
+
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._check_call_streamed",
+        _raise_badwindow,
+    )
+    wandb_logger = WandbLogger(
+        offline=True,
+        save_dir=str(tmp_path),
+        id=spec.run_id,
+        project="wandb-track-test-project",
+    )
+    wandb_run = wandb_logger.experiment
+    define_metric = MagicMock(wraps=wandb_run.define_metric)
+    monkeypatch.setattr(wandb_run, "define_metric", define_metric)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        generate(spec, tmp_path, [wandb_logger])
+
+    define_metric.assert_called_once_with("generation/badwindow_detected", summary="max")
+    assert wandb.run is None, "generate() did not close the failed wandb run"
+    binary_files = glob.glob(
+        str(tmp_path / "wandb" / f"offline-run-*-{spec.run_id}" / "run-*.wandb")
+    )
+    assert len(binary_files) == 1, f"expected exactly one .wandb binary, found {binary_files}"
+    rows = read_history_rows(
+        Path(binary_files[0]),
+        until=lambda scanned: any("generation/badwindow_detected" in row for row in scanned),
+    )
+    failure_rows = [row for row in rows if "generation/badwindow_detected" in row]
+    assert len(failure_rows) == 1
+    assert json.loads(failure_rows[0]["generation/badwindow_detected"]) == 1
+
+
 def test_generate_relay_preserves_nonzero_rejection_counts_offline(
     tmp_path: Path,
     fake_r2_remote: Path,
@@ -268,7 +339,7 @@ def test_generate_relay_preserves_nonzero_rejection_counts_offline(
     spec = _build_spec(dataset_spec_factory)
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
-        lambda _path: spec.render.renderer_version,
+        lambda _path: spec.render.synth.synth_version,
     )
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.shard_has_complete_attempt",
@@ -281,7 +352,7 @@ def test_generate_relay_preserves_nonzero_rejection_counts_offline(
         if args and args[0] != "rclone":
             shard_path = Path(args[find_script_index(args) + 1])
             render_metrics_path(shard_path).write_text(
-                RenderRejectionMetrics(clipped=2, silent=3).model_dump_json()
+                RenderRejectionMetrics(clipped=2, non_finite=3, silent=4).model_dump_json()
             )
 
     monkeypatch.setattr(
@@ -306,10 +377,12 @@ def test_generate_relay_preserves_nonzero_rejection_counts_offline(
     )
     shard_rows = [row for row in rows if "shard/bytes" in row]
     assert [json.loads(row["shard/samples_rejected_clipped"]) for row in shard_rows] == [2, 2]
-    assert [json.loads(row["shard/samples_rejected_silent"]) for row in shard_rows] == [3, 3]
+    assert [json.loads(row["shard/samples_rejected_non_finite"]) for row in shard_rows] == [3, 3]
+    assert [json.loads(row["shard/samples_rejected_silent"]) for row in shard_rows] == [4, 4]
     summary = next(row for row in rows if "shards/rendered" in row)
     assert json.loads(summary["generation/samples_rejected_clipped"]) == 4
-    assert json.loads(summary["generation/samples_rejected_silent"]) == 6
+    assert json.loads(summary["generation/samples_rejected_non_finite"]) == 6
+    assert json.loads(summary["generation/samples_rejected_silent"]) == 8
 
 
 def test_generate_stamps_wandb_provenance_into_run_config_offline(
@@ -340,7 +413,7 @@ def test_generate_stamps_wandb_provenance_into_run_config_offline(
 
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset.extract_renderer_version",
-        lambda _path: spec.render.renderer_version,
+        lambda _path: spec.render.synth.synth_version,
     )
     _stub_complete_attempts(monkeypatch)
 
@@ -367,3 +440,56 @@ def test_generate_stamps_wandb_provenance_into_run_config_offline(
     assert json.loads(config["image_tag"]) == "test-image:abc123", config
     sha = json.loads(config["github_sha"])
     assert sha == "unknown" or re.fullmatch(r"[0-9a-f]{40}", sha), config
+
+
+def test_main_finalize_inline_logs_dataset_artifact_to_dedicated_finalize_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inline finalize opens its own offline W&B run carrying the dataset artifact.
+
+    ``generate`` and the R2-facing finalize body are stubbed so the only
+    side effect is the finalize-stage W&B run ``main()`` brackets around
+    ``finalize_inline=true``; its id is ``<generate run id>-finalize``.
+
+    :param tmp_path: Hosts ``PROJECT_ROOT`` so the offline run lands under the test tree.
+    :param monkeypatch: Pins the offline ``WANDB_*`` env, argv, and the I/O stubs.
+    """
+    import synth_setter.cli.generate_dataset as gd
+
+    _offline_wandb_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    plugin = Path(__file__).resolve().parent / "pipeline" / "fixtures" / "TestPlugin.vst3"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"synth.plugin_path={plugin}",
+            "finalize_inline=true",
+        ],
+    )
+    monkeypatch.setattr(gd, "write_spec_locally", lambda _spec, out: Path(out) / "input_spec.json")
+    monkeypatch.setattr(
+        gd, "upload_spec", lambda _spec: "r2://stub-bucket/stub-key/input_spec.json"
+    )
+    monkeypatch.setattr(gd.r2_io, "ensure_r2_env_loaded", lambda *_a, **_k: None)
+    monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
+    monkeypatch.setattr(
+        "synth_setter.cli.finalize_dataset.finalize_from_spec",
+        lambda _spec, _work_dir, _cb=None: None,
+    )
+
+    gd.main()
+
+    assert wandb.run is None, "main() did not close the finalize wandb run on return"
+    finalize_dirs = list(tmp_path.rglob("wandb/offline-run-*-smoke-shard-*-finalize"))
+    assert len(finalize_dirs) == 1, f"expected one finalize offline-run dir, found {finalize_dirs}"
+    binary_files = glob.glob(str(finalize_dirs[0] / "run-*.wandb"))
+    assert len(binary_files) == 1, f"expected one .wandb binary, found {binary_files}"
+    payload = read_run_binary(
+        Path(binary_files[0]), until=lambda data: b"data-smoke-shard" in data
+    )
+    assert b"data-smoke-shard" in payload, "dataset artifact not recorded on the finalize run"

@@ -1,0 +1,20 @@
+# @package _global_
+
+# SAME-L conditioning: the `same_l` Lance column written by the add_embeddings
+# CLI, pooled by the embedpool encoder. 44 latent frames = 4 s render @ 44.1 kHz
+# through SAME's 4096-sample downsampling ratio (SAME_LATENT_FRAMES).
+defaults:
+  - override /model/encoder: embedpool
+
+model:
+  conditioning:
+    column: same_l
+    input_shape: [256, 44]
+  encoder:
+    embed_dim: 256
+    max_seq_len: 44
+
+datamodule:
+  conditioning:
+    column: same_l
+    input_shape: [256, 44]

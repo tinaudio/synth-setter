@@ -1,14 +1,16 @@
 defaults:
+  - backbone@net: ast_projection
+  - encoder: null
   - _self_
 
 _target_: synth_setter.models.vst_ff_module.VSTFeedForwardModule
 
+conditioning: mel
+encoder_num_heads: 1
+encoder_output_dim: ${param_spec_width:${synth.param_spec_name}}
+
 net:
-  _target_: synth_setter.models.components.transformer.ASTWithProjectionHead
-  d_model: 768
-  d_out: ${param_spec_width:${datamodule.param_spec_name}}
-  n_heads: 16
-  n_layers: 12
+  d_out: ${model.encoder_output_dim}
   patch_size: 16
   patch_stride: 10
   input_channels: 2

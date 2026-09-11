@@ -58,7 +58,7 @@
       },
       {
         "matcher": "Edit|Write",
-        "description": "No-yaml-run-comments: on Edit/Write of .github/workflows/*.{yml,yaml} or configs/compute/*.{yml,yaml}, blocks the call if the post-edit content has any `#`-comment line inside a `run: |` / `setup: |` block scalar. The block scalar body is bash; stray quotes/backticks inside a comment have caused unintended shell expansion. Goal: keep comments above the step, not inside it.",
+        "description": "No-yaml-run-comments: on Edit/Write of .github/workflows/*.{yml,yaml} or configs/skypilot_launch/compute/*.{yml,yaml}, blocks the call if the post-edit content has any `#`-comment line inside a `run: |` / `setup: |` block scalar. The block scalar body is bash; stray quotes/backticks inside a comment have caused unintended shell expansion. Goal: keep comments above the step, not inside it.",
         "hooks": [
           {
             "type": "command",
@@ -74,6 +74,18 @@
             "type": "command",
             "if": "Bash(git commit *)",
             "command": "branch=$(git branch --show-current 2>/dev/null || true); if [[ -z \"$branch\" ]]; then branch=\"DETACHED HEAD\"; fi; echo \"Committing to branch: $branch\" >&2"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "description": "Pr-title-guard: blocks `gh pr create` / `gh pr edit` whose inline --title/-t has an off-vocabulary conventional-commit type (.gitlint) or a release-triggering type (feat/fix/perf/revert per pyproject semantic-release tags) without an explicit RELEASE_INTENT=1 prefix. shlex-tokenizes so quoted prose mentioning the recipe does not trip it; fails closed on unparsable gated commands. PR_TITLE_GUARD: block default / warn / off. Tracked in #2291.",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh*)",
+            "timeout": 10,
+            "command": "bash agent/hooks/pr-title-guard.sh"
           }
         ]
       },

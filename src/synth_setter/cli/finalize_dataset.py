@@ -3,9 +3,10 @@
 Loads the frozen ``DatasetSpec`` from ``input_spec.json`` under
 ``cfg.dataset_root_uri`` (the R2 run prefix the upstream generate stage's
 ``upload_spec`` wrote to) and commits its staged winner fragments into each
-``{train,val,test}.lance`` split manifest, reducing the winners' Welford
-sidecars into ``stats.npz`` — no shard row is decoded (#1776). The
-``dataset.complete`` marker is written last per ``pipeline/CLAUDE.md``.
+``{train,val,test}.lance`` split manifest. By default it reduces the winners'
+Welford sidecars into ``stats.npz`` without decoding rows (#1776); an opt-in
+mode estimates statistics from raw training waveforms. The ``dataset.complete``
+marker is written last per ``pipeline/CLAUDE.md``.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from pydantic import BaseModel, ConfigDict, Field
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import DATASET_COMPLETE_FILENAME
@@ -41,6 +43,47 @@ from synth_setter.workspace import operator_workspace
 
 _failure_logger = structlog.get_logger(__name__)
 
+
+class _EnabledNormalizationEstimation(BaseModel):
+    """Strict settings for the opt-in normalization estimator.
+
+    .. attribute :: model_config
+
+        Strict immutable Pydantic validation.
+
+    .. attribute :: estimate_normalization_stats
+
+        Strict opt-in flag.
+
+    .. attribute :: seed
+
+        Non-negative uniform-sampling seed.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    estimate_normalization_stats: bool
+    seed: int = Field(ge=0)
+
+
+def _normalization_estimation_settings(cfg: DictConfig) -> tuple[bool, int]:
+    """Validate enabled estimator settings while leaving the disabled seed unused.
+
+    :param cfg: Hydra finalize configuration.
+    :returns: Whether estimation is enabled and its validated seed, if used.
+    """
+    enabled = OmegaConf.select(cfg, "estimate_normalization_stats", default=False)
+    if enabled is False:
+        return False, 1234
+    settings = _EnabledNormalizationEstimation.model_validate(
+        {
+            "estimate_normalization_stats": enabled,
+            "seed": OmegaConf.select(cfg, "seed", default=1234),
+        }
+    )
+    return True, settings.seed
+
+
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
 operator_workspace()
@@ -50,7 +93,7 @@ def _log_finalize_metrics(loggers: Sequence[Logger], metrics: Mapping[str, float
     """Log one finalization history row to W&B without making logging mandatory.
 
     No explicit step is passed because W&B auto-advances history for each
-    ``log`` call, including when finalize resumes the generation run.
+    ``log`` call, including when a re-run resumes the finalize run.
 
     :param loggers: Configured Lightning loggers; only ``WandbLogger`` entries receive metrics.
     :param metrics: Completed-progress values for one W&B history row.
@@ -130,34 +173,48 @@ def finalize_lance(  # noqa: DOC502
     spec: DatasetSpec,
     work_dir: Path,
     progress_callback: FinalizeProgressCallback | None = None,
+    *,
+    estimate_normalization_stats: bool = False,
+    seed: int = 1234,
 ) -> None:
-    """Commit staged winner fragments into split datasets — no shard row is decoded.
+    """Commit staged winners and write the selected normalization statistics.
 
     Delegates to
     :func:`~synth_setter.pipeline.data.lance_finalize.finalize_lance_fragments`:
     winner selection over the staged attempts, structural checks, one atomic
-    ``Overwrite`` commit per split, Welford reduction of the winners'
-    ``.shard-stats.npz`` sidecars into ``stats.npz``, and the ``dataset.json``
+    ``Overwrite`` commit per split, the selected exact or estimated
+    normalization-statistics writer, and the ``dataset.json``
     audit record. Progress events surface one ``shard_processed`` per selected
-    winner and one ``artifact_uploaded`` per committed split, plus the stats
-    and card uploads.
+    winner and one ``artifact_uploaded`` per committed split or new artifact;
+    a reused statistics artifact does not increment upload progress.
 
     :param spec: Validated dataset spec (``output_format == "lance"``).
     :param work_dir: Scratch directory for the staged ``stats.npz`` / ``dataset.json``.
     :param progress_callback: Optional sink for completed shard and upload events.
+    :param estimate_normalization_stats: Recompute statistics from committed train audio.
+    :param seed: Random-sampling seed, ignored unless estimation is enabled.
     :raises ValueError: The train split is empty, a spec shard has no
         staged-valid attempt, or a winner fails a structural check.
     """
     from synth_setter.pipeline.data.lance_finalize import finalize_lance_fragments
 
     _require_nonempty_train(spec)
-    finalize_lance_fragments(spec, work_dir, progress_callback)
+    finalize_lance_fragments(
+        spec,
+        work_dir,
+        progress_callback,
+        estimate_normalization_stats=estimate_normalization_stats,
+        seed=seed,
+    )
 
 
 def finalize_from_spec(
     spec: DatasetSpec,
     work_dir: Path,
     progress_callback: FinalizeProgressCallback | None = None,
+    *,
+    estimate_normalization_stats: bool = False,
+    seed: int = 1234,
 ) -> None:
     """Finalize a dataset given an in-memory spec; idempotent on ``dataset.complete``.
 
@@ -171,7 +228,9 @@ def finalize_from_spec(
     :param work_dir: Writable scratch dir; created if missing; retained
         after the call.
     :param progress_callback: Optional sink for completed shard and upload events.
-    :raises ValueError: ``spec.output_format`` is not a supported finalized format.
+    :param estimate_normalization_stats: Recompute statistics from committed train audio.
+    :param seed: Random-sampling seed, ignored unless estimation is enabled.
+    :raises ValueError: Output format is unsupported or published language metadata mismatches.
     """
     marker_uri = spec.r2.dataset_complete_marker_uri()
     if r2_io.object_size(marker_uri) is not None:
@@ -187,11 +246,43 @@ def finalize_from_spec(
     except ValueError as exc:
         logger.warning("non-canonical r2 prefix (finalizing anyway): {}", exc)
     work_dir.mkdir(parents=True, exist_ok=True)
-    if spec.output_format is OutputFormat.LANCE:
-        finalize_lance(spec, work_dir, progress_callback)
-    else:
+    if spec.output_format is not OutputFormat.LANCE:
         raise ValueError(f"unsupported output_format: {spec.output_format!r}")
 
+    if spec.param_language_dimension is not None:
+        from synth_setter.pipeline.data.param_language import (
+            PARAM_LANGUAGE_FILENAME,
+            load_param_language,
+            prepare_param_language,
+        )
+
+        language_uri = f"r2://{spec.r2.bucket}/{spec.r2.prefix}{PARAM_LANGUAGE_FILENAME}"
+        if r2_io.object_size(language_uri) is None:
+            language_path = prepare_param_language(
+                work_dir,
+                str(spec.render.param_spec_name),
+                spec.render.synth.name,
+                dimension=spec.param_language_dimension,
+            )
+            r2_io.upload(language_path, language_uri)
+            report_finalize_progress(progress_callback, "artifact_uploaded")
+        else:
+            with r2_io.downloaded_to_tempfile(language_uri) as language_path:
+                _, metadata = load_param_language(
+                    language_path, str(spec.render.param_spec_name), spec.render.synth.name
+                )
+            if metadata.dimension != spec.param_language_dimension:
+                raise ValueError("published parameter language dimension does not match spec")
+            logger.info("reused validated parameter language artifact at {}", language_uri)
+
+    # Persist static language first so gated-model failures cannot replay Lance commits.
+    finalize_lance(
+        spec,
+        work_dir,
+        progress_callback,
+        estimate_normalization_stats=estimate_normalization_stats,
+        seed=seed,
+    )
     marker_local = work_dir / DATASET_COMPLETE_FILENAME
     marker_local.touch()
     r2_io.upload(marker_local, marker_uri)
@@ -202,18 +293,23 @@ def finalize_from_spec(
 def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
     """Return the R2 URIs of the objects finalize materialized for this run.
 
-    Each non-empty split ``.lance`` dataset plus ``stats.npz`` is referenced;
+    Each non-empty split plus cumulative ``welford.npz`` and ``stats.npz`` is referenced;
     empty splits contribute nothing — finalize prunes them.
 
     :param spec: Validated dataset spec.
-    :returns: Canonical ``r2://`` URIs, split datasets first then ``stats.npz``.
+    :returns: Canonical URIs, split datasets first then Welford and derived stats.
     """
     split_uris = [
         spec.r2.split_lance_uri(split)
         for split, (lo, hi) in spec.split_shard_ranges.items()
         if lo < hi
     ]
-    return [*split_uris, spec.r2.stats_uri()]
+    references = [*split_uris, spec.r2.welford_uri(), spec.r2.stats_uri()]
+    if spec.param_language_dimension is not None:
+        from synth_setter.pipeline.data.param_language import PARAM_LANGUAGE_FILENAME
+
+        references.append(f"r2://{spec.r2.bucket}/{spec.r2.prefix}{PARAM_LANGUAGE_FILENAME}")
+    return references
 
 
 def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
@@ -221,7 +317,7 @@ def build_dataset_artifact(spec: DatasetSpec) -> wandb.Artifact:
 
     Names the artifact ``data-{spec.task_name}`` (type ``dataset``) per
     ``storage-provenance-spec.md`` §4, references the finalized R2 objects as
-    ``s3://`` URIs (split ``.lance`` datasets plus ``stats.npz``), and records
+    ``s3://`` URIs (split datasets plus Welford state and stats), and records
     ``shard_count`` / ``n_samples`` / ``git_sha``
     in ``artifact.metadata`` per §6. References use ``checksum=False`` because
     R2's custom S3 endpoint is not reachable by W&B's default reference
@@ -286,56 +382,87 @@ def _log_dataset_artifact(loggers: list[Logger], spec: DatasetSpec) -> None:
             logger.warning(f"_log_dataset_artifact failed on {type(lg).__name__}: {exc}")
 
 
-def finalize(cfg: DictConfig) -> None:  # noqa: DOC503
+def finalize_loggers(cfg: DictConfig, spec: DatasetSpec) -> list[Logger]:
+    """Instantiate ``cfg.logger`` pinned to the run's dedicated finalize W&B run.
+
+    The run id is ``{spec.run_id}-finalize`` (``job_type=finalize``) so finalize
+    shows up as its own row next to the data-generation run rather than being
+    folded into it; ``resume=allow`` lets a re-run of an interrupted finalize
+    reattach to that same run.
+
+    :param cfg: Composed cfg; ``logger.wandb.{id,job_type,resume}`` are updated in place.
+    :param spec: Validated dataset spec supplying ``run_id``.
+    :returns: Loggers list — empty when ``cfg.logger`` is omitted/null.
+    """
+    pin_wandb_run_id(cfg, f"{spec.run_id}-finalize", "finalize")
+    if OmegaConf.select(cfg, "logger.wandb") is not None:
+        OmegaConf.update(cfg, "logger.wandb.resume", "allow", force_add=True)
+    return instantiate_loggers(cfg.get("logger"))
+
+
+def finalize_tracked(cfg: DictConfig, spec: DatasetSpec, work_dir: Path) -> None:  # noqa: DOC503
+    """Run :func:`finalize_from_spec` inside its own W&B-tracked region.
+
+    Instantiates ``cfg.logger`` via :func:`finalize_loggers` (a no-op list when
+    the group is absent), streams live ``finalize/*`` progress rows and the
+    canonical ``data-{task_name}`` artifact to every ``WandbLogger``, and closes
+    the loggers with status ``"success"`` / ``"failed"`` in ``finally``. Any
+    failure — logger construction included — logs the sanitized traceback and
+    partial progress summary before the exception re-raises.
+
+    :param cfg: Composed cfg whose optional ``logger`` group is instantiated here.
+    :param spec: Validated dataset spec to finalize.
+    :param work_dir: Writable scratch dir forwarded to :func:`finalize_from_spec`.
+    :raises ValueError: Propagated from :func:`finalize_from_spec` — a drifted
+        ``spec.r2.prefix`` or an unsupported ``spec.output_format``.
+    """
+    loggers: list[Logger] = []
+    status = "success"
+    started_at: float | None = None
+    log_summary: Callable[[float], None] | None = None
+    try:
+        loggers = finalize_loggers(cfg, spec)
+        started_at = perf_counter()
+        report_progress, log_summary = _make_finalize_progress_logger(loggers, spec.num_shards)
+        estimate_normalization_stats, configured_seed = _normalization_estimation_settings(cfg)
+        if estimate_normalization_stats:
+            finalize_from_spec(
+                spec,
+                work_dir,
+                report_progress,
+                estimate_normalization_stats=True,
+                seed=configured_seed,
+            )
+        else:
+            finalize_from_spec(spec, work_dir, report_progress)
+        log_summary(perf_counter() - started_at)
+        _log_dataset_artifact(loggers, spec)
+    except BaseException as error:
+        status = "failed"
+        _log_finalize_failure(error, spec)
+        if log_summary is not None and started_at is not None:
+            log_summary(perf_counter() - started_at)
+        raise
+    finally:
+        close_loggers(loggers, status)
+
+
+def finalize(cfg: DictConfig) -> None:
     """Finalize the R2 prefix at ``cfg.dataset_root_uri``; idempotent on ``dataset.complete``.
 
     Loads R2 creds and the spec from ``input_spec.json`` under
-    ``cfg.dataset_root_uri``, delegates to
-    :func:`finalize_from_spec` for the marker-probe → dispatch → marker-upload
-    body, then logs live progress metrics and the canonical ``dataset``
-    artifact to any configured ``WandbLogger`` (resuming the data-generation
-    run pinned to ``spec.run_id`` so both land on the producer node of the
-    lineage DAG). The wandb run id is pinned and ``resume=allow`` is forced so
-    finalize attaches to the generation run rather than minting a new one;
-    both are no-ops when ``cfg`` carries no ``logger`` group (the wandb-free
-    default). On any failure the traceback and partial progress summary are
-    logged before the loggers close with status ``"failed"`` and the exception re-raises.
+    ``cfg.dataset_root_uri``, then delegates to :func:`finalize_tracked`.
 
     :param cfg: Composed cfg with ``dataset_root_uri`` (the run-prefix dir
         accepted by :func:`~synth_setter.pipeline.spec_io.load_spec_from_root`),
         ``paths.output_dir`` (writable scratch dir; created if missing;
         retained after the call), and an optional ``logger`` group instantiated
         for W&B progress and artifact logging.
-    :raises ValueError: Propagated from :func:`finalize_from_spec` — a drifted
-        ``spec.r2.prefix`` or an unsupported ``spec.output_format``.
     """
+    _normalization_estimation_settings(cfg)
     r2_io.ensure_r2_env_loaded()
     spec = load_spec_from_root(cfg.dataset_root_uri)
-    pin_wandb_run_id(cfg, spec.run_id, "data-generation")
-    if OmegaConf.select(cfg, "logger.wandb") is not None:
-        OmegaConf.update(cfg, "logger.wandb.resume", "allow", force_add=True)
-    loggers: list[Logger] = []
-    status = "success"
-    started_at: float | None = None
-    log_summary: Callable[[float], None] | None = None
-    try:
-        loggers = instantiate_loggers(cfg.get("logger"))
-        started_at = perf_counter()
-        report_progress, log_summary = _make_finalize_progress_logger(loggers, spec.num_shards)
-        finalize_from_spec(spec, Path(cfg.paths.output_dir), report_progress)
-        log_summary(perf_counter() - started_at)
-        _log_dataset_artifact(loggers, spec)
-    except BaseException as error:
-        status = "failed"
-        failed_elapsed_seconds = None
-        if log_summary is not None and started_at is not None:
-            failed_elapsed_seconds = perf_counter() - started_at
-        _log_finalize_failure(error, spec)
-        if log_summary is not None and failed_elapsed_seconds is not None:
-            log_summary(failed_elapsed_seconds)
-        raise
-    finally:
-        close_loggers(loggers, status)
+    finalize_tracked(cfg, spec, Path(cfg.paths.output_dir))
 
 
 @hydra.main(

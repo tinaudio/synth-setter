@@ -107,7 +107,7 @@ def _brute_force_optimal_cost(noise: torch.Tensor, params: torch.Tensor) -> floa
 def _make_dict_batch(n: int = 2, *, audio: bool = True) -> list[dict]:
     """Build ``n`` identical-shape dict items for collate-fn tests.
 
-    Each item carries a ``params`` (D=3), ``mel_spec`` ((2, 4)), and either an audio
+    Each item carries a ``params`` (D=3), ``mel`` ((2, 4)), and either an audio
     tensor ((2, 8)) or ``None``. Values are filled with the item index so assertions
     can recover provenance.
 
@@ -122,7 +122,7 @@ def _make_dict_batch(n: int = 2, *, audio: bool = True) -> list[dict]:
     return [
         {
             "params": torch.full((3,), float(i)),
-            "mel_spec": torch.full((2, 4), float(i)),
+            "mel": torch.full((2, 4), float(i)),
             "audio": torch.full((2, 8), float(i)) if audio else None,
         }
         for i in range(n)
@@ -419,7 +419,7 @@ class TestCollateDict:
         out = _collate_dict(_make_dict_batch())
 
         assert _present(out["params"]).shape == (2, 3)
-        assert _present(out["mel_spec"]).shape == (2, 2, 4)
+        assert _present(out["mel"]).shape == (2, 2, 4)
         assert _present(out["audio"]).shape == (2, 2, 8)
         assert _present(out["noise"]).shape == _present(out["params"]).shape
 
@@ -459,7 +459,7 @@ class TestRegularCollateFn:
         """A list of dicts routes to ``_collate_dict``."""
         out = regular_collate_fn(_make_dict_batch(audio=False))
         assert isinstance(out, dict)
-        assert set(out.keys()) == {"params", "noise", "mel_spec", "audio"}
+        assert set(out.keys()) == {"params", "noise", "mel", "audio"}
 
     def test_unsupported_item_type_raises_not_implemented(self) -> None:
         """An item of an unknown type (e.g. plain tensor) triggers ``NotImplementedError``."""
@@ -531,11 +531,11 @@ class TestOtCollateTuple:
 
 
 class TestOtCollateDict:
-    """`_ot_collate_dict` collates dicts then applies OT across (noise, params, mel_spec,
+    """`_ot_collate_dict` collates dicts then applies OT across (noise, params, mel,
     audio)."""
 
     def test_calls_hungarian_match_with_four_aligned_tensors(self) -> None:
-        """The OT call sees noise, params, mel_spec, audio — four positional args."""
+        """The OT call sees noise, params, mel, audio — four positional args."""
         with patch(
             "synth_setter.data.ot._hungarian_match",
             side_effect=lambda n, p, m, a: (n, p, m, a),
@@ -547,9 +547,9 @@ class TestOtCollateDict:
         assert len(args) == 4
         assert args[0].shape == (2, 3)  # noise
         assert args[1].shape == (2, 3)  # params
-        assert args[2].shape == (2, 2, 4)  # mel_spec
+        assert args[2].shape == (2, 2, 4)  # mel
         assert args[3].shape == (2, 2, 8)  # audio
-        assert set(out.keys()) == {"params", "noise", "mel_spec", "audio"}
+        assert set(out.keys()) == {"params", "noise", "mel", "audio"}
 
     def test_audio_none_path_forwards_none_to_hungarian_match(self) -> None:
         """When ``audio is None`` after collate, OT receives ``None`` and returns ``None``."""
@@ -590,7 +590,7 @@ class TestOtCollateFn:
         """A list of dicts routes through :func:`_ot_collate_dict`."""
         out = ot_collate_fn(_make_dict_batch(audio=False))
         assert isinstance(out, dict)
-        assert set(out.keys()) == {"params", "noise", "mel_spec", "audio"}
+        assert set(out.keys()) == {"params", "noise", "mel", "audio"}
 
     def test_unsupported_item_type_raises_not_implemented(self) -> None:
         """A plain tensor (not tuple/list/dict) triggers ``NotImplementedError``."""

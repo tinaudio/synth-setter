@@ -1,8 +1,12 @@
 """Hydra entrypoint for evaluating a trained model on a datamodule's test split."""
 
+import fcntl
+import hashlib
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
@@ -11,11 +15,13 @@ from typing import Any, cast
 import hydra
 import pandas as pd
 import wandb
-from lightning import Callback, LightningDataModule, LightningModule, Trainer
+from lightning import Callback, LightningDataModule, LightningModule, Trainer, seed_everything
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
+from pydantic_settings import CliApp
 
+from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
 from synth_setter.evaluation.audio_probe import (
     METRICS_TIMEOUT_OVERHEAD_SECONDS,
     METRICS_TIMEOUT_PER_SAMPLE_SECONDS,
@@ -23,9 +29,14 @@ from synth_setter.evaluation.audio_probe import (
     RENDER_TIMEOUT_PER_SAMPLE_SECONDS,
 )
 from synth_setter.evaluation.compute_audio_metrics import load_aggregated_metrics
+from synth_setter.feature_flags import apply_feature_flags
+from synth_setter.model_cache import retry_external_io, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.dataset_lineage import dataset_artifact_ref
-from synth_setter.pipeline.schemas.spec import _get_git_sha
+from synth_setter.pipeline.dataset_lineage import (
+    dataset_artifact_ref,
+    describe_unresolved_dataset_root,
+)
+from synth_setter.pipeline.schemas.spec import RenderConfig, _get_git_sha
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.run_id import make_wandb_run_id
@@ -37,10 +48,10 @@ from synth_setter.utils import (
     log_hyperparameters,
     log_wandb_provenance,
     pin_wandb_run_id,
+    record_input_lineage,
     register_resolvers,
     resolve_run_config_id,
     task_wrapper,
-    use_input_artifacts,
 )
 from synth_setter.workspace import operator_workspace
 
@@ -48,8 +59,6 @@ _PREDICT_VST_AUDIO_MODULE = "synth_setter.evaluation.predict_vst_audio"
 _COMPUTE_AUDIO_METRICS_MODULE = "synth_setter.evaluation.compute_audio_metrics"
 _AGGREGATED_METRICS_FILENAME = "aggregated_metrics.csv"
 _METRICS_FILENAME = "metrics.csv"
-_AGGREGATED_METRICS_SHUFFLED_FILENAME = "aggregated_metrics_shuffled.csv"
-_SHUFFLE_PERMUTATION_FILENAME = "shuffle_permutation.csv"
 
 # Resolve workspace at import so ``${oc.env:PROJECT_ROOT}`` in
 # ``configs/paths/default.yaml`` interpolates under any install layout.
@@ -58,6 +67,12 @@ operator_workspace()
 register_resolvers()
 
 log = RankedLogger(__name__, rank_zero_only=True)
+
+_MAX_EVALUATION_SEED = 2**32 - 1
+
+
+class _CheckpointChangedDuringDownloadError(RuntimeError):
+    """A remote checkpoint changed between metadata lookup and download."""
 
 
 def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:  # noqa: DOC502 — raised by load_aggregated_metrics
@@ -71,21 +86,12 @@ def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:  # noqa: DOC502 
         CSV; surfaced so the silent-success failure mode is loud.
     :raises ValueError: when the CSV is missing a required stat column.
     """
-    result: dict[str, float] = {
+    return {
         f"audio/{name}": value
         for name, value in load_aggregated_metrics(
             metrics_dir / _AGGREGATED_METRICS_FILENAME
         ).items()
     }
-    shuffled_path = metrics_dir / _AGGREGATED_METRICS_SHUFFLED_FILENAME
-    if shuffled_path.is_file():
-        result.update(
-            {
-                f"shuffled_audio/{name}": value
-                for name, value in load_aggregated_metrics(shuffled_path).items()
-            }
-        )
-    return result
 
 
 def _log_audio_metrics_to_wandb(audio_metrics: dict[str, float]) -> None:
@@ -130,46 +136,15 @@ def _log_metrics_csv_to_wandb(metrics_dir: Path, prefix: str = "") -> None:
         )
 
 
-def _log_shuffle_permutation_to_wandb(metrics_dir: Path, prefix: str = "") -> None:
-    """Log the probe permutation to wandb as a Table; no-op when ``wandb.run`` is unset.
-
-    Silently skips when ``shuffle_permutation.csv`` is absent — the probe writes it only
-    for uniform-params (oracle) datasets, so its absence is the common case. Swallows wandb
-    errors so a logging failure never aborts the evaluation run.
-
-    :param metrics_dir: Directory produced by
-        :mod:`synth_setter.evaluation.compute_audio_metrics`; ``shuffle_permutation.csv``
-        is read from it when present.
-    :param prefix: Prepended to the ``shuffle/permutation`` Table key so per-split runs
-        (one wandb run shared across splits) stay distinct.
-    """
-    if wandb.run is None:
-        return
-    csv_path = metrics_dir / _SHUFFLE_PERMUTATION_FILENAME
-    if not csv_path.is_file():
-        return
-    try:
-        df = pd.read_csv(csv_path)
-        wandb.run.log({f"{prefix}shuffle/permutation": wandb.Table(dataframe=df)})
-    except Exception as exc:
-        log.warning(
-            f"shuffle permutation table logging failed with {type(exc).__name__}: {exc}; skipped."
-        )
-
-
 def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: DOC502,DOC503
     """Render VST audio, compute audio metrics, and return their aggregated values.
 
     The VST render subprocess is prefixed with the headless wrapper on Linux so
     the VST3 plugin gets an Xvfb display before pedalboard imports it; the
-    metrics subprocess is CPU-only and needs no wrapper. ``--shuffle_seed`` is
-    always forwarded; the render-order probe (#489) runs automatically inside
-    ``compute_audio_metrics`` when all sample dirs have identical params.
+    metrics subprocess is CPU-only and needs no wrapper.
 
-    :param cfg: Reads ``cfg.evaluation`` (gates + ``num_workers`` + ``shuffle_seed``
-        + optional ``metric_prefix``), ``cfg.render`` (param spec, preset, optional
-        plugin path), and ``cfg.paths.output_dir`` (base for ``predictions/``,
-        ``audio/``, ``metrics/``).
+    :param cfg: Reads ``cfg.evaluation`` gates and metric settings, the complete
+        ``cfg.render`` contract, and ``cfg.paths.output_dir`` for artifact roots.
     :returns: ``{"<metric_prefix>audio/<name>_<stat>": value}`` when ``compute_metrics``
         ran (``metric_prefix`` empty by default); empty dict otherwise. Always
         rank-zero — the caller gates DDP duplication.
@@ -184,11 +159,23 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     audio_dir = output_dir / "audio"
     metrics_dir = output_dir / "metrics"
 
+    no_params = cfg.evaluation.get("no_params", False)
+    if not isinstance(no_params, bool):
+        raise ValueError(
+            f"evaluation.no_params must be a boolean, got {no_params!r}; a quoted "
+            '"false" would otherwise select the no-params render path'
+        )
     if cfg.evaluation.render_vst:
+        if no_params and cfg.evaluation.rerender_target:
+            raise ValueError(
+                "evaluation.no_params=true means the predict split carries no ground-truth "
+                "patch, so evaluation.rerender_target must be false — the target audio can "
+                "only come from the dataset."
+            )
         if cfg.get("render") is None:
             raise ValueError(
                 "evaluation.render_vst=true requires a render config group "
-                "(e.g. `render=surge_xt`); cfg.render is unset."
+                "(e.g. `synth=surge_xt render=vst`); cfg.render is unset."
             )
         if not predictions_dir.is_dir():
             raise ValueError(
@@ -201,33 +188,19 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             if sys.platform == "linux":
                 wrapper_path = Path(stack.enter_context(as_file(vst_headless_wrapper())))
                 args.append(str(wrapper_path))
+            render_config = RenderConfig.from_cfg_nodes(cfg.render, cfg.get("synth"))
             args += [
                 sys.executable,
                 "-m",
                 _PREDICT_VST_AUDIO_MODULE,
                 str(predictions_dir),
                 str(audio_dir),
-                "--param_spec",
-                cfg.render.param_spec_name,
-                "--plugin_state_path",
-                cfg.render.plugin_state_path,
+                *CliApp.serialize(render_config),
             ]
-            if cfg.render.get("plugin_path"):
-                args += ["--plugin_path", cfg.render.plugin_path]
-            # Forward the remaining render fields predict_vst_audio renders with so the
-            # re-render matches the dataset's generation render rather than this module's
-            # CLI defaults. Gated like plugin_path so a partial render cfg still works.
-            for flag, key in (
-                ("--sample_rate", "sample_rate"),
-                ("--channels", "channels"),
-                ("--velocity", "velocity"),
-                ("--signal_duration_seconds", "signal_duration_seconds"),
-            ):
-                value = cfg.render.get(key)
-                if value is not None:
-                    args += [flag, str(value)]
             if cfg.evaluation.rerender_target:
-                args.append("-t")
+                args.extend(["--rerender-target", "True"])
+            if no_params:
+                args.extend(["--no-params", "True"])
             # Each pred file stores at most one configured batch, so this is a
             # conservative timeout budget when the final map-style batch is ragged.
             n_render_samples = (
@@ -258,11 +231,11 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             _COMPUTE_AUDIO_METRICS_MODULE,
             str(audio_dir),
             str(metrics_dir),
-            "--shuffle_seed",
-            str(cfg.evaluation.get("shuffle_seed", 0)),
             "-w",
             str(cfg.evaluation.num_workers),
         ]
+        if OmegaConf.select(cfg, "render.renderer_backend") == "pyfdn":
+            args.extend(["--renderer-backend", "pyfdn"])
         # Upper-bounds the sample count compute_audio_metrics scores (it skips
         # subdirs lacking both wavs); the surplus only loosens the budget.
         n_metric_samples = sum(1 for d in audio_dir.glob("*") if d.is_dir())
@@ -281,20 +254,221 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
             ),
         )
         audio_metrics = _load_audio_metrics(metrics_dir)
-        # Namespace every key (audio/* and shuffled_audio/*) per caller — e.g. one
-        # wandb run shared across splits — so passes don't overwrite each other.
+        # Namespace every key per caller so split passes do not overwrite each other.
         prefix = cfg.evaluation.get("metric_prefix", "")
         if prefix:
             audio_metrics = {f"{prefix}{key}": value for key, value in audio_metrics.items()}
         _log_audio_metrics_to_wandb(audio_metrics)
         _log_metrics_csv_to_wandb(metrics_dir, prefix)
-        _log_shuffle_permutation_to_wandb(metrics_dir, prefix)
         return audio_metrics
 
     return {}
 
 
-def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
+def _checkpoint_sha256(checkpoint: Path) -> str:
+    """Compute one checkpoint file's SHA-256 digest.
+
+    :param checkpoint: Local checkpoint file.
+    :returns: Lowercase SHA-256 hex digest.
+    """
+    with checkpoint.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _verify_checkpoint_sha256(checkpoint: Path, expected_sha256: str | None) -> None:
+    """Reject checkpoint bytes that do not match their optional provenance pin.
+
+    :param checkpoint: Local checkpoint file.
+    :param expected_sha256: Validated lowercase SHA-256 hex digest, or ``None``.
+    :raises RuntimeError: The checkpoint digest differs from the pin.
+    """
+    if expected_sha256 is None:
+        return
+    actual = _checkpoint_sha256(checkpoint)
+    if actual != expected_sha256:
+        raise RuntimeError(
+            f"checkpoint SHA-256 mismatch: expected {expected_sha256}, "
+            f"received {actual} for {checkpoint}"
+        )
+
+
+def _normalize_checkpoint_sha256(expected_sha256: str | None) -> str | None:
+    """Validate and normalize an optional checkpoint digest.
+
+    :param expected_sha256: Configured SHA-256 hex digest.
+    :returns: Lowercase digest, or ``None``.
+    :raises ValueError: The configured digest is not a SHA-256 hex string.
+    """
+    if expected_sha256 is None:
+        return None
+    if not isinstance(expected_sha256, str):
+        raise ValueError("ckpt_sha256 must contain 64 hexadecimal characters")
+    normalized = expected_sha256.lower()
+    valid = len(normalized) == 64 and all(
+        character in "0123456789abcdef" for character in normalized
+    )
+    if not valid:
+        raise ValueError("ckpt_sha256 must contain 64 hexadecimal characters")
+    return normalized
+
+
+@retry_external_io(retry_exceptions=(_CheckpointChangedDuringDownloadError,))
+def _download_checkpoint(r2_uri: str, expected_sha256: str | None, cached: Path) -> None:
+    """Stage and atomically publish one remote checkpoint.
+
+    :param r2_uri: R2 object URI to download.
+    :param expected_sha256: Lowercase SHA-256 digest to enforce, or ``None``.
+    :param cached: Destination path.
+    :raises FileNotFoundError: The remote object does not exist.
+    :raises RuntimeError: R2 access fails or downloaded bytes violate the optional pin.
+    :raises _CheckpointChangedDuringDownloadError: The remote object's size changes mid-transfer.
+    """
+    try:
+        r2_io.ensure_r2_env_loaded()
+        remote_size = r2_io.object_size(r2_uri)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            "rclone R2 credentials are unavailable or cannot access remote "
+            f"eval checkpoint: {r2_uri}"
+        ) from exc
+    if remote_size is None:
+        raise FileNotFoundError(f"remote eval checkpoint does not exist: {r2_uri}")
+    if remote_size == 0:
+        raise RuntimeError(f"remote eval checkpoint is empty: {r2_uri}")
+    with tempfile.NamedTemporaryFile(
+        prefix=".model-", suffix=".ckpt", dir=cached.parent, delete=False
+    ) as temporary:
+        staging = Path(temporary.name)
+    try:
+        r2_io.download_to_path(r2_uri, staging)
+        if staging.stat().st_size != remote_size:
+            raise _CheckpointChangedDuringDownloadError(
+                f"downloaded eval checkpoint is incomplete: {r2_uri}"
+            )
+        _verify_checkpoint_sha256(staging, expected_sha256)
+        staging.replace(cached)
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(f"rclone cannot download eval checkpoint: {r2_uri}") from exc
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def _copy_verified_checkpoint(source: Path, digest: str, cached: Path) -> None:
+    """Atomically publish a verified copy of a local checkpoint.
+
+    :param source: Mutable local checkpoint path.
+    :param digest: Expected lowercase SHA-256 digest.
+    :param cached: Content-addressed destination path.
+    """
+    with tempfile.NamedTemporaryFile(
+        prefix=".model-", suffix=".ckpt", dir=cached.parent, delete=False
+    ) as temporary:
+        staging = Path(temporary.name)
+    try:
+        shutil.copyfile(source, staging)
+        _verify_checkpoint_sha256(staging, digest)
+        staging.replace(cached)
+    finally:
+        staging.unlink(missing_ok=True)
+
+
+def _cached_checkpoint(digest: str, publish: Callable[[Path], None]) -> Path:
+    """Return a verified content-addressed checkpoint under an interprocess lock.
+
+    :param digest: Expected lowercase SHA-256 digest and cache identity.
+    :param publish: Cache-miss operation that atomically publishes verified bytes.
+    :returns: Verified immutable checkpoint path.
+    """
+    cached = synth_setter_cache_dir() / "checkpoints" / "evaluation" / digest / "model.ckpt"
+    lock_path = cached.with_suffix(".ckpt.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        try:
+            if cached.is_file():
+                _verify_checkpoint_sha256(cached, digest)
+            else:
+                publish(cached)
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    return cached
+
+
+def _cached_remote_checkpoint(r2_uri: str, digest: str) -> Path:
+    """Return an immutable content-addressed remote checkpoint.
+
+    :param r2_uri: R2 object URI to localize on a cache miss.
+    :param digest: Expected lowercase SHA-256 digest and cache identity.
+    :returns: Verified local checkpoint path.
+    """
+    return _cached_checkpoint(digest, lambda cached: _download_checkpoint(r2_uri, digest, cached))
+
+
+def _download_unpinned_remote_checkpoint(r2_uri: str) -> Path:
+    """Download current remote bytes into an immutable content-addressed path.
+
+    :param r2_uri: R2 object URI to localize.
+    :returns: Local checkpoint path keyed by the downloaded content digest.
+    """
+    downloads_root = synth_setter_cache_dir() / "checkpoints" / "evaluation" / "downloads"
+    downloads_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".eval-", dir=downloads_root) as temp_dir:
+        downloaded = Path(temp_dir) / "model.ckpt"
+        _download_checkpoint(r2_uri, None, downloaded)
+        digest = _checkpoint_sha256(downloaded)
+
+        def publish(cached: Path) -> None:
+            downloaded.replace(cached)
+
+        return _cached_checkpoint(digest, publish)
+
+
+def _cached_local_checkpoint(source: Path, digest: str) -> Path:
+    """Return an immutable content-addressed copy of a local checkpoint.
+
+    :param source: Mutable local checkpoint path.
+    :param digest: Expected lowercase SHA-256 digest and cache identity.
+    :returns: Verified immutable checkpoint path.
+    """
+    return _cached_checkpoint(
+        digest, lambda cached: _copy_verified_checkpoint(source, digest, cached)
+    )
+
+
+def _localize_eval_checkpoint(
+    checkpoint: str | None,
+    expected_sha256: str | None = None,
+    world_size: int = 1,
+) -> str | None:
+    """Return the local checkpoint path Lightning should consume.
+
+    :param checkpoint: Local path, R2-backed URI, or ``None``.
+    :param expected_sha256: Optional SHA-256 pin for checkpoint bytes.
+    :param world_size: Number of evaluation processes that must consume identical bytes.
+    :returns: Local checkpoint path for Lightning, or ``None``.
+    :raises ValueError: Checkpoint provenance is contradictory or malformed.
+    """
+    if checkpoint is None:
+        if expected_sha256 is not None:
+            raise ValueError("ckpt_sha256 requires ckpt_path")
+        return None
+    if not isinstance(checkpoint, str):
+        raise ValueError("ckpt_path must be a string or null")
+    digest = _normalize_checkpoint_sha256(expected_sha256)
+    is_remote = checkpoint.startswith(("r2://", "s3://"))
+    if not is_remote:
+        if digest is None:
+            return checkpoint
+        return str(_cached_local_checkpoint(Path(checkpoint), digest))
+    r2_uri = r2_io.from_s3_uri(checkpoint) if checkpoint.startswith("s3://") else checkpoint
+    if digest is None:
+        if world_size != 1:
+            raise ValueError("an unpinned remote checkpoint requires single-process evaluation")
+        return str(_download_unpinned_remote_checkpoint(r2_uri))
+    return str(_cached_remote_checkpoint(r2_uri, digest))
+
+
+def _consumed_artifact_refs(cfg: DictConfig) -> tuple[list[tuple[str, str]], list[str]]:
     """Build the consumed-artifact lineage edges for an eval run (spec §5).
 
     Eval consumes both the model it scores and the dataset it scores it on; the
@@ -302,21 +476,28 @@ def _consumed_artifact_refs(cfg: DictConfig) -> list[tuple[str, str]]:
     provenance comes from the datamodule's local or remote dataset root.
 
     :param cfg: Hydra-composed cfg; reads ``consumed_train_config_id`` plus the
-        local or remote datamodule root.
-    :returns: ``(name, alias)`` refs for the optional model plus the discovered
-        dataset, in that order.
+        local or remote datamodule root, falling back to a directly named corpus URI.
+    :returns: ``(refs, unresolved)`` — the optional model ref then the discovered
+        dataset ref, plus a description of the configured dataset root whose edge
+        could not be derived (#2424).
     """
     refs: list[tuple[str, str]] = []
     train_id = cfg.get("consumed_train_config_id")
     if train_id:
-        refs.append((f"model-{train_id}", "latest"))
-    ref = dataset_artifact_ref(
-        OmegaConf.select(cfg, "datamodule.dataset_root"),
-        OmegaConf.select(cfg, "datamodule.download_dataset_root_uri"),
-    )
+        train_alias = cfg.get("consumed_train_artifact_alias", "latest")
+        refs.append((f"model-{train_id}", train_alias))
+    dataset_root = OmegaConf.select(cfg, "datamodule.dataset_root")
+    download_uri = OmegaConf.select(cfg, "datamodule.download_dataset_root_uri")
+    ref = dataset_artifact_ref(dataset_root, download_uri)
     if ref is not None:
         refs.append(ref)
-    return refs
+        return refs, []
+    unresolved = describe_unresolved_dataset_root(dataset_root, download_uri)
+    if unresolved is None:
+        # Third-party corpora name their source directly and carry no frozen spec;
+        # reporting the URI keeps the run from recording no dataset provenance at all.
+        unresolved = OmegaConf.select(cfg, "datamodule.dataset_uri")
+    return refs, ([unresolved] if unresolved else [])
 
 
 @task_wrapper
@@ -325,13 +506,31 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     Wrapped in ``@task_wrapper`` so crashes still flush the run dir.
 
-    :param cfg: Hydra-composed cfg; ``cfg.ckpt_path=None`` is allowed and
-        evaluates the in-memory model (Lightning's documented no-op).
+    :param cfg: Hydra-composed cfg; ``ckpt_path`` accepts a local path or an
+        R2-backed ``r2://`` / ``s3://`` URI. ``None`` evaluates the in-memory
+        model (Lightning's documented no-op).
     :return: ``(metric_dict, object_dict)``. ``metric_dict`` merges
         ``trainer.callback_metrics`` (``torch.Tensor`` values) with audio
         metrics from :func:`_run_predict_postprocessing` (Python ``float``),
         so callers iterating values must handle both.
+    :raises ValueError: Seeded evaluation lacks a supported explicit integer seed.
     """
+    seeded_evaluation = OmegaConf.select(cfg, "model.seeded_evaluation", default=False)
+    if seeded_evaluation:
+        evaluation_seed = cfg.get("seed")
+        valid_seed = (
+            isinstance(evaluation_seed, int)
+            and not isinstance(evaluation_seed, bool)
+            and 0 <= evaluation_seed <= _MAX_EVALUATION_SEED
+        )
+        if not valid_seed:
+            raise ValueError(
+                "model.seeded_evaluation=true requires cfg.seed to be an integer in "
+                f"[0, {_MAX_EVALUATION_SEED}]; got {evaluation_seed!r}"
+            )
+        seed_everything(evaluation_seed, workers=True)
+    apply_feature_flags(cfg)
+
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
 
@@ -342,11 +541,27 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     callbacks: list[Callback] = instantiate_callbacks(cfg.get("callbacks"))
 
     log.info("Instantiating loggers...")
-    pin_wandb_run_id(cfg, make_wandb_run_id(resolve_run_config_id(cfg)), "evaluation")
+    run_id = OmegaConf.select(cfg, "logger.wandb.id") or make_wandb_run_id(
+        resolve_run_config_id(cfg)
+    )
+    pin_wandb_run_id(cfg, run_id, "evaluation")
     logger: list[Logger] = instantiate_loggers(cfg.get("logger"))
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, logger=logger, callbacks=callbacks)
+
+    configured_checkpoint = cfg.ckpt_path
+    is_unpinned_remote = (
+        cfg.get("ckpt_sha256") is None
+        and isinstance(configured_checkpoint, str)
+        and configured_checkpoint.startswith(("r2://", "s3://"))
+    )
+    checkpoint_path = _localize_eval_checkpoint(
+        configured_checkpoint, cfg.get("ckpt_sha256"), trainer.world_size
+    )
+    if is_unpinned_remote and checkpoint_path is not None:
+        with open_dict(cfg):
+            cfg.ckpt_sha256 = _checkpoint_sha256(Path(checkpoint_path))
 
     object_dict = {
         "cfg": cfg,
@@ -364,36 +579,39 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     # Record the model + dataset lineage edges before evaluation so the run links
     # to both inputs in the W&B DAG (storage-provenance-spec §5).
-    use_input_artifacts(logger, _consumed_artifact_refs(cfg))
+    record_input_lineage(logger, *_consumed_artifact_refs(cfg))
 
     mode = cfg.get("mode", "test")
 
     audio_metrics: dict[str, float] = {}
     if mode == "test":
         log.info("Starting testing!")
-        trainer.test(
-            model=model,
-            datamodule=datamodule,
-            ckpt_path=cfg.ckpt_path,
-            weights_only=False,
-        )
+        with checkpoint_migration_hint(checkpoint_path):
+            trainer.test(
+                model=model,
+                datamodule=datamodule,
+                ckpt_path=checkpoint_path,
+                weights_only=False,
+            )
     # Accept both spellings for backwards compatibility with older configs.
     elif mode == "val" or mode == "validate":
         log.info("Starting validating!")
-        trainer.validate(
-            model=model,
-            datamodule=datamodule,
-            ckpt_path=cfg.ckpt_path,
-            weights_only=False,
-        )
+        with checkpoint_migration_hint(checkpoint_path):
+            trainer.validate(
+                model=model,
+                datamodule=datamodule,
+                ckpt_path=checkpoint_path,
+                weights_only=False,
+            )
     elif mode == "predict":
-        trainer.predict(
-            model=model,
-            dataloaders=datamodule,
-            ckpt_path=cfg.ckpt_path,
-            return_predictions=False,
-            weights_only=False,
-        )
+        with checkpoint_migration_hint(checkpoint_path):
+            trainer.predict(
+                model=model,
+                dataloaders=datamodule,
+                ckpt_path=checkpoint_path,
+                return_predictions=False,
+                weights_only=False,
+            )
         # Rank-zero gate: trainer.predict runs on every rank in DDP/multi-device
         # setups, but the postprocessing subprocesses share one output_dir.
         if trainer.is_global_zero:

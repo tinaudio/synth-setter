@@ -17,7 +17,13 @@ import numpy as np
 import pytest
 
 from synth_setter.data.vst import core
-from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
+from synth_setter.data.vst.generate_vst_dataset import audio_uuid
+from synth_setter.data.vst.shapes import (
+    AUDIO_FIELD,
+    AUDIO_MP3_FIELD,
+    AUDIO_UUID_FIELD,
+    PARAM_ARRAY_FIELD,
+)
 from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
@@ -34,14 +40,14 @@ from tests.helpers.logger_assertions import assert_no_logger_exceptions  # noqa:
 
 _PLUGIN_PATH = "plugins/fake.vst3"  # never touched on disk — load_plugin is patched
 _PRESET_PATH = "presets/fake.vstpreset"
-_RENDERER_VERSION = "fake-0.0.0"
+_SYNTH_VERSION = "fake-0.0.0"
 
 
 def _fake_render_cfg(**overrides: object) -> RenderConfig:
     """Build a ``RenderConfig`` pointing at the fake plugin paths.
 
-    Wraps the canonical ``_render_cfg`` and rebinds ``plugin_path`` / ``plugin_state_path`` /
-    ``renderer_version`` to the never-touched fake-plugin strings so the writer runs
+    Wraps the canonical ``_render_cfg`` and rebinds the nested synth identity
+    to never-touched fake-plugin strings so the writer runs
     entirely under ``install_fake_plugin``.
 
     :param \\*\\*overrides: Passed through to ``_render_cfg`` (e.g. ``num_samples``,
@@ -52,9 +58,13 @@ def _fake_render_cfg(**overrides: object) -> RenderConfig:
     cadence = overrides.pop("param_sample_cadence", None)
     cfg = _render_cfg(num_samples=num_samples, **overrides)  # type: ignore[arg-type]
     update: dict[str, object] = {
-        "plugin_path": _PLUGIN_PATH,
-        "plugin_state_path": _PRESET_PATH,
-        "renderer_version": _RENDERER_VERSION,
+        "synth": cfg.synth.model_copy(
+            update={
+                "plugin_path": _PLUGIN_PATH,
+                "plugin_state_path": _PRESET_PATH,
+                "synth_version": _SYNTH_VERSION,
+            }
+        )
     }
     if cadence is not None:
         update["param_sample_cadence"] = cadence
@@ -105,11 +115,16 @@ def test_make_lance_dataset_always_on_writes_valid_shard_under_fake_plugin(
         samples_per_render_batch=2,
         plugin_reload_cadence="once",
         gui_toggle_cadence="always_on",
-    ).model_copy(
+    )
+    render_cfg = render_cfg.model_copy(
         update={
-            "plugin_path": _PLUGIN_PATH,
-            "plugin_state_path": _PRESET_PATH,
-            "renderer_version": _RENDERER_VERSION,
+            "synth": render_cfg.synth.model_copy(
+                update={
+                    "plugin_path": _PLUGIN_PATH,
+                    "plugin_state_path": _PRESET_PATH,
+                    "synth_version": _SYNTH_VERSION,
+                }
+            )
         }
     )
     out = tmp_path / "shard-000000.lance"
@@ -200,7 +215,13 @@ def test_make_lance_dataset_writes_validator_passing_shard_under_fake_plugin(
     )
 
     assert validate_shard(out, spec) == []
-    meta = read_shard_metadata(lance.dataset(str(out)).schema)
+    dataset = lance.dataset(str(out))
+    table = dataset.to_table(columns=[AUDIO_FIELD, AUDIO_MP3_FIELD, AUDIO_UUID_FIELD])
+    audio_rows = table.column(AUDIO_FIELD).combine_chunks().to_numpy_ndarray()
+    assert table.column(AUDIO_UUID_FIELD).to_pylist() == [audio_uuid(row) for row in audio_rows]
+    assert all(table.column(AUDIO_MP3_FIELD).to_pylist())
+    assert dataset.schema.field(AUDIO_MP3_FIELD).metadata == {b"mime_type": b"audio/mpeg"}
+    meta = read_shard_metadata(dataset.schema)
     # Whole-model equality: a new ShardMetadata field fails construction here,
     # forcing this round-trip pin to cover it.
     assert meta == ShardMetadata(
@@ -211,6 +232,7 @@ def test_make_lance_dataset_writes_validator_passing_shard_under_fake_plugin(
         min_loudness=render_cfg.min_loudness,
         base_seed=render_cfg.base_seed,
         attempts_per_sample=render_cfg.attempts_per_sample,
+        render_contract_digest=render_cfg.shard_metadata().render_contract_digest,
     )
 
 

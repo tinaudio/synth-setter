@@ -1,0 +1,13 @@
+defaults:
+  - model_checkpoint
+  - _self_
+
+model_checkpoint:
+  dirpath: ${paths.output_dir}/checkpoints
+  filename: "epoch_{epoch:03d}"
+  monitor: "loss/val/total_loss"
+  mode: min
+  save_last: true
+  auto_insert_metric_name: false
+  every_n_epochs: 1
+  save_on_train_epoch_end: false

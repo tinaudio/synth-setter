@@ -14,6 +14,7 @@ from pydantic_settings import CliApp
 
 from synth_setter.cli.generate_dataset import build_generate_args
 from synth_setter.data.vst.generate_vst_dataset import _GenerateCliArgs
+from synth_setter.synth_spec import SynthName, SynthSpec
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, RenderConfig
 
@@ -30,8 +31,8 @@ def test_cli_args_class_inherits_every_render_config_field() -> None:
     assert render_fields <= cli_fields
 
 
-def test_cli_args_class_adds_only_data_file_beyond_render_config() -> None:
-    """Beyond ``RenderConfig`` fields, the CLI's only extra is ``data_file``.
+def test_cli_args_class_adds_only_launcher_fields_beyond_render_config() -> None:
+    """Beyond ``RenderConfig`` fields, the CLI adds destination and shard identity.
 
     Guards against accidental CLI bloat — adding a flag here should be a deliberate decision, not
     silent drift.
@@ -40,16 +41,19 @@ def test_cli_args_class_adds_only_data_file_beyond_render_config() -> None:
     render_fields = set(RenderConfig.model_fields.keys())
 
     extra = cli_fields - render_fields
-    assert extra == {"data_file"}
+    assert extra == {"data_file", "shard_id"}
 
 
 def _smoke_spec() -> DatasetSpec:
     """Build a minimal ``DatasetSpec`` for round-trip tests — no I/O, no plugin required."""
     render_cfg = RenderConfig(
-        plugin_path="plugins/Surge XT.vst3",
-        plugin_state_path="presets/surge-base.vstpreset",
-        param_spec_name=ParamSpecName("surge_simple"),
-        renderer_version="1.3.4",
+        synth=SynthSpec(
+            name=SynthName("surge_simple"),
+            param_spec_name=ParamSpecName("surge_simple"),
+            plugin_path="plugins/Surge XT.vst3",
+            plugin_state_path="presets/surge-base.vstpreset",
+            synth_version="1.3.4",
+        ),
         sample_rate=44100,
         channels=2,
         velocity=100,
@@ -83,10 +87,11 @@ def test_build_generate_args_roundtrips_through_cli_parser(tmp_path: Path) -> No
     args = build_generate_args(spec, spec.shards[0], tmp_path)
 
     parsed = CliApp.run(_GenerateCliArgs, cli_args=args[2:])
-    reconstructed = RenderConfig(**parsed.model_dump(exclude={"data_file"}))
+    reconstructed = RenderConfig(**parsed.model_dump(exclude={"data_file", "shard_id"}))
 
     # build_generate_args overrides base_seed with the shard's seed (#884), so the
     # round-tripped config matches spec.render with that one field substituted.
     expected = spec.render.model_copy(update={"base_seed": spec.shards[0].seed})
     assert reconstructed == expected
     assert parsed.data_file == str(tmp_path / "shard-000000.lance")
+    assert parsed.shard_id == spec.shards[0].shard_id

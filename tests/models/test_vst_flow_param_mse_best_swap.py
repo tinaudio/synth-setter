@@ -1,0 +1,438 @@
+"""Pin global matching and number-group optimal-assignment parameter metrics.
+
+Global best-swap remains unconditional. Selecting a ParamSpec also logs the
+structured middle bound ``best_swap <= number_group_optimal_assignment <= param_mse``.
+"""
+
+from __future__ import annotations
+
+import csv
+import math
+from functools import partial
+from pathlib import Path
+
+import pytest
+import torch
+from lightning.pytorch import Trainer
+from lightning.pytorch.callbacks import Callback
+from lightning.pytorch.loggers import CSVLogger, Logger
+from torch.utils.data import DataLoader, Dataset
+
+from synth_setter.data.vst import param_specs
+from synth_setter.metrics import BestSwapParamMSE, NumberGroupOptimalAssignmentParamMSE
+from synth_setter.models.components.transformer import (
+    ApproxEquivTransformer,
+    LearntProjection,
+)
+from synth_setter.models.vst_flow_matching_module import (
+    EndpointLoss,
+    Parameterization,
+    VSTFlowMatchingModule,
+)
+from synth_setter.utils.callbacks import LogPerParamMSE
+
+_MEL_CHANNELS = 2
+_MEL_N_MELS = 4
+_MEL_N_FRAMES = 5
+_D_MODEL = 16
+
+
+class _TinyEncoder(torch.nn.Module):
+    """Conditioning encoder mapping a mel spec to a ``(B, 1, _D_MODEL)`` token."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.linear = torch.nn.Linear(_MEL_CHANNELS * _MEL_N_MELS * _MEL_N_FRAMES, _D_MODEL)
+
+    def forward(self, mel: torch.Tensor) -> torch.Tensor:
+        """Map ``mel`` to a single conditioning token per sample.
+
+        :param mel: Batch of mel spectrograms.
+        :returns: Conditioning tensor of shape ``(B, 1, _D_MODEL)``.
+        """
+        return self.linear(mel.flatten(start_dim=1)).unsqueeze(1)
+
+
+class _FakeBatchDataset(Dataset[dict[str, torch.Tensor]]):
+    """Fixed random samples shaped like the VST datamodule's batches."""
+
+    def __init__(self, num_params: int) -> None:
+        """Materialize the fixed samples.
+
+        :param num_params: Width of each ``params`` row.
+        """
+        generator = torch.Generator().manual_seed(0)
+        self._params = torch.rand(4, num_params, generator=generator)
+        self._noise = torch.randn(4, num_params, generator=generator)
+        self._mels = torch.rand(4, _MEL_CHANNELS, _MEL_N_MELS, _MEL_N_FRAMES, generator=generator)
+
+    def __len__(self) -> int:
+        return 4
+
+    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
+        """Return one sample carrying the keys the module's step functions read.
+
+        :param index: Sample index.
+        :returns: ``params`` / ``noise`` / ``mel`` sample dict.
+        """
+        return {
+            "params": self._params[index],
+            "noise": self._noise[index],
+            "mel": self._mels[index],
+        }
+
+
+def _flow_module(
+    num_params: int,
+    *,
+    endpoint_loss: EndpointLoss = "mse",
+    parameterization: Parameterization = "velocity",
+    param_spec: str | None = None,
+) -> VSTFlowMatchingModule:
+    """Build a tiny real flow-matching module with a 1-step sampler.
+
+    :param num_params: Parameter-vector width.
+    :param endpoint_loss: Flat MSE or per-parameter MSE/CE for one-hot spans.
+    :param parameterization: Field output semantics.
+    :param param_spec: Optional registered spec enabling structured swap metrics.
+    :returns: Module wired for the fake batch shapes.
+    """
+    vector_field = ApproxEquivTransformer(
+        projection=LearntProjection(
+            d_model=_D_MODEL,
+            d_token=_D_MODEL,
+            num_params=num_params,
+            num_tokens=4,
+            initial_ffn=True,
+            final_ffn=False,
+        ),
+        num_layers=1,
+        d_model=_D_MODEL,
+        conditioning_dim=_D_MODEL,
+        num_heads=2,
+        d_ff=_D_MODEL,
+        num_tokens=4,
+        learn_projection=True,
+        time_encoding="sinusoidal",
+        zero_init=False,
+    )
+    return VSTFlowMatchingModule(
+        encoder=_TinyEncoder(),
+        vector_field=vector_field,
+        optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
+        scheduler=None,  # pyright: ignore[reportArgumentType]
+        num_params=num_params,
+        endpoint_loss=endpoint_loss,
+        parameterization=parameterization,
+        param_spec=param_spec,
+        validation_sample_steps=1,
+        validation_cfg_strength=1.0,
+        test_sample_steps=1,
+        test_cfg_strength=1.0,
+    )
+
+
+def _tiny_trainer(
+    *, callbacks: list[Callback] | None = None, logger: Logger | bool = False
+) -> Trainer:
+    """Build a minimal CPU trainer for one validation/test batch.
+
+    :param callbacks: Optional callbacks to exercise with the loop.
+    :param logger: Optional real logger receiving loop metrics.
+    :returns: Silent single-batch CPU trainer.
+    """
+    return Trainer(
+        callbacks=callbacks,
+        accelerator="cpu",
+        logger=logger,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        limit_train_batches=1,
+        limit_val_batches=1,
+        limit_test_batches=1,
+        max_epochs=1,
+    )
+
+
+def test_training_loop_logs_weighted_velocity_and_unweighted_endpoint_names() -> None:
+    """Training objectives and one-step endpoint diagnostics use distinct namespaces."""
+    spec_name = "surge_4"
+    spec = param_specs[spec_name]
+    module = _flow_module(spec.encoded_width, param_spec=spec_name)
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+    trainer = _tiny_trainer(callbacks=[LogPerParamMSE(spec_name)])
+
+    trainer.fit(module, train_dataloaders=loader, val_dataloaders=loader)
+
+    metrics = trainer.callback_metrics
+    weighted_names = {f"train/per_param_weighted_velocity_mse/{name}" for name in spec.names}
+    endpoint_names = {f"train/per_param_velocity_endpoint_mse/{name}" for name in spec.names}
+    assert weighted_names | endpoint_names <= metrics.keys()
+    assert not any(key.startswith("train/per_param_flow_mse/") for key in metrics)
+    assert not any(key.startswith("train/per_param_endpoint_mse/") for key in metrics)
+    grouped_flow_mse = (
+        metrics["train/per_param_weighted_velocity_mse/a_amp_eg_attack"]
+        + metrics["train/per_param_weighted_velocity_mse/a_filter_1_cutoff"]
+        + metrics["train/per_param_weighted_velocity_mse/a_lfo_1_amplitude"]
+        + metrics["train/per_param_weighted_velocity_mse/a_lfo_1_rate"]
+        + metrics["train/per_param_weighted_velocity_mse/pitch"]
+        + 2 * metrics["train/per_param_weighted_velocity_mse/note_start_and_end"]
+    ) / 7
+    assert grouped_flow_mse.item() == pytest.approx(metrics["train/loss_epoch"].item())
+    assert "val/per_param_mse/a_amp_eg_attack" in metrics
+
+
+def test_training_loop_logs_weighted_and_unweighted_endpoint_names() -> None:
+    """Direct endpoint objectives never reuse the velocity diagnostic namespace."""
+    spec_name = "cardinal"
+    spec = param_specs[spec_name]
+    module = _flow_module(
+        spec.encoded_width,
+        endpoint_loss="mixed",
+        parameterization="endpoint",
+        param_spec=spec_name,
+    )
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+
+    _tiny_trainer().fit(module, train_dataloaders=loader, val_dataloaders=loader)
+
+    metrics = module.trainer.callback_metrics
+    assert "train/weighted_endpoint_mse" in metrics
+    assert "train/endpoint_mse" in metrics
+    assert "train/per_param_weighted_endpoint_mse/parameter_1_v" in metrics
+    assert "train/per_param_endpoint_mse/parameter_1_v" in metrics
+    assert "train/weighted_velocity_mse" not in metrics
+    assert "train/velocity_endpoint_mse" not in metrics
+
+
+def test_ctor_param_spec_width_mismatch_raises() -> None:
+    """Metric labels cannot silently address columns outside the model output."""
+    with pytest.raises(ValueError, match="encoded width 7.*num_params 6"):
+        _flow_module(6, param_spec="surge_4")
+
+
+def test_ctor_instantiates_best_swap_metrics_unconditionally() -> None:
+    """Both loop metrics exist without any spec plumbing."""
+    module = _flow_module(6)
+
+    assert isinstance(module.val_param_mse_best_swap, BestSwapParamMSE)
+    assert isinstance(module.test_param_mse_best_swap, BestSwapParamMSE)
+
+
+def test_ctor_instantiates_number_group_optimal_assignment_metrics_with_param_spec() -> None:
+    """Selecting a ParamSpec enables both structured loop metrics."""
+    spec = param_specs["surge_simple"]
+
+    module = _flow_module(spec.encoded_width, param_spec="surge_simple")
+
+    assert isinstance(
+        module.val_param_mse_number_group_optimal_assignment,
+        NumberGroupOptimalAssignmentParamMSE,
+    )
+    assert isinstance(
+        module.test_param_mse_number_group_optimal_assignment,
+        NumberGroupOptimalAssignmentParamMSE,
+    )
+
+
+def test_validation_loop_logs_best_swap_alongside_param_mse() -> None:
+    """``val/param_mse_best_swap`` lands beside ``val/param_mse`` and never exceeds it."""
+    module = _flow_module(6)
+    loader = DataLoader(_FakeBatchDataset(6), batch_size=2)
+
+    metrics = _tiny_trainer().validate(module, dataloaders=loader)[0]
+
+    assert "val/param_mse_best_swap" in metrics
+    assert "val/param_mse" in metrics
+    assert metrics["val/param_mse_best_swap"] <= metrics["val/param_mse"] + 1e-6
+
+
+def test_validation_loop_logs_number_group_optimal_assignment_metrics() -> None:
+    """Optimal-assignment MSE lands between global best-swap and fixed-order MSE."""
+    spec = param_specs["surge_simple"]
+    module = _flow_module(spec.encoded_width, param_spec="surge_simple")
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+    trainer = _tiny_trainer(callbacks=[LogPerParamMSE("surge_simple")])
+
+    metrics = trainer.validate(module, dataloaders=loader)[0]
+
+    grouped_key = "val/param_mse_number_group_optimal_assignment"
+    assert grouped_key in metrics
+    assert "val/number_group_optimal_assignment_mse/a_osc_N_pitch" in metrics
+    assert "val/number_group_optimal_assignment_mse/a_osc_1_pitch" not in metrics
+    assert metrics["val/param_mse_best_swap"] <= metrics[grouped_key]
+    assert metrics[grouped_key] <= metrics["val/param_mse"] + 1e-6
+
+
+def test_validation_loop_logs_per_param_best_swap() -> None:
+    """The callback publishes best-swap errors under target parameter names."""
+    module = _flow_module(7)
+    loader = DataLoader(_FakeBatchDataset(7), batch_size=2)
+    trainer = _tiny_trainer(callbacks=[LogPerParamMSE("surge_4")])
+
+    metrics = trainer.validate(module, dataloaders=loader)[0]
+
+    assert "val_per_param_mse_best_swap/note_start_and_end" in metrics
+
+
+def test_validation_loop_logs_spec_quantized_metrics() -> None:
+    """The callback publishes scalar and per-parameter rendered-value errors."""
+    spec = param_specs["surge_4"]
+    module = _flow_module(spec.encoded_width, param_spec="surge_4")
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+    trainer = _tiny_trainer(callbacks=[LogPerParamMSE("surge_4")])
+
+    metrics = trainer.validate(module, dataloaders=loader)[0]
+
+    assert math.isfinite(metrics["val/param_mse_spec_quantized"])
+    assert math.isfinite(metrics["val/per_param_mse_spec_quantized/a_amp_eg_attack"])
+
+
+@pytest.mark.parametrize("stage", ["val", "test"])
+@pytest.mark.parametrize(
+    ("spec_name", "array_names", "geometric_name"),
+    [
+        pytest.param(
+            "pyfdn_n8_mono_kronecker",
+            {
+                "delays",
+                "direct_matrix",
+                "input_matrix",
+                "kronecker_angles",
+                "kronecker_reflect",
+                "output_matrix",
+            },
+            "kronecker_angles",
+            id="kronecker",
+        ),
+        pytest.param(
+            "pyfdn_n8_mono_householder_vector",
+            {
+                "delays",
+                "direct_matrix",
+                "householder_vector",
+                "input_matrix",
+                "output_matrix",
+            },
+            "householder_vector",
+            id="householder-vector",
+        ),
+    ],
+)
+def test_pyfdn_loop_persists_abs_cosine_for_array_parameters_without_losing_metrics(
+    tmp_path: Path,
+    stage: str,
+    spec_name: str,
+    array_names: set[str],
+    geometric_name: str,
+) -> None:
+    """Real loops persist bounded array cosine metrics beside existing families.
+
+    :param tmp_path: Isolated CSV logger directory.
+    :param stage: Validation or test loop namespace.
+    :param spec_name: Registered PyFDN parameter spec.
+    :param array_names: Expected continuous, discrete, angle, and direction arrays.
+    :param geometric_name: Angle or direction parameter retaining existing metrics.
+    """
+    spec = param_specs[spec_name]
+    module = _flow_module(spec.encoded_width, param_spec=spec_name)
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+    logger = CSVLogger(tmp_path, name=stage)
+    trainer = _tiny_trainer(callbacks=[LogPerParamMSE(spec_name)], logger=logger)
+
+    loop = trainer.validate if stage == "val" else trainer.test
+    metrics = loop(module, dataloaders=loader)[0]
+
+    abs_cosine_prefix = f"{stage}/per_param_abs_cosine_distance/"
+    abs_cosine_metrics = {
+        key.removeprefix(abs_cosine_prefix): value
+        for key, value in metrics.items()
+        if key.startswith(abs_cosine_prefix)
+    }
+    assert abs_cosine_metrics.keys() == array_names
+    assert all(
+        math.isfinite(value) and 0.0 <= value <= 1.0 for value in abs_cosine_metrics.values()
+    )
+    assert f"{abs_cosine_prefix}post_delay.rt_dc_seconds" not in metrics
+    assert f"{abs_cosine_prefix}post_delay.rt_nyquist_seconds" not in metrics
+
+    expected_existing_keys = {
+        f"{stage}/per_param_mse/{geometric_name}",
+        f"{stage}_per_param_mse_best_swap/{geometric_name}",
+        f"{stage}/number_group_optimal_assignment_mse/{geometric_name}",
+        f"{stage}/per_param_mse_spec_quantized/{geometric_name}",
+    }
+    assert expected_existing_keys <= metrics.keys()
+
+    with Path(logger.log_dir, "metrics.csv").open(newline="") as metrics_file:
+        persisted = list(csv.DictReader(metrics_file))[-1]
+    expected_keys = {f"{abs_cosine_prefix}{name}" for name in array_names} | expected_existing_keys
+    assert {key: float(persisted[key]) for key in expected_keys} == pytest.approx(
+        {key: metrics[key] for key in expected_keys}
+    )
+
+
+def test_pyfdn_validation_loop_logs_all_per_param_metric_families() -> None:
+    """PyFDN validation publishes each per-parameter metric family under ``val``."""
+    spec_name = "pyfdn_n8_mono_householder"
+    spec = param_specs[spec_name]
+    module = _flow_module(spec.encoded_width, param_spec=spec_name)
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+
+    metrics = _tiny_trainer(callbacks=[LogPerParamMSE(spec_name)]).validate(
+        module, dataloaders=loader
+    )[0]
+
+    assert "val/per_param_mse/delays" in metrics
+    assert "val_per_param_mse_best_swap/delays" in metrics
+    assert "val/number_group_optimal_assignment_mse/delays" in metrics
+    assert "val/per_param_mse_spec_quantized/delays" in metrics
+
+
+def test_pyfdn_test_loop_logs_all_per_param_metric_families() -> None:
+    """PyFDN test publishes each per-parameter metric family under ``test``."""
+    spec_name = "pyfdn_n8_mono_householder"
+    spec = param_specs[spec_name]
+    module = _flow_module(spec.encoded_width, param_spec=spec_name)
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+
+    metrics = _tiny_trainer(callbacks=[LogPerParamMSE(spec_name)]).test(
+        module, dataloaders=loader
+    )[0]
+
+    assert "test/per_param_mse/delays" in metrics
+    assert "test_per_param_mse_best_swap/delays" in metrics
+    assert "test/number_group_optimal_assignment_mse/delays" in metrics
+    assert "test/per_param_mse_spec_quantized/delays" in metrics
+
+
+def test_test_loop_logs_number_group_optimal_assignment() -> None:
+    """The test loop emits the structured scalar metric when a spec is selected."""
+    spec = param_specs["surge_simple"]
+    module = _flow_module(spec.encoded_width, param_spec="surge_simple")
+    loader = DataLoader(_FakeBatchDataset(spec.encoded_width), batch_size=2)
+    trainer = _tiny_trainer(callbacks=[LogPerParamMSE("surge_simple")])
+
+    metrics = trainer.test(module, dataloaders=loader)[0]
+
+    grouped_key = "test/param_mse_number_group_optimal_assignment"
+    assert grouped_key in metrics
+    assert "test/per_param_mse/a_osc_1_pitch" in metrics
+    assert "test_per_param_mse_best_swap/a_osc_1_pitch" in metrics
+    assert "test/number_group_optimal_assignment_mse/a_osc_N_pitch" in metrics
+    assert "test/number_group_optimal_assignment_mse/a_osc_1_pitch" not in metrics
+    assert "test/per_param_mse_spec_quantized/a_osc_1_pitch" in metrics
+    assert "test/param_mse_spec_quantized" in metrics
+    assert metrics["test/param_mse_best_swap"] <= metrics[grouped_key]
+    assert metrics[grouped_key] <= metrics["test/param_mse"] + 1e-6
+
+
+def test_test_loop_logs_best_swap() -> None:
+    """``test/param_mse_best_swap`` is logged by the test loop."""
+    module = _flow_module(6)
+    loader = DataLoader(_FakeBatchDataset(6), batch_size=2)
+
+    metrics = _tiny_trainer().test(module, dataloaders=loader)[0]
+
+    assert "test/param_mse_best_swap" in metrics

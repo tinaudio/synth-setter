@@ -1,0 +1,6 @@
+# Generic render knobs inherit from faust; identity comes from `synth=faust_filter_osc`.
+defaults:
+  - faust
+  - _self_
+
+channels: 1

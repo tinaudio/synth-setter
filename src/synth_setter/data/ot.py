@@ -59,11 +59,11 @@ def _collate_tuple(batch):
 def _collate_dict(batch):
     # batch is a list of dicts and we want a dict of lists
     params = [d["params"] for d in batch]
-    mel_spec = [d["mel_spec"] for d in batch]
+    mel = [d["mel"] for d in batch]
     audio = [d["audio"] for d in batch]
 
     params = stack(params)
-    mel_spec = stack(mel_spec)
+    mel = stack(mel)
     if audio[0] is not None:
         audio = stack(audio)
     else:
@@ -74,7 +74,7 @@ def _collate_dict(batch):
     return dict(
         params=params,
         noise=noise,
-        mel_spec=mel_spec,
+        mel=mel,
         audio=audio,
     )
 
@@ -104,15 +104,15 @@ def _ot_collate_dict(batch):
 
     noise = batch["noise"]
     params = batch["params"]
-    mel_spec = batch["mel_spec"]
+    mel = batch["mel"]
     audio = batch["audio"]
 
-    noise, params, mel_spec, audio = _hungarian_match(noise, params, mel_spec, audio)
+    noise, params, mel, audio = _hungarian_match(noise, params, mel, audio)
 
     return dict(
         params=params,
         noise=noise,
-        mel_spec=mel_spec,
+        mel=mel,
         audio=audio,
     )
 

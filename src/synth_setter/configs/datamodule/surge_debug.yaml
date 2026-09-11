@@ -2,5 +2,4 @@ defaults:
   - vst
   - _self_
 
-param_spec_name: surge_xt
 repeat_first_batch: true

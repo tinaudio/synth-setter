@@ -7,56 +7,62 @@ batch, committed as one dataset and compacted to a single fragment at the end.
 
 from __future__ import annotations
 
+import gc
 import shutil
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
 from loguru import logger
-from pedalboard import VST3Plugin
 from tqdm import trange
 
-from synth_setter.data.vst.core import load_plugin, load_preset, run_with_editor_held_open
+from synth_setter.data.vst.audio_preview import validate_mp3_sample_rate
+from synth_setter.data.vst.core import run_with_editor_held_open
 from synth_setter.data.vst.generate_vst_dataset import (
     SampleSeed,
     VSTDataSample,
     generate_sample,
 )
-from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.param_spec import ParameterValue, ParamSpec
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
-from synth_setter.data.vst.renderers import (
-    AudioRenderer,
-    DawDreamerRenderer,
-    PedalboardRenderer,
-    TorchSynthRenderer,
+from synth_setter.data.vst.renderers import AudioRenderer, PedalboardRenderer
+from synth_setter.data.vst.shapes import (
+    AUDIO_MP3_FIELD,
+    AUDIO_UUID_FIELD,
+    DATASET_FIELD_NAMES,
+    dataset_field_dtypes,
+    dataset_field_shapes,
 )
-from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, dataset_field_shapes
 from synth_setter.pipeline.schemas.render_metrics import RenderRejectionMetrics
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.renderer_factory import make_audio_renderer
 
 
-def _sample_batch_arrays(samples: list[VSTDataSample]) -> dict[str, np.ndarray]:
-    """Stack rendered samples into writer-field arrays.
+def _sample_batch_arrays(
+    samples: list[VSTDataSample],
+) -> dict[str, np.ndarray | Sequence[bytes] | Sequence[str]]:
+    """Return persisted tensor and preview columns for samples in row order.
 
     :param samples: Rendered samples in row order.
-    :returns: Mapping keyed by ``DATASET_FIELD_NAMES``.
-    :rtype: dict[str, np.ndarray]
+    :returns: Tensor and preview columns keyed by their Lance field names.
     """
     audio_name, mel_name, param_name = DATASET_FIELD_NAMES
     return {
-        audio_name: np.stack([s.audio.T for s in samples], axis=0).astype(np.float16),
+        audio_name: np.stack([s.audio.T for s in samples], axis=0),
         mel_name: np.stack([s.mel_spec for s in samples], axis=0),
         param_name: np.stack([s.param_array for s in samples], axis=0),
+        AUDIO_MP3_FIELD: [sample.audio_mp3 for sample in samples],
+        AUDIO_UUID_FIELD: [sample.audio_uuid for sample in samples],
     }
 
 
 def _validate_fixed_params_lengths(
     *,
     num_samples: int,
-    fixed_synth_params_list: list[dict[str, float]] | None,
-    fixed_note_params_list: list[NoteParams] | None,
+    fixed_synth_params_list: Sequence[Mapping[str, ParameterValue]] | None,
+    fixed_note_params_list: Sequence[Mapping[str, object]] | None,
 ) -> None:
     """Raise ``ValueError`` unless each fixed-params list spans the whole shard.
 
@@ -86,52 +92,13 @@ def _validate_fixed_params_lengths(
             )
 
 
-def _make_renderer(render_cfg: RenderConfig, plugin: VST3Plugin | None = None) -> AudioRenderer:
-    """Construct the configured audio renderer for one shard or render.
-
-    :param render_cfg: Render settings that identify the backend and audio shape.
-    :param plugin: Preloaded pedalboard plugin for ``plugin_reload_cadence="once"``.
-    :returns: Renderer configured for the requested backend.
-    """
-    if render_cfg.renderer_backend == "dawdreamer":
-        from synth_setter.data.vst.param_map import load_param_map
-        from synth_setter.resources import as_file, param_map
-
-        with as_file(param_map(render_cfg.param_spec_name)) as path:
-            joint_map = load_param_map(path)
-        return DawDreamerRenderer(
-            plugin_path=render_cfg.plugin_path,
-            sample_rate=render_cfg.sample_rate,
-            channels=render_cfg.channels,
-            signal_duration_seconds=render_cfg.signal_duration_seconds,
-            plugin_state_path=render_cfg.plugin_state_path,
-            parameter_map=joint_map,
-            reload_plugin_each_render=render_cfg.plugin_reload_cadence == "render",
-        )
-    if render_cfg.renderer_backend == "torchsynth":
-        return TorchSynthRenderer(
-            plugin_path=render_cfg.plugin_path,
-            sample_rate=render_cfg.sample_rate,
-            channels=render_cfg.channels,
-            signal_duration_seconds=render_cfg.signal_duration_seconds,
-        )
-    return PedalboardRenderer(
-        plugin_path=render_cfg.plugin_path,
-        sample_rate=render_cfg.sample_rate,
-        channels=render_cfg.channels,
-        signal_duration_seconds=render_cfg.signal_duration_seconds,
-        plugin_state_path=render_cfg.plugin_state_path,
-        plugin=plugin,
-    )
-
-
 def _render_in_batches(
     *,
     render_cfg: RenderConfig,
     param_spec: ParamSpec,
     start_idx: int,
-    fixed_synth_params_list: list[dict[str, float]] | None,
-    fixed_note_params_list: list[NoteParams] | None,
+    fixed_synth_params_list: Sequence[Mapping[str, ParameterValue]] | None,
+    fixed_note_params_list: Sequence[Mapping[str, object]] | None,
     flush_batch: Callable[[list[VSTDataSample], int], None],
 ) -> RenderRejectionMetrics:
     """Render samples from ``start_idx`` to ``render_cfg.samples_per_shard`` in fixed-size batches.
@@ -150,33 +117,40 @@ def _render_in_batches(
     :param fixed_note_params_list: Pre-set note params (or ``None``), indexed by absolute row;
         shares the synth list's shard-cadence seed-from-``start_idx``-and-reuse behavior.
     :param flush_batch: Called with ``(batch, batch_start_idx)`` to persist each batch.
-    :returns: Counts of silent and clipped draws rejected across the shard.
+    :returns: Counts of clipped, non-finite, and silent draws rejected across the shard.
     :raises RuntimeError: ``gui_toggle_cadence="always_on"`` reaches the
         renderer without ``plugin_reload_cadence="once"`` (validator regression).
     """
     num_samples = render_cfg.samples_per_shard
     share_params = render_cfg.param_sample_cadence == "shard"
     clipped_rejections = 0
+    non_finite_rejections = 0
     silent_rejections = 0
 
-    # "once" reuses one renderer per shard; "render" reloads for each attempt (see #705).
-    cached_plugin: VST3Plugin | None = None
-    cached_renderer: AudioRenderer | None = None
-    if render_cfg.plugin_reload_cadence == "once":
-        if render_cfg.renderer_backend == "pedalboard":
-            cached_plugin = load_plugin(render_cfg.plugin_path)
-            load_preset(cached_plugin, render_cfg.plugin_state_path)
-        cached_renderer = _make_renderer(render_cfg, cached_plugin)
+    # Delayed host finalizers can clear DPF process-global state while DawDreamer is live (#2549).
+    suspend_gc = render_cfg.renderer_backend == "dawdreamer"
+    gc_was_enabled = gc.isenabled()
+    if suspend_gc:
+        gc.disable()
+    renderer: AudioRenderer | None = None
+    try:
+        renderer = make_audio_renderer(render_cfg)
+    finally:
+        if renderer is None and suspend_gc:
+            gc.collect()
+            if gc_was_enabled:
+                gc.enable()
+    assert renderer is not None
 
     def _render_loop() -> None:
-        nonlocal clipped_rejections, silent_rejections
+        nonlocal clipped_rejections, non_finite_rejections, silent_rejections
         sample_batch: list[VSTDataSample] = []
         sample_batch_start = start_idx
         warmup_done = False
         # param_sample_cadence="shard": the first rendered row (start_idx) sets the shard's single
         # patch (drawn fresh, or copied from the source's same row); later renders reuse it (#489).
-        shared_synth: dict[str, float] | None = None
-        shared_note: NoteParams | None = None
+        shared_synth: Mapping[str, ParameterValue] | None = None
+        shared_note: Mapping[str, object] | None = None
         for i in trange(start_idx, num_samples):
             logger.info(f"Making sample {i}")
             warmup_this_render = render_cfg.gui_toggle_cadence == "render" or (
@@ -184,8 +158,8 @@ def _render_in_batches(
             )
             # Fixed params are indexed by absolute row ``i`` (full-shard lists),
             # so a resumed run still reads the source row matching each output row.
-            fixed_synth: dict[str, float] | None
-            fixed_note: NoteParams | None
+            fixed_synth: Mapping[str, ParameterValue] | None
+            fixed_note: Mapping[str, object] | None
             if share_params and shared_synth is not None:
                 fixed_synth, fixed_note = shared_synth, shared_note
             else:
@@ -195,7 +169,6 @@ def _render_in_batches(
                 fixed_note = (
                     fixed_note_params_list[i] if fixed_note_params_list is not None else None
                 )
-            renderer = cached_renderer or _make_renderer(render_cfg)
             sample = generate_sample(
                 renderer=renderer,
                 velocity=render_cfg.velocity,
@@ -210,11 +183,13 @@ def _render_in_batches(
                     sample_idx=render_cfg.sample_offset + i,
                     max_attempts=render_cfg.attempts_per_sample,
                 ),
+                audio_dtype=render_cfg.audio_dtype,
             )
             if share_params and shared_synth is None:
                 shared_synth = sample.synth_params
                 shared_note = sample.note_params
             clipped_rejections += sample.clipped_rejections
+            non_finite_rejections += sample.non_finite_rejections
             silent_rejections += sample.silent_rejections
             sample_batch.append(sample)
             if warmup_this_render and render_cfg.gui_toggle_cadence == "once":
@@ -227,54 +202,63 @@ def _render_in_batches(
         if sample_batch:
             flush_batch(sample_batch, sample_batch_start)
 
-    # always_on: main thread blocks in ``show_editor`` while ``_render_loop`` runs
-    # on a worker (pedalboard requires show_editor on the main thread, #1204).
-    # RenderConfig validator pairs always_on with plugin_reload_cadence="once"
-    # so cached_plugin is non-None on this branch (#1187).
-    if render_cfg.gui_toggle_cadence == "always_on":
-        if cached_plugin is None:
-            raise RuntimeError(
-                "always_on reached the renderer without a cached plugin; "
-                "RenderConfig._always_on_requires_plugin_reload_once validator "
-                "should have rejected this combination."
-            )
-        run_with_editor_held_open(cached_plugin, _render_loop)
-    else:
-        _render_loop()
+    try:
+        # Pedalboard requires show_editor on the main thread while rendering runs on a worker.
+        if render_cfg.gui_toggle_cadence == "always_on":
+            if not isinstance(renderer, PedalboardRenderer) or renderer.plugin is None:
+                raise RuntimeError(
+                    "always_on reached the renderer without a cached plugin; "
+                    "RenderConfig validation should have rejected this combination."
+                )
+            run_with_editor_held_open(renderer.plugin, _render_loop)
+        else:
+            _render_loop()
 
-    return RenderRejectionMetrics(
-        clipped=clipped_rejections,
-        silent=silent_rejections,
-    )
+        return RenderRejectionMetrics(
+            clipped=clipped_rejections,
+            non_finite=non_finite_rejections,
+            silent=silent_rejections,
+        )
+    finally:
+        if suspend_gc:
+            del renderer
+            gc.collect()
+            if gc_was_enabled:
+                gc.enable()
 
 
 def make_lance_dataset(
     lance_dir: Path | str,
     render_cfg: RenderConfig,
     *,
-    fixed_synth_params_list: list[dict[str, float]] | None = None,
-    fixed_note_params_list: list[NoteParams] | None = None,
+    shard_id: int | None = None,
+    fixed_synth_params_list: Sequence[Mapping[str, ParameterValue]] | None = None,
+    fixed_note_params_list: Sequence[Mapping[str, object]] | None = None,
 ) -> RenderRejectionMetrics:
     """Render ``render_cfg.samples_per_shard`` samples to a Lance dataset directory.
 
     Not resumable: any dataset already at ``lance_dir`` is overwritten on each
-    run. Audio is stored as ``float16``; ``mel_spec`` and ``param_array`` stay
-    ``float32``. The shard metadata is embedded in Arrow schema metadata so
-    validation and finalize recover the sidecar payload at read time. Each
+    run. Audio and mel-spectrogram tensors use their configured physical
+    dtypes; parameter arrays retain their fixed storage dtype. The shard metadata
+    is embedded in Arrow schema metadata so validation and finalize recover the sidecar
+    payload at read time. Each
     render batch becomes one Lance fragment, committed as one dataset at the
     end, then compacted to a single fragment with pre-compaction manifests and
     data files removed.
 
     :param lance_dir: Destination ``.lance`` dataset directory.
     :param render_cfg: Per-shard renderer config from the dataset spec.
+    :param shard_id: Logical shard number stored in row debug documents; ``None`` for ad hoc renders.
     :param fixed_synth_params_list: Optional pre-set synth params, one dict per
         shard row. Must have length ``samples_per_shard``. Under
         ``param_sample_cadence="shard"`` only row 0 is consumed (it seeds the
         shard's single patch); rows 1..N are required but unused.
     :param fixed_note_params_list: Optional pre-set note params; same full-shard
         contract as ``fixed_synth_params_list``.
-    :returns: Counts of silent and clipped draws rejected across the shard.
+    :returns: Counts of clipped, non-finite, and silent draws rejected across the shard.
     """
+    validate_mp3_sample_rate(render_cfg.sample_rate)
+
     # Function-local so importing this module (e.g. from the launcher) never
     # pays the `lance` import cost.
     import lance
@@ -284,6 +268,7 @@ def make_lance_dataset(
         lance_fragment,
         lance_schema,
         record_batch_from_arrays,
+        seed_debug_array,
     )
 
     param_spec = resolve_param_spec(render_cfg.param_spec_name)
@@ -296,15 +281,37 @@ def make_lance_dataset(
         fixed_synth_params_list=fixed_synth_params_list,
         fixed_note_params_list=fixed_note_params_list,
     )
-    schema = lance_schema(dataset_field_shapes(render_cfg, param_spec.encoded_width), meta)
+    schema = lance_schema(
+        dataset_field_shapes(render_cfg, param_spec.encoded_width),
+        meta,
+        field_dtypes=dataset_field_dtypes(render_cfg),
+    )
     lance_path.parent.mkdir(parents=True, exist_ok=True)
     staging_path = Path(tempfile.mkdtemp(dir=lance_path.parent, prefix=f".{lance_path.name}.tmp-"))
 
     try:
         fragments: list[lance.fragment.FragmentMetadata] = []
+        fixed_synth = fixed_synth_params_list is not None
+        fixed_note = fixed_note_params_list is not None
+        parameter_source = (
+            "fixed" if fixed_synth and fixed_note else "mixed" if fixed_synth or fixed_note else "sampled"
+        )
 
-        def _flush(batch: list[VSTDataSample], _batch_start: int) -> None:
-            record_batch = record_batch_from_arrays(_sample_batch_arrays(batch), schema)
+        def _flush(batch: list[VSTDataSample], batch_start: int) -> None:
+            sample_indices = [
+                render_cfg.sample_offset + batch_start + row for row in range(len(batch))
+            ]
+            debug = seed_debug_array(
+                render_cfg.base_seed,
+                sample_indices,
+                [sample.attempt for sample in batch],
+                [sample.sampler_seed for sample in batch],
+                shard_id=shard_id,
+                parameter_source=parameter_source,
+            )
+            record_batch = record_batch_from_arrays(
+                _sample_batch_arrays(batch), schema, debug=debug
+            )
             fragments.append(lance_fragment(staging_path, schema, record_batch))
 
         # Commit only after a clean render: orphaned fragment data files from a failed

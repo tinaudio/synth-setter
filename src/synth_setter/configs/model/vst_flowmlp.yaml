@@ -4,6 +4,9 @@ defaults:
 
 _target_: synth_setter.models.vst_flow_matching_module.VSTFlowMatchingModule
 
+conditioning: mel
+encoder_num_heads: 8
+encoder_output_dim: ${model.vector_field.d_model}
 warmup_steps: 0
 scheduler:
   _target_: torch.optim.lr_scheduler.CosineAnnealingLR
@@ -28,11 +31,15 @@ vector_field:
 # training
 cfg_dropout_rate: 0.1
 
-num_params: ${param_spec_width:${datamodule.param_spec_name}}
+num_params: ${param_spec_width:${synth.param_spec_name}}
+param_spec: ${synth.param_spec_name}
 
 rectified_sigma_min: 0.0
+# What the field predicts: the velocity x1 - x0, or the clean endpoint x1.
+parameterization: velocity
 
 # sampling
+seeded_evaluation: false
 validation_sample_steps: 50
 validation_cfg_strength: 2.0
 test_sample_steps: 200

@@ -1,7 +1,7 @@
 # Guide: Interactive VST prediction & patch capture
 
 > **Status**: Stable
-> **Last Updated**: 2026-07-16
+> **Last Updated**: 2026-07-23
 > **Source**: [`src/synth_setter/tools/vst_interactive.py`](../../src/synth_setter/tools/vst_interactive.py)
 
 ______________________________________________________________________
@@ -113,7 +113,7 @@ raises `click.UsageError`.
 
 | Flag                        | Type               | Default                                                   | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | --------------------------- | ------------------ | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--plugin-path` / `-p`      | path               | `$SYNTH_SETTER_PLUGIN_PATH`, else `plugins/Surge XT.vst3` | Path to VST3 plugin. Defaults to `$SYNTH_SETTER_PLUGIN_PATH` or the in-repo bundle.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `--plugin-path` / `-p`      | path               | `$SYNTH_SETTER_PLUGIN_PATH`, else `plugins/Surge XT.vst3` | Path to VST3 plugin. The checkout alias is provisioned by `make install-surge-xt` through Studiorack.                                                                                                                                                                                                                                                                                                                                                                                    |
 | `--pred`                    | `PATH:BATCH_IDX`   | unset                                                     | Prediction reference. The selected row must be finite and exactly match the selected ParamSpec width; it is decoded and applied before the editor opens. Example: `outputs/pred-0.pt:0`.                                                                                                                                                                                                                                                                                                 |
 | `--dataset-ref`             | `PATH:DATASET_IDX` | unset                                                     | Dataset reference. The selected row must exactly match the selected ParamSpec width; it is decoded and applied before the editor opens. Example: `outputs/test.lance:0`.                                                                                                                                                                                                                                                                                                                 |
 | `--param-spec-name`         | choice             | required                                                  | Parameter spec name — one of the keys registered in `src/synth_setter/data/vst/__init__.py` (`param_specs`). Selects which synth params are decoded from prediction/dataset rows, captured into recorded patches, and which base preset is loaded (the script indexes `plugin_state_paths` with this value). There is no `--plugin-state-path` flag — spec and preset travel together.                                                                                                   |
@@ -170,8 +170,8 @@ to consume. Each Lance dataset has these columns:
 
 | Column        | Per-row shape                                | Dtype     | Notes                                                                          |
 | ------------- | -------------------------------------------- | --------- | ------------------------------------------------------------------------------ |
-| `audio`       | `(2, sample_rate * signal_duration_seconds)` | `float16` | Stereo waveform. Fixed-shape tensor column.                                    |
-| `mel_spec`    | `(2, 128, 401)`                              | `float32` | Mel spectrogram per channel. Fixed-shape tensor column.                        |
+| `audio`       | `(2, sample_rate * signal_duration_seconds)` | `float16` | Stereo waveform using the `RenderConfig` default. Fixed-shape tensor column.   |
+| `mel_spec`    | `(2, 128, 401)`                              | `float32` | Mel spectrogram using the `RenderConfig` default. Fixed-shape tensor column.   |
 | `param_array` | `(P,)`                                       | `float32` | Encoded params (`ParamSpec.encode` output) in `[0, 1]`. `P = len(param_spec)`. |
 
 The dataset has `N = len(synth_patches)` rows, `sample_rate = 44100`, and

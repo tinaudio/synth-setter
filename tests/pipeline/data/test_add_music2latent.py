@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NoReturn
 
 import lance
 import numpy as np
@@ -340,11 +341,25 @@ def test_augment_shards_skips_complete_shard_and_continues_after_bad_shard(
     assert augmented == [paths[2].name]
 
 
-def test_main_invalid_selection_exits_before_loading_encoder(tmp_path: Path) -> None:
+def test_main_invalid_selection_exits_before_loading_encoder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Mutually exclusive shard selectors fail before model loading.
 
+    The exit code alone does not pin the ordering the name claims, so the loader is replaced with
+    one that fails if it is reached at all.
+
     :param tmp_path: Empty shard root passed to the CLI.
+    :param monkeypatch: Replaces the encoder loader with a tripwire.
     """
+
+    def _must_not_load(_: object) -> NoReturn:
+        raise AssertionError("encoder loaded before shard selection was validated")
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_music2latent.load_m2l_audio_encoder", _must_not_load
+    )
+
     result = CliRunner().invoke(main, [str(tmp_path), "--shard", "1", "--shard-range", "0", "2"])
 
     assert result.exit_code == 1

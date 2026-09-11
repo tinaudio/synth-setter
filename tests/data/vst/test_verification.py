@@ -31,7 +31,7 @@ def test_report_with_block_findings_verdict_is_blocked() -> None:
 def test_report_with_only_warn_findings_verdict_is_committable() -> None:
     """WARN-only findings keep the output committable but flag hand-tuning."""
     report = VerificationReport("fake_synth")
-    report.warn("renderer_version is 'unknown'")
+    report.warn("synth_version is 'unknown'")
 
     assert report.verdict() == "COMMITTABLE with WARN findings (hand-tuning needed)"
 
@@ -192,8 +192,8 @@ def test_markdown_report_carries_verdict_findings_and_artifacts(tmp_path: Path) 
     """
     report = VerificationReport("fake_synth")
     report.block("spec module is oversized")
-    report.warn("renderer_version is 'unknown'")
-    report.ok("Hydra render=fake_synth composes into a valid RenderConfig")
+    report.warn("synth_version is 'unknown'")
+    report.ok("Hydra synth=fake_synth render=vst composes into a valid RenderConfig")
 
     text = report.to_markdown([tmp_path / "fake_synth_param_spec.py"])
 
@@ -218,6 +218,6 @@ def test_registered_artifacts_cover_every_file_register_writes(tmp_path: Path) -
         paths.spec_module,
         paths.preset,
         paths.csv,
-        paths.render_config,
+        paths.identity_config,
         paths.registry,
     ]

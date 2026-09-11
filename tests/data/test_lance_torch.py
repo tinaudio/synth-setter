@@ -7,9 +7,11 @@ fakes or mocks anywhere in this module.
 
 from __future__ import annotations
 
+import multiprocessing
+import shutil
 import os
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import lance
@@ -23,7 +25,7 @@ from torch.utils.data import DataLoader
 
 from synth_setter.data.lance_torch import (
     LanceMapDataset,
-    _batch_to_shaped_tensors,
+    batch_to_shaped_tensors,
     lance_iterable_dataloader,
     lance_map_dataloader,
     map_dataloader_over,
@@ -37,6 +39,55 @@ from tests.helpers.lance_torch_datasets import (
 )
 
 BATCH_SIZE = 8
+_WIDE_TAKE_BATCH_BOUNDARY = 68
+_WIDE_TAKE_ROWS = 300
+_WIDE_TAKE_TIMEOUT_SECONDS = 30
+_WIDE_TAKE_COLUMNS = (
+    ("param_array", 1),
+    ("mel_spec", 219_648),
+    ("sketch", 4_096),
+)
+
+
+def _write_and_take_wide_batch_boundary(dest: str) -> None:
+    """Exercise the training reader at the scheduler-deadlock boundary.
+
+    :param dest: Child-process scratch dataset path.
+    """
+    schema = pa.schema(
+        [
+            pa.field(
+                name,
+                pa.fixed_shape_tensor(pa.float32(), (width,)),
+                nullable=False,
+            )
+            for name, width in _WIDE_TAKE_COLUMNS
+        ]
+    )
+
+    def batches() -> Iterator[pa.RecordBatch]:
+        for rows in (_WIDE_TAKE_BATCH_BOUNDARY, _WIDE_TAKE_ROWS):
+            yield pa.record_batch(
+                [
+                    pa.FixedShapeTensorArray.from_numpy_ndarray(
+                        np.zeros((rows, width), dtype=np.float32)
+                    )
+                    for _, width in _WIDE_TAKE_COLUMNS
+                ],
+                schema=schema,
+            )
+
+    write_lance_dataset(dest, schema, batches())
+    indices = range(
+        _WIDE_TAKE_BATCH_BOUNDARY,
+        _WIDE_TAKE_BATCH_BOUNDARY + _WIDE_TAKE_ROWS,
+    )
+
+    columns = [name for name, _ in _WIDE_TAKE_COLUMNS]
+    batch = LanceMapDataset(dest, columns=columns).__getitems__(indices)
+
+    for name, width in _WIDE_TAKE_COLUMNS:
+        assert batch[name].shape == (_WIDE_TAKE_ROWS, width)
 
 
 class _TakeRecorder:
@@ -155,6 +206,30 @@ def _assert_short_final_batch(loader_factory: Callable[[Path], DataLoader], dest
 
 class TestMapDataloader:
     """Behavior of ``lance_map_dataloader`` over a real local dataset."""
+
+    @pytest.mark.slow
+    def test_take_at_write_batch_boundary_over_256_mib_completes(
+        self, tmp_path: Path
+    ) -> None:
+        """A wide projected take at a write-batch boundary does not deadlock.
+
+        :param tmp_path: Scratch root for the generated dataset.
+        """
+        context = multiprocessing.get_context("spawn")
+        process = context.Process(
+            target=_write_and_take_wide_batch_boundary,
+            args=(str(tmp_path / "wide.lance"),),
+        )
+        process.start()
+        process.join(timeout=_WIDE_TAKE_TIMEOUT_SECONDS)
+        try:
+            assert not process.is_alive(), "wide boundary take did not complete"
+            assert process.exitcode == 0
+        finally:
+            if process.is_alive():
+                process.kill()
+                process.join()
+            process.close()
 
     def test_batches_unshuffled_preserve_shapes_dtypes_and_values(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
@@ -290,6 +365,29 @@ class TestMapDataloader:
         assert item["mel_spec"].shape == (2, 128, 3)
         np.testing.assert_array_equal(item["param_array"].numpy(), arrays["param_array"][3])
 
+    def test_map_dataset_exact_version_remains_pinned_after_append(
+        self,
+        lance_dataset: tuple[Path, dict[str, np.ndarray]],
+        tmp_path: Path,
+    ) -> None:
+        """The reader and worker reopen contract retain the requested local version.
+
+        :param lance_dataset: Module-shared dataset and original arrays.
+        :param tmp_path: Isolated mutable dataset copy.
+        """
+        source, arrays = lance_dataset
+        dest = tmp_path / "versioned.lance"
+        shutil.copytree(source, dest)
+        version = lance.dataset(dest).version
+        lance.write_dataset(lance.dataset(dest).to_table(), dest, mode="append")
+
+        pinned = LanceMapDataset(dest, columns=["param_array"], version=version)
+
+        assert len(pinned) == len(arrays["param_array"])
+        np.testing.assert_array_equal(
+            pinned[0]["param_array"].numpy(), arrays["param_array"][0]
+        )
+
     def test_persistent_workers_without_workers_is_effectively_disabled(
         self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
     ) -> None:
@@ -308,6 +406,99 @@ class TestMapDataloader:
 
         assert loader.persistent_workers is False
         assert next(iter(loader))["param_array"].shape == (BATCH_SIZE, NUM_PARAMS)
+
+    def test_prefetch_factor_with_workers_reaches_dataloader(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """A configured prefetch depth reaches loaders that own worker processes.
+
+        :param lance_dataset: Module-shared dataset used to construct the loader.
+        """
+        dest, _ = lance_dataset
+
+        loader = map_dataloader_over(
+            LanceMapDataset(dest),
+            batch_size=BATCH_SIZE,
+            num_workers=2,
+            prefetch_factor=4,
+        )
+
+        assert loader.prefetch_factor == 4
+
+    def test_prefetch_factor_default_none_keeps_pytorch_default(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """Leaving the prefetch depth unset preserves PyTorch's own default.
+
+        :param lance_dataset: Module-shared dataset used to construct the loader.
+        """
+        dest, _ = lance_dataset
+
+        loader = map_dataloader_over(
+            LanceMapDataset(dest), batch_size=BATCH_SIZE, num_workers=2
+        )
+
+        plain_default = DataLoader(
+            LanceMapDataset(dest), batch_size=BATCH_SIZE, num_workers=2
+        )
+        assert loader.prefetch_factor == plain_default.prefetch_factor
+
+    def test_prefetch_factor_without_workers_is_effectively_disabled(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """In-process loaders drop the configured prefetch depth (PyTorch forbids it).
+
+        :param lance_dataset: Module-shared dataset used to construct the loader.
+        """
+        dest, _ = lance_dataset
+
+        loader = map_dataloader_over(
+            LanceMapDataset(dest),
+            batch_size=BATCH_SIZE,
+            num_workers=0,
+            prefetch_factor=4,
+        )
+
+        assert loader.prefetch_factor is None
+        assert next(iter(loader))["param_array"].shape == (BATCH_SIZE, NUM_PARAMS)
+
+    def test_lance_map_dataloader_forwards_prefetch_factor(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """The public factory forwards a configured prefetch depth to its loader.
+
+        :param lance_dataset: Module-shared dataset used to construct the loader.
+        """
+        dest, _ = lance_dataset
+
+        loader = lance_map_dataloader(
+            dest, batch_size=BATCH_SIZE, num_workers=2, prefetch_factor=4
+        )
+
+        assert loader.prefetch_factor == 4
+
+    @pytest.mark.dataloader_multiprocess
+    @pytest.mark.xdist_group(name="dataloader-multiprocess")
+    @pytest.mark.slow
+    def test_prefetch_factor_with_spawn_workers_delivers_batches(
+        self, lance_dataset: tuple[Path, dict[str, np.ndarray]]
+    ) -> None:
+        """Spawn workers deliver every row when a non-default prefetch depth is set.
+
+        :param lance_dataset: Module-shared dataset; source arrays are the ground truth.
+        """
+        dest, arrays = lance_dataset
+        loader = map_dataloader_over(
+            LanceMapDataset(dest, columns=["param_array"]),
+            batch_size=BATCH_SIZE,
+            num_workers=2,
+            shuffle=False,
+            prefetch_factor=4,
+        )
+
+        rows = _concat_batches(list(loader), "param_array")
+
+        np.testing.assert_array_equal(rows, arrays["param_array"])
 
     def test_short_final_batch_preserves_all_rows(self, tmp_path: Path) -> None:
         """A row count not divisible by ``batch_size`` yields a ragged final batch.
@@ -539,16 +730,69 @@ def test_zero_row_dataset_yields_no_batches(tmp_path: Path) -> None:
     assert list(iterable_loader) == []
 
 
-def test_batch_to_shaped_tensors_preserves_shapes_on_handbuilt_batch() -> None:
+def testbatch_to_shaped_tensors_preserves_shapes_on_handbuilt_batch() -> None:
     """The conversion keeps per-row tensor shapes and dtypes on a hand-built batch."""
     values = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
     batch = pa.record_batch({"mel": pa.FixedShapeTensorArray.from_numpy_ndarray(values)})
 
-    tensors = _batch_to_shaped_tensors(batch)
+    tensors = batch_to_shaped_tensors(batch)
 
     assert tensors["mel"].shape == (2, 3, 4)
     assert tensors["mel"].dtype == torch.float32
     np.testing.assert_array_equal(tensors["mel"].numpy(), values)
+
+
+def _struct_dataset(dest: Path, rows: int = 4) -> dict[str, np.ndarray]:
+    """Write a dataset carrying one struct column with list and tensor children.
+
+    :param dest: Output dataset directory.
+    :param rows: Number of rows.
+    :returns: Source child arrays keyed by dotted column path.
+    """
+    rng = np.random.default_rng(5)
+    loudness = rng.random((rows, 3)).astype(np.float32)
+    pitch = rng.random((rows, 2, 3)).astype(np.float32)
+    struct = pa.StructArray.from_arrays(
+        [
+            pa.FixedSizeListArray.from_arrays(pa.array(loudness.reshape(-1)), 3),
+            pa.FixedShapeTensorArray.from_numpy_ndarray(pitch),
+        ],
+        names=["loudness", "pitch"],
+    )
+    schema = pa.schema([pa.field("sketch", struct.type, nullable=False)])
+    write_lance_dataset(dest, schema, [pa.record_batch([struct], schema=schema)])
+    return {"sketch.loudness": loudness, "sketch.pitch": pitch}
+
+
+def test_map_dataset_take_expands_struct_children_to_dotted_keys(tmp_path: Path) -> None:
+    """A whole-struct ``take`` projection lands as flat ``parent.child`` tensors.
+
+    :param tmp_path: Scratch dir for the struct dataset.
+    """
+    dest = tmp_path / "struct.lance"
+    expected = _struct_dataset(dest)
+
+    batch = LanceMapDataset(dest, columns=["sketch"]).__getitems__([0, 1, 2, 3])
+
+    assert set(batch) == set(expected)
+    for key, values in expected.items():
+        np.testing.assert_array_equal(batch[key].numpy(), values)
+
+
+def test_scanner_dotted_projection_matches_take_expansion(tmp_path: Path) -> None:
+    """Scanner dotted projection (flat dotted columns) normalizes to the same keys.
+
+    :param tmp_path: Scratch dir for the struct dataset.
+    """
+    dest = tmp_path / "struct.lance"
+    expected = _struct_dataset(dest)
+
+    scan = lance.dataset(str(dest)).to_table(columns=["sketch.loudness", "sketch.pitch"])
+    tensors = batch_to_shaped_tensors(scan.combine_chunks().to_batches()[0])
+
+    assert set(tensors) == set(expected)
+    for key, values in expected.items():
+        np.testing.assert_array_equal(tensors[key].numpy(), values)
 
 
 def test_column_with_nulls_raises_value_error() -> None:
@@ -557,7 +801,7 @@ def test_column_with_nulls_raises_value_error() -> None:
     batch = pa.record_batch({"clap": column})
 
     with pytest.raises(ValueError, match="clap"):
-        _batch_to_shaped_tensors(batch)
+        batch_to_shaped_tensors(batch)
 
 
 def test_blob_projected_dict_batch_raises_type_error() -> None:
@@ -568,7 +812,7 @@ def test_blob_projected_dict_batch_raises_type_error() -> None:
     not support.
     """
     with pytest.raises(TypeError, match="blob columns"):
-        _batch_to_shaped_tensors({"audio_mp3": [b"\x00"]})
+        batch_to_shaped_tensors({"audio_mp3": [b"\x00"]})
 
 
 def _collect_ddp_rank_rows(rank: int, world_size: int, dataset_dir: str, out_dir: str) -> None:

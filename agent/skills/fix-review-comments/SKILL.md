@@ -34,7 +34,10 @@ the user to run `/repo-review-full-no-comments` first — do not fabricate one.
 Read the whole sentinel. The findings you act on are the lines tagged
 `**[comment-hygiene:warn]**` or `**[comment-hygiene:block]**`, grouped under
 their `### \`<path>\`\` headers. Ignore every other skill's findings — they are
-out of scope here.
+out of scope here. `[comment-hygiene:nit]` bullets live in the sentinel's
+`## Nits` section and are also out of scope: they gate nothing, so applying them
+would spend a commit on a preference the author never opted into. Apply a NIT
+only when the user names it.
 
 ## Step 2: Extract one work-item per comment-hygiene finding
 

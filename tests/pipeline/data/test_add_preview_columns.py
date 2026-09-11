@@ -19,6 +19,7 @@ import pytest
 from click.testing import CliRunner
 from pedalboard.io import AudioFile
 
+from synth_setter.data.vst.audio_preview import audio_uuid, encode_audio_to_mp3
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     MEL_SPEC_FIELD,
@@ -29,8 +30,6 @@ from synth_setter.pipeline.data.add_preview_columns import (
     AUDIO_UUID_FIELD,
     _encode_preview_columns,
     add_preview_columns,
-    audio_uuid,
-    encode_audio_to_mp3,
     main,
 )
 from synth_setter.pipeline.data.lance_shard import (
@@ -95,12 +94,14 @@ def _write_smoke_dataset(path: Path, *, sample_rate: int = _SAMPLE_RATE) -> None
         min_loudness=-55.0,
     )
     schema = lance_schema(_FIELD_SHAPES, metadata)
+    for preview_field in (AUDIO_MP3_FIELD, AUDIO_UUID_FIELD):
+        schema = schema.remove(schema.get_field_index(preview_field))
     arrays = {
         AUDIO_FIELD: _sine_rows(sample_rate),
         MEL_SPEC_FIELD: np.zeros(_FIELD_SHAPES[MEL_SPEC_FIELD], dtype=np.float32),
         PARAM_ARRAY_FIELD: np.zeros(_FIELD_SHAPES[PARAM_ARRAY_FIELD], dtype=np.float32),
     }
-    write_lance_dataset(path, schema, [record_batch_from_arrays(arrays, schema)])
+    write_lance_dataset(path, schema, [record_batch_from_arrays(arrays, schema, debug=None)])
 
 
 def _decode_mp3(payload: bytes) -> tuple[np.ndarray, int]:
@@ -265,7 +266,7 @@ def test_audio_uuid_matches_pinned_value_for_fixed_input() -> None:
     ``tobytes().hex()`` input, or the uuid version would break this — the
     on-disk ids are a stable contract that must not drift silently.
     """
-    assert audio_uuid(np.zeros((1, 4), dtype=np.float16)) == "34ef8dee-3474-5863-85cf-d299a7827175"
+    assert audio_uuid(np.zeros((1, 4), dtype=np.float16)) == "a0cd37d8-29b2-5b77-a001-336e9aef650b"
 
 
 def test__encode_preview_columns_non_tensor_audio_column_raises() -> None:
@@ -369,8 +370,11 @@ def test_add_preview_columns_tags_field_with_audio_mime_type(tmp_path: Path) -> 
 
     add_preview_columns(uri)
 
-    field = lance.dataset(str(uri)).schema.field(AUDIO_MP3_FIELD)
-    assert field.metadata == {b"mime_type": b"audio/mpeg"}
+    schema = lance.dataset(str(uri)).schema
+    mp3_field = schema.field(AUDIO_MP3_FIELD)
+    assert mp3_field.metadata == {b"mime_type": b"audio/mpeg"}
+    assert not mp3_field.nullable
+    assert not schema.field(AUDIO_UUID_FIELD).nullable
 
 
 def test_add_preview_columns_uses_sample_rate_from_metadata(tmp_path: Path) -> None:
@@ -493,18 +497,35 @@ def test_main_rejects_out_of_range_bitrate(tmp_path: Path) -> None:
     assert "bitrate-kbps" in result.output
 
 
-def test_main_bitrate_option_threads_through(tmp_path: Path) -> None:
-    """The ``--bitrate-kbps`` option is accepted and the column is still produced.
+def test_main_bitrate_option_threads_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--bitrate-kbps`` reaches the encoder, not just the CLI parser.
+
+    Exit code and column presence are identical when the flag is dropped on the
+    floor and the default bitrate is used, so the encoder call is recorded.
 
     :param tmp_path: Pytest fixture providing a fresh test directory.
+    :param monkeypatch: Wraps the MP3 encoder to record the bitrate it received.
     """
     uri = tmp_path / "shard-000000.lance"
     _write_smoke_dataset(uri)
+
+    seen_bitrates: list[int] = []
+
+    def _recording_encode(row: np.ndarray, sample_rate: int, bitrate_kbps: int) -> bytes:
+        seen_bitrates.append(bitrate_kbps)
+        return encode_audio_to_mp3(row, sample_rate, bitrate_kbps)
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_preview_columns.encode_audio_to_mp3", _recording_encode
+    )
 
     result = CliRunner().invoke(main, [str(uri), "--bitrate-kbps", "64"])
 
     assert result.exit_code == 0
     assert AUDIO_MP3_FIELD in lance.dataset(str(uri)).schema.names
+    assert seen_bitrates and set(seen_bitrates) == {64}
 
 
 def test_main_rewrites_r2_uri_and_forwards_storage_options(

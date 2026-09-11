@@ -17,12 +17,18 @@ on:
   pull_request:
     paths:
       - "tests/test_generate_dataset.py"
+      - "tests/helpers/processes.py"
       - "tests/conftest.py"
       - "src/synth_setter/configs/dataset.yaml"
       - "src/synth_setter/configs/experiment/generate_dataset/**"
       - "src/synth_setter/configs/render/**"
       - "src/synth_setter/configs/r2/**"
       - "src/synth_setter/cli/generate_dataset.py"
+      - "src/synth_setter/data/vst/generate_vst_dataset.py"
+      - "src/synth_setter/data/vst/shapes.py"
+      - "src/synth_setter/data/vst/writers.py"
+      - "src/synth_setter/pipeline/ci/validate_shard.py"
+      - "src/synth_setter/pipeline/data/lance_shard.py"
       - ".github/actions/prepare-docker-storage/**"
       - ".github/workflows/test-generate-dataset-shards.yml"
 
@@ -39,7 +45,7 @@ jobs:
   generate-dataset-shards:
     name: Generate dataset shards -> real R2 (Docker + VST)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     # Fork PRs can't see repo secrets; the rclone auth ping would fail and
     # burn runner minutes. Same gating pattern as test-local-launcher-roundtrip.yml.
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
@@ -71,7 +77,7 @@ jobs:
       # `ensure_plugin_symlinks.sh` recreates the in-image
       # `plugins/Surge XT.vst3` symlink that the workspace bind-mount shadows;
       # without it the worker resolves `plugin_path: plugins/Surge XT.vst3`
-      # (from `src/synth_setter/configs/render/surge_xt.yaml`) to a missing
+      # (from `src/synth_setter/configs/render/vst.yaml`) to a missing
       # host file.
       - name: Run generate-dataset-shards e2e in Docker
         run: |

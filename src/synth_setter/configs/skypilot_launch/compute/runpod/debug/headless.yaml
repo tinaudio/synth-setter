@@ -1,0 +1,8 @@
+# DEBUG variant: headless-wrapper canary — Xvfb + xsettingsd + openbox +
+# dbus around a no-op echo, proving the wrapper's child-process lifecycle
+# releases the SSH pipes (#735 bug #1, hardened in #741).
+defaults:
+  - /skypilot_launch/compute/runpod/smoke@_here_
+  - _self_
+name: runpod-debug-headless
+run_script: debug-headless.sh

@@ -8,9 +8,11 @@ from types import ModuleType
 
 import numpy as np
 import pytest
+from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.shapes import MEL_SPEC_FIELD, dataset_field_shapes
 from synth_setter.pipeline.data import stats as _stats_module
+from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
 
 
@@ -41,6 +43,60 @@ def _existing_from_samples(
     for row in samples:
         existing = stats_script.update(existing, row)
     return existing
+
+
+def test_welford_archive_round_trip_is_canonical(tmp_path: Path) -> None:
+    """The public archive helpers preserve strict cumulative state.
+
+    :param tmp_path: Isolated archive directory.
+    """
+    path = tmp_path / "welford.npz"
+    state = (
+        5,
+        np.array([[1.0, 2.0]], dtype=np.float32),
+        np.array([[3.0, 4.0]], dtype=np.float32),
+    )
+
+    _stats_module.save_welford(path, state, expected_shape=(1, 2))
+
+    loaded = _stats_module.load_welford(path, expected_shape=(1, 2))
+    assert loaded[0] == 5
+    np.testing.assert_array_equal(loaded[1], state[1])
+    np.testing.assert_array_equal(loaded[2], state[2])
+    with np.load(path) as archive:
+        assert archive["count"].shape == ()
+        assert archive["count"].dtype == np.dtype(np.int64)
+        assert archive["mean"].dtype == np.dtype(np.float32)
+        assert archive["m2"].dtype == np.dtype(np.float32)
+
+
+def test_load_welford_wrong_shape_fails_closed(tmp_path: Path) -> None:
+    """A cumulative archive cannot be reused with a different mel shape.
+
+    :param tmp_path: Isolated archive directory.
+    """
+    path = tmp_path / "welford.npz"
+    np.savez(
+        path,
+        count=np.int64(5),
+        mean=np.ones((2,), dtype=np.float32),
+        m2=np.ones((2,), dtype=np.float32),
+    )
+
+    with pytest.raises(ValueError, match="mean must have shape"):
+        _stats_module.load_welford(path, expected_shape=(1, 2))
+
+
+def test_load_welford_noncanonical_dtype_fails_closed(tmp_path: Path) -> None:
+    """Archives with promoted floating-point state are rejected.
+
+    :param tmp_path: Isolated archive directory.
+    """
+    path = tmp_path / "welford.npz"
+    np.savez(path, count=np.int64(5), mean=np.ones((2,)), m2=np.ones((2,)))
+
+    with pytest.raises(ValueError, match="mean must have dtype float32"):
+        _stats_module.load_welford(path, expected_shape=(2,))
 
 
 def test_merge_welford_two_states_matches_single_pass_over_all_rows(
@@ -357,12 +413,38 @@ def test_stream_stats_lance_matches_numpy(stats_script: ModuleType, tmp_path: Pa
 
     mean, std = stats_script.stream_stats_lance([shard])
 
-    from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
-
     rows = list(iter_lance_column_rows(shard, "mel_spec"))
     expected = np.stack(rows, axis=0)
     np.testing.assert_allclose(mean, expected.mean(axis=0))
     np.testing.assert_allclose(std, expected.std(axis=0))
+
+
+def test_fold_lance_float16_mel_accumulates_in_float32(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """Float16 storage does not reduce the precision of Welford state.
+
+    :param stats_script: Imported stats module fixture.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    base = build_lance_smoke_spec()
+    render = base.render.model_copy(update={"mel_spec_dtype": "float16"})
+    spec = build_lance_smoke_spec(render=render)
+    shard = tmp_path / spec.shards[0].filename
+    write_minimal_lance_shard(shard, spec)
+
+    count, mean, m2 = stats_script.fold_lance_shard_into_welford((0, 0, 0), shard)
+
+    stored_rows = np.stack(list(iter_lance_column_rows(shard, MEL_SPEC_FIELD))).astype(
+        np.float32
+    )
+    expected_mean = stored_rows.mean(axis=0)
+    expected_m2 = ((stored_rows - expected_mean) ** 2).sum(axis=0)
+    assert count == spec.render.samples_per_shard
+    assert isinstance(mean, np.ndarray) and mean.dtype == np.float32
+    assert isinstance(m2, np.ndarray) and m2.dtype == np.float32
+    np.testing.assert_allclose(mean, expected_mean, rtol=1e-6)
+    np.testing.assert_allclose(m2, expected_m2, rtol=1e-5)
 
 
 def test_stream_stats_lance_rejects_empty_shard_sequence(stats_script: ModuleType) -> None:
@@ -423,6 +505,36 @@ def test_get_stats_lance_writes_sibling_stats_npz_with_mel_inner_shape(
         assert loaded["mean"].dtype == np.float32
         assert loaded["std"].shape == mel_inner
         assert loaded["std"].dtype == np.float32
+
+
+def test_get_stats_directory_reads_audio_dataset_mel_key(
+    stats_script: ModuleType, tmp_path: Path
+) -> None:
+    """Audio-directory statistics consume the model-ready ``mel`` entry.
+
+    :param stats_script: Imported stats module under test.
+    :param tmp_path: Directory receiving a real WAV and its computed statistics.
+    """
+    sample_rate = 8_000
+    samples = np.arange(sample_rate, dtype=np.float32)
+    tone_a = np.sin(2 * np.pi * 220 * samples / sample_rate).astype(np.float32)
+    tone_b = np.sin(2 * np.pi * 440 * samples / sample_rate).astype(np.float32)
+    with AudioFile(
+        str(tmp_path / "tone-a.wav"), "w", samplerate=sample_rate, num_channels=1
+    ) as audio_file:
+        audio_file.write(tone_a[None, :])
+    with AudioFile(
+        str(tmp_path / "tone-b.wav"), "w", samplerate=sample_rate, num_channels=1
+    ) as audio_file:
+        audio_file.write(tone_b[None, :])
+
+    stats_script.get_stats_directory(str(tmp_path), mask_degenerate=True)
+
+    with np.load(tmp_path / "stats.npz") as stats:
+        assert stats["mean"].shape == (2, 128, 401)
+        assert stats["std"].shape == (2, 128, 401)
+        assert np.isfinite(stats["mean"]).all()
+        assert np.isfinite(stats["std"]).all()
 
 
 def test_get_stats_lance_no_shards_in_directory_raises(

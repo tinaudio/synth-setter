@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
+from synth_setter.pipeline.schemas.gpu_tier import GpuTier
 from synth_setter.pipeline.schemas.skypilot_launch import (
     ENV_SKYPILOT_API_SERVER_ENDPOINT,
     ENV_SKYPILOT_SERVICE_ACCOUNT_TOKEN,
@@ -19,21 +20,45 @@ from synth_setter.pipeline.schemas.skypilot_launch import (
 class TestDefaults:
     """All fields default to safe local-only values when no input is given."""
 
-    def test_default_compute_template_is_none(self) -> None:
-        """Compute template defaults to None — the "don't dispatch" sentinel."""
-        assert SkypilotLaunchConfig().compute_template is None
+    def test_default_compute_is_none(self) -> None:
+        """Compute defaults to None — the "don't dispatch" sentinel."""
+        assert SkypilotLaunchConfig().compute is None
 
     def test_default_cmd_is_none(self) -> None:
         """Cmd defaults to None — populated by the Hydra entrypoint at dispatch time."""
         assert SkypilotLaunchConfig().cmd is None
 
+    @pytest.mark.parametrize("blank", ["", " ", "\t"])
+    def test_blank_cmd_raises(self, blank: str) -> None:
+        """A configured worker command must contain a shell command.
+
+        :param blank: Empty or whitespace-only candidate command.
+        """
+        with pytest.raises(ValueError, match="cmd must be a non-empty command"):
+            SkypilotLaunchConfig(cmd=blank)
+
     def test_default_num_workers_is_one(self) -> None:
         """Single worker is the default; >1 fans out parallel ranks."""
         assert SkypilotLaunchConfig().num_workers == 1
 
-    def test_default_worker_image_tag_is_dev_snapshot(self) -> None:
-        """Worker image tag defaults to the dev-snapshot rolling tag."""
-        assert SkypilotLaunchConfig().worker_image_tag == "dev-snapshot"
+    def test_default_worker_image_tag_is_devcontainer_tools(self) -> None:
+        """Worker image tag defaults to the tooling image so pods are debuggable."""
+        assert SkypilotLaunchConfig().worker_image_tag == "devcontainer-tools"
+
+    def test_default_worker_checkout_dir_matches_container_workspace(self) -> None:
+        """The checkout default matches the worker image workspace."""
+        assert SkypilotLaunchConfig().worker_checkout_dir == "/home/build/synth-setter"
+
+    def test_worker_checkout_dir_strips_surrounding_whitespace(self) -> None:
+        """The checkout directory is normalized before shell quoting."""
+        cfg = SkypilotLaunchConfig(worker_checkout_dir=" /workspace/repo ")
+
+        assert cfg.worker_checkout_dir == "/workspace/repo"
+
+    def test_blank_worker_checkout_dir_raises(self) -> None:
+        """A configured checkout directory must contain a path."""
+        with pytest.raises(ValueError, match="worker_checkout_dir must be non-empty"):
+            SkypilotLaunchConfig(worker_checkout_dir="   ")
 
     def test_default_tail_is_false(self) -> None:
         """Detach by default; ``tail`` is opt-in."""
@@ -42,6 +67,14 @@ class TestDefaults:
     def test_default_local_is_false(self) -> None:
         """No dispatch-mode preference by default; honor inherited env."""
         assert SkypilotLaunchConfig().local is False
+
+    def test_default_tier_is_any(self) -> None:
+        """GPU filtering defaults to passthrough for existing launches."""
+        assert SkypilotLaunchConfig().tier is GpuTier.ANY
+
+    def test_string_tier_is_coerced_at_config_boundary(self) -> None:
+        """Hydra and YAML tier tokens validate into the domain enum."""
+        assert SkypilotLaunchConfig(tier="low").tier is GpuTier.LOW  # type: ignore[arg-type]
 
 
 class TestValidation:
@@ -75,11 +108,16 @@ class TestValidation:
         with pytest.raises(ValidationError, match="compute_templat"):
             SkypilotLaunchConfig(compute_templat="typo.yaml")  # type: ignore[call-arg]
 
+    def test_network_volume_field_is_rejected(self) -> None:
+        """Unsupported launch fields fail at the strict config boundary."""
+        with pytest.raises(ValidationError, match="network_volume"):
+            SkypilotLaunchConfig(network_volume="obsolete")  # type: ignore[call-arg]
+
     def test_frozen_after_construction(self) -> None:
         """Trust-boundary models are frozen so dispatch can't mutate the config mid-launch."""
         cfg = SkypilotLaunchConfig()
         with pytest.raises(ValidationError):
-            cfg.compute_template = "anything.yaml"  # type: ignore[misc]
+            cfg.job_name = "anything"  # type: ignore[misc]
 
 
 class TestSkypilotClientSettings:
@@ -207,10 +245,10 @@ class TestModelCopy:
 
     def test_model_copy_with_cmd_yields_new_instance(self) -> None:
         """Frozen + model_copy(update=…) is the only way to set cmd post-construction."""
-        original = SkypilotLaunchConfig(compute_template="x.yaml")
+        original = SkypilotLaunchConfig(job_name="stem-x")
         with_cmd = original.model_copy(update={"cmd": "echo hi"})
         assert with_cmd.cmd == "echo hi"
-        assert with_cmd.compute_template == "x.yaml"
+        assert with_cmd.job_name == "stem-x"
         # Original is untouched (frozen invariant).
         assert original.cmd is None
 

@@ -8,8 +8,8 @@ nothing there drives the real ``evaluate()`` entrypoint, so the load-bearing
 
 This module closes that gap: it drives the real ``evaluate(cfg)`` against a
 ``WandbLogger(offline=True)`` and a local-backed ``r2://`` upload prefix, then
-decodes the offline ``run-*.wandb`` binary to confirm the ``eval-results``
-artifact actually landed on the live run.
+decodes the offline run to confirm the explicit run id and ``eval-results``
+artifact landed on the live run.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from synth_setter.workspace import operator_workspace
 from tests.helpers.wandb_offline import read_run_binary
 
 _CONFIG_ID = "test-mps-fake-oracle"
+_RUN_ID = "shared-generation-run"
 _UPLOAD_URI = "r2://eval-artifacts/eval-run-1"
 
 
@@ -61,7 +62,7 @@ def _compose_offline_wandb_eval_cfg(
                 # The experiment defaults to mode=predict; the artifact path is mode-agnostic
                 # and test-mode gives a deterministic zero param_mse without rendering.
                 "mode=test",
-                "datamodule.param_spec_name=surge_4",
+                "synth=surge_4",
             ],
         )
     with open_dict(cfg):
@@ -82,10 +83,10 @@ def _compose_offline_wandb_eval_cfg(
                 "_target_": "lightning.pytorch.loggers.wandb.WandbLogger",
                 "save_dir": str(tmp_path),
                 "offline": True,
-                # pin_wandb_run_id updates logger.wandb.{id,job_type} in place, so both
-                # keys must exist in the struct before evaluate() instantiates the logger.
-                "id": None,
+                # Inline oracle eval supplies the generation id; eval must not replace it.
+                "id": _RUN_ID,
                 "job_type": "",
+                "resume": "must",
                 "project": "eval-artifact-e2e-test",
                 "log_model": False,
                 "settings": {"_target_": "wandb.Settings", "console": "wrap"},
@@ -97,16 +98,16 @@ def _compose_offline_wandb_eval_cfg(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
-def test_evaluate_logs_eval_results_artifact_to_offline_wandb_run(
+def test_evaluate_preserves_wandb_id_and_logs_eval_results_artifact(
     tmp_path: Path,
     surge_xt_smoke_datasets: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``evaluate(cfg)`` end-to-end logs an ``eval-{config_id}`` ``eval-results`` artifact.
+    """``evaluate(cfg)`` preserves its W&B id and logs an ``eval-results`` artifact.
 
-    Drives the real entrypoint against a ``WandbLogger(offline=True)`` and a
-    local-backed ``r2://`` upload prefix (real rclone), then decodes the offline
-    ``run-*.wandb`` binary to confirm the artifact landed on the live run. No
+    Drives the real entrypoint with an explicit id and ``resume=must`` against a
+    ``WandbLogger(offline=True)`` and local-backed ``r2://`` upload prefix (real
+    rclone). The offline binary confirms the id and artifact landed on the live run. No
     wandb internals are mocked — name, type, ``s3://`` reference, and metadata
     are read back from the bytes the client wrote. Guards the load-bearing
     in-``evaluate`` ordering: the artifact must be logged while the run is open
@@ -155,6 +156,7 @@ def test_evaluate_logs_eval_results_artifact_to_offline_wandb_run(
     assert len(offline_dirs) == 1, (
         f"expected one offline-run dir under {tmp_path / 'wandb'}, found {offline_dirs}"
     )
+    assert offline_dirs[0].name.endswith(f"-{_RUN_ID}")
     binary_files = glob.glob(str(offline_dirs[0] / "run-*.wandb"))
     assert len(binary_files) == 1, (
         f"expected one .wandb binary in {offline_dirs[0]}, found {binary_files}"

@@ -2,7 +2,7 @@
 
 > **Status**: Draft
 > **Author**: ktinubu@
-> **Last Updated**: 2026-07-16
+> **Last Updated**: 2026-07-23
 > **Tracking**: #74
 > **Storage conventions**: [storage-provenance-spec.md](storage-provenance-spec.md)
 
@@ -36,11 +36,11 @@ Topline goal: Get massive dataset generation working reliably enough, and know w
 
 **synth-setter** is a collection of tools for synthesizer inversion, sound matching and preset exploration.
 
-Training models for these tasks requires large-scale datasets: 500k–15M audio samples, each rendered through a real VST synthesizer plugin (Surge XT) with random parameter configurations. Each sample produces an audio waveform, mel spectrogram, and ground-truth parameter array, stored as a Lance dataset shard. This rendering is CPU-bound — each sample requires a real-time audio render through the plugin — and takes hours to days on a single machine.
+Training models for these tasks requires large-scale datasets: 500k–15M audio samples, each rendered through a configured synthesizer backend with random parameter configurations. Each sample produces an audio waveform, mel spectrogram, and ground-truth parameter array, stored as a Lance dataset shard. This rendering is CPU-bound — each sample requires a real-time audio render through the plugin — and takes hours to days on a single machine.
 
 ### Prior Work
 
-The core generation and training infrastructure was built by benhayes@: the VST rendering engine (`generate_vst_dataset.py`), a comprehensive parameter specification system covering Surge XT's full parameter space (`param_spec.py`, `surge_xt_param_spec.py` — ~1300 lines of sampling, encoding, and semantic representation), plugin loading with audio and mel extraction (`core.py`), and the PyTorch Lightning DataModule (`vst_datamodule.py`). Beyond the generation code, benhayes@ built an extensive Hydra configuration system — 40+ composable experiment configs across multiple datasets (Surge, k-osc, k-sin, FM, FSD, NSynth), multi-logger support (W&B, TensorBoard, MLflow), Optuna integration for hyperparameter search, and SGE job scripts for QMUL's HPC cluster with proper resource management, array jobs, and W&B checkpoint retrieval. This is a well-structured research codebase with strong configuration practices, and it remains the foundation the distributed pipeline builds on.
+The core generation and training infrastructure was built by benhayes@: the VST rendering engine (`generate_vst_dataset.py`), a comprehensive parameter specification system covering Surge XT's full parameter space (`param_spec.py`, `surge_xt_param_spec.py` — ~1300 lines of sampling, encoding, and semantic representation), plugin loading with audio and mel extraction (`core.py`), and the PyTorch Lightning DataModule (`vst_datamodule.py`). Beyond the generation code, benhayes@ built an extensive Hydra configuration system — composable experiment configs across multiple datasets and synthesizers (Surge, TorchSynth, FSD, NSynth), multi-logger support (W&B, TensorBoard, MLflow), Optuna integration for hyperparameter search, and SGE job scripts for QMUL's HPC cluster with proper resource management, array jobs, and W&B checkpoint retrieval. This is a well-structured research codebase with strong configuration practices, and it remains the foundation the distributed pipeline builds on.
 
 On top of this, ktinubu@ added sequential orchestration (`run_dataset_pipeline.py`), cloud storage integration via rclone (`uploader.py`), a containerized execution environment with Docker, a first parallelization attempt with per-instance shards (`generate_shards.py`), RunPod scaling (`runpod_launch.py`), and post-generation finalization (`finalize_shards.py`).
 
@@ -54,13 +54,13 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 > implemented today (`src/synth_setter/cli/generate_dataset.py` loops over
 > `spec.shards`, skipping shards already present in R2 — worker-side
 > resumability MVP per #750; the launcher-side reconciliation engine described
-> in §7.4 / §7.7 is not yet built). When `render.parallel=True`, owned shards
+> in §7.4 / §7.7 is not yet built). When `render.parallel=true`, owned shards
 > dispatch concurrently via a thread pool sized to half the worker's
 > affinity-aware CPU count; transient renderer subprocess failures are retried
 > up to `render.max_retries` times (default 0 = strict fail-fast).
 > `use_shard_queue=true` instead claims shard IDs dynamically from the run's
-> Lance shard-claims table (§7.1); claims mode renders one claim at a time and
-> ignores `render.parallel`. The
+> Lance shard-claims table (§7.1), using the same local concurrency bound when
+> parallel rendering is enabled. The
 > distributed/parallel pipeline described below — CLI, backends, reconciliation,
 > and finalize stages — is the design target and not yet built.
 
@@ -87,7 +87,7 @@ RunPod is used because it's the platform where GPUs are already available and co
 #    as `experiment=` is `generate_dataset/<stem>`.
 #    Hydra composes the final DatasetSpec from src/synth_setter/configs/dataset.yaml + this overlay.
 cat src/synth_setter/configs/experiment/generate_dataset/surge-simple-480k-10k.yaml
-# → task_name: surge-simple-480k-10k, defaults: [/datamodule: surge_simple, /render: surge_simple, ...], ...
+# → task_name: surge-simple-480k-10k, defaults: [/datamodule: surge_simple, /render: vst, ...], ...
 
 # 2. Run multi-shard generation on a single worker (default sequential loop;
 #    `render.parallel=true` opts into thread-pool parallel dispatch).
@@ -588,7 +588,7 @@ Validation is **tiered** — each stage does the minimum work needed for its rol
 
 Current implementation:
 
-- **Structural**: Opens as a Lance fragment, expected columns present (`audio`, `mel_spec`, `param_array`)
+- **Structural**: Opens as a Lance fragment, expected columns present (`audio`, `mel_spec`, `param_array`, `audio_mp3`, `audio_uuid`)
 - **Row count**: Matches spec's expected shard size
 - **Schema**: the written fragment's physical schema matches the spec-derived schema — see `lance_fragment` in `pipeline/data/lance_shard.py`; Lance's append-mode writer otherwise silently inherits an existing committed dataset's schema ([#2084](https://github.com/tinaudio/synth-setter/issues/2084))
 
@@ -841,7 +841,7 @@ No `check_tasks` method exists. Provider APIs answer the wrong question ("is the
 
 The pipeline's output format is **Lance**. The renderer CLI dispatches on the shard's filename suffix (`.lance` → `make_lance_dataset`) via `OutputFormat.from_extension`.
 
-Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline derives logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) from the staging path, filename, and spec rather than storing it in the sidecar ([§14.4](#144-lance-fragment-sidecar-schema)). Rows are Arrow fixed-shape-tensor columns (float16 `audio`, float32 `mel_spec` / `param_array`) with the `ShardMetadata` JSON embedded in the schema metadata and the on-disk format pinned to `data_storage_version="2.2"`.
+Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are committed from worker-produced fragments. Workers use Lance to write uncommitted fragment data and persist a strict Pydantic `fragment.json` sidecar whose `fragment_json` field is the exact Lance `FragmentMetadata.to_json()` payload. Lance owns Lance fragment IDs and physical data references; the pipeline derives logical identity (`shard_id`, `split`, `worker_id`, `attempt_uuid`) from the staging path, filename, and spec rather than storing it in the sidecar ([§14.4](#144-lance-fragment-sidecar-schema)). Rows carry three Arrow fixed-shape-tensor columns plus two preview columns: `render.audio_dtype` and `render.mel_spec_dtype` select float16 or float32 storage, `param_array` stays float32, `audio_mp3` is non-null binary tagged `audio/mpeg` and encoded at the format's fixed 128 kbps setting, and `audio_uuid` is a non-null UUIDv5 string derived from the persisted audio bytes. VST generation accepts the MP3-supported rates 8, 11.025, 12, 16, 22.05, 24, 32, 44.1, and 48 kHz. pyFDN fixes mono tensors to float32 audio `(1, 176400)` and mel `(1, 128, 401)`, while DiffVox uses stereo audio `(2, 176400)` and mel `(2, 128, 401)`; parameter-tensor width varies per synth's `ParamSpec.encoded_width` (see `src/synth_setter/data/pyfdn_param_spec.py`). The schema embeds `ShardMetadata` JSON and pins the on-disk format to `data_storage_version="2.2"`.
 
 **Why Lance:** the columnar layout gives per-column projection (train on `mel_spec` + `param_array` without decoding `audio`), the dataset streams natively from object storage for both random-access and sequential loaders, and fragment-based finalize commits winning fragment metadata instead of rewriting rows — so finalize decodes zero audio rows and never becomes a single-machine bottleneck ([§12](#12-open-questions-risks--limitations)). One format serves both the local single-GPU random-access case and the multi-GPU streaming case.
 
@@ -853,7 +853,7 @@ Lance **dataset directories** (`train.lance/`, `val.lance/`, `test.lance/`) are 
 
 W&B serves as a lightweight observability layer for the pipeline — a few key metrics and the dataset as a first-class artifact. It is not a monitoring dashboard or a log aggregator. W&B is an index and lineage tracker, not the authoritative dataset store. R2 holds the data; `dataset.json` holds the metadata; W&B points to both.
 
-The finalize stage initializes W&B with `wandb.init(project="synth-setter", job_type="data-generation")`.
+The finalize stage opens its own W&B run (`id={spec.run_id}-finalize`, `job_type=finalize`) rather than resuming the data-generation run; see [storage-provenance-spec.md §7](storage-provenance-spec.md#7-job_type-values) for the authoritative `job_type` list.
 
 ### Metadata Placement
 
@@ -1122,13 +1122,136 @@ Additional stages could follow the same contract (§5) without modifying existin
 | **add-captions**   | audio shards | shards + text column | GPU     |
 | **render-presets** | preset bank  | audio shards         | CPU     |
 
-`add-embeddings` is now implemented as the `synth-setter-add-embeddings` CLI: it
-augments a finalized Lance dataset in place with a `clap` (LAION-CLAP)
-`FixedSizeList<float32, 512>` vector column — optionally IVF_PQ-indexed for
-`nearest=` vector search — and an `m2l` (music2latent) fixed-shape-tensor
-latent column, both derived from the audio column.
+`add-embeddings` is implemented as the `synth-setter-add-embeddings` Hydra
+endpoint (`synth-setter-add-embeddings lance_uri=DATASET.lance`, config
+`configs/add_embeddings.yaml` validated into `AddEmbeddingsConfig`). Each
+invocation augments one finalized Lance dataset without modifying finalize-owned
+dataset cards or completion markers. It writes global vector columns for `clap`
+(LAION-CLAP, 512 dimensions) and `ssondo` (S-SONDO MATPAC-MobileNetV3, 960
+dimensions), plus sequence features (`cqt`, `m2l`, `same_s`, `same_l`, `matpac_plus`,
+`meanaudio_16k`, `pupujepa_tiny`, and `pupujepa_large`) stored as fixed-shape
+tensors. All are derived from the audio column and selectable via `embeddings=`
+(the selectable set is
+`EMBEDDING_REGISTRY`'s keys in `add_embeddings.py`; the multi-GB SAME encoders
+are each loaded and written in their own sequential pass). SAME-S and SAME-L
+use Stable Audio 3's autoencoder factory with strict safetensors state loading;
+local directories, R2 mirrors, and HuggingFace repo IDs retain the same
+checkpoint-resolution behavior. Each sequence embedding also writes a mean-pooled
+`FixedSizeList<float32, D>` companion (`cqt_vec`, `m2l_vec`, `same_s_vec`,
+`same_l_vec`, `matpac_plus_vec`, `meanaudio_16k_vec`, `pupujepa_tiny_vec`, or
+`pupujepa_large_vec`); when `build_index=true`, IVF_PQ indexes `clap`, `ssondo`,
+and the selected companion columns for `nearest=` search. S-SONDO audio is downmixed,
+resampled to 32 kHz, and right-padded to its 10-second input window; longer
+clips fail instead of silently losing a partial tail. Its PyPI runtime is pinned
+to `ssondo==0.3.1`, and the MIT checkpoint is pinned by Hugging Face revision
+and SHA-256 before the package's pickle-based Lightning loader runs. If index
+creation fails after vectors commit, rerunning the same split builds only
+missing indexes without re-encoding complete columns. An optional
+`resume_cache=<path>` caches per-batch encoder outputs so an interrupted write
+can resume without re-encoding already-processed rows. Generated fields carry
+artifact and input-policy identities so retries reject incompatible output.
+`cqt` runs the commit-pinned CQT_pytorch NSGT transform on the selected Torch device.
+It downmixes channels on-device, stores 8 octaves × 32 bins of float32 `log1p` magnitude on
+the canonical 100 Hz frame grid, and runs in a solo encoder pass to bound transform memory.
+For four-second 44.1 kHz rows the stored shape is `(256, 401)`, consumed by
+`conditioning=cqt` through `EmbeddingPool`. CQT has no checkpoint override; its field identity
+records the immutable source commit and preprocessing policy.
 
-`synth-setter-add-preview-columns` (`pipeline/data/add_preview_columns.py`) follows the same contract: it takes Lance audio shards and adds an `audio_mp3` preview column plus an `audio_uuid` UUIDv5 fingerprint column (CPU), without modifying existing stages.
+The default CLAP, SAME, and S-SONDO sources hydrate under
+`${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
+`checkpoints.<embedding>=<source>` Hydra overrides remain authoritative.
+
+`sketch` is not a learned embedding: it extracts the Sketch2Sound-style
+loudness, spectral-centroid, and PESTO pitch tracks
+(`features/sketch_controls.py`) from `audio` on the mel frame grid, then stores
+32-frame model-ready controls in a `sketch` struct column (#2707). Loudness and
+centroid use adaptive average pooling; pitch uses adaptive maximum pooling and
+remains unthresholded. The `vec` child stores the pooled frame mean for
+contour-similarity search. The struct is an atomic write unit — refreshing
+one child means rewriting the whole column (requires Lance data storage 2.2).
+`sketch=on` consumes this canonical layout. Its `IndexSpec`
+fixes `num_sub_vectors=2` — the only practical PQ split for the pooled
+vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
+386\) — since the CLAP-oriented default of 16 cannot divide it; a run config
+leaves `num_sub_vectors` null to let each spec's default apply.
+
+Sketch extraction is batch-vectorized torch and runs on the configured device
+(auto-CUDA, ~6.5× CPU on a consumer GPU; the CPU path already saturates
+multiple cores via torch intra-op threading, so a process pool would add
+contention, not throughput). `sketch_encode_batch` caps rows per extractor
+invocation: the default 32 bounds CPU RSS (#2707), while a large GPU may need a
+bigger batch to saturate — benchmark per #3131 before a large backfill. The
+resolved device and batch are logged at encoder load, so a silently-CPU run is
+visible in the first log lines. Because co-resident encoders share one Lance
+UDF pass and run serially per batch, launch CPU-bound and GPU-bound encoders as
+separate `add-embeddings` runs so neither idles while the other works.
+
+`matpac_plus` runs the frozen MATPAC++ encoder through TinyMU's public package
+API, installed from an exact Git commit in the normal heavy runtime. The pinned
+R2 checkpoint is verified by SHA-256, and each generated Lance field records
+that immutable checkpoint digest for safe retry. The integration rejects
+incompatible model state, malformed audio, shape drift, and non-finite output.
+The measured preprocessing, sequence shape, cache identity, package boundary,
+and `conditioning=matpac_plus` profile are documented in
+[MATPAC++ audio embeddings](../reference/matpac-plus-embeddings.md).
+
+`meanaudio_16k` installs MeanAudio directly from immutable upstream commit
+`8740a3e8df4c891a8d9deee1f820d051584d2671` and uses only
+`get_mel_converter("16k")` plus `get_my_vae("16k")`; it does not construct
+`AutoEncoderModule`, a vocoder, or a flow model. The default
+`AndreasXi/MeanAudio` `v1-16.pth` checkpoint is fixed at revision
+`6e072062d4f9af21c647e2bae5aafc1da2c84014` and SHA-256
+`15ad082c714ccf3771898a771fc6eebdc1d9c8d5c6154726906a97f43603d62c`;
+only that source or a hash-identical local file is accepted, and the default
+uses Hugging Face Hub's standard cache. State loads strictly before the decoder
+is discarded, then weight normalization is removed
+and the remaining encoder is frozen in evaluation mode. One- or two-channel
+audio is downmixed by channel mean, resampled to 16 kHz, and passed through the
+canonical MeanAudio mel frontend. Stored values are deterministic
+`vae.encode(mel).mode()` posterior means with shape `(20, 125)` for four seconds
+at 44.1 kHz; `conditioning=meanaudio_16k` consumes that fixed shape through the
+existing `EmbeddingPool`. The 20-wide mean-pooled companion uses four PQ
+sub-vectors. MeanAudio's repository and Hugging Face card declare MIT licensing,
+while its imported EDM2 VAE utility carries CC BY-NC-SA 4.0; synth-setter accepts
+this integration for research/non-commercial use under those upstream terms.
+
+`pupujepa_tiny` and `pupujepa_large` use one shared Torch implementation for
+offline augmentation and online waveform conditioning. Each loads only its
+pinned patch embed and frozen teacher, producing a 1,536- or 8,192-wide 25 Hz
+sequence in a solo bounded-batch pass. The Hugging Face revision,
+variant-specific digests, frontend, output geometry, and cached/online
+conditioning profiles are documented in
+[PupuJEPA audio embeddings](../reference/pupujepa-embeddings.md).
+
+`t5gemma` is the one embedding that conditions on parameters rather than audio.
+Each `EmbeddingSpec` declares an `input_field`, and this one reads `param_array`,
+renders each row to text through the `param_text_normalizer` strategy
+(`data/vst/param_text.py`; the shipped `param_names` joins the spec's parameter
+names with commas and ignores values), and encodes the captions with Stable
+Audio 3's frozen T5Gemma prompt conditioner (`pipeline/data/t5gemma.py`).
+Stable Audio 3 is part of the normal heavy runtime's `torch` dependency group.
+`param_spec_name=` is required whenever it is
+selected, and the encoded width must match that spec. Captions past the
+checkpoint's 256-token budget are truncated exactly as SA3 truncates them, so
+the wider specs keep only their leading names (`surge_simple` 31 of 91,
+`surge_xt` 31 of 164; pinned by
+`test_param_names_caption_retains_only_its_leading_names_after_truncation`). Pad positions carry the checkpoint's learned
+`padding_embedding` rather than zeros, since SA3's DiT cross-attends over every
+context position unmasked; an empty caption is therefore SA3's unconditional
+representation. The encoder runs at float32 even though the checkpoint declares
+bfloat16 — bf16 SDPA kernels move these embeddings by up to 11.5 (embedding std
+1.75) between torch releases, while float32 is bitwise identical across torch
+2.7.1 and the locked torch. Each unique caption is encoded as a singleton and
+reused for duplicate rows because batched SDPA also varies with batch shape.
+Checkpoints must declare T5Gemma with the canonical 768-dimensional,
+256-token contract. The column is a `[768, 256]` fixed-shape tensor with no
+index: every row of one dataset shares a caption today, so an IVF_PQ index
+over it would be degenerate. The mirrored weights carry Gemma Terms of Use
+redistribution conditions.
+
+Current generation writes `audio_mp3` and `audio_uuid` in the initial Lance fragment. `synth-setter-add-preview-columns` (`pipeline/data/add_preview_columns.py`) remains a manual utility for legacy Lance audio shards that lack those columns; there is no automated migration or compatibility path for existing datasets.
+
+Training hydration that reads only a subset of a finalized dataset's columns/rows can materialize a transaction-uuid-pinned local copy via `materialize_lance_subset` (`pipeline/data/lance_materialize.py`) instead of transferring the whole dataset directory; a sidecar manifest gates cache reuse by request hash.
 
 Stage order would remain static and explicit — user runs commands in sequence. If the number of stages grows to 4-6 and manual commands become unwieldy, adopt Prefect rather than building a homegrown orchestrator.
 
@@ -1176,35 +1299,15 @@ class RenderConfig(BaseModel):
     """Renderer-specific configuration nested as ``DatasetSpec.render``."""
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
-    plugin_path: str  # "torchsynth" selects the in-process backend; must agree with renderer_backend (RenderConfig._validate_torchsynth_backend)
-    plugin_state_path: str
-    param_spec_name: str
-    renderer_version: str
-    sample_rate: int
-    channels: int
-    velocity: int
-    signal_duration_seconds: float
-    min_loudness: float
-    samples_per_render_batch: int = 32
-    samples_per_shard: int
-    sample_offset: int = 0      # split-local index of this shard's first row
-    attempts_per_sample: int = 100
-    max_retries: int = 0        # per-shard retry budget for transient renderer failures
-    parallel: bool = False      # dispatch shard renders concurrently (ThreadPoolExecutor)
-    plugin_reload_cadence: Literal["once", "render"] = "once"  # per-shard load (#1999)
-    # Platform-aware default via Field(default_factory=...): "never" on Darwin
-    # (show_editor SIGTRAPs after ~3-4 calls, #714), "render" elsewhere
-    # (preserves historical per-render warm-up). An explicit
-    # gui_toggle_cadence="render" is still rejected on Darwin by a
-    # model_validator; "always_on" requires plugin_reload_cadence="once".
-    # Source of truth: _GuiToggleCadence / RenderConfig in pipeline/schemas/spec.py.
-    gui_toggle_cadence: Literal["never", "once", "render", "always_on"] = Field(
-        default_factory=_default_gui_toggle_cadence
-    )
-    # "shard" reuses one patch for every sample in the shard (a #489 per-patch
-    # variance probe; a partial shard re-renders from row 0 rather than resuming).
-    # Source of truth: _ParamSampleCadence / RenderConfig in pipeline/schemas/spec.py.
-    param_sample_cadence: Literal["sample", "shard"] = "sample"
+    synth: SynthSpec  # Param spec, rendering artifact, preset, and synth_version
+    renderer_backend: RendererBackend
+    # Audio/shard geometry, retry budgets, and the cadence knobs
+    # (plugin_reload_cadence #1999, gui_toggle_cadence #714,
+    # param_sample_cadence #489, post_{load,param,render}_flush_blocks #3245)
+    # are documented field-by-field on the
+    # authoritative RenderConfig in pipeline/schemas/spec.py; this block is
+    # an abridged sketch, not the definition.
+    ...
 
 class DatasetSpec(BaseModel):
     """Unified dataset specification — input config + materialized runtime in one model."""
@@ -1244,6 +1347,25 @@ class DatasetSpec(BaseModel):
 
 All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) use Pydantic strict mode at the trust boundary. JSON-mode coercions (`list→tuple` for `train_val_test_sizes` / `train_val_test_seeds`, `str→datetime` for `created_at`) are handled by explicit per-field validators on `DatasetSpec`; `extra="forbid"` plus those validators keep the boundary tight without relaxing strict. `frozen=True` makes specs immutable at the type level.
 
+`RendererBackend` and `SynthSpec.format` are the source of truth for renderer
+dispatch. The `dawdreamer` + `faust` tuple accepts a
+`registry://faust/<registered-source-name>` plugin path and no state path. The
+URI must match `param_spec_name`; the worker resolves that checked-in source,
+verifies `source_sha256`, compiles it, and dispatches renderer-native values by
+exact compiled address. `render.backend_version` independently pins the
+DawDreamer host. Faust render groups recompile per row so DSP and voice state
+cannot cross sample boundaries. Existing v2 specs with a blank Faust plugin path
+remain accepted; external files and other URIs are not supported by the registry
+renderer. The standalone `synth-setter-export-fdn-faust` command instead emits a
+fixed-value BasicFDN `.dsp` artifact and verifies direct DawDreamer compilation
+without adding a registry identity. `pyfdn` uses the same `AudioRenderer` and
+accepted-sample path with
+fixed zero-valued MIDI compatibility inputs. It samples complete 91-coordinate
+patches and renders native four-second, 44.1 kHz mono impulse responses by
+default. `pyfdn_excitation: chirp` opts into the canonical chirp, whose byte
+digest participates in the shard render-contract digest. Training reads
+finalized Lance shards; the former on-demand pyFDN datamodule is removed.
+
 **Seed derivation:** `DatasetSpec.train_val_test_seeds` supplies independent
 split masters. Each `ShardSpec` pairs its split master with a split-local
 `sample_offset`; row-level retries derive RNGs from the master, absolute
@@ -1268,7 +1390,7 @@ class DatasetCard(BaseModel):
     git_sha: str
     is_repo_dirty: bool
     param_spec: str
-    renderer_version: str
+    synth_version: str
     output_format: str      # "lance"
     sample_rate: int
 
@@ -1350,8 +1472,8 @@ precision loss. The `.npz` contains Welford state:
 | Array   | Type      | Meaning                                   |
 | ------- | --------- | ----------------------------------------- |
 | `count` | `int64`   | Number of rows represented                |
-| `mean`  | `float64` | Running mean for normalization statistics |
-| `m2`    | `float64` | Running sum of squared deviations         |
+| `mean`  | `float32` | Running mean for normalization statistics |
+| `m2`    | `float32` | Running sum of squared deviations         |
 
 Finalize reduces only the selected winners' `.shard-stats.npz` files into
 dataset-level `stats.npz`.
@@ -1380,7 +1502,7 @@ A run starts from a Hydra experiment YAML composed against `src/synth_setter/con
 
 defaults:
   - override /datamodule: surge_simple
-  - override /render: surge_simple
+  - override /render: vst
   - _self_
 
 task_name: surge-simple-480k-10k
@@ -1398,7 +1520,7 @@ On first `generate` (`python -m synth_setter.cli.generate_dataset experiment=<id
 
 1. Hydra composes the experiment against `src/synth_setter/configs/dataset.yaml`, yielding an `OmegaConf` `DictConfig`.
 2. `spec_from_cfg(cfg)` (a thin wrapper over `DatasetSpec.from_hydra_cfg`) masks the cfg to `DatasetSpec`'s own fields, resolves, and constructs a Pydantic `DatasetSpec` (`strict=True`, `frozen=True`) — the same model used for the on-R2 artifact.
-3. Runtime fields (`run_id`, `r2`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2.prefix` is `data/{task_name}/{run_id}/`. `renderer_version` is set by the configured renderer's pin; the worker re-derives via `extract_renderer_version` and refuses to render on mismatch.
+3. Runtime fields (`run_id`, `r2`, `created_at`, `git_sha`, `is_repo_dirty`) auto-fill via `default_factory` when absent. `run_id` is `{task_name}-{YYYYMMDDTHHMMSSsssZ}` (millisecond precision); `r2.prefix` is `data/{task_name}/{run_id}/`. The renderer subprocess receives the complete `RenderConfig` and dispatches through `make_audio_renderer`: VST backends load their plugin and verify pinned provenance, while `dawdreamer` with `synth.format: faust` compiles registered checked-in source, verifies its digest and backend version, and validates its exact addresses against the registered spec.
 4. Computed fields (`shards`, `num_shards`, `num_params`) derive deterministically from layout + render fields.
 5. Upload the JSON-serialized `DatasetSpec` to R2 (`<r2.prefix>/input_spec.json`).
 6. Proceed with reconciliation.
@@ -1478,7 +1600,10 @@ src/synth_setter/configs/
   datamodule/          # Param spec / channels / velocity / loudness floor (shared with training)
     surge_simple.yaml
     surge.yaml
-  render/              # Renderer + plugin / preset / sample rate / batch sizes
+  render/              # Backend-named render groups (generic knobs + backend selectors)
+    vst.yaml
+    surgepy.yaml
+  synth/               # Root synth identity groups, including synth_version
     surge_simple.yaml
     surge_xt.yaml
   r2/                  # R2 bucket + prefix root
@@ -1492,8 +1617,8 @@ src/synth_setter/configs/
   # experiment/          # Per-experiment defaults files; each composes dataset.yaml + groups
   #   generate_dataset/
   #     surge-simple-480k-10k.yaml
-  # render/              # Renderer-specific configs (param_spec_name, renderer_version, samples_per_shard, …)
-  #   surge_xt.yaml
+  # render/              # Backend-named renderer settings; identity lives in the root synth/ group
+  #   vst.yaml
   # r2/                  # R2 bucket + prefix_root
   #   default.yaml
 ```
@@ -1520,7 +1645,7 @@ src/synth_setter/configs/
 | **Quarantined shard**         | A corrupt shard uploaded by the worker to `metadata/workers/shards/shard-{id}/quarantine/` on validation failure. Preserves the evidence for debugging alongside lifecycle markers.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **Dataset card**              | JSON file (`dataset.json`) describing the finalized dataset: provenance, structure, stats. References the spec by SHA-256.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | **param_spec**                | Configuration selecting which synthesizer parameters to vary. Determines prediction task dimensionality. Registered specs live in `param_specs` in [`src/synth_setter/data/vst/__init__.py`](../../src/synth_setter/data/vst/__init__.py); see also the [glossary entry](../glossary.md).                                                                                                                                                                                                                                                                                                                                                                                        |
-| **VST**                       | Virtual Studio Technology — plugin format for audio synthesizers. Surge XT is the VST used for rendering.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| **VST**                       | Virtual Studio Technology — plugin format used by the synth identities registered in [`SYNTHS`](../../src/synth_setter/synth_spec.py).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | **Mel spectrogram**           | Frequency-domain audio representation used as neural network input. 128 mels, ~100 frames/sec.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | **Fully parallel**            | Workload where tasks are completely independent — no communication or shared state between workers.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **rclone**                    | CLI tool for syncing files to cloud storage. Used as the R2 upload/download mechanism.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -1541,7 +1666,7 @@ src/synth_setter/configs/
 | Retry           | [tenacity](https://tenacity.readthedocs.io/)                                                                                                                                | Centralized retry policy                         |
 | Upload/download | [rclone](https://rclone.org/)                                                                                                                                               | R2 file transfer; all transfers use `--checksum` |
 | Containers      | [Docker](https://docs.docker.com/build/buildkit/) (BuildKit)                                                                                                                | Reproducible environments                        |
-| Audio           | [Surge XT](https://surge-synthesizer.github.io/) (headless, Xvfb)                                                                                                           | VST synthesis                                    |
+| Audio           | Registered VST3 synths through Pedalboard or DawDreamer                                                                                                                     | VST synthesis                                    |
 
 ## Appendix C: References
 

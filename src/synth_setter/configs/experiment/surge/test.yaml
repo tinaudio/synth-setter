@@ -9,6 +9,7 @@
 defaults:
   - override /model: vst_ffn
   - override /datamodule: surge
+  - override /synth: surge_xt
   - override /trainer: cpu
   - override /callbacks: [default_vst, eval_vst]
   - _self_

@@ -1,0 +1,175 @@
+"""Build SkyPilot task documents from validated Hydra compute options."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from functools import cache
+from importlib.abc import Traversable
+
+from synth_setter.pipeline.schemas.compute import ComputeConfig
+from synth_setter.pipeline.schemas.gpu_tier import GpuTier, filter_gpu_skus
+from synth_setter.resources import configs_dir
+
+_COMPUTE_GROUP = "skypilot_launch/compute"
+
+
+@cache
+def load_compute_script(name: str) -> str:
+    """Load one packaged compute script with its shebang/header comments stripped.
+
+    Header stripping keeps the shipped setup/run text identical to the legacy
+    inline YAML blocks while letting the ``.sh`` files carry a shebang (for
+    shellcheck) and rationale comments.
+
+    :param name: Script filename under ``configs/skypilot_launch/compute/scripts/``.
+    :returns: Script body starting at the first non-comment line.
+    :raises FileNotFoundError: No packaged script has this name.
+    """
+    ref = configs_dir() / "skypilot_launch" / "compute" / "scripts" / name
+    if not ref.is_file():
+        raise FileNotFoundError(
+            f"compute script not found: {name} (expected under {_COMPUTE_GROUP}/scripts/)"
+        )
+    lines = ref.read_text(encoding="utf-8").splitlines(keepends=True)
+    body_start = 0
+    for i, line in enumerate(lines):
+        if not line.startswith("#"):
+            body_start = i
+            break
+    return "".join(lines[body_start:])
+
+
+def compute_option_names() -> list[str]:
+    """List every checked-in ``skypilot_launch/compute`` option name.
+
+    :returns: Sorted option names (``runpod/smoke`` style) discovered from the
+        packaged config tree.
+    """
+
+    def walk(node: Traversable, prefix: str) -> Iterator[str]:
+        for child in node.iterdir():
+            if child.is_dir() and child.name != "scripts":
+                yield from walk(child, f"{prefix}{child.name}/")
+            elif child.name.endswith(".yaml"):
+                yield f"{prefix}{child.name.removesuffix('.yaml')}"
+
+    return sorted(walk(configs_dir() / "skypilot_launch" / "compute", ""))
+
+
+def load_compute_option(name: str) -> ComputeConfig:
+    """Compose one ``skypilot_launch/compute`` option into a validated model.
+
+    Uses the Hydra Compose API (not ``yaml.safe_load``) because debug options
+    inherit their pool from ``runpod/smoke`` via a defaults list.
+
+    :param name: Option name relative to the group (e.g. ``runpod/smoke``).
+    :returns: Validated compute option.
+    :raises ValueError: The option does not exist or fails validation.
+    """
+    from hydra import compose, initialize_config_module
+    from hydra.core.global_hydra import GlobalHydra
+    from hydra.errors import MissingConfigException
+    from omegaconf import OmegaConf
+
+    GlobalHydra.instance().clear()
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            try:
+                cfg = compose(overrides=[f"+{_COMPUTE_GROUP}={name}"])
+            except MissingConfigException as exc:
+                raise ValueError(
+                    f"unknown {_COMPUTE_GROUP} option {name!r}; "
+                    f"available: {', '.join(compute_option_names())}"
+                ) from exc
+    finally:
+        GlobalHydra.instance().clear()
+    raw = OmegaConf.to_container(cfg.skypilot_launch.compute, resolve=True)
+    if not isinstance(raw, dict):
+        raise ValueError(f"compute option {name!r} must compose to a mapping")
+    return ComputeConfig(**{str(k): v for k, v in raw.items()})
+
+
+def apply_tier_filter(compute: ComputeConfig, tier: GpuTier) -> ComputeConfig:
+    """Return a copy of a compute option narrowed to one cumulative GPU tier.
+
+    CPU-only resource alternatives have no accelerator pool to filter.
+
+    :param compute: Validated compute option to narrow.
+    :param tier: Maximum GPU class to allow.
+    :returns: New compute config containing the filtered resource alternatives.
+    :raises ValueError: A GPU pool contains an unclassified SKU or has no
+        accelerator allowed by ``tier``.
+    """
+    if tier is GpuTier.ANY:
+        return compute.model_copy(deep=True)
+
+    filtered_resources = []
+    for resource in compute.resources:
+        if resource.accelerators is None:
+            filtered_resources.append(resource.model_copy(deep=True))
+            continue
+
+        filtered_skus = filter_gpu_skus(resource.accelerators, tier)
+        if not filtered_skus:
+            raise ValueError(
+                f"compute option {compute.name!r} has no accelerators allowed by tier={tier.value}"
+            )
+        accelerators = {
+            sku: count for sku, count in resource.accelerators.items() if sku in filtered_skus
+        }
+        filtered_resources.append(
+            resource.model_copy(update={"accelerators": accelerators}, deep=True)
+        )
+
+    return compute.model_copy(update={"resources": filtered_resources}, deep=True)
+
+
+def resolve_run_block(compute: ComputeConfig, cmd: str | None) -> str:
+    """Resolve the task ``run`` block from the option's run source and ``cmd``.
+
+    :param compute: Validated compute option.
+    :param cmd: Launcher-injected worker command, when the caller has one.
+    :returns: The final ``run`` block text.
+    :raises ValueError: ``cmd`` is set alongside a ``run_script`` (it would be
+        silently dropped), or missing where the option requires it.
+    """
+    if compute.run_script is not None:
+        if cmd is not None:
+            raise ValueError(
+                f"compute option {compute.name!r} carries run_script="
+                f"{compute.run_script!r}, but cmd is also set — cmd cannot be "
+                "silently dropped. Pick a compute option without a run_script "
+                "to opt into the cmd-injection flow."
+            )
+        return load_compute_script(compute.run_script)
+    if cmd is None:
+        raise ValueError(
+            f"compute option {compute.name!r} takes an injected worker cmd, but none was given"
+        )
+    return cmd
+
+
+def build_task_doc(
+    compute: ComputeConfig,
+    *,
+    cmd: str | None,
+) -> dict[str, object]:
+    """Build a SkyPilot task document with packaged scripts resolved.
+
+    :param compute: Validated Hydra compute option.
+    :param cmd: Worker command required by injected-command options.
+    :returns: Mapping accepted by ``sky.Task.from_yaml_config``.
+    """
+    task_doc = compute.model_dump(exclude_none=True)
+    resources = task_doc.pop("resources")
+    assert isinstance(resources, list)
+
+    setup_scripts = task_doc.pop("setup_scripts")
+    task_doc.pop("run_script", None)
+    task_doc["resources"] = resources[0] if len(resources) == 1 else {"any_of": resources}
+
+    setup = "".join(load_compute_script(script) for script in setup_scripts)
+    if setup:
+        task_doc["setup"] = setup
+    task_doc["run"] = resolve_run_block(compute, cmd)
+    return task_doc

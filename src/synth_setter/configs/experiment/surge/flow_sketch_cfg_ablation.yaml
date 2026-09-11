@@ -1,0 +1,48 @@
+# @package _global_
+
+# Content/sketch CFG evaluation grid for the flow_sketch_prelim checkpoint (#3000).
+defaults:
+  - /experiment/surge/flow_sketch_prelim
+  - override /callbacks: [eval_vst, log_per_param_mse]
+  - override /logger: wandb
+  - override /render: surgepy
+  - override /synth: surge_simple_surgepy
+  - _self_
+
+experiment_name: flow-sketch-cfg-ablation
+run_name: cfg-c2-s2-validation
+mode: validate
+
+consumed_train_config_id: flow_sketch_prelim
+
+logger:
+  wandb:
+    entity: khaledtinubu-n-a
+    project: synth-setter
+    group: flow-sketch-cfg-ablation-flow_sketch_prelim-20260901T163655048Z
+
+model:
+  compile: false
+  test_sample_steps: 50
+
+datamodule:
+  dataset_root: ${paths.output_dir}/data
+  download_dataset_root_uri: r2://experiments/data/surge-simple-surgepy-lance-2m-40k-10k/surge-simple-surgepy-lance-2m-40k-10k-20260824T195308545Z/
+  download_dataset_row_limit: 20480
+  predict_file: ${datamodule.dataset_root}/val.lance
+  batch_size: 1024
+  num_workers: 4
+  val_num_workers: 0
+  persistent_workers: false
+  prefetch_factor: null
+
+trainer:
+  limit_val_batches: 20
+  limit_predict_batches: 1
+
+evaluation:
+  render_vst: true
+  compute_metrics: true
+  rerender_target: true
+  num_workers: 4
+  upload_output_dir_uri: null

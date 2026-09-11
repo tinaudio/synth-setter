@@ -1,0 +1,9 @@
+# DEBUG variant: image-pull canary — the minimum-meaningful workload. PASS =
+# RunPod hands us a pod with SSH + the image inside SkyPilot's SSH-readiness
+# timeout; a second orchestration probe per dispatch so one transient doesn't
+# look like a regression.
+defaults:
+  - /skypilot_launch/compute/runpod/smoke@_here_
+  - _self_
+name: runpod-debug-image-pull
+run_script: debug-image-pull.sh

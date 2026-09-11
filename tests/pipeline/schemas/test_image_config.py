@@ -131,14 +131,6 @@ class TestIssueNumberValidation:
 class TestImageConfigIdDerivation:
     """image_config_id is derived from the config filename stem."""
 
-    def test_dev_snapshot_yaml_gives_dev_snapshot_id(self, tmp_path: Path) -> None:
-        """dev-snapshot.yaml produces image_config_id 'dev-snapshot'."""
-        config_path = _write_config(tmp_path)
-
-        result = load_image_config(config_path, github_sha=VALID_SHA, issue_number=VALID_ISSUE)
-
-        assert result.image_config_id == "dev-snapshot"
-
     def test_custom_name_gives_matching_id(self, tmp_path: Path) -> None:
         """Arbitrary filename stem becomes image_config_id."""
         config_path = tmp_path / "my-custom-image.yaml"

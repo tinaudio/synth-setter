@@ -76,6 +76,16 @@ def test_param_map_duplicate_dawdreamer_indices_raise() -> None:
         _param_map({"first": first, "second": second})
 
 
+def test_param_map_partial_surgepy_provenance_raises() -> None:
+    """A native snapshot cannot omit the exact FXP resource identity."""
+    joint = _param_map({"cutoff": _identity(2)})
+
+    with pytest.raises(ValidationError, match="provided together"):
+        SynthParamMap.model_validate(
+            {**joint.model_dump(), "surgepy": joint.pedalboard.model_dump()}
+        )
+
+
 def test_param_map_blank_param_spec_name_raises() -> None:
     """SynthParamMap rejects a whitespace-only registry key."""
     with pytest.raises(ValidationError, match="param spec name must not be blank"):

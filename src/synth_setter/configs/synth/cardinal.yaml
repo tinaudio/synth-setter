@@ -1,0 +1,6 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "cardinal"
+param_spec_name: "cardinal"
+plugin_path: "plugins/CardinalSynth.vst3"
+plugin_state_path: "presets/cardinal-base.vstpreset"
+synth_version: "0.26.2"

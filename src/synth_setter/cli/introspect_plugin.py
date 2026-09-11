@@ -3,7 +3,7 @@
 Loads the plugin via pedalboard, optionally applies a starting preset, then
 writes an editable draft spec module plus a captured baseline ``.vstpreset``.
 By default the artifacts land as loose files; ``--register`` instead wires
-them into a synth-setter checkout — spec module, preset, render config, and
+them into a synth-setter checkout — spec module, preset, identity config, and
 ``param_spec_registry`` entries — so committing the result makes the synth
 renderable via ``generate_dataset`` (issue #1596).
 """
@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 import click
 
@@ -33,12 +33,23 @@ from synth_setter.data.vst.registration import (
     RegistrationPaths,
     checkout_relative_path,
     find_repo_root,
+    identity_group_yaml,
     is_checkout_root,
+    preset_repo_path,
     registration_paths,
     registry_with_spec,
-    render_config_yaml,
+    synths_with_spec,
 )
 from synth_setter.data.vst.verification import registered_artifacts, verify_registration
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.plugin_integrity import ArtifactLock
+from synth_setter.plugin_manager import (
+    ManagedPlugin,
+    PluginManifest,
+    default_plugins_dir,
+    link_plugin,
+)
+from synth_setter.synth_spec import SynthName, SynthSpec
 
 # Native VST3 init can block for minutes (Six Sines ~120 s); heartbeats at
 # this cadence keep a slow load distinguishable from a hang.
@@ -65,11 +76,40 @@ class _RegisterTarget:
 
        The registry source with the spec already registered, written last so
        a failure on any earlier artifact leaves the registry untouched.
+
+    .. attribute :: synth_source
+
+       Identity-table source to extend once the plugin version is known.
+
+    .. attribute :: recorded_plugin_path
+
+       Plugin path as recorded for render workers, relative to the checkout
+       when it sits inside it.
     """
 
     root: Path
     paths: RegistrationPaths
     registry_source: str
+    synth_source: str
+    recorded_plugin_path: str
+
+
+class _IntrospectionOptions(TypedDict):
+    force: bool
+    load_timeout: float
+    out_csv: str | None
+    out_preset: str | None
+    out_spec: str | None
+    plugin_name: str | None
+    plugin_path: str | None
+    plugin_state_path: str | None
+    register: bool
+    repo_root: str | None
+    spec_name: str
+    studiorack_manifest: Path | None
+    studiorack_plugin: str | None
+    studiorack_plugins_dir: Path
+    verify: bool
 
 
 @click.command()
@@ -77,9 +117,28 @@ class _RegisterTarget:
     "--plugin-path",
     "-p",
     type=click.Path(exists=True),
-    default=default_plugin_path,
-    show_default="$SYNTH_SETTER_PLUGIN_PATH or the bundled Surge XT",
-    help="Path to the .vst3 bundle to introspect.",
+    default=None,
+    show_default="$SYNTH_SETTER_PLUGIN_PATH or the managed Surge XT alias",
+    help="Path to an unmanaged or legacy .vst3 bundle to introspect.",
+)
+@click.option(
+    "--studiorack-plugin",
+    default=None,
+    help="Managed Studiorack package slug to register (for example, 'example/synth').",
+)
+@click.option(
+    "--studiorack-manifest",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    show_default="<repo-root>/studiorack.json",
+    help="Pinned project manifest used with --studiorack-plugin.",
+)
+@click.option(
+    "--studiorack-plugins-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=default_plugins_dir,
+    show_default="$STUDIORACK_PLUGINS_DIR or the user data directory",
+    help="Studiorack pluginsDir used with --studiorack-plugin.",
 )
 @click.option(
     "--plugin-name",
@@ -124,7 +183,7 @@ class _RegisterTarget:
     default=False,
     help=(
         "Wire the outputs into a synth-setter checkout: spec module, preset, CSV, and "
-        "render config at their conventional paths, plus param_spec_registry entries."
+        "identity config at their conventional paths, plus param_spec_registry entries."
     ),
 )
 @click.option(
@@ -160,36 +219,18 @@ class _RegisterTarget:
         "src/synth_setter/scripts/run-linux-vst-headless.sh."
     ),
 )
-def main(
-    plugin_path: str,
-    plugin_name: str | None,
-    plugin_state_path: str | None,
-    spec_name: str,
-    out_spec: str | None,
-    out_preset: str | None,
-    out_csv: str | None,
-    register: bool,
-    repo_root: str | None,
-    force: bool,
-    verify: bool,
-    load_timeout: float,
-) -> None:
+def main(**params: object) -> None:
+    """Validate command options and draft plugin registration artifacts.
+
+    :param **params: Values validated and supplied by Click.
+    """
+    _run_introspection(cast(_IntrospectionOptions, params))
+
+
+def _run_introspection(options: _IntrospectionOptions) -> None:
     """Draft a ParamSpec module + baseline preset + CSV table from a VST3 plugin.
 
-    :param plugin_path: Path to the ``.vst3`` bundle to introspect.
-    :param plugin_name: Factory class to open from a multi-class bundle; ``None``
-        opens the sole class.
-    :param plugin_state_path: Optional starting ``.vstpreset`` applied before capture.
-    :param spec_name: Registry key; names the emitted constant and default outputs.
-    :param out_spec: Draft module destination; defaults from ``spec_name``.
-    :param out_preset: Captured preset destination; defaults from ``spec_name``.
-    :param out_csv: Per-parameter CSV table destination; defaults from ``spec_name``.
-    :param register: Wire the outputs into a synth-setter checkout instead of
-        loose files, registering the spec for ``generate_dataset``.
-    :param repo_root: Checkout root for ``--register``; auto-detected when omitted.
-    :param force: Allow overwriting existing output files.
-    :param verify: Run the post-draft verification battery after ``--register``.
-    :param load_timeout: Seconds to wait for plugin initialization.
+    :param options: Typed command options supplied by the Click boundary.
     :raises click.BadParameter: ``spec_name`` is not a valid Python identifier.
     :raises click.UsageError: An output file exists and ``--force`` was not
         given; ``--register`` was combined with ``--out-*``; ``--verify`` was
@@ -198,19 +239,59 @@ def main(
         load (a multi-class bundle needing ``--plugin-name``, or initialization
         outlasting ``--load-timeout``).
     """
+    plugin_path = options["plugin_path"]
+    studiorack_plugin = options["studiorack_plugin"]
+    studiorack_manifest = options["studiorack_manifest"]
+    studiorack_plugins_dir = options["studiorack_plugins_dir"]
+    plugin_name = options["plugin_name"]
+    plugin_state_path = options["plugin_state_path"]
+    spec_name = options["spec_name"]
+    out_spec = options["out_spec"]
+    out_preset = options["out_preset"]
+    out_csv = options["out_csv"]
+    register = options["register"]
+    repo_root = options["repo_root"]
+    force = options["force"]
+    verify = options["verify"]
+    load_timeout = options["load_timeout"]
+
     if not spec_name.isidentifier():
         raise click.BadParameter(
             f"{spec_name!r} is not a Python identifier", param_hint="--spec-name"
         )
+    if plugin_path is not None and studiorack_plugin is not None:
+        raise click.UsageError("--plugin-path and --studiorack-plugin are mutually exclusive.")
+    if studiorack_plugin is not None and not register:
+        raise click.UsageError("--studiorack-plugin requires --register.")
+    managed_lock: ArtifactLock | None = None
+    managed_plugin: ManagedPlugin | None = None
+    if studiorack_plugin is not None:
+        root = _resolve_checkout_root(repo_root)
+        manifest_path = studiorack_manifest or root / "studiorack.json"
+        try:
+            manifest = PluginManifest.load(manifest_path)
+            managed_lock = ArtifactLock.load(manifest_path.with_suffix(".lock.json"), manifest)
+            managed_plugin = manifest.resolve(studiorack_plugin)
+        except (OSError, ValueError, KeyError) as exc:
+            raise click.UsageError(str(exc)) from exc
+        plugin_path = str(root / "plugins" / managed_plugin.bundle)
+    plugin_path = plugin_path or default_plugin_path()
     if verify and not register:
         raise click.UsageError(
             "--verify checks the registered checkout wiring; combine it with --register."
         )
     if register:
-        target = _resolve_register_target(spec_name, repo_root, out_spec, out_preset, out_csv)
+        target = _resolve_register_target(
+            spec_name, repo_root, out_spec, out_preset, out_csv, plugin_path
+        )
         paths = target.paths
         spec_dest, preset_dest, csv_dest = paths.spec_module, paths.preset, paths.csv
-        guarded = (spec_dest, preset_dest, csv_dest, paths.render_config)
+        guarded = (
+            spec_dest,
+            preset_dest,
+            csv_dest,
+            paths.identity_config,
+        )
     else:
         target = None
         spec_dest = Path(out_spec or f"{spec_name}_param_spec.py")
@@ -223,6 +304,17 @@ def main(
         if dest.exists() and not force:
             raise click.UsageError(f"{dest} already exists; pass --force to overwrite")
 
+    if managed_plugin is not None and managed_lock is not None:
+        try:
+            link_plugin(
+                managed_plugin,
+                artifact_lock=managed_lock,
+                plugins_dir=studiorack_plugins_dir,
+                links_dir=Path(plugin_path).parent,
+            )
+        except (OSError, ValueError) as exc:
+            raise click.UsageError(str(exc)) from exc
+
     vst_plugin = _load_plugin_loudly(
         plugin_path, plugin_name, load_plugin, timeout_seconds=load_timeout
     )
@@ -234,6 +326,8 @@ def main(
 
     drafted, skipped = draft_synth_params(plugin)
     version = _plugin_version(plugin_path)
+    if target is not None:
+        synth_source = _register_synth_source(target, spec_name, version)
     source = render_param_spec_module(
         spec_name,
         plugin_name=plugin.name,
@@ -258,7 +352,7 @@ def main(
     click.echo(f"Baseline    : {preset_dest}")
     click.echo(f"Param table : {csv_dest}")
     if target is not None:
-        _write_register_wiring(target, spec_name, plugin_path, version)
+        _write_register_wiring(target, spec_name, version, synth_source=synth_source)
         if verify:
             _run_verification(target, spec_name, plugin)
     else:
@@ -275,6 +369,7 @@ def _resolve_register_target(
     out_spec: str | None,
     out_preset: str | None,
     out_csv: str | None,
+    plugin_path: str,
 ) -> _RegisterTarget:
     """Validate the register-mode invocation and pre-compute the checkout wiring.
 
@@ -286,6 +381,8 @@ def _resolve_register_target(
     :param out_spec: Must be unset — ``--register`` owns the layout.
     :param out_preset: Must be unset — ``--register`` owns the layout.
     :param out_csv: Must be unset — ``--register`` owns the layout.
+    :param plugin_path: Plugin path as given on the CLI; recorded relative to the
+        checkout when it sits inside it.
     :returns: The resolved checkout wiring.
     :raises click.UsageError: ``--out-*`` was supplied, no checkout was found,
         or the registry rejects ``spec_name``.
@@ -295,6 +392,30 @@ def _resolve_register_target(
             "--register writes to the checkout's conventional paths; "
             "drop --out-spec/--out-preset/--out-csv."
         )
+    root = _resolve_checkout_root(repo_root)
+    recorded_path = checkout_relative_path(plugin_path, root)
+    try:
+        paths = registration_paths(root, spec_name)
+        updated = registry_with_spec(paths.registry.read_text(encoding="utf-8"), spec_name)
+        synth_source = paths.synth_module.read_text(encoding="utf-8")
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+    return _RegisterTarget(
+        root=root,
+        paths=paths,
+        registry_source=updated,
+        synth_source=synth_source,
+        recorded_plugin_path=recorded_path,
+    )
+
+
+def _resolve_checkout_root(repo_root: str | None) -> Path:
+    """Resolve and validate the checkout used for registration.
+
+    :param repo_root: Operator-supplied checkout root, if any.
+    :returns: Validated synth-setter checkout root.
+    :raises click.UsageError: The supplied or current path is not in a checkout.
+    """
     if repo_root is not None:
         root = Path(repo_root)
         if not is_checkout_root(root):
@@ -302,45 +423,64 @@ def _resolve_register_target(
                 f"{root} is not a synth-setter checkout "
                 "(src/synth_setter/data/vst/param_spec_registry.py not found)."
             )
-    else:
-        found = find_repo_root(Path.cwd())
-        if found is None:
-            raise click.UsageError(
-                "not inside a synth-setter checkout; pass --repo-root <checkout>."
-            )
-        root = found
-    try:
-        paths = registration_paths(root, spec_name)
-        updated = registry_with_spec(paths.registry.read_text(encoding="utf-8"), spec_name)
-    except ValueError as exc:
-        raise click.UsageError(str(exc)) from exc
-    return _RegisterTarget(root=root, paths=paths, registry_source=updated)
+        return root
+    found = find_repo_root(Path.cwd())
+    if found is None:
+        raise click.UsageError("not inside a synth-setter checkout; pass --repo-root <checkout>.")
+    return found
 
 
-def _write_register_wiring(
-    target: _RegisterTarget, spec_name: str, plugin_path: str, version: str
-) -> None:
-    """Write the render config + registry entries and echo the run instructions.
+def _register_synth_source(target: _RegisterTarget, spec_name: str, version: str) -> str:
+    """Validate and render the identity-table update before writing artifacts.
 
     :param target: Pre-computed checkout wiring.
     :param spec_name: Registry key for the synth.
-    :param plugin_path: Plugin path as given on the CLI; recorded relative to the checkout when it
-        sits inside it.
-    :param version: Plugin version pinned in the render config.
+    :param version: Plugin version pinned in synth identity.
+    :returns: Updated identity-table source.
+    :raises click.UsageError: Existing identity wiring conflicts with the plugin.
     """
-    recorded_path = checkout_relative_path(plugin_path, target.root)
-    render_config = target.paths.render_config
-    render_config.parent.mkdir(parents=True, exist_ok=True)
-    render_config.write_text(
-        render_config_yaml(spec_name, plugin_path=recorded_path, renderer_version=version),
+    try:
+        return synths_with_spec(
+            target.synth_source,
+            spec_name,
+            plugin_path=target.recorded_plugin_path,
+            synth_version=version,
+        )
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
+
+
+def _write_register_wiring(
+    target: _RegisterTarget, spec_name: str, version: str, *, synth_source: str
+) -> None:
+    """Write the identity config + registry entries and echo the run instructions.
+
+    :param target: Pre-computed checkout wiring.
+    :param spec_name: Registry key for the synth.
+    :param version: Plugin version pinned in synth identity.
+    :param synth_source: Prevalidated identity-table source to write.
+    """
+    identity_config = target.paths.identity_config
+    identity_config.parent.mkdir(parents=True, exist_ok=True)
+    identity_config.write_text(
+        identity_group_yaml(
+            SynthSpec(
+                name=SynthName(spec_name),
+                param_spec_name=ParamSpecName(spec_name),
+                plugin_path=target.recorded_plugin_path,
+                plugin_state_path=preset_repo_path(spec_name),
+                synth_version=version,
+            )
+        ),
         encoding="utf-8",
     )
+    target.paths.synth_module.write_text(synth_source, encoding="utf-8")
     target.paths.registry.write_text(target.registry_source, encoding="utf-8")
-    click.echo(f"Render cfg  : {render_config}")
+    click.echo(f"Identity cfg: {identity_config}")
     click.echo(f"Registered  : {spec_name!r} in {target.paths.registry}")
     if version == "unknown":
         click.echo(
-            f"WARNING: renderer_version is 'unknown' — edit {render_config} to pin the "
+            f"WARNING: synth_version is 'unknown' — edit {identity_config} to pin the "
             "real plugin version before generating; generate_dataset cross-checks it "
             "against the loaded plugin.",
             err=True,
@@ -348,7 +488,7 @@ def _write_register_wiring(
     click.echo(
         "Next: hand-tune the spec, run `make format`, commit, then render with:\n"
         f"  synth-setter-generate-dataset experiment=generate_dataset/smoke-shard "
-        f"render={spec_name}"
+        f"synth={spec_name} render=vst"
     )
 
 
@@ -480,7 +620,7 @@ def _plugin_version(plugin_path: str) -> str:
     """Extract the plugin bundle's version, degrading to ``"unknown"``.
 
     The version is informational in the provenance line but load-bearing in
-    the render config (``generate`` cross-checks it); the fallback keeps the
+    the identity config (``generate`` cross-checks it); the fallback keeps the
     draft flowing on the helper's documented failure modes (missing/odd bundle
     metadata, scan failure) and is echoed so the operator can pin it by hand.
 

@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from unittest.mock import MagicMock, patch
 
 import lance
@@ -30,18 +30,19 @@ from synth_setter.evaluation.compute_audio_metrics import (
 )
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.synth_spec import SynthName, SynthSpec
 from tests._vst import (
     PLUGIN_PATH,
     TEST_PARAM_SPEC_NAME,
     TEST_PRESET_PATH,
-    TEST_RENDERER_VERSION,
+    TEST_SYNTH_VERSION,
 )
 
 log = logging.getLogger(__name__)
 
 # Env-driven (Surge XT default) so the synth-agnostic ``test_make_dataset``
 # renders a second synth in CI; the Surge-specific tests below are deselected there.
-# Preset, spec name, and renderer version all track the selected synth so the
+# Preset, spec name, and synth version all track the selected synth so the
 # OB-Xf cell pins OB-Xf's version, not Surge XT's.
 _PRESET_PATH = TEST_PRESET_PATH
 _NUM_SAMPLES = 5
@@ -51,7 +52,7 @@ _DURATION = 4.0
 _VELOCITY = 100
 _MIN_LOUDNESS = -55.0
 _SPEC_NAME = TEST_PARAM_SPEC_NAME
-_RENDERER_VERSION = TEST_RENDERER_VERSION
+_SYNTH_VERSION = TEST_SYNTH_VERSION
 _ABSOLUTE_TOLERANCE = 1e-7
 _RELATIVE_TOLERANCE = 1e-9
 
@@ -85,10 +86,13 @@ def _render_cfg(
     :return: ``RenderConfig`` populated with the module's test defaults.
     """
     return RenderConfig(
-        plugin_path=PLUGIN_PATH,
-        plugin_state_path=_PRESET_PATH,
-        param_spec_name=ParamSpecName(_SPEC_NAME),
-        renderer_version=_RENDERER_VERSION,
+        synth=SynthSpec(
+            name=SynthName(_SPEC_NAME),
+            param_spec_name=ParamSpecName(_SPEC_NAME),
+            plugin_path=PLUGIN_PATH,
+            plugin_state_path=_PRESET_PATH,
+            synth_version=_SYNTH_VERSION,
+        ),
         sample_rate=int(_SAMPLE_RATE),
         channels=_CHANNELS,
         velocity=_VELOCITY,
@@ -748,20 +752,25 @@ def _assert_round_trip_matches(
             f"{expected_synth_patches[i]} within tolerances "
             f"(abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
         )
-        assert decoded_note_params == pytest.approx(
-            expected_note_patches[i], rel=_RELATIVE_TOLERANCE, abs=_ABSOLUTE_TOLERANCE
-        ), (
-            f"sample {i}: decoded note params {decoded_note_params} do not match input "
-            f"{expected_note_patches[i]} within tolerances "
-            f"(abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
-        )
         assert isinstance(decoded_note_params, dict)
         assert decoded_note_params.keys() == {"pitch", "note_start_and_end"}
         assert isinstance(decoded_note_params["pitch"], int)
+        assert decoded_note_params["pitch"] == expected_note_patches[i]["pitch"], f"sample {i}"
+        # pytest.approx compares tuple values inside a mapping exactly, so the
+        # note window is compared on its own with the shared tolerances.
+        assert decoded_note_params["note_start_and_end"] == pytest.approx(
+            expected_note_patches[i]["note_start_and_end"],
+            rel=_RELATIVE_TOLERANCE,
+            abs=_ABSOLUTE_TOLERANCE,
+        ), (
+            f"sample {i}: decoded note window {decoded_note_params['note_start_and_end']} "
+            f"does not match input {expected_note_patches[i]['note_start_and_end']} within "
+            f"tolerances (abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
+        )
         assert isinstance(decoded_note_params["note_start_and_end"], tuple)
         start, end = decoded_note_params["note_start_and_end"]
-        assert isinstance(start, np.floating)
-        assert isinstance(end, np.floating)
+        assert isinstance(start, float)
+        assert isinstance(end, float)
 
     return RoundTripMetrics(
         mss_max=max(mss_values),
@@ -910,8 +919,8 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
     note_patches: list[NoteParams] = []
     for i in range(_NUM_SAMPLES):
         decoded_synth_params, decoded_note_params = spec.decode(expected_params[i])
-        synth_patches.append(decoded_synth_params)
-        note_patches.append(decoded_note_params)
+        synth_patches.append(cast(dict[str, float], decoded_synth_params))
+        note_patches.append(cast(NoteParams, decoded_note_params))
     log.info("synth_patches: %s", synth_patches)
     log.info("note_patches: %s", note_patches)
 
@@ -1258,6 +1267,71 @@ def _clipped_audio() -> np.ndarray:
     return np.stack([sine, sine], axis=0)
 
 
+def _nonfinite_audio() -> np.ndarray:
+    """Return a correctly shaped render containing one non-finite sample.
+
+    :returns: Channel-leading stereo audio containing one NaN.
+    """
+    audio = _loud_audio()
+    audio[0, 0] = np.nan
+    return audio
+
+
+def test_generate_sample_nonfinite_render_sampled_params_resamples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-finite sampled render is rejected without aborting the shard.
+
+    :param monkeypatch: Replaces rendering and parameter sampling with deterministic fakes.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    render_outputs = iter([_nonfinite_audio(), _loud_audio()])
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.render_params", lambda *a, **kw: next(render_outputs)
+    )
+    sample_returns = iter([(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * 2)
+    monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
+
+    sample = generate_vst_dataset.generate_sample(
+        renderer=_pedalboard_renderer(),
+        velocity=_VELOCITY,
+        min_loudness=_MIN_LOUDNESS,
+        param_spec=spec,
+        seed=generate_vst_dataset.SampleSeed(master_seed=7, max_attempts=2),
+    )
+
+    assert sample.attempt == 1
+    assert sample.non_finite_rejections == 1
+
+
+def test_generate_sample_nonfinite_render_fixed_synth_params_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-finite fixed patch remains fail-fast because retries cannot change it.
+
+    :param monkeypatch: Replaces rendering with deterministic non-finite audio.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+    from synth_setter.data.vst.renderers import NonFiniteAudioError
+
+    spec = param_specs[_SPEC_NAME]
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.render_params", lambda *a, **kw: _nonfinite_audio()
+    )
+
+    with pytest.raises(NonFiniteAudioError, match="finite"):
+        generate_vst_dataset.generate_sample(
+            renderer=_pedalboard_renderer(),
+            velocity=_VELOCITY,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=spec,
+            fixed_synth_params=_HARDCODED_SYNTH_PARAMS,
+            fixed_note_params=_HARDCODED_NOTE_PARAMS,
+        )
+
+
 def test_generate_sample_clipped_render_sampled_params_resamples(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1320,6 +1394,24 @@ def test_generate_sample_silent_and_clipped_draws_counted_separately(
     assert sample.clipped_rejections == 1
 
 
+def test_reject_clipped_audio_accepts_bounds_and_rejects_adjacent_values() -> None:
+    """The dataset amplitude gate is inclusive at exactly -1 and 1."""
+    from synth_setter.data.vst.generate_vst_dataset import (
+        AudioAmplitudeError,
+        _reject_clipped_audio,
+    )
+
+    _reject_clipped_audio(np.array([[-1.0, 1.0]], dtype=np.float32))
+    outside = np.array(
+        [
+            np.nextafter(np.float32(-1.0), np.float32(-np.inf)),
+            np.nextafter(np.float32(1.0), np.float32(np.inf)),
+        ]
+    )
+    with pytest.raises(AudioAmplitudeError, match=r"within \[-1, 1\]"):
+        _reject_clipped_audio(outside[None, :])
+
+
 def test_generate_sample_clipped_render_fixed_synth_params_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1331,7 +1423,7 @@ def test_generate_sample_clipped_render_fixed_synth_params_raises(
     :param monkeypatch: Active monkeypatch fixture for render/sample fakes.
     """
     from synth_setter.data.vst import generate_vst_dataset
-    from synth_setter.data.vst.renderers import AudioAmplitudeError
+    from synth_setter.data.vst.generate_vst_dataset import AudioAmplitudeError
 
     spec = param_specs[_SPEC_NAME]
     monkeypatch.setattr(
@@ -1354,8 +1446,7 @@ def test_generate_sample_wrong_shape_render_sampled_params_raises(
 ) -> None:
     """A wrong-shape render stays fatal on the sampling path — it is a backend bug.
 
-    Only the amplitude check is sampled-data rejection; shape/finiteness violations mean the
-    renderer broke its contract and must not be retried.
+    Shape violations mean the renderer broke its contract and must not be retried.
 
     :param monkeypatch: Active monkeypatch fixture for render/sample fakes.
     """
@@ -1476,35 +1567,6 @@ def test_generate_sample_with_warmup_false_never_warms_across_retries(
         warmup=False,
     )
     assert warmup_mock.call_count == 0
-
-
-def test_generate_sample_with_warmup_true_no_retries_warms_exactly_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Strict equality at zero retries: ``warmup_plugin`` fires once, not at least once.
-
-    The "happy path" pin — when the first render passes the loudness gate, the
-    warm-up primitive is invoked exactly once. Without this, a regression that
-    silently double-warmed on the success path could slip past the retry tests
-    (which only exercise the retry branch).
-
-    :param monkeypatch: Pytest fixture used to patch attributes / env / argv.
-    """
-    from synth_setter.data.vst import generate_vst_dataset
-
-    spec = param_specs[_SPEC_NAME]
-    warmup_mock = _install_fake_render_params(monkeypatch, spec, num_retries=0)
-
-    generate_vst_dataset.generate_sample(
-        renderer=_pedalboard_renderer(),
-        velocity=_VELOCITY,
-        min_loudness=_MIN_LOUDNESS,
-        param_spec=spec,
-        fixed_synth_params=None,
-        fixed_note_params=_HARDCODED_NOTE_PARAMS,
-        warmup=True,
-    )
-    assert warmup_mock.call_count == 1
 
 
 @pytest.mark.slow

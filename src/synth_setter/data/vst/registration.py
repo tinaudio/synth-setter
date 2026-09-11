@@ -1,8 +1,8 @@
 """Wire a drafted ``ParamSpec`` into a synth-setter checkout (issue #1596).
 
 Pure text transforms and path layout behind the introspect CLI's
-``--register`` mode: insert the registry entries, emit the render config, and
-compute where each artifact lands in the checkout. No plugin or pedalboard
+``--register`` mode: insert the registry entries, emit the identity config,
+and compute where each artifact lands in the checkout. No plugin or pedalboard
 dependency — everything here operates on source text and paths.
 """
 
@@ -14,33 +14,15 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from synth_setter.synth_spec import SynthSpec
+
 # Marker file that identifies a synth-setter checkout root (and is the file
 # the registry transform rewrites).
 _REGISTRY_RELPATH = Path("src/synth_setter/data/vst/param_spec_registry.py")
-# Registration writes configs/render; protect shipped groups from being overwritten.
-_RESERVED_RENDER_CONFIG_NAMES = frozenset(
-    {
-        "obxf",
-        "surge_4",
-        "surge_simple",
-        "surge_xt",
-        "torchsynth_adsr",
-        "torchsynth_full",
-        "torchsynth_simple",
-        "vst",
-    }
-)
+# The identity table ``--register`` extends alongside the param-spec registry.
+_SYNTH_SPEC_RELPATH = Path("src/synth_setter/synth_spec.py")
 
 _IMPORT_RE = re.compile(r"^from (synth_setter\.\S+) import ")
-
-
-def _is_reserved_render_config_name(spec_name: str) -> bool:
-    """Return whether ``spec_name`` is reserved for a shared render config.
-
-    :param spec_name: Candidate synth registry key.
-    :returns: ``True`` when the name collides with a shared render config.
-    """
-    return spec_name.casefold() in _RESERVED_RENDER_CONFIG_NAMES
 
 
 @dataclass(frozen=True)
@@ -60,20 +42,25 @@ class RegistrationPaths:
        Per-parameter triage table at the checkout root (``surge_params.csv``
        convention).
 
-    .. attribute :: render_config
-
-       Hydra render group config selecting this synth.
-
     .. attribute :: registry
 
        The registry module the transform rewrites in place.
+
+    .. attribute :: synth_module
+
+       The identity-table module the transform rewrites in place.
+
+    .. attribute :: identity_config
+
+       Root ``configs/synth`` group config generated from the table row (#2565).
     """
 
     spec_module: Path
     preset: Path
     csv: Path
-    render_config: Path
     registry: Path
+    synth_module: Path
+    identity_config: Path
 
 
 def registration_paths(repo_root: Path, spec_name: str) -> RegistrationPaths:
@@ -81,17 +68,15 @@ def registration_paths(repo_root: Path, spec_name: str) -> RegistrationPaths:
 
     :param repo_root: Synth-setter checkout root.
     :param spec_name: Registry key for the synth.
-    :returns: The five destination paths.
-    :raises ValueError: If the name is reserved for a shared render config.
+    :returns: Each artifact's destination path.
     """
-    if _is_reserved_render_config_name(spec_name):
-        raise ValueError(f"{spec_name!r} is reserved for a render config")
     return RegistrationPaths(
         spec_module=repo_root / "src/synth_setter/data/vst" / f"{spec_name}_param_spec.py",
         preset=repo_root / preset_repo_path(spec_name),
         csv=repo_root / f"{spec_name}_params.csv",
-        render_config=repo_root / "src/synth_setter/configs/render" / f"{spec_name}.yaml",
         registry=repo_root / _REGISTRY_RELPATH,
+        synth_module=repo_root / _SYNTH_SPEC_RELPATH,
+        identity_config=repo_root / "src/synth_setter/configs/synth" / f"{spec_name}.yaml",
     )
 
 
@@ -99,7 +84,7 @@ def preset_repo_path(spec_name: str) -> str:
     """Return the checkout-relative baseline-preset path for ``spec_name``.
 
     Single source for the path recorded in both ``plugin_state_paths`` and the
-    render config, which must agree.
+    identity config, which must agree.
 
     :param spec_name: Registry key for the synth.
     :returns: ``presets/<spec_name>-base.vstpreset``.
@@ -144,6 +129,25 @@ def _registry_key_value(key: ast.expr | None) -> str | None:
     return key.value if isinstance(key, ast.Constant) and isinstance(key.value, str) else None
 
 
+def _module_dict(tree: ast.Module, dict_name: str) -> ast.Dict | None:
+    """Return one named module-level dictionary expression.
+
+    :param tree: Parsed registry module.
+    :param dict_name: Module-level dictionary variable to inspect.
+    :returns: The dictionary expression, or ``None`` when absent.
+    """
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        names_dict = any(
+            isinstance(target, ast.Name) and target.id == dict_name for target in targets
+        )
+        if names_dict and isinstance(node.value, ast.Dict):
+            return node.value
+    return None
+
+
 def _dict_key_lines(
     tree: ast.Module, *, lines: list[str], dict_name: str, key_value: str
 ) -> list[str]:
@@ -155,19 +159,32 @@ def _dict_key_lines(
     :param key_value: String key identity to find.
     :return: Source lines whose key evaluates to ``key_value``.
     """
-    matches: list[str] = []
-    for node in tree.body:
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        if not any(isinstance(target, ast.Name) and target.id == dict_name for target in targets):
-            continue
-        if not isinstance(node.value, ast.Dict):
-            continue
-        for key in node.value.keys:
-            if key is not None and _registry_key_value(key) == key_value:
-                matches.append(lines[key.lineno - 1])
-    return matches
+    mapping = _module_dict(tree, dict_name)
+    if mapping is None:
+        return []
+    return [
+        lines[key.lineno - 1]
+        for key in mapping.keys
+        if key is not None and _registry_key_value(key) == key_value
+    ]
+
+
+def _dict_values(tree: ast.Module, *, dict_name: str, key_value: str) -> list[ast.expr]:
+    """Return values assigned to one logical key in a module-level dict.
+
+    :param tree: Parsed registry module.
+    :param dict_name: Module-level dictionary variable to inspect.
+    :param key_value: String key identity to find.
+    :returns: Matching value expressions.
+    """
+    mapping = _module_dict(tree, dict_name)
+    if mapping is None:
+        return []
+    return [
+        value
+        for key, value in zip(mapping.keys, mapping.values, strict=True)
+        if key is not None and _registry_key_value(key) == key_value
+    ]
 
 
 def _module_scope_imports(node: ast.AST) -> list[ast.ImportFrom]:
@@ -190,7 +207,8 @@ def registry_with_spec(source: str, spec_name: str) -> str:
     """Return ``source`` with ``spec_name`` registered in both registry dicts.
 
     Inserts the generated module's import (in sorted position, so ruff's I001
-    stays clean) plus one entry each in ``_param_specs`` and ``plugin_state_paths``.
+    stays clean) plus one ``_param_specs`` entry. The preset mapping is derived
+    from ``synth_spec.SYNTHS`` and needs no separate write.
     Re-applying an identical registration is a no-op so ``--force`` re-runs
     converge instead of erroring.
 
@@ -204,7 +222,6 @@ def registry_with_spec(source: str, spec_name: str) -> str:
     constant = f"{spec_name.upper()}_PARAM_SPEC"
     import_line = f"from {module} import {constant}"
     spec_entry = f'    ParamSpecName("{spec_name}"): {constant},'
-    preset_entry = f'    "{spec_name}": "{preset_repo_path(spec_name)}",'
 
     lines = source.splitlines()
     tree = ast.parse(source)
@@ -219,18 +236,12 @@ def registry_with_spec(source: str, spec_name: str) -> str:
     logical_wiring = (
         import_lines,
         _dict_key_lines(tree, lines=lines, dict_name="_param_specs", key_value=spec_name),
-        _dict_key_lines(
-            tree,
-            lines=lines,
-            dict_name="plugin_state_paths",
-            key_value=spec_name,
-        ),
     )
     if any(logical_wiring):
         if all(
             matches == [expected]
             for matches, expected in zip(
-                logical_wiring, (import_line, spec_entry, preset_entry), strict=True
+                logical_wiring, (import_line, spec_entry), strict=True
             )
         ):
             return source
@@ -241,8 +252,82 @@ def registry_with_spec(source: str, spec_name: str) -> str:
 
     lines.insert(_import_insert_index(lines, module), import_line)
     _insert_dict_entry(lines, "_param_specs", spec_entry)
-    _insert_dict_entry(lines, "plugin_state_paths", preset_entry)
     return "\n".join(lines) + "\n"
+
+
+def synths_with_spec(
+    source: str, spec_name: str, *, plugin_path: str, synth_version: str
+) -> str:
+    """Return ``source`` with ``spec_name`` added to the synth identity table.
+
+    Inserts one formatter-stable row into ``_synth_rows``. Re-applying an identical
+    registration is a no-op so ``--force`` re-runs converge instead of erroring.
+
+    :param source: Current ``synth_spec.py`` source text.
+    :param spec_name: Registry key; also names the param spec and synth group.
+    :param plugin_path: ``.vst3`` path recorded for render workers.
+    :param synth_version: Plugin version recorded in synth identity.
+    :returns: The modified ``synth_spec.py`` source.
+    :raises ValueError: ``spec_name`` is already present with different wiring,
+        or ``source`` lacks the ``_synth_rows`` anchor.
+    """
+    expected = (spec_name, plugin_path, preset_repo_path(spec_name), synth_version)
+    row = "\n".join(
+        [
+            f'    "{spec_name}": (',
+            f"        {json.dumps(spec_name)},",
+            f"        {json.dumps(plugin_path)},",
+            f"        {json.dumps(preset_repo_path(spec_name))},",
+            f"        {json.dumps(synth_version)},",
+            "    ),",
+        ]
+    )
+
+    lines = source.splitlines()
+    existing = _dict_values(ast.parse(source), dict_name="_synth_rows", key_value=spec_name)
+    if existing:
+        try:
+            matches_expected = len(existing) == 1 and ast.literal_eval(existing[0]) == expected
+        except (TypeError, ValueError):
+            matches_expected = False
+        if matches_expected:
+            return source
+        raise ValueError(
+            f"{spec_name!r} is already registered in synth_spec with different wiring; "
+            "pick another --spec-name or remove the existing row first."
+        )
+
+    _insert_dict_entry(lines, "_synth_rows", row, source_name="synth_spec")
+    return "\n".join(lines) + "\n"
+
+
+def identity_group_yaml(spec: SynthSpec) -> str:
+    """Emit the root ``configs/synth`` identity config for one ``SYNTHS`` row.
+
+    ``tests/data/vst/test_registration.py`` pins the emitted shape and
+    ``tests/schemas/test_synth_config.py`` pins the checked-in group files as
+    byte-for-byte generator output. Scalars are double-quoted via ``json.dumps``
+    so an arbitrary plugin path cannot break the YAML scalar.
+
+    :param spec: The identity row to project; its ``name`` names the group file.
+    :returns: YAML text for ``configs/synth/<spec.name>.yaml``.
+    """
+    fields = [
+        "# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.",
+        f"name: {json.dumps(spec.name)}",
+        f"param_spec_name: {json.dumps(spec.param_spec_name)}",
+    ]
+    if spec.plugin_path:
+        fields.append(f"plugin_path: {json.dumps(spec.plugin_path)}")
+    fields.extend(
+        [
+            f"plugin_state_path: {json.dumps(spec.plugin_state_path)}",
+            f"synth_version: {json.dumps(spec.synth_version)}",
+        ]
+    )
+    if spec.source_sha256 is not None:
+        fields.append(f"source_sha256: {json.dumps(spec.source_sha256)}")
+    return "\n".join([*fields, ""])
 
 
 def _import_insert_index(lines: list[str], module: str) -> int:
@@ -274,12 +359,15 @@ def _import_insert_index(lines: list[str], module: str) -> int:
     return block[-1][2]
 
 
-def _insert_dict_entry(lines: list[str], dict_name: str, entry: str) -> None:
+def _insert_dict_entry(
+    lines: list[str], dict_name: str, entry: str, *, source_name: str = "param_spec_registry"
+) -> None:
     """Insert ``entry`` before the closing brace of module-level dict ``dict_name``.
 
-    :param lines: Registry source lines, mutated in place.
+    :param lines: Source lines, mutated in place.
     :param dict_name: Name of the dict assignment to extend.
     :param entry: Pre-indented ``"key": value,`` line.
+    :param source_name: Module named in the error, for a legible failure.
     :raises ValueError: The dict's ``<name>… = {`` / ``}`` anchors are missing.
     """
     opener = next(
@@ -295,9 +383,7 @@ def _insert_dict_entry(lines: list[str], dict_name: str, entry: str) -> None:
             if lines[i] == "}":
                 lines.insert(i, entry)
                 return
-    raise ValueError(
-        f"param_spec_registry source has no module-level dict {dict_name!r} to extend"
-    )
+    raise ValueError(f"{source_name} source has no module-level dict {dict_name!r} to extend")
 
 
 def checkout_relative_path(plugin_path: str, root: Path) -> str:
@@ -322,35 +408,3 @@ def checkout_relative_path(plugin_path: str, root: Path) -> str:
         except ValueError:
             continue
     return str(absolute.resolve())
-
-
-def render_config_yaml(spec_name: str, *, plugin_path: str, renderer_version: str) -> str:
-    """Emit the Hydra render group config selecting ``spec_name``.
-
-    Generic render knobs (sample rate, shard sizing, cadences) inherit from
-    the ``vst`` group config, while this config pins the synth's identity.
-    Every identity scalar is double-quoted via ``json.dumps`` (a subset of
-    YAML's double-quote style) so arbitrary plugin paths cannot break the scalar.
-    A spec name that is a YAML 1.1 literal (``on``, ``true``) stays a string.
-
-    :param spec_name: Registry key; names the param spec and preset.
-    :param plugin_path: ``.vst3`` path recorded for render workers.
-    :param renderer_version: Plugin version pin checked before each render.
-    :returns: YAML text for ``configs/render/<spec_name>.yaml``.
-    :raises ValueError: If the name is reserved for a shared render config.
-    """
-    if _is_reserved_render_config_name(spec_name):
-        raise ValueError(f"{spec_name!r} is reserved for a render config")
-    return "\n".join(
-        [
-            "# Generated by synth-setter-introspect-plugin; generic VST knobs inherit from vst.",
-            "defaults:",
-            "  - vst",
-            "",
-            f"plugin_path: {json.dumps(plugin_path)}",
-            f"plugin_state_path: {json.dumps(preset_repo_path(spec_name))}",
-            f"param_spec_name: {json.dumps(spec_name)}",
-            f"renderer_version: {json.dumps(renderer_version)}",
-            "",
-        ]
-    )

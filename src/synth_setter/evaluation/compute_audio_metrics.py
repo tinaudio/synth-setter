@@ -21,14 +21,30 @@ We compute the following metrics:
     literature for an option here?). cosine sim.
 5. amp env: compute RMS amp envelopes (50ms window, 25ms hop). take cosine similarity
     (i.e. normalized dot prod).
+6. SOT: spectral optimal transport — per-frame Wasserstein-1 distance between
+    sum-normalised STFT magnitudes (50ms window, 20ms hop), averaged over frames.
+7. MLDR: multi-scale loudness dynamic range (DiffVox, arXiv:2504.14735 eq. 14-15) —
+    L1 distance of the log ratio between short- and long-window energy envelopes at
+    (50ms, 1s) and (100ms, 2s) integration times.
+8. Stereo only: MLDR after an energy-preserving mid/side transform.
+9. pyFDN only: octave-band RT60 natural-log RMSE.
+10. pyFDN only: octave-band energy-decay-curve RMSE in dB.
+11. pyFDN only (Götz et al., arXiv:2510.23158): octave-band T30 mean absolute
+    percentage error and C50 mean absolute error in dB per sample, plus per-band
+    Pearson correlation of both parameters across the dataset.
+12. ``--fad``: Fréchet Audio Distance between the target and predicted sets on
+    CLAP embeddings (dataset-level, one row in the aggregate).
 """
 
 import math
 import multiprocessing
+import numbers
 import os
-import tempfile
+import shutil
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import Literal, SupportsFloat
 
 import click
 import librosa
@@ -40,15 +56,53 @@ from dtw import dtw
 from kymatio.numpy import Scattering1D
 from loguru import logger
 from pedalboard.io import AudioFile
+from pyFDN import estimate_rt_bands
+from scipy.signal import lfilter
 
-from synth_setter.evaluation.shuffle_pred_audio import (
-    params_are_uniform,
-    shuffle_pred_audio,
+from synth_setter.evaluation import acoustic_parameters
+from synth_setter.evaluation.joint_transport import compute_joint_time_frequency_ot
+from synth_setter.evaluation.response_losses import (
+    compute_pyfdn_match_energy_decay,
+    compute_pyfdn_response_losses,
+    validate_mono_impulse_response_pair,
 )
 
 # Column headers load_aggregated_metrics requires of the aggregated-metrics CSVs;
 # the write sites below still spell them literally.
 AGGREGATED_METRICS_STATS: tuple[str, ...] = ("mean", "std")
+type ReverbMetricBackend = Literal["pyfdn"]
+type AudioChannelPolicy = Literal[
+    "mono-only",
+    "stereo-only",
+    "corresponding-channels",
+    "global-joint",
+    "explicit-downmix",
+]
+type AudioEncodeFn = Callable[[np.ndarray, int], np.ndarray]
+
+# Per-sample columns holding raw octave-band parameters; they feed the dataset-level
+# Pearson rows instead of the mean/std aggregate.
+_ACOUSTIC_PARAMETER_PREFIX = "acoustic_param/"
+_ACOUSTIC_PARAMETER_NAMES: tuple[str, ...] = ("t30", "c50")
+
+
+def _acoustic_parameter_column(name: str, centre_hz: int, side: str) -> str:
+    """Return the per-sample column holding one side's octave-band parameter.
+
+    :param name: Parameter name, ``"t30"`` or ``"c50"``.
+    :param centre_hz: Octave-band centre frequency in Hz.
+    :param side: ``"target"`` or ``"pred"``.
+    :returns: Column name under :data:`_ACOUSTIC_PARAMETER_PREFIX`.
+    """
+    return f"{_ACOUSTIC_PARAMETER_PREFIX}{name}/{centre_hz}hz/{side}"
+
+
+ACOUSTIC_PARAMETER_COLUMNS: tuple[str, ...] = tuple(
+    _acoustic_parameter_column(name, centre, side)
+    for name in _ACOUSTIC_PARAMETER_NAMES
+    for centre in acoustic_parameters.BAND_CENTRES_HZ
+    for side in ("target", "pred")
+)
 
 
 def subdir_matches_pattern(sample_dir: Path) -> bool:
@@ -76,6 +130,111 @@ MEL_PARAMS = [
     (25, 10, 64),
     (100, 50, 128),
 ]
+_MSS_ANALYSIS_LENGTHS_MS = tuple(
+    length
+    for window_ms, hop_ms, _n_mels in MEL_PARAMS
+    for length in (("n_fft", window_ms), ("hop_length", hop_ms))
+)
+_MFCC_WINDOW_MS = 50.0
+_MFCC_HOP_MS = 10.0
+_MFCC_ANALYSIS_LENGTHS_MS = (("n_fft", _MFCC_WINDOW_MS), ("hop_length", _MFCC_HOP_MS))
+_STFT_WINDOW_MS = 50.0
+_STFT_HOP_MS = 20.0
+_STFT_ANALYSIS_LENGTHS_MS = (("n_fft", _STFT_WINDOW_MS), ("hop_length", _STFT_HOP_MS))
+_RMS_WINDOW_MS = 50.0
+_RMS_HOP_MS = 25.0
+_RMS_ANALYSIS_LENGTHS_MS = (("frame_length", _RMS_WINDOW_MS), ("hop_length", _RMS_HOP_MS))
+
+
+def _validate_audio_pair(
+    target: np.ndarray,
+    pred: np.ndarray,
+    *,
+    channel_policy: AudioChannelPolicy,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Validate one channel-first real numeric audio pair.
+
+    Integer samples are widened to float64 without scaling; floating-point arrays retain
+    their dtype and values.
+
+    :param target: Integer or floating-point audio shaped ``(channels, samples)``.
+    :param pred: Integer or floating-point audio with exactly the same shape.
+    :param channel_policy: Metric channel contract used to constrain the channel count.
+    :returns: Validated target and prediction arrays.
+    :raises ValueError: Inputs violate the selected channel contract.
+    """
+    target_array = np.asarray(target)
+    pred_array = np.asarray(pred)
+    if target_array.ndim != 2 or pred_array.ndim != 2:
+        raise ValueError(
+            "target and pred must be channel-first (channels, samples) arrays; "
+            f"got {target_array.shape} and {pred_array.shape}"
+        )
+    if target_array.shape != pred_array.shape:
+        raise ValueError(
+            f"target and pred must have the same shape; got {target_array.shape} and {pred_array.shape}"
+        )
+    channels, samples = target_array.shape
+    if channels == 0 or samples == 0:
+        raise ValueError("target and pred must have at least one channel and one sample")
+    if channel_policy == "mono-only" and channels != 1:
+        raise ValueError(f"mono-only metric requires shape (1, samples); got {target_array.shape}")
+    if channel_policy == "stereo-only" and channels != 2:
+        raise ValueError(
+            f"stereo-only metric requires shape (2, samples); got {target_array.shape}"
+        )
+    arrays = (target_array, pred_array)
+    if any(array.dtype.kind not in "iuf" for array in arrays):
+        raise ValueError("target and pred must be real numeric arrays")
+    if np.issubdtype(target_array.dtype, np.integer):
+        target_array = target_array.astype(np.float64)
+    if np.issubdtype(pred_array.dtype, np.integer):
+        pred_array = pred_array.astype(np.float64)
+    if not (np.isfinite(target_array).all() and np.isfinite(pred_array).all()):
+        raise ValueError("target and pred must contain only finite values")
+    return target_array, pred_array
+
+
+def _normalize_sample_rate(sample_rate: SupportsFloat) -> float:
+    """Return a finite positive real sample rate as a float.
+
+    :param sample_rate: Audio sample rate in Hz.
+    :returns: Float accepted by downstream signal transforms.
+    :raises ValueError: The rate is boolean, non-real, non-finite, or non-positive.
+    """
+    if not isinstance(sample_rate, numbers.Real) or isinstance(sample_rate, (bool, np.bool_)):
+        raise ValueError("sample_rate must be a finite positive number")
+    try:
+        normalized = float(sample_rate)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("sample_rate must be a finite positive number") from exc
+    if not math.isfinite(normalized) or normalized <= 0.0:
+        raise ValueError("sample_rate must be a finite positive number")
+    return normalized
+
+
+def _validate_analysis_lengths(
+    metric_name: str,
+    sample_rate: float,
+    lengths_ms: tuple[tuple[str, float], ...],
+) -> None:
+    """Reject rates that truncate a metric's derived sample lengths to zero.
+
+    :param metric_name: Public metric name used in validation errors.
+    :param sample_rate: Validated sample rate in Hz.
+    :param lengths_ms: Derived length names and their durations in milliseconds.
+    :raises ValueError: Any derived length is not a positive sample count.
+    """
+    invalid = [
+        f"{name} ({duration_ms:g} ms)"
+        for name, duration_ms in lengths_ms
+        if int(duration_ms * sample_rate / 1000.0) <= 0
+    ]
+    if invalid:
+        raise ValueError(
+            f"{metric_name} sample_rate must produce positive analysis lengths; "
+            f"invalid {', '.join(invalid)}"
+        )
 
 
 def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0) -> list[np.ndarray]:
@@ -105,16 +264,22 @@ def compute_mel_specs(y: np.ndarray, sample_rate: float = 44100.0) -> list[np.nd
     return mel_specs
 
 
-def compute_mss(target: np.ndarray, pred: np.ndarray) -> float:
-    """Return mean multi-scale spectrogram distance between ``target`` and ``pred``.
+def compute_mss_corresponding_channels(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return MSS distance over corresponding channels without downmixing.
 
-    :param target: Target audio, shape ``(C, T)``.
-    :param pred: Predicted audio, same shape as ``target``.
-    :returns: Mean absolute spectrogram difference averaged across mel scales.
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
+    :param sample_rate: Finite positive sample rate in Hz.
+    :returns: Mean absolute spectrogram difference across channels and mel scales.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="corresponding-channels")
+    sample_rate = _normalize_sample_rate(sample_rate)
+    _validate_analysis_lengths("MSS", sample_rate, _MSS_ANALYSIS_LENGTHS_MS)
     logger.info("Computing MSS...")
-    target_specs = compute_mel_specs(target)
-    pred_specs = compute_mel_specs(pred)
+    target_specs = compute_mel_specs(target, sample_rate)
+    pred_specs = compute_mel_specs(pred, sample_rate)
 
     dist = 0.0
     for target_spec, pred_spec in zip(target_specs, pred_specs):
@@ -122,6 +287,9 @@ def compute_mss(target: np.ndarray, pred: np.ndarray) -> float:
 
     dist = dist / len(target_specs)
     return dist
+
+
+compute_mss = compute_mss_corresponding_channels
 
 
 scatter = None
@@ -145,15 +313,18 @@ def compute_jtfs(y: np.ndarray, J: int = 10, Q: int = 12) -> np.ndarray:
     return scatter(y)
 
 
-def compute_jtfs_distance(target: np.ndarray, pred: np.ndarray, J: int = 10, Q: int = 12) -> float:
-    """Return mean L1 JTFS distance between ``target`` and ``pred``.
+def compute_jtfs_distance_corresponding_channels(
+    target: np.ndarray, pred: np.ndarray, J: int = 10, Q: int = 12
+) -> float:
+    """Return JTFS distance over corresponding channels without downmixing.
 
-    :param target: Target audio, shape ``(C, T)``.
-    :param pred: Predicted audio, same shape as ``target``.
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
     :param J: Log-scale resolution forwarded to :func:`compute_jtfs`.
     :param Q: Quality factor forwarded to :func:`compute_jtfs`.
-    :returns: Mean absolute difference of scattering coefficients.
+    :returns: Mean absolute difference across channel scattering coefficients.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="corresponding-channels")
     logger.info("Computing JTFS...")
 
     target_jtfs = compute_jtfs(target, J, Q)
@@ -161,6 +332,9 @@ def compute_jtfs_distance(target: np.ndarray, pred: np.ndarray, J: int = 10, Q: 
 
     dist = np.mean(np.abs(target_jtfs - pred_jtfs))
     return dist
+
+
+compute_jtfs_distance = compute_jtfs_distance_corresponding_channels
 
 
 def compute_mfcc(target: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray:
@@ -171,8 +345,8 @@ def compute_mfcc(target: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray
     :param sample_rate: Sample rate in Hz; governs window and hop lengths.
     :returns: MFCC array; shape ``(20, frames)`` for 1-D input, ``(C, 20, frames)`` for 2-D.
     """
-    window_length = int(0.05 * sample_rate)
-    hop_length = int(0.01 * sample_rate)
+    window_length = int(_MFCC_WINDOW_MS * sample_rate / 1000.0)
+    hop_length = int(_MFCC_HOP_MS * sample_rate / 1000.0)
 
     mfcc = librosa.feature.mfcc(
         y=target,
@@ -196,23 +370,35 @@ def _l1_distance(a: np.ndarray, b: np.ndarray) -> float:
     return np.mean(np.abs(a - b))
 
 
-def compute_wmfcc(target: np.ndarray, pred: np.ndarray) -> float:
-    """Return DTW-normalised MFCC distance between ``target`` and ``pred``.
+def compute_wmfcc_global_joint(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return wMFCC after joining channel and coefficient dimensions.
 
-    :param target: Target audio, shape ``(C, T)``.
-    :param pred: Predicted audio, same shape as ``target``.
-    :returns: DTW-normalised L1 distance between MFCC sequences.
+    Multichannel DTW joins channel and coefficient dimensions; it does not downmix or
+    score channels independently.
+
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
+    :param sample_rate: Finite positive sample rate in Hz.
+    :returns: DTW-normalised L1 distance between joint MFCC sequences.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="global-joint")
+    sample_rate = _normalize_sample_rate(sample_rate)
+    _validate_analysis_lengths("wMFCC", sample_rate, _MFCC_ANALYSIS_LENGTHS_MS)
     logger.info("Computing wMFCC...")
 
-    target_mfcc = compute_mfcc(target)
-    pred_mfcc = compute_mfcc(pred)
+    target_mfcc = compute_mfcc(target, sample_rate)
+    pred_mfcc = compute_mfcc(pred, sample_rate)
 
     target_mfcc = target_mfcc.reshape(-1, target_mfcc.shape[-1])
     pred_mfcc = pred_mfcc.reshape(-1, pred_mfcc.shape[-1])
 
     dist = dtw(target_mfcc.T, pred_mfcc.T, dist_method=_l1_distance, distance_only=True)
     return dist.normalizedDistance
+
+
+compute_wmfcc = compute_wmfcc_global_joint
 
 
 pesto_model = None
@@ -247,16 +433,24 @@ def get_pesto_activations(
     return target_f0[mask].numpy(), pred_f0[mask].numpy()
 
 
-def compute_f0(target: np.ndarray, pred: np.ndarray) -> float:
-    """Return mean absolute F0 error at high-confidence PESTO frames.
+def compute_f0_downmix(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return PESTO F0 error after explicit channel-mean downmixing.
 
-    :param target: Target audio, shape ``(C, T)``.
-    :param pred: Predicted audio, same shape as ``target``.
-    :returns: Mean Hz error at frames where both signals exceed the 0.85 confidence threshold.
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
+    :param sample_rate: Finite positive sample rate in Hz.
+    :returns: Mean Hz error at frames where both signals exceed the confidence threshold.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="explicit-downmix")
+    sample_rate = _normalize_sample_rate(sample_rate)
     logger.info("Computing f0...")
-    target_f0, pred_f0 = get_pesto_activations(target, pred)
+    target_f0, pred_f0 = get_pesto_activations(target, pred, sample_rate)
     return np.mean(np.abs(target_f0 - pred_f0))
+
+
+compute_f0 = compute_f0_downmix
 
 
 def get_stft(y: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray:
@@ -266,8 +460,8 @@ def get_stft(y: np.ndarray, sample_rate: float = 44100.0) -> np.ndarray:
     :param sample_rate: Sample rate in Hz; governs window and hop lengths.
     :returns: Magnitude spectrogram, shape ``(frames, n_fft // 2 + 1)``.
     """
-    win_length = int(0.05 * sample_rate)
-    hop_length = int(0.02 * sample_rate)
+    win_length = int(_STFT_WINDOW_MS * sample_rate / 1000.0)
+    hop_length = int(_STFT_HOP_MS * sample_rate / 1000.0)
     stft = librosa.stft(
         y.mean(axis=0),
         n_fft=win_length,
@@ -296,16 +490,22 @@ def batched_wasserstein_distance_np(
     return distance
 
 
-def compute_sot(target: np.ndarray, pred: np.ndarray) -> float:
-    """Return mean Sliced Optimal Transport distance between spectrograms.
+def compute_sot_downmix(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return SOT after explicitly downmixing each waveform by channel mean.
 
-    :param target: Target audio, shape ``(C, T)``.
-    :param pred: Predicted audio, same shape as ``target``.
-    :returns: Mean Wasserstein distance across frequency bins.
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
+    :param sample_rate: Finite positive sample rate in Hz.
+    :returns: Mean Wasserstein distance across frequency bins after downmixing.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="explicit-downmix")
+    sample_rate = _normalize_sample_rate(sample_rate)
+    _validate_analysis_lengths("SOT", sample_rate, _STFT_ANALYSIS_LENGTHS_MS)
     logger.info("Computing SOT...")
-    target_stft = get_stft(target)
-    pred_stft = get_stft(pred)
+    target_stft = get_stft(target, sample_rate)
+    pred_stft = get_stft(pred, sample_rate)
 
     target_stft = target_stft / np.clip(target_stft.sum(axis=-1, keepdims=True), 1e-6, None)
     pred_stft = pred_stft / np.clip(pred_stft.sum(axis=-1, keepdims=True), 1e-6, None)
@@ -314,17 +514,233 @@ def compute_sot(target: np.ndarray, pred: np.ndarray) -> float:
     return dists.mean()
 
 
-def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100.0) -> float:
-    """Return the cosine similarity of the RMS amplitude envelopes of ``target`` and ``pred``.
+compute_sot = compute_sot_downmix
 
-    :param target: Target audio, shape ``(C, T)``.
-    :param pred: Predicted audio, same shape as ``target``.
-    :param sample_rate: Sample rate in Hz; governs window and hop lengths.
+
+def _mono_octave_rt60_log_rmse(
+    target_ir: np.ndarray, pred_ir: np.ndarray, sample_rate: float
+) -> float:
+    """Return octave-band RT60 log-RMSE for one validated channel pair.
+
+    :param target_ir: One-dimensional target impulse response.
+    :param pred_ir: One-dimensional predicted impulse response.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Root mean squared natural-log RT60 ratio across valid octave bands.
+    :raises ValueError: Centre frequencies differ or no band is jointly fitted.
+    """
+    target_rt, target_centres = estimate_rt_bands(target_ir, sample_rate)
+    pred_rt, pred_centres = estimate_rt_bands(pred_ir, sample_rate)
+    if not np.array_equal(target_centres, pred_centres):
+        raise ValueError("target and predicted octave-band centre frequencies differ")
+
+    valid = np.isfinite(target_rt) & np.isfinite(pred_rt) & (target_rt > 0) & (pred_rt > 0)
+    if not valid.any():
+        raise ValueError("no valid paired octave-band RT60 estimates")
+    log_error = np.log(pred_rt[valid]) - np.log(target_rt[valid])
+    return float(np.sqrt(np.mean(log_error**2)))
+
+
+def compute_octave_rt60_log_rmse_mono_only(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return mono-only log-RMSE between valid paired octave-band RT60 estimates.
+
+    :param target: Target mono impulse response, shape ``(1, samples)``.
+    :param pred: Predicted mono impulse response, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Root mean squared natural-log RT60 ratio across valid octave bands.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="mono-only")
+    rate = _normalize_sample_rate(sample_rate)
+    target_ir, pred_ir = validate_mono_impulse_response_pair(target, pred)
+    return _mono_octave_rt60_log_rmse(target_ir, pred_ir, rate)
+
+
+def compute_octave_rt60_log_rmse_corresponding_channels(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return channel-mean octave-band RT60 log-RMSE.
+
+    :param target: Target impulse response, shape ``(channels, samples)``.
+    :param pred: Predicted impulse response with exactly the same shape.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Mean of independently analyzed corresponding-channel values.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="corresponding-channels")
+    rate = _normalize_sample_rate(sample_rate)
+    values = [
+        _mono_octave_rt60_log_rmse(target_ir, pred_ir, rate)
+        for target_ir, pred_ir in zip(target, pred, strict=True)
+    ]
+    return float(np.mean(values))
+
+
+compute_octave_rt60_log_rmse = compute_octave_rt60_log_rmse_mono_only
+
+
+def compute_octave_edc_rmse_db_mono_only(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return mono-only pyFDN octave-band energy-decay-curve RMSE in dB.
+
+    :param target: Target mono impulse response, shape ``(1, samples)``.
+    :param pred: Predicted mono impulse response, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: RMS dB difference over target-valid octave-band decay frames.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="mono-only")
+    return compute_pyfdn_match_energy_decay(target, pred, _normalize_sample_rate(sample_rate))
+
+
+def compute_octave_edc_rmse_db_corresponding_channels(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return channel-mean pyFDN octave-band energy-decay-curve RMSE in dB.
+
+    :param target: Target impulse response, shape ``(channels, samples)``.
+    :param pred: Predicted impulse response with exactly the same shape.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Mean of independently analyzed corresponding-channel values.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="corresponding-channels")
+    return compute_pyfdn_match_energy_decay(target, pred, _normalize_sample_rate(sample_rate))
+
+
+compute_octave_edc_rmse_db = compute_octave_edc_rmse_db_mono_only
+
+
+def _mono_acoustic_parameter_metrics(
+    target_ir: np.ndarray, pred_ir: np.ndarray, sample_rate: float
+) -> dict[str, float]:
+    """Return acoustic metrics for one validated channel pair.
+
+    :param target_ir: One-dimensional target impulse response.
+    :param pred_ir: One-dimensional predicted impulse response.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Scalar errors and raw per-band parameter measurements.
+    """
+    target_t30, _ = acoustic_parameters.octave_band_t30(target_ir, sample_rate)
+    pred_t30, _ = acoustic_parameters.octave_band_t30(pred_ir, sample_rate)
+    target_c50, _ = acoustic_parameters.octave_band_c50(target_ir, sample_rate)
+    pred_c50, _ = acoustic_parameters.octave_band_c50(pred_ir, sample_rate)
+    metrics = {
+        "t30_mape": acoustic_parameters.t30_mape(target_t30, pred_t30),
+        "c50_mae_db": acoustic_parameters.c50_mae_db(target_c50, pred_c50),
+    }
+    per_band = {"t30": (target_t30, pred_t30), "c50": (target_c50, pred_c50)}
+    for name, (target_values, pred_values) in per_band.items():
+        bands = zip(acoustic_parameters.BAND_CENTRES_HZ, target_values, pred_values, strict=True)
+        for centre, target_value, pred_value in bands:
+            metrics[_acoustic_parameter_column(name, centre, "target")] = float(target_value)
+            metrics[_acoustic_parameter_column(name, centre, "pred")] = float(pred_value)
+    return metrics
+
+
+def compute_acoustic_parameter_metrics_mono_only(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat
+) -> dict[str, float]:
+    """Return mono-only Götz et al. T30/C50 errors and per-band parameters.
+
+    :param target: Target mono impulse response, shape ``(1, samples)``.
+    :param pred: Predicted mono impulse response, same shape as ``target``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Scalar errors and raw per-band parameter measurements.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="mono-only")
+    rate = _normalize_sample_rate(sample_rate)
+    target_ir, pred_ir = validate_mono_impulse_response_pair(target, pred)
+    return _mono_acoustic_parameter_metrics(target_ir, pred_ir, rate)
+
+
+def compute_acoustic_parameter_metrics_corresponding_channels(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat
+) -> dict[str, float]:
+    """Return channel-mean Götz et al. T30/C50 errors and per-band parameters.
+
+    :param target: Target impulse response, shape ``(channels, samples)``.
+    :param pred: Predicted impulse response with exactly the same shape.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Scalar errors and raw per-band measurements averaged after channel analysis.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="corresponding-channels")
+    rate = _normalize_sample_rate(sample_rate)
+    channel_metrics = [
+        _mono_acoustic_parameter_metrics(target_ir, pred_ir, rate)
+        for target_ir, pred_ir in zip(target, pred, strict=True)
+    ]
+    return {
+        name: float(np.mean([metrics[name] for metrics in channel_metrics]))
+        for name in channel_metrics[0]
+    }
+
+
+compute_acoustic_parameter_metrics = compute_acoustic_parameter_metrics_mono_only
+
+
+def compute_acoustic_parameter_pcc(per_sample: pd.DataFrame) -> dict[str, float]:
+    """Return per-band Pearson correlation between target and predicted parameters.
+
+    :param per_sample: Per-sample metrics frame carrying ``acoustic_param/`` columns.
+    :returns: ``{"<param>_pcc_<centre>hz": r}`` for every band present in the frame.
+    """
+    pcc: dict[str, float] = {}
+    for name in _ACOUSTIC_PARAMETER_NAMES:
+        for centre in acoustic_parameters.BAND_CENTRES_HZ:
+            target_column = _acoustic_parameter_column(name, centre, "target")
+            if target_column not in per_sample.columns:
+                continue
+            pred_column = _acoustic_parameter_column(name, centre, "pred")
+            pcc[f"{name}_pcc_{centre}hz"] = acoustic_parameters.pearson_correlation(
+                per_sample[target_column].to_numpy(dtype=float),
+                per_sample[pred_column].to_numpy(dtype=float),
+            )
+    return pcc
+
+
+def _load_fad_encoder() -> AudioEncodeFn:
+    """Load the repo's CLAP audio encoder for Fréchet Audio Distance.
+
+    :returns: Encoder mapping ``(B, T)`` mono audio at a sample rate to ``(B, D)``.
+    """
+    from synth_setter.pipeline.data.add_embeddings import load_clap_audio_encoder
+
+    return load_clap_audio_encoder()
+
+
+def compute_fad(audio_dirs: list[Path], encode: AudioEncodeFn) -> float:
+    """Return the Fréchet Audio Distance between the target and predicted sets.
+
+    :param audio_dirs: Sample dirs each containing ``target.wav`` and ``pred.wav``.
+    :param encode: Audio encoder mapping ``(B, T)`` mono audio to ``(B, D)`` embeddings.
+    :returns: Fréchet distance between Gaussian fits of the two embedding sets.
+    """
+    embeddings: dict[str, list[np.ndarray]] = {"target": [], "pred": []}
+    for sample_dir in audio_dirs:
+        for side, rows in embeddings.items():
+            with AudioFile(str(sample_dir / f"{side}.wav")) as audio_file:
+                mono = audio_file.read(audio_file.frames).mean(axis=0, keepdims=True)
+                rows.append(encode(mono, int(audio_file.samplerate)))
+    return acoustic_parameters.frechet_distance(
+        np.concatenate(embeddings["target"]), np.concatenate(embeddings["pred"])
+    )
+
+
+def compute_rms_downmix(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return RMS-envelope cosine similarity after explicit channel-mean downmixing.
+
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
+    :param sample_rate: Finite positive sample rate in Hz.
     :returns: Cosine similarity in ``[-1, 1]``, or ``0.0`` when either envelope is silent.
     """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="explicit-downmix")
+    sample_rate = _normalize_sample_rate(sample_rate)
+    _validate_analysis_lengths("RMS", sample_rate, _RMS_ANALYSIS_LENGTHS_MS)
     logger.info("Computing amp env...")
-    win_length = int(0.05 * sample_rate)
-    hop_length = int(0.025 * sample_rate)
+    win_length = int(_RMS_WINDOW_MS * sample_rate / 1000.0)
+    hop_length = int(_RMS_HOP_MS * sample_rate / 1000.0)
 
     target_rms = librosa.feature.rms(
         y=target.mean(axis=0), frame_length=win_length, hop_length=hop_length
@@ -353,36 +769,197 @@ def compute_rms(target: np.ndarray, pred: np.ndarray, sample_rate: float = 44100
     return cosine_sim.mean()
 
 
-def compute_metrics_on_dir(audio_dir: Path) -> dict[str, float]:
-    """Load ``target.wav`` and ``pred.wav`` from ``audio_dir`` and return all metric scores.
+compute_rms = compute_rms_downmix
+
+
+# (short, long) integration times in ms — DiffVox's ``s_taus``/``l_taus`` for the MLDR loss.
+LDR_SCALES_MS: tuple[tuple[float, float], ...] = ((50.0, 1000.0), (100.0, 2000.0))
+# Energy floor before the log, matching the reference implementation's ``clamp_min``.
+_LDR_ENERGY_FLOOR = 1e-8
+# Numerator used by torchcomp's ``ms2coef``.
+_TORCHCOMP_MS_TO_COEF = 2200.0
+
+
+def _one_pole_average(energy: np.ndarray, time_ms: float, sample_rate: float) -> np.ndarray:
+    """Return torchcomp's running-average envelope of ``energy`` along the last axis.
+
+    :param energy: Non-negative signal, any leading shape.
+    :param time_ms: Integration time in ms, converted with torchcomp's ``ms2coef``.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Smoothed signal, same shape as ``energy``.
+    """
+    coef = 1.0 - math.exp(-_TORCHCOMP_MS_TO_COEF / (time_ms * sample_rate))
+    return lfilter([coef], [1.0, coef - 1.0], energy, axis=-1)
+
+
+def _loudness_dynamic_range(
+    energy: np.ndarray, short_ms: float, long_ms: float, sample_rate: float
+) -> np.ndarray:
+    """Return the per-sample log ratio of the short to the delayed long energy envelope.
+
+    The long envelope is advanced by half the integration-time gap (circularly, as the
+    reference implementation's ``roll`` does) so both envelopes centre on the same instant.
+    The roll is per row: DiffVox rolls the flattened tensor, which bleeds each channel's
+    tail into the next channel and departs from the paper's per-signal definition.
+
+    :param energy: Floored squared signal, shape ``(rows, T)``.
+    :param short_ms: Short integration time in ms.
+    :param long_ms: Long integration time in ms.
+    :param sample_rate: Sample rate in Hz.
+    :returns: Log loudness dynamic range, shape ``(rows, T)``.
+    """
+    half_gap_seconds = (long_ms - short_ms) / 1000.0 / 2.0
+    align_shift = int(sample_rate * half_gap_seconds)
+    short_env = _one_pole_average(energy, short_ms, sample_rate)
+    long_env = np.roll(_one_pole_average(energy, long_ms, sample_rate), -align_shift, axis=-1)
+    return np.log(short_env) - np.log(long_env)
+
+
+def compute_mldr_corresponding_channels(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return MLDR averaged over corresponding channels without downmixing.
+
+    Sums, over ``LDR_SCALES_MS``, the mean absolute difference of the two signals' log
+    short-to-long energy-envelope ratios (DiffVox eq. 15). Gain-invariant by construction.
+
+    :param target: Target audio, shape ``(channels, samples)``.
+    :param pred: Predicted audio with exactly the same shape.
+    :param sample_rate: Finite positive sample rate in Hz.
+    :returns: Non-negative distance in natural-log units.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="corresponding-channels")
+    sample_rate = _normalize_sample_rate(sample_rate)
+    logger.info("Computing MLDR...")
+    target_energy = np.maximum(np.square(target, dtype=np.float64), _LDR_ENERGY_FLOOR)
+    pred_energy = np.maximum(np.square(pred, dtype=np.float64), _LDR_ENERGY_FLOOR)
+
+    dist = 0.0
+    for short_ms, long_ms in LDR_SCALES_MS:
+        target_ldr = _loudness_dynamic_range(target_energy, short_ms, long_ms, sample_rate)
+        pred_ldr = _loudness_dynamic_range(pred_energy, short_ms, long_ms, sample_rate)
+        dist += float(np.mean(np.abs(target_ldr - pred_ldr)))
+    return dist
+
+
+compute_mldr = compute_mldr_corresponding_channels
+
+
+def compute_mldr_mid_side_stereo_only(
+    target: np.ndarray, pred: np.ndarray, sample_rate: SupportsFloat = 44100.0
+) -> float:
+    """Return MLDR after an energy-preserving stereo mid/side transform.
+
+    :param target: Target stereo audio with shape ``(2, T)``.
+    :param pred: Predicted stereo audio with the same shape as ``target``.
+    :param sample_rate: Sample rate in Hz; governs the MLDR envelope time constants.
+    :returns: Non-negative mid/side distance in natural-log units.
+    :raises ValueError: Inputs are not finite, matching, nonempty stereo arrays.
+    """
+    target, pred = _validate_audio_pair(target, pred, channel_policy="stereo-only")
+    sample_rate = _normalize_sample_rate(sample_rate)
+    scale = math.sqrt(2.0)
+    target_float = np.asarray(target, dtype=np.float64)
+    pred_float = np.asarray(pred, dtype=np.float64)
+    if not np.isfinite(target_float).all() or not np.isfinite(pred_float).all():
+        raise ValueError("target and pred must contain only finite values")
+    with np.errstate(over="ignore"):
+        target_mid_side = np.stack(
+            (
+                (target_float[0] + target_float[1]) / scale,
+                (target_float[0] - target_float[1]) / scale,
+            )
+        )
+        pred_mid_side = np.stack(
+            (
+                (pred_float[0] + pred_float[1]) / scale,
+                (pred_float[0] - pred_float[1]) / scale,
+            )
+        )
+    if not np.isfinite(target_mid_side).all() or not np.isfinite(pred_mid_side).all():
+        raise ValueError("mid/side transformed audio must contain only finite values")
+    peak = max(float(np.abs(target_mid_side).max()), float(np.abs(pred_mid_side).max()))
+    longest_window = max(1, int(2.0 * sample_rate))
+    safe_energy_peak = math.sqrt(np.finfo(np.float64).max / longest_window)
+    if peak > safe_energy_peak:
+        target_mid_side /= peak
+        pred_mid_side /= peak
+    return compute_mldr_corresponding_channels(target_mid_side, pred_mid_side, sample_rate)
+
+
+compute_mldr_mid_side = compute_mldr_mid_side_stereo_only
+
+
+def compute_metrics_on_dir(
+    audio_dir: Path, renderer_backend: ReverbMetricBackend | None = None
+) -> dict[str, float]:
+    """Load one target/prediction pair and return applicable audio metrics.
 
     :param audio_dir: Directory containing ``target.wav`` and ``pred.wav``.
-    :returns: Dict mapping metric name to scalar score.
+    :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
+    :returns: Metric scores, including ``mldr_mid_side`` only for stereo pairs.
+    :raises ValueError: The target and predicted WAV files have different sample rates.
     """
     with AudioFile(str(audio_dir / "target.wav")) as target_file:
         target = target_file.read(target_file.frames)
+        target_sample_rate = float(target_file.samplerate)
     with AudioFile(str(audio_dir / "pred.wav")) as pred_file:
         pred = pred_file.read(pred_file.frames)
+        pred_sample_rate = float(pred_file.samplerate)
 
-    mss = compute_mss(target, pred)
-    wmfcc = compute_wmfcc(target, pred)
-    sot = compute_sot(target, pred)
-    rms = compute_rms(target, pred)
+    if target_sample_rate != pred_sample_rate:
+        raise ValueError("target and predicted audio must have the same sample rate")
+    metrics = {
+        "mss": compute_mss_corresponding_channels(target, pred, target_sample_rate),
+        "wmfcc": compute_wmfcc_global_joint(target, pred, target_sample_rate),
+        "sot": compute_sot_downmix(target, pred, target_sample_rate),
+        "rms": compute_rms_downmix(target, pred, target_sample_rate),
+        "mldr": compute_mldr_corresponding_channels(target, pred, target_sample_rate),
+    }
+    if target.shape[0] == 2 and pred.shape[0] == 2:
+        metrics["mldr_mid_side"] = compute_mldr_mid_side_stereo_only(
+            target, pred, target_sample_rate
+        )
+    if renderer_backend == "pyfdn":
+        response_losses = compute_pyfdn_response_losses(target, pred, target_sample_rate)
+        metrics.update(response_losses)
+        metrics.update(
+            {
+                "joint_time_frequency_ot": compute_joint_time_frequency_ot(
+                    target, pred, target_sample_rate
+                ),
+                "octave_edc_rmse_db": compute_octave_edc_rmse_db_corresponding_channels(
+                    target, pred, target_sample_rate
+                ),
+                "octave_rt60_log_rmse": compute_octave_rt60_log_rmse_corresponding_channels(
+                    target, pred, target_sample_rate
+                ),
+            }
+        )
+        metrics.update(
+            compute_acoustic_parameter_metrics_corresponding_channels(
+                target, pred, target_sample_rate
+            )
+        )
+    return metrics
 
-    return dict(mss=mss, wmfcc=wmfcc, sot=sot, rms=rms)
 
-
-def compute_metrics(audio_dirs: list[Path], output_dir: Path) -> Path:
+def compute_metrics(
+    audio_dirs: list[Path],
+    output_dir: Path,
+    renderer_backend: ReverbMetricBackend | None = None,
+) -> Path:
     """Score each dir in ``audio_dirs`` and write a per-sample CSV to ``output_dir``.
 
     :param audio_dirs: Sample dirs to score (each must contain ``target.wav`` + ``pred.wav``).
     :param output_dir: Directory for the per-worker ``metrics-<pid>.csv`` output file.
+    :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
     :returns: Path to the written CSV file.
     """
     idxs = []
     rows = []
     for sample_dir in audio_dirs:
-        metrics = compute_metrics_on_dir(sample_dir)
+        metrics = compute_metrics_on_dir(sample_dir, renderer_backend)
         rows.append(metrics)
         idxs.append(sample_dir.name.rsplit("_", 1)[-1])
 
@@ -395,7 +972,12 @@ def compute_metrics(audio_dirs: list[Path], output_dir: Path) -> Path:
     return metric_file
 
 
-def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int) -> pd.DataFrame:
+def _aggregate_metrics(
+    audio_dirs: list[Path],
+    work_dir: Path,
+    num_workers: int,
+    renderer_backend: ReverbMetricBackend | None = None,
+) -> pd.DataFrame:
     """Run the parallel per-sample metrics pass and return the concatenated DataFrame.
 
     Intermediate per-worker CSVs are written to ``work_dir`` and left there alongside
@@ -405,6 +987,7 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
     :param work_dir: Directory for per-worker intermediate ``metrics-<pid>.csv`` files.
     :param num_workers: ProcessPoolExecutor worker count; capped to ``len(audio_dirs)`` to
         avoid spawning idle processes.
+    :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
     :returns: Concatenated per-sample metrics DataFrame.
     """
     effective_workers = min(num_workers, len(audio_dirs)) if audio_dirs else 1
@@ -419,7 +1002,10 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
     ]
     metric_dfs = []
     with ProcessPoolExecutor(max_workers=effective_workers) as executor:
-        futures = [executor.submit(compute_metrics, sublist, work_dir) for sublist in sublists]
+        futures = [
+            executor.submit(compute_metrics, sublist, work_dir, renderer_backend)
+            for sublist in sublists
+        ]
         for future in as_completed(futures):
             metric_file = future.result()
             metric_df = pd.read_csv(metric_file)
@@ -430,11 +1016,49 @@ def _aggregate_metrics(audio_dirs: list[Path], work_dir: Path, num_workers: int)
     return pd.concat(metric_dfs)
 
 
+def _is_tool_owned_audio_view(path: Path) -> bool:
+    """Return whether ``path`` matches the generated symlink-view layout.
+
+    :param path: Candidate directory containing sample subdirectories.
+    :returns: ``True`` for a nonempty tree of sample directories containing only
+        ``pred.wav`` and ``target.wav`` symlinks.
+    """
+    if not path.is_dir() or path.is_symlink():
+        return False
+    sample_dirs = list(path.iterdir())
+    if not sample_dirs:
+        return False
+    for sample_dir in sample_dirs:
+        if not sample_dir.name.startswith("sample_") or not sample_dir.is_dir():
+            return False
+        entries = list(sample_dir.iterdir())
+        if {entry.name for entry in entries} != {"pred.wav", "target.wav"}:
+            return False
+        if not all(entry.is_symlink() for entry in entries):
+            return False
+    return True
+
+
+def _remove_deprecated_metric_outputs(output_dir: Path) -> None:
+    """Remove unsupported generated artifacts while preserving unowned content.
+
+    :param output_dir: Metrics directory that may contain unsupported artifacts.
+    """
+    audio_view = output_dir / "shuffled_audio"
+    if not _is_tool_owned_audio_view(audio_view):
+        return
+
+    for name in ("aggregated_metrics_shuffled.csv", "shuffle_permutation.csv"):
+        path = output_dir / name
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+    shutil.rmtree(audio_view)
+
+
 def load_aggregated_metrics(csv_path: Path) -> dict[str, float]:
     """Flatten an aggregated-metrics CSV into ``{"<metric>_<stat>": value}``.
 
-    Reads either ``aggregated_metrics.csv`` or ``aggregated_metrics_shuffled.csv``
-    — both share the layout this module writes: metric names as rows,
+    Reads the layout this module writes: metric names as rows and
     :data:`AGGREGATED_METRICS_STATS` as columns. Keys are returned unprefixed;
     namespacing them is the caller's policy.
 
@@ -466,32 +1090,45 @@ def load_aggregated_metrics(csv_path: Path) -> dict[str, float]:
 @click.argument("audio_dir", type=str)
 @click.argument("output_dir", type=str, default="metrics")
 @click.option("--num_workers", "-w", type=click.IntRange(min=1), default=8)
-@click.option(
-    "--shuffle_seed",
-    type=int,
-    default=0,
-    help="Seed for the render-order probe permutation. Non-zero implies shuffle is intended.",
-)
-def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -> None:
-    """Score rendered audio under ``audio_dir`` and write aggregated metrics to ``output_dir``.
+@click.option("--renderer-backend", type=click.Choice(["pyfdn"]), default=None)
+@click.option("--fad", is_flag=True, help="Add CLAP Fréchet Audio Distance (loads CLAP).")
+def main(
+    audio_dir: str,
+    output_dir: str,
+    num_workers: int,
+    renderer_backend: ReverbMetricBackend | None,
+    fad: bool,
+) -> None:
+    """Score rendered audio under ``audio_dir`` and write metrics to ``output_dir``.
 
     Runs the parallel per-sample pass writing ``metrics.csv`` and
-    ``aggregated_metrics.csv``. When all sample dirs share identical
-    ``params.csv`` (render-order probe, #489), a second pass with permuted
-    ``pred.wav`` symlinks writes ``aggregated_metrics_shuffled.csv``.
+    ``aggregated_metrics.csv``. Dataset-level rows (per-band Pearson correlation,
+    ``fad_clap``) carry the statistic as ``mean`` and ``NaN`` as ``std``.
 
     :param audio_dir: Root containing per-sample subdirectories
         (each must have ``pred.wav`` and ``target.wav``).
     :param output_dir: Destination for CSV outputs.
     :param num_workers: Number of parallel worker processes.
-    :param shuffle_seed: Permutation seed for the render-order probe; non-zero
-        implies the probe is intended and raises if params are not uniform.
-    :raises ValueError: when no valid sample dirs are found, or when
-        ``shuffle_seed`` is non-zero but ``params.csv`` files are not uniform.
+    :param renderer_backend: ``"pyfdn"`` to add impulse-response metrics.
+    :param fad: Add the CLAP Fréchet Audio Distance between the target and predicted sets.
+    :raises ValueError: when no valid sample dirs are found or the input and output
+        directories overlap.
     """
     audio_dir_path = Path(audio_dir)
-    os.makedirs(output_dir, exist_ok=True)
     output_dir_path = Path(output_dir)
+    resolved_audio_dir = audio_dir_path.resolve()
+    resolved_output_dir = output_dir_path.resolve()
+    paths_overlap = (
+        resolved_output_dir == resolved_audio_dir
+        or resolved_output_dir in resolved_audio_dir.parents
+        or resolved_audio_dir in resolved_output_dir.parents
+    )
+    if paths_overlap:
+        raise ValueError(
+            "output_dir must not equal, contain, or be contained by audio_dir "
+            "to preserve source artifacts."
+        )
+    os.makedirs(output_dir_path, exist_ok=True)
 
     audio_dirs = find_possible_subdirs(audio_dir_path)
     if not audio_dirs:
@@ -499,95 +1136,25 @@ def main(audio_dir: str, output_dir: str, num_workers: int, shuffle_seed: int) -
             f"No valid sample dirs with pred.wav and target.wav found under {audio_dir_path}."
         )
 
-    df = _aggregate_metrics(audio_dirs, output_dir_path, num_workers)
+    _remove_deprecated_metric_outputs(output_dir_path)
+    df = _aggregate_metrics(audio_dirs, output_dir_path, num_workers, renderer_backend)
     df.to_csv(output_dir_path / "metrics.csv")
 
-    columnwise_means = df.mean(axis=0)
-    columnwise_stds = df.std(axis=0)
+    is_parameter_column = df.columns.str.startswith(_ACOUSTIC_PARAMETER_PREFIX)
+    scalar_metrics = df.loc[:, ~is_parameter_column]
+    columnwise_means = scalar_metrics.mean(axis=0)
+    columnwise_stds = scalar_metrics.std(axis=0)
+    dataset_level = compute_acoustic_parameter_pcc(df.loc[:, is_parameter_column])
+    if fad:
+        dataset_level["fad_clap"] = compute_fad(audio_dirs, _load_fad_encoder())
+    for name, value in dataset_level.items():
+        columnwise_means[name] = value
+        columnwise_stds[name] = float("nan")
     logger.info("metric means:\n{m}", m=columnwise_means.to_string())
     logger.info("metric stds:\n{s}", s=columnwise_stds.to_string())
 
     pd.DataFrame({"mean": columnwise_means, "std": columnwise_stds}).to_csv(
         output_dir_path / "aggregated_metrics.csv"
-    )
-
-    # filter to sample_* to match shuffle_pred_audio._sample_dirs glob pattern (#489)
-    probe_dirs = [d for d in audio_dirs if d.name.startswith("sample_")]
-    if shuffle_seed != 0 and len(probe_dirs) < 2:
-        raise ValueError(
-            f"shuffle_seed={shuffle_seed} was set but only {len(probe_dirs)} sample_* dir(s) "
-            "exist; the render-order probe requires at least 2."
-        )
-    uniform = params_are_uniform(probe_dirs)
-    if not uniform and shuffle_seed != 0:
-        raise ValueError(
-            f"shuffle_seed={shuffle_seed} was set but params.csv files are not uniform across "
-            "sample dirs — the render-order probe requires identical params. Either fix the "
-            "dataset or omit --shuffle_seed to silently skip the probe."
-        )
-    if uniform and len(probe_dirs) >= 2:
-        _run_shuffle_probe(audio_dir_path, output_dir_path, shuffle_seed, num_workers)
-
-
-def _run_shuffle_probe(
-    audio_dir_path: Path,
-    output_dir_path: Path,
-    shuffle_seed: int,
-    num_workers: int,
-) -> None:
-    """Run the render-order probe, writing the shuffled-metrics and permutation CSVs.
-
-    Builds a symlink view with permuted ``pred.wav`` files, scores it into
-    ``aggregated_metrics_shuffled.csv``, and records the drawn permutation alongside it to
-    ``shuffle_permutation.csv`` (columns ``dest_idx``, ``src_idx``). Cleans up the
-    intermediate temp dir in all cases.
-
-    :param audio_dir_path: Root audio directory passed to :func:`shuffle_pred_audio`.
-    :param output_dir_path: Destination dir for ``aggregated_metrics_shuffled.csv``.
-    :param shuffle_seed: Permutation seed forwarded to :func:`shuffle_pred_audio`.
-    :param num_workers: Worker count forwarded to :func:`_aggregate_metrics`.
-    :raises ValueError: when ``shuffle_seed`` is non-zero and ``output_dir_path`` is nested
-        inside ``audio_dir_path``.
-    """
-    shuffled_view = output_dir_path / "shuffled_audio"
-    _resolved_audio = audio_dir_path.resolve()
-    _resolved_view = shuffled_view.resolve()
-    _nested = _resolved_audio in _resolved_view.parents or _resolved_view == _resolved_audio
-    if _nested:
-        if shuffle_seed != 0:
-            raise ValueError(
-                f"shuffle_seed={shuffle_seed} was set but output_dir ({output_dir_path}) is "
-                f"inside audio_dir ({audio_dir_path}); the render-order probe cannot build "
-                "a safe symlink view there. Move output_dir outside audio_dir."
-            )
-        logger.warning(
-            "Render-order probe skipped: output_dir ({o}) is inside audio_dir ({a}); "
-            "shuffled_audio would nest inside the source tree.",
-            o=output_dir_path,
-            a=audio_dir_path,
-        )
-        return
-    permutation = shuffle_pred_audio(audio_dir_path, shuffled_view, shuffle_seed)
-    if len(permutation) < 2:
-        return
-    logger.info("Render-order probe: scoring permuted pred audio (seed={s})", s=shuffle_seed)
-    shuffled_dirs = find_possible_subdirs(shuffled_view)
-    if not shuffled_dirs:
-        logger.warning(
-            "Render-order probe: no valid sample dirs found in shuffled view {v}; "
-            "skipping shuffled metrics",
-            v=shuffled_view,
-        )
-        return
-    with tempfile.TemporaryDirectory(dir=output_dir_path) as _tmp:
-        shuffled_df = _aggregate_metrics(shuffled_dirs, Path(_tmp), num_workers)
-        pd.DataFrame({"mean": shuffled_df.mean(axis=0), "std": shuffled_df.std(axis=0)}).to_csv(
-            output_dir_path / "aggregated_metrics_shuffled.csv"
-        )
-    # Written only after the shuffled metrics land, so the permutation never
-    # appears without the metrics it explains.
-    pd.DataFrame({"dest_idx": range(len(permutation)), "src_idx": permutation}).to_csv(
-        output_dir_path / "shuffle_permutation.csv", index=False
     )
 
 

@@ -24,8 +24,12 @@ Determine the PR number:
 Fetch the PR's metadata once and remember it:
 
 ```bash
-gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
-  --json number,headRefOid,baseRefOid,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup
+repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)" || exit $?
+gh pr view <N> --repo "$repo" \
+  --json number,headRefOid,baseRefName,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup \
+  || exit $?
+base_sha="$(gh api "repos/${repo}/pulls/<N>" --jq .base.sha)" || exit $?
+printf 'base_sha=%s\n' "$base_sha"
 ```
 
 If there is no PR for the current branch, stop and tell the user to push and open a PR first.
@@ -77,19 +81,34 @@ For each finding emit one line:
 ```
 BLOCK: <path>:<line> — [<category>] <description>
 WARN:  <path>:<line> — [<category>] <description>
+NIT:   <path>:<line> — [<category>] <description>
 ```
 
-Categories: `comment-hygiene`, `yaml-bash`, `python`, `shell`, `pipeline`, `security`, `commit-style`, `pr-link`, `stale-ref`, `secret-doc`.
+BLOCK = must fix before merge · WARN = should fix · NIT = optional preference
+that never gates. Emit NIT rather than WARN whenever a reviewer could decline
+the change without harming the codebase.
+
+Categories: `comment-hygiene`, `yaml-bash`, `python`, `shell`, `pipeline`, `security`, `commit-style`, `pr-link`, `pr-scope`, `stale-ref`, `secret-doc`.
 
 ### The core checklist (sourced from AGENTS.md)
 
+**PR scope (AGENTS.md "Keep auxiliary work in separate PRs")**
+
+- WARN [pr-scope] Flag independently useful non-core refactors, cleanup, or
+  pre-existing bug fixes bundled into the main PR, even if they enable its core
+  change. Identify the added hunk and explain why it is separable; recommend an
+  auxiliary prerequisite PR with the main PR stacked above it, or an independent
+  PR when there is no dependency. Review against the declared base so already
+  separated prerequisite commits are not flagged. Do not flag fixes for
+  regressions introduced by this PR or tests/docs directly supporting its change.
+
 **Comment hygiene (AGENTS.md "Comment Hygiene" + "No Comments Inside YAML run: Block-Scalars")**
 
-Rule IDs `C1`–`C12` are the full BLOCK/WARN schema in the plugin's `comment-hygiene` skill (run via `/repo-review-full` or directly when the plugin is available). The MVP repeats the same rule IDs inline so external contributors and plugin-less environments still get coverage; what the MVP omits is the plugin's per-finding `Before / After` rewrites (and the two NIT-severity items C13–C14). When in doubt about a flag, defer to the plugin's per-finding rewrites.
+Rule IDs `C1`–`C12` are the full BLOCK/WARN schema in the plugin's `comment-hygiene` skill (run via `/repo-review-full` or directly when the plugin is available). The MVP repeats the same rule IDs inline so external contributors and plugin-less environments still get coverage; what the MVP omits is the plugin's per-finding `Before / After` rewrites and its NIT-severity items C13–C14. When in doubt about a flag, defer to the plugin's per-finding rewrites.
 
 BLOCK items (hard AGENTS.md rules — always flag):
 
-- [comment-hygiene C1] **No `#`-comments inside `run: |` or `setup: |` block-scalars** in `.github/workflows/*.{yml,yaml}` or `configs/compute/*.yaml`. Comments belong ABOVE the `run:` key, not inside the bash.
+- [comment-hygiene C1] **No `#`-comments inside `run: |` or `setup: |` block-scalars** in `.github/workflows/*.{yml,yaml}` or `configs/skypilot_launch/compute/*.yaml`. Comments belong ABOVE the `run:` key, not inside the bash.
 - [comment-hygiene C2] No comment restates a literal constant value next to its assignment (`num = 6  # 6 items`).
 - [comment-hygiene C3] No comment enumerates list contents in prose (`THINGS = [...]  # a, b, c`). The list IS the source of truth.
 - [comment-hygiene C4] No baked-in counts the code already reports (`# 29 comments triaged`, `# 5 metric series`) — belongs in the PR description, not in source.
@@ -116,7 +135,7 @@ WARN items (bloat patterns — flag when the diff adds them):
 - [python] `structlog` for logging in pipeline code; Python's `logging` module elsewhere.
 - [python] No `print()` statements in production code. CLI helpers + tests excepted (and exempted in `pyproject.toml` per-file-ignores). (P29)
 
-**Shell (plugin `shell-style` BLOCK items — applies to `.sh` files AND bash inside YAML `run:` / `setup:` block-scalars in `.github/workflows/*.{yml,yaml}` and `configs/compute/*.yaml`)**
+**Shell (plugin `shell-style` BLOCK items — applies to `.sh` files AND bash inside YAML `run:` / `setup:` block-scalars in `.github/workflows/*.{yml,yaml}` and `configs/skypilot_launch/compute/*.yaml`)**
 
 - [shell] `set -euo pipefail` at the top of every shell script and every YAML `run: |` / `setup: |` block-scalar. Inner `bash -c '...'` shells get their own `set -euo pipefail`. (SH1)
 - [shell] All variable expansions are double-quoted: `"${VAR}"` not `$VAR`. Exceptions: integers and `$?`. (SH2)
@@ -165,14 +184,16 @@ WARN items (bloat patterns — flag when the diff adds them):
 End the listing with:
 
 ```
-Summary: X BLOCK, Y WARN
+Summary: X BLOCK, Y WARN, Z NIT
 ```
 
 If the checklist found zero findings AND Step 2 found no PR-health BLOCKs (no merge conflict, no failing checks), output `PASS` and stop — do not post an empty review. If PR-health turned up anything, always submit so the merge-conflict / failing-check banner reaches the author.
 
 ## Step 5: Build the findings JSON
 
-Convert your BLOCK/WARN list to the JSON shape `post_review.py` consumes. Each diff-anchored finding becomes one inline comment with a `[repo-review:<severity>]` prefix.
+Convert your BLOCK/WARN list to the JSON shape `post_review.py` consumes. Each diff-anchored BLOCK or WARN becomes one inline comment with a `[repo-review:<severity>]` prefix.
+
+**NITs never become inline comments.** List them as `- **[repo-review:nit]** \`<path>:<line>\` — \[<category>\] <description>`bullets under a`## Nits`section appended last in`review_body\`; omit the section when there are none. An inline thread is a merge obligation under "Conversations must be resolved" branch protection, which is exactly what a NIT must not be.
 
 **Fold the Step 2 PR-health BLOCKs into `review_body`** (they aren't anchored to diff lines, so they can't be inline comments). Prepend a `## PR health` section listing every PR-health BLOCK; if Step 2 produced nothing, omit the section entirely.
 
@@ -184,7 +205,7 @@ Example shape when both health flags fire:
 {
   "pr_number": <N>,
   "repo": "<owner>/<repo>",
-  "review_body": "Repo-review (MVP): <X> BLOCK, <Y> WARN. Inline core checklist from AGENTS.md.\n\n## PR health\n\n- **[repo-review:block]** [pr-health] Merge conflict with base branch (mergeStateStatus=DIRTY). Rebase or merge base before review.\n- **[repo-review:block]** [pr-health] Failing check: ci/test (FAILURE) — https://github.com/.../runs/123",
+  "review_body": "Repo-review (MVP): <X> BLOCK, <Y> WARN, <Z> NIT. Inline core checklist from AGENTS.md.\n\n## PR health\n\n- **[repo-review:block]** [pr-health] Merge conflict with base branch (mergeStateStatus=DIRTY). Rebase or merge base before review.\n- **[repo-review:block]** [pr-health] Failing check: ci/test (FAILURE) — https://github.com/.../runs/123\n\n## Nits\n\n- **[repo-review:nit]** `src/foo.py:9` — [comment-hygiene] comment restates the assignment.",
   "findings": [
     {
       "path": "<path>",
@@ -223,6 +244,6 @@ The helper prints the review's `html_url` on success. Report it back to the user
 
 ## Notes
 
-- Severity threshold: post everything (every BLOCK and every WARN). Tuning to top-N or by-category is a follow-up — see issue #778's "Out of scope" list.
+- Severity threshold: post everything (every BLOCK and WARN inline, every NIT in the body). Tuning to top-N or by-category is a follow-up — see issue #778's "Out of scope" list.
 - Idempotency: re-running the skill on the same PR posts a fresh review with fresh comment threads (duplicates by design — easy to delete a whole review, fiddly to dedupe).
 - Drift: this checklist is sourced from AGENTS.md verbatim. When AGENTS.md changes, this SKILL.md should change in the same PR — that's the contract.

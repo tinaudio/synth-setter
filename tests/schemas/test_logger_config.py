@@ -42,10 +42,13 @@ class TestLoggerConfigAcceptsEveryComposition:
         assert parsed.root
 
     def test_many_loggers_yields_multiple_entries(self) -> None:
-        """``many_loggers.yaml`` composes more than one logger entry."""
+        """``many_loggers.yaml`` composes exactly the csv, tensorboard and wandb loggers.
+
+        A count-only assertion would still pass with a logger silently dropped.
+        """
         logger_subtree = compose_subtree("logger", "many_loggers")
         parsed = LoggerConfig.model_validate(logger_subtree)
-        assert len(parsed.root) > 1
+        assert sorted(parsed.root) == ["csv", "tensorboard", "wandb"]
 
 
 class TestWandbConsoleCapture:

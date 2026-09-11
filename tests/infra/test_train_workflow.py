@@ -2,71 +2,66 @@
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).parents[2]
-_LAUNCH_CONFIG_DIR = _REPO_ROOT / "src/synth_setter/configs/launch"
 _WORKFLOW_PATH = _REPO_ROOT / ".github/workflows/train.yml"
 
 
-def test_train_workflow_optional_inputs_reach_launcher_extra_env() -> None:
-    """Optional dispatch overrides are forwarded to the SkyPilot worker."""
-    workflow = yaml.safe_load(_WORKFLOW_PATH.read_text(encoding="utf-8"))
+def _load_workflow() -> dict:
+    """Parse the training workflow YAML.
 
-    # PyYAML's YAML 1.1 resolver interprets the unquoted GitHub key `on` as True.
-    inputs = workflow[True]["workflow_dispatch"]["inputs"]
-    steps_by_name = {step["name"]: step for step in workflow["jobs"]["train"]["steps"]}
-    dispatch_step = steps_by_name["Dispatch via SkyPilot"]
-
-    assert inputs["dataset_root_uri"]["default"] == ""
-    assert inputs["experiment"]["default"] == ""
-    assert dispatch_step["env"]["DATASET_ROOT_URI"] == "${{ inputs.dataset_root_uri }}"
-    assert dispatch_step["env"]["EXPERIMENT"] == "${{ inputs.experiment }}"
-    assert '--extra-env DATASET_ROOT_URI "$DATASET_ROOT_URI"' in dispatch_step["run"]
-    assert '--extra-env EXPERIMENT "$EXPERIMENT"' in dispatch_step["run"]
-
-
-@pytest.mark.parametrize(
-    ("name", "default_experiment", "default_dataset_root_uri"),
-    [
-        (
-            "train-runpod-flow-simple-440k.yaml",
-            "surge/flow_simple",
-            "r2://experiments/data/surge-simple-lance-440k-20k-20k/"
-            "surge-simple-lance-440k-20k-20k-20260706T005448315Z/",
-        ),
-        (
-            "train-runpod-smoke.yaml",
-            "surge/ffn_simple",
-            "r2://experiments/data/surge-simple-lance-1k-2k-2k/"
-            "surge-simple-lance-1k-2k-2k-20260716T163226347Z/",
-        ),
-        (
-            "train-runpod.yaml",
-            "surge/ffn_simple",
-            "r2://experiments/data/surge-simple-lance-1k-2k-2k/"
-            "surge-simple-lance-1k-2k-2k-20260716T163226347Z/",
-        ),
-    ],
-)
-def test_train_runpod_config_uses_optional_inputs_with_existing_defaults(
-    name: str,
-    default_experiment: str,
-    default_dataset_root_uri: str,
-) -> None:
-    """Each worker command honors overrides without changing its defaults.
-
-    :param name: Shipped training launch-config filename.
-    :param default_experiment: Experiment used when its workflow input is empty.
-    :param default_dataset_root_uri: Dataset used when its workflow input is empty.
+    :returns: The workflow document as a mapping.
     """
-    launch_config_path = _LAUNCH_CONFIG_DIR / name
-    launch_config = yaml.safe_load(launch_config_path.read_text(encoding="utf-8"))
+    return yaml.safe_load(_WORKFLOW_PATH.read_text(encoding="utf-8"))
 
-    expected_dataset = (
-        f'"datamodule.download_dataset_root_uri=${{DATASET_ROOT_URI:-{default_dataset_root_uri}}}"'
-    )
-    expected_experiment = f'"experiment=${{EXPERIMENT:-{default_experiment}}}"'
-    assert expected_dataset in launch_config["cmd"]
-    assert expected_experiment in launch_config["cmd"]
+
+def _steps_by_name(workflow: dict) -> dict[str, dict]:
+    """Index the train job's steps by their display name.
+
+    :param workflow: Parsed workflow document.
+    :returns: Mapping of step name to step definition.
+    """
+    return {step["name"]: step for step in workflow["jobs"]["train"]["steps"]}
+
+
+def test_train_workflow_requires_experiment_and_accepts_compute_override() -> None:
+    """Training dispatch selects science and infrastructure independently."""
+    workflow = _load_workflow()
+
+    inputs = workflow[True]["workflow_dispatch"]["inputs"]
+    assert inputs["experiment"]["required"] is True
+    assert inputs["compute"]["required"] is False
+    assert inputs["compute"]["default"] == ""
+    assert inputs["tail"]["default"] is False
+    assert "launch_config" not in inputs
+    assert "dataset_root_uri" not in inputs
+
+
+def test_train_workflow_maps_expensive_experiment_to_training_compute() -> None:
+    """The 440k experiment retains its larger-disk compute default."""
+    workflow = _load_workflow()
+
+    script = _steps_by_name(workflow)["Resolve compute option"]["run"]
+    assert "surge/flow_simple_440k)" in script
+    assert "COMPUTE_OPTION=runpod/training" in script
+    assert "COMPUTE_OPTION=runpod/smoke" in script
+    assert '== "surge/ffn_simple_smoke"' in script
+    assert "TAIL=true" in script
+    assert "./scripts/validate_skypilot_workflow_inputs.sh" in script
+
+
+def test_train_workflow_dispatches_hydra_launcher_with_generic_command() -> None:
+    """The workflow passes compute and train command through Hydra overrides."""
+    workflow = _load_workflow()
+
+    dispatch = _steps_by_name(workflow)["Dispatch via SkyPilot"]["run"]
+    assert '"skypilot_launch/compute=$COMPUTE_OPTION"' in dispatch
+    assert '"skypilot_launch.tail=$TAIL"' in dispatch
+    assert "hydra.output_subdir=null" in dispatch
+    assert "skypilot_launch.worker_image_tag=dev-snapshot" in dispatch
+    assert '"exec synth-setter-train "' in dispatch
+    assert '"experiment=$EXPERIMENT "' in dispatch
+    assert "training.upload_checkpoints_during_training=true" in dispatch
+    assert "hydra.run.dir=/home/build/synth-setter/train-run" in dispatch
+    assert "src/synth_setter/configs/launch" not in dispatch

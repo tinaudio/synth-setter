@@ -1,0 +1,8 @@
+# DEBUG variant: headless wrapper + rclone. If `headless` and `rclone` both
+# PASS but this FAILS, the failure is in their interaction (rclone fds
+# inheriting X-stack pipes, dbus session seeing unexpected children, etc.).
+defaults:
+  - /skypilot_launch/compute/runpod/smoke@_here_
+  - _self_
+name: runpod-debug-headless-rclone
+run_script: debug-headless-rclone.sh

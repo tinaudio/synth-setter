@@ -20,9 +20,42 @@ from pedalboard.io import AudioFile
 
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.synth_spec import SynthName, SynthSpec
 from tests.helpers.lance_fixtures import write_lance_shard
 
 SURGE_SIMPLE = "surge_simple"
+
+
+def _render_config(
+    param_spec_name: str = SURGE_SIMPLE,
+    plugin_state_path: str = "presets/surge-simple.vstpreset",
+) -> RenderConfig:
+    """Return a complete config for captured-patch renderer subprocesses.
+
+    :param param_spec_name: Registry identity rendered by the subprocess.
+    :param plugin_state_path: Preset loaded before each render session.
+    :returns: Validated renderer configuration.
+    """
+    return RenderConfig(
+        synth=SynthSpec(
+            name=SynthName(param_spec_name),
+            param_spec_name=ParamSpecName(param_spec_name),
+            plugin_path="plugins/Surge XT.vst3",
+            plugin_state_path=plugin_state_path,
+            synth_version="1.3.4",
+        ),
+        sample_rate=44100,
+        channels=2,
+        velocity=100,
+        signal_duration_seconds=4.0,
+        min_loudness=-55.0,
+        samples_per_render_batch=1,
+        samples_per_shard=1,
+        plugin_reload_cadence="render",
+        gui_toggle_cadence="never",
+    )
 
 
 @pytest.fixture(scope="module")
@@ -1283,7 +1316,7 @@ class TestRunPredict:
         args = runner.calls[0]
         assert "experiment=surge/test" in args
         assert "mode=predict" in args
-        assert f"datamodule.param_spec_name={SURGE_SIMPLE}" in args
+        assert f"synth={SURGE_SIMPLE}" in args
         assert not any(arg.startswith("model.net.d_out=") for arg in args)
         # Every path-bearing override must be absolute.
         for prefix, original in (
@@ -1396,6 +1429,93 @@ class TestValidateMetricsDf:
 
         vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
 
+    def test_optional_metric_allows_missing_values_in_mixed_collection(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """An optional stereo metric may be absent only from mono sample rows.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
+        df = pd.DataFrame({"mss": [0.1, 0.2], "mldr_mid_side": [float("nan"), 0.3]})
+        spec = vst_interactive._MetricsFileSpec(
+            rows=2,
+            columns=frozenset({"mss"}),
+            optional_columns=frozenset({"mldr_mid_side"}),
+        )
+
+        vst_interactive._validate_metrics_df(Path("metrics.csv"), df, spec)
+
+    def test_optional_aggregate_row_allows_single_stereo_sample_std_nan(
+        self, vst_interactive: ModuleType
+    ) -> None:
+        """One applicable stereo sample may leave only its optional std undefined.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
+        df = pd.DataFrame(
+            {"metric": ["mss", "mldr_mid_side"], "mean": [0.1, 0.2], "std": [0.01, float("nan")]}
+        )
+        spec = vst_interactive._MetricsFileSpec(
+            rows=1,
+            columns=frozenset({"mean", "std"}),
+            optional_rows=frozenset({"mldr_mid_side"}),
+        )
+
+        vst_interactive._validate_metrics_df(Path("aggregated_metrics.csv"), df, spec)
+
+    def test_missing_required_aggregate_row_raises(self, vst_interactive: ModuleType) -> None:
+        """Required aggregate metric labels must be present.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
+        df = pd.DataFrame({"metric": ["mss"], "mean": [0.1], "std": [0.01]})
+        spec = vst_interactive._MetricsFileSpec(
+            rows=1,
+            columns=frozenset({"mean", "std"}),
+            required_rows=frozenset({"mldr_mid_side"}),
+        )
+
+        with pytest.raises(ValueError, match="missing required metric rows"):
+            vst_interactive._validate_metrics_df(Path("aggregated_metrics.csv"), df, spec)
+
+    def test_duplicate_optional_aggregate_rows_raise(self, vst_interactive: ModuleType) -> None:
+        """An optional metric name may occur at most once in an aggregate table.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
+        df = pd.DataFrame(
+            {
+                "metric": ["mss", "mldr_mid_side", "mldr_mid_side"],
+                "mean": [0.1, 0.2, 0.3],
+                "std": [0.01, 0.02, 0.03],
+            }
+        )
+        spec = vst_interactive._MetricsFileSpec(
+            rows=1,
+            columns=frozenset({"mean", "std"}),
+            optional_rows=frozenset({"mldr_mid_side"}),
+        )
+
+        with pytest.raises(ValueError, match="duplicate optional metric rows"):
+            vst_interactive._validate_metrics_df(Path("aggregated_metrics.csv"), df, spec)
+
+    def test_optional_aggregate_row_nan_mean_raises(self, vst_interactive: ModuleType) -> None:
+        """An optional aggregate row still requires a finite mean.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        """
+        df = pd.DataFrame(
+            {"metric": ["mss", "mldr_mid_side"], "mean": [0.1, float("nan")], "std": [0.01, 0.0]}
+        )
+        spec = vst_interactive._MetricsFileSpec(
+            rows=1,
+            columns=frozenset({"mean", "std"}),
+            optional_rows=frozenset({"mldr_mid_side"}),
+        )
+
+        with pytest.raises(ValueError, match="invalid optional metric rows"):
+            vst_interactive._validate_metrics_df(Path("aggregated_metrics.csv"), df, spec)
+
     def test_wrong_rows_raises_valueerror(self, vst_interactive: ModuleType) -> None:
         """Row count mismatch raises ``ValueError`` mentioning expected and actual.
 
@@ -1467,7 +1587,7 @@ class _RecordingEvalRunner:
     """
 
     def __init__(self) -> None:
-        self.calls: list[tuple[int, Path, Path, str, str, str]] = []
+        self.calls: list[tuple[int, Path, Path, RenderConfig, str]] = []
 
     def __call__(
         self,
@@ -1475,8 +1595,7 @@ class _RecordingEvalRunner:
         *,
         dataset_root_dir: Path,
         checkpoint_path: Path,
-        param_spec_name: str,
-        plugin_state_path: str,
+        render_config: RenderConfig,
         experiment: str,
     ) -> None:
         self.calls.append(
@@ -1484,8 +1603,7 @@ class _RecordingEvalRunner:
                 num_samples,
                 dataset_root_dir,
                 checkpoint_path,
-                param_spec_name,
-                plugin_state_path,
+                render_config,
                 experiment,
             )
         )
@@ -1521,8 +1639,7 @@ class TestMaybeEvalCapturedPatches:
             output_dataset_dir_path=tmp_path,
             num_patches=1,
             checkpoint_path=None,
-            param_spec_name=SURGE_SIMPLE,
-            plugin_state_path="presets/surge-base.vstpreset",
+            render_config=_render_config(plugin_state_path="presets/surge-base.vstpreset"),
             eval_runner=runner,
         )
 
@@ -1550,8 +1667,7 @@ class TestMaybeEvalCapturedPatches:
             output_dataset_dir_path=tmp_path,
             num_patches=3,
             checkpoint_path=ckpt_path,
-            param_spec_name=SURGE_SIMPLE,
-            plugin_state_path="presets/surge-simple.vstpreset",
+            render_config=_render_config(),
             experiment="vst/custom",
             eval_runner=runner,
         )
@@ -1566,8 +1682,7 @@ class TestMaybeEvalCapturedPatches:
                 3,
                 tmp_path,
                 ckpt_path,
-                SURGE_SIMPLE,
-                "presets/surge-simple.vstpreset",
+                _render_config(),
                 "vst/custom",
             )
         ]
@@ -1600,8 +1715,7 @@ class TestMaybeEvalCapturedPatches:
                 output_dataset_dir_path=tmp_path,
                 num_patches=1,
                 checkpoint_path=ckpt_path,
-                param_spec_name=SURGE_SIMPLE,
-                plugin_state_path="presets/surge-base.vstpreset",
+                render_config=_render_config(plugin_state_path="presets/surge-base.vstpreset"),
                 eval_runner=runner,
             )
 
@@ -1646,8 +1760,7 @@ class TestMaybeEvalCapturedPatches:
                 output_dataset_dir_path=tmp_path,
                 num_patches=1,
                 checkpoint_path=checkpoint_path,
-                param_spec_name=SURGE_SIMPLE,
-                plugin_state_path="presets/surge-base.vstpreset",
+                render_config=_render_config(plugin_state_path="presets/surge-base.vstpreset"),
                 eval_runner=_RecordingEvalRunner(),
             )
 
@@ -1743,12 +1856,16 @@ class _MaterializingPipelineRunner:
             pd.DataFrame(
                 {
                     metric: np.full(self.num_samples, 0.5)
-                    for metric in ("mss", "wmfcc", "sot", "rms")
+                    for metric in ("mss", "wmfcc", "sot", "rms", "mldr", "mldr_mid_side")
                 }
             ).to_csv(metrics_dir / "metrics.csv", index=False)
-            pd.DataFrame({"mean": np.full(4, 0.5), "std": np.zeros(4)}).to_csv(
-                metrics_dir / "aggregated_metrics.csv", index=False
-            )
+            pd.DataFrame(
+                {
+                    "metric": ("mss", "wmfcc", "sot", "rms", "mldr", "mldr_mid_side"),
+                    "mean": np.full(6, 0.5),
+                    "std": np.zeros(6),
+                }
+            ).to_csv(metrics_dir / "aggregated_metrics.csv", index=False)
             return
         raise AssertionError(f"unexpected subprocess module: {module}")
 
@@ -1773,8 +1890,7 @@ class TestEvalPatches:
             2,
             dataset_root_dir=tmp_path,
             checkpoint_path=checkpoint_path,
-            param_spec_name=SURGE_SIMPLE,
-            plugin_state_path="presets/surge-simple.vstpreset",
+            render_config=_render_config(),
             experiment="vst/custom",
             subprocess_runner=runner,
         )
@@ -1786,7 +1902,7 @@ class TestEvalPatches:
             "synth_setter.evaluation.compute_audio_metrics",
         ]
         assert "experiment=vst/custom" in runner.calls[0]
-        assert "datamodule.param_spec_name=surge_simple" in runner.calls[0]
+        assert "synth=surge_simple" in runner.calls[0]
         assert "surge_simple" in runner.calls[1]
         assert "presets/surge-simple.vstpreset" in runner.calls[1]
         assert len(pd.read_csv(tmp_path / "metrics" / "metrics.csv")) == 2
@@ -1818,8 +1934,7 @@ class TestBuildPredictVstAudioArgv:
         argv = vst_interactive._build_predict_vst_audio_argv(
             tmp_path / "preds",
             tmp_path / "audio",
-            SURGE_SIMPLE,
-            _RENDER_DEFAULT_PRESET,
+            _render_config(plugin_state_path=_RENDER_DEFAULT_PRESET),
             platform="linux",
             wrapper_path=wrapper_path,
         )
@@ -1840,8 +1955,7 @@ class TestBuildPredictVstAudioArgv:
             vst_interactive._build_predict_vst_audio_argv(
                 tmp_path / "preds",
                 tmp_path / "audio",
-                SURGE_SIMPLE,
-                _RENDER_DEFAULT_PRESET,
+                _render_config(plugin_state_path=_RENDER_DEFAULT_PRESET),
                 platform="linux",
                 wrapper_path=missing_wrapper,
             )
@@ -1859,8 +1973,7 @@ class TestBuildPredictVstAudioArgv:
         argv = vst_interactive._build_predict_vst_audio_argv(
             tmp_path / "preds",
             tmp_path / "audio",
-            SURGE_SIMPLE,
-            _RENDER_DEFAULT_PRESET,
+            _render_config(plugin_state_path=_RENDER_DEFAULT_PRESET),
             platform="darwin",
             wrapper_path=missing_wrapper,
         )
@@ -1882,16 +1995,15 @@ class TestBuildPredictVstAudioArgv:
         argv = vst_interactive._build_predict_vst_audio_argv(
             tmp_path / "preds",
             tmp_path / "audio",
-            "custom-spec",
-            "presets/custom.vstpreset",
+            _render_config("custom_spec", "presets/custom.vstpreset"),
             platform="darwin",
         )
 
-        assert "--param_spec" in argv
-        assert argv[argv.index("--param_spec") + 1] == "custom-spec"
-        assert "--plugin_state_path" in argv
-        assert argv[argv.index("--plugin_state_path") + 1] == "presets/custom.vstpreset"
-        assert argv[-1] == "-t"
+        assert "--synth.param-spec-name" in argv
+        assert argv[argv.index("--synth.param-spec-name") + 1] == "custom_spec"
+        assert "--synth.plugin-state-path" in argv
+        assert argv[argv.index("--synth.plugin-state-path") + 1] == "presets/custom.vstpreset"
+        assert argv[argv.index("--rerender-target") + 1] == "True"
 
     def test_predictions_and_audio_dirs_appear_as_positional_args(
         self, vst_interactive: ModuleType, tmp_path: Path
@@ -1905,7 +2017,10 @@ class TestBuildPredictVstAudioArgv:
         audio_dir = tmp_path / "audio"
 
         argv = vst_interactive._build_predict_vst_audio_argv(
-            preds_dir, audio_dir, SURGE_SIMPLE, _RENDER_DEFAULT_PRESET, platform="darwin"
+            preds_dir,
+            audio_dir,
+            _render_config(plugin_state_path=_RENDER_DEFAULT_PRESET),
+            platform="darwin",
         )
 
         assert str(preds_dir) in argv
@@ -2038,8 +2153,7 @@ class TestRenderPredictedAudioSubprocessIntegration:
             tmp_path / "preds",
             audio_dir,
             num_samples=1,
-            param_spec_name=SURGE_SIMPLE,
-            plugin_state_path=_RENDER_DEFAULT_PRESET,
+            render_config=_render_config(plugin_state_path=_RENDER_DEFAULT_PRESET),
             subprocess_runner=runner,
         )
 
@@ -2119,7 +2233,7 @@ def _write_synthetic_prediction_files(
     pred_dir.mkdir(parents=True, exist_ok=True)
     total_length = simple_spec.synth_param_length + simple_spec.note_param_length
     # ``predict_vst_audio.py`` loads ``target-audio-{i}.pt`` unconditionally and indexes
-    # ``target_audio[j]`` for spectrogram generation even under ``-t``/``--rerender_target``,
+    # ``target_audio[j]`` for spectrogram generation even with target re-rendering,
     # so the saved tensor must be (batch, channels, frames) matching that script's CLI
     # defaults. Contents can be silent — only the post-render pred/target WAVs are checked
     # for non-silence.
@@ -2169,8 +2283,7 @@ class TestRenderPredictedAudioE2E:
             pred_dir,
             audio_dir,
             num_samples,
-            param_spec_name=SURGE_SIMPLE,
-            plugin_state_path=plugin_state_path,
+            render_config=_render_config(plugin_state_path=plugin_state_path),
         )
 
         for i in range(num_samples):

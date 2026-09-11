@@ -3,8 +3,8 @@
 # SkyPilot worker → wandb checkpoint resolve → trainer.test) at minimal GPU
 # cost. Pair with train-runpod-smoke.yaml, which publishes the junk artifact.
 
-compute_template: src/synth_setter/configs/compute/runpod-template.yaml
-worker_image_tag: dev-snapshot
+compute: runpod/smoke
+worker_image_tag: devcontainer-tools
 env_file: .env
 # tail=true keeps the dispatcher attached so the Actions job reflects the
 # worker run end-to-end.
@@ -14,6 +14,7 @@ cmd: >-
   bash scripts/sync_worker_checkout.sh &&
   exec src/synth_setter/scripts/run-linux-vst-headless.sh
   synth-setter-eval
-  experiment=surge/wandb_checkpoint/ffn_simple
+  experiment=surge/ffn_simple
+  "ckpt_path=\${wandb:tinaudio/synth-setter/model-ffn_simple:latest}"
   trainer.limit_test_batches=2
   hydra.run.dir=/home/build/synth-setter/eval-run

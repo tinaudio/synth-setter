@@ -12,8 +12,9 @@ defaults:
   - surge/base
   - override /model: vst_fake_oracle
   - override /datamodule: surge
+  - override /synth: surge_xt
   - override /trainer: mps
-  - override /callbacks: [default_vst, eval_vst]
+  - override /callbacks: [default_vst, eval_vst, log_per_param_mse]
   - _self_
 
 run_name: fake_oracle
@@ -27,7 +28,7 @@ logger: null
 test: false
 
 # Predict-mode eval knobs — kept in lockstep with surge/fake_oracle.yaml (see header).
-# render defaults to null; predict-mode callers select a group (e.g. render=surge_simple)
+# render defaults to null; predict-mode callers select a group (e.g. render=vst)
 # and eval raises if render_vst runs without one.
 mode: predict
 render: null
@@ -62,9 +63,6 @@ trainer:
   deterministic: true
 
 callbacks:
-  log_per_param_mse:
-    _target_: synth_setter.utils.callbacks.LogPerParamMSE
-    param_spec: ${datamodule.param_spec_name}
   plot_proj_ii: null
   model_checkpoint:
     save_last: true

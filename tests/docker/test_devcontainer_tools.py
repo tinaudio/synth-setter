@@ -1,4 +1,4 @@
-"""Smoke tests for the built devcontainer-tools Docker image."""
+"""Smoke tests for the devcontainer-tools and devcontainer-tools-dev-user Docker images."""
 
 from __future__ import annotations
 
@@ -26,6 +26,55 @@ def _run_text(*args: str) -> str:
     return result.stdout.strip()
 
 
+def _run_as_dev_text(*args: str) -> str:
+    """Run command argv with the dev user's home and return normalized stdout.
+
+    :param *args: Command executed as ``dev`` in either published image variant.
+    :returns: Normalized stdout value used for image-contract assertions.
+    """
+    command = ("env", "HOME=/home/dev", *args)
+    if _run_text("whoami") == "root":
+        command = ("runuser", "-u", "dev", "--", *command)
+    return _run_text(*command)
+
+
+@pytest.mark.docker_smoke
+@pytest.mark.skipif(
+    not _RUN_DEVCONTAINER_SMOKE,
+    reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
+)
+def test_image_default_user_matches_expected() -> None:
+    """Validate the image's default user against the SkyPilot/RunPod contract.
+
+    ``devcontainer-tools`` must default to root so SkyPilot's RunPod backend can
+    install sshd; ``devcontainer-tools-dev-user`` must default to non-root
+    ``dev`` for local VS Code devcontainers. The runner declares which image it
+    built via ``SYNTH_SETTER_DEVCONTAINER_EXPECT_USER`` (defaults to ``root``).
+    """
+    expected_user = os.environ.get("SYNTH_SETTER_DEVCONTAINER_EXPECT_USER", "root")
+    assert _run_text("whoami") == expected_user
+
+
+@pytest.mark.docker_smoke
+@pytest.mark.skipif(
+    not _RUN_DEVCONTAINER_SMOKE,
+    reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
+)
+def test_btop_available() -> None:
+    """Require the packaged binary to execute successfully."""
+    _run_text("btop", "--version")
+
+
+@pytest.mark.docker_smoke
+@pytest.mark.skipif(
+    not _RUN_DEVCONTAINER_SMOKE,
+    reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
+)
+def test_zellij_available() -> None:
+    """Require the downloaded Zellij binary to execute successfully."""
+    assert _run_text("zellij", "--version").startswith("zellij ")
+
+
 @pytest.mark.docker_smoke
 @pytest.mark.skipif(
     not _RUN_DEVCONTAINER_SMOKE,
@@ -44,6 +93,29 @@ def test_codex_sandbox_prerequisites_available() -> None:
         str(user_codex),
         "--version",
     )
+
+
+@pytest.mark.docker_smoke
+@pytest.mark.skipif(
+    not _RUN_DEVCONTAINER_SMOKE,
+    reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
+)
+def test_doom_emacs_available() -> None:
+    """Validate the dev user's initialized Doom installation and dependencies."""
+    doom_version = _run_as_dev_text(
+        "emacs",
+        "--batch",
+        "--load",
+        "/home/dev/.config/emacs/early-init.el",
+        "--eval",
+        "(princ doom-version)",
+    )
+
+    assert doom_version.endswith("2.2.0")
+    assert _run_as_dev_text("doom", "version", "--short") == "2.2.0"
+    assert _run_as_dev_text("fd", "--version").startswith("fd ")
+    assert _run_as_dev_text("rg", "--version").startswith("ripgrep ")
+    assert Path("/home/dev/.config/doom/init.el").is_file()
 
 
 @pytest.mark.docker_smoke

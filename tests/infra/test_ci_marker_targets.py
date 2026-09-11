@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -22,15 +23,28 @@ import pytest
 TARGET_MARKERS: dict[str, str] = {
     "test-ci-unit": "not slow and not gpu and not mps",
     "test-ci-slow": "slow and not gpu and not mps and not requires_vst",
+    "test-ci-slow-pr": "slow and not gpu and not mps and not requires_vst and not integration_r2",
     "test-ci-nightly": "not gpu and not mps and not requires_vst",
 }
 
 # workflow file -> the make target it must invoke instead of inline pytest.
-WORKFLOW_TARGETS: dict[str, str] = {
-    "test.yml": "test-ci-unit",
-    "cpu-slow.yml": "test-ci-slow",
-    "nightly.yml": "test-ci-nightly",
+WORKFLOW_TARGETS: dict[str, tuple[str, ...]] = {
+    "test.yml": ("test-fast", "test-ci-unit"),
+    "cpu-slow.yml": ("test-ci-slow", "test-ci-slow-pr-r2-e2e"),
+    "nightly.yml": ("test-ci-nightly",),
 }
+
+
+def _workflow_target_cases() -> list[tuple[str, str]]:
+    """Return sorted workflow and Makefile target pairs.
+
+    :returns: Workflow filename and Makefile target pairs.
+    """
+    cases = []
+    for workflow, targets in WORKFLOW_TARGETS.items():
+        for target in targets:
+            cases.append((workflow, target))
+    return sorted(cases)
 
 
 def _recipe(makefile: str, target: str) -> str:
@@ -139,6 +153,7 @@ def _run_full_cpu_target(
             "--no-print-directory",
             f"UNAME_S={uname}",
             f"HEADLESS_WRAPPER={wrapper_recorder}",
+            "PYTEST=pytest",
             "test-full-cpu",
         ],
         cwd=project_root,
@@ -228,7 +243,7 @@ def test_full_cpu_linux_runs_all_cpu_tests_through_headless_wrapper(
 
 
 @pytest.mark.infra
-@pytest.mark.parametrize(("workflow", "target"), sorted(WORKFLOW_TARGETS.items()))
+@pytest.mark.parametrize(("workflow", "target"), _workflow_target_cases())
 def test_workflow_invokes_make_target(project_root: Path, workflow: str, target: str) -> None:
     """The workflow calls `make <target>` rather than re-spelling pytest markers.
 
@@ -242,6 +257,67 @@ def test_workflow_invokes_make_target(project_root: Path, workflow: str, target:
         f"{workflow} must run `make {target}` so its marker filter stays in the "
         f"Makefile (see #1353)"
     )
+
+
+@pytest.mark.infra
+def test_ci_workflow_fast_lane_exceeds_wall_clock_limit_terminates(project_root: Path) -> None:
+    """CI terminates the fast lane at its configured budget.
+
+    :param project_root: Session fixture locating the workflow.
+    """
+    text = (project_root / ".github" / "workflows" / "test.yml").read_text()
+
+    assert 'budget_seconds="$(make --no-print-directory -s fast-test-budget)"' in text
+    assert 'timeout --signal=KILL "${budget_seconds}s" make test-fast' in text
+
+
+@pytest.mark.infra
+def test_ci_workflow_ubuntu_installs_rclone_before_tests(project_root: Path) -> None:
+    """Ubuntu installs the pinned rclone action before either pytest tier.
+
+    :param project_root: Session fixture locating the workflow.
+    """
+    workflow = (project_root / ".github" / "workflows" / "test.yml").read_text()
+
+    install = workflow.index("uses: ./.github/actions/install-rclone")
+    assert install < workflow.index("make test-fast")
+    assert install < workflow.index("make test-ci-unit")
+    assert workflow.count('      - ".github/actions/install-rclone/**"') == 2
+
+
+def test_coverage_patches_python_subprocesses(project_root: Path) -> None:
+    """Coverage starts automatically in public Python CLI subprocesses.
+
+    :param project_root: Session fixture locating coverage configuration.
+    """
+    with (project_root / "pyproject.toml").open("rb") as file:
+        config = tomllib.load(file)
+
+    assert config["tool"]["coverage"]["run"]["patch"] == ["subprocess"]
+
+
+def test_ci_r2_e2e_appends_coverage_before_xml_report(project_root: Path) -> None:
+    """The targeted R2 E2E preserves earlier slow-lane data in coverage.xml.
+
+    :param project_root: Session fixture locating the Makefile.
+    """
+    makefile = (project_root / "Makefile").read_text()
+    recipe = _recipe(makefile, "test-ci-slow-pr-r2-e2e")
+
+    assert "tests/integration/test_pyfdn_growing_lance_r2_e2e.py" in recipe
+    assert "$(CI_COV_APPEND)" in recipe
+    assert "CI_COV_APPEND := --cov-append $(CI_COV)" in makefile
+    assert "CI_COV := " in makefile and "--cov-report=xml" in makefile
+
+
+def test_ci_workflow_test_tiers_change_triggers(project_root: Path) -> None:
+    """Push and pull-request filters include the Makefile tier definitions.
+
+    :param project_root: Session fixture locating the workflow.
+    """
+    text = (project_root / ".github" / "workflows" / "test.yml").read_text()
+
+    assert text.count('      - "Makefile"') == 2
 
 
 @pytest.mark.infra

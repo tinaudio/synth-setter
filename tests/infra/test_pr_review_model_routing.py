@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import importlib
 import io
@@ -11,6 +12,7 @@ import re
 import runpy
 import shutil
 import signal
+import subprocess
 import sys
 import time
 import tomllib
@@ -20,10 +22,11 @@ from unittest import mock
 import pytest
 import yaml
 
-from agent._shared.run_pi_review_aftercare import AftercareManifest
+from agent._shared.run_pi_review_follow_up import FollowUpManifest
 from tests.helpers.package_available import _SH_AVAILABLE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+_DETACHED_FOLLOW_UP_TIMEOUT_SECONDS = 10.0
 
 
 def _process_state(pid: int) -> str | None:
@@ -60,54 +63,6 @@ def _assert_process_terminated(pid: int, *, timeout: float = 1) -> None:
         if time.monotonic() >= deadline:
             raise AssertionError(f"process {pid} is still running (state {state})")
         time.sleep(0.05)
-
-
-def test_process_state_permission_denied_reports_pid_present(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Treat an inaccessible PID as present rather than terminated.
-
-    :param monkeypatch: Replaces the process probe with its permission-denied result.
-    """
-    monkeypatch.setattr(os, "kill", mock.Mock(side_effect=PermissionError))
-
-    assert _process_state(123) == "?"
-
-
-def test_assert_process_terminated_live_pid_fails() -> None:
-    """Reject a descendant that is still executing."""
-    child_pid = os.fork()
-    if child_pid == 0:
-        time.sleep(30)
-        os._exit(0)
-    try:
-        with pytest.raises(AssertionError, match="still running"):
-            _assert_process_terminated(child_pid, timeout=0)
-    finally:
-        os.kill(child_pid, signal.SIGKILL)
-        os.waitpid(child_pid, 0)
-
-
-def test_assert_process_terminated_nonexistent_pid_passes() -> None:
-    """Accept a PID after its process has been reaped."""
-    child_pid = os.fork()
-    if child_pid == 0:
-        os._exit(0)
-    os.waitpid(child_pid, 0)
-
-    _assert_process_terminated(child_pid, timeout=0)
-
-
-@pytest.mark.skipif(not Path("/proc").is_dir(), reason="requires Linux process states")
-def test_assert_process_terminated_zombie_pid_passes() -> None:
-    """Accept a terminated child before its parent reaps it."""
-    child_pid = os.fork()
-    if child_pid == 0:
-        os._exit(0)
-    try:
-        _assert_process_terminated(child_pid, timeout=1)
-    finally:
-        os.waitpid(child_pid, 0)
 
 
 _ROLE_MODELS = {
@@ -218,14 +173,6 @@ def test_native_review_orchestrators_delegate_to_pi() -> None:
     assert "yields a shell session" in contract
 
 
-def test_review_fanout_promotes_deep_checklists() -> None:
-    """Keep high thinking pinned for correctness-sensitive checklists."""
-    routing = (REPO_ROOT / "agent" / "_shared" / "pi_review_routing.py").read_text()
-
-    assert 'DEEP_SKILLS = frozenset({"correctness-review", "lance-review"})' in routing
-    assert 'return "high", "deep checklist"' in routing
-
-
 def test_pi_review_worker_allows_dynamic_model_routing() -> None:
     """Ensure policy, rather than the agent definition, selects Pi worker models."""
     text = (REPO_ROOT / ".pi" / "agents" / "pr-review-worker.md").read_text()
@@ -241,7 +188,7 @@ def test_pi_review_worker_allows_dynamic_model_routing() -> None:
     assert "thinking" not in worker
     prompt_flat = " ".join(prompt.split())
     assert "exactly one JSON object" in prompt_flat
-    assert '"severity": "block or warn"' in prompt
+    assert '"severity": "block, warn, or nit"' in prompt
     assert '"line": 42' in prompt
     assert '"what_looks_good"' in prompt
     assert "no Markdown fence or surrounding prose" in prompt_flat
@@ -256,18 +203,19 @@ def test_pi_project_settings_pin_review_pool_providers_only() -> None:
 
     assert settings["defaultProvider"] == "openai-codex"
     assert settings["defaultModel"] == "gpt-5.6-sol"
-    assert settings["enabledModels"]
-    assert all("anthropic" not in pattern.lower() for pattern in settings["enabledModels"])
-    assert any(pattern.startswith("openai-codex/") for pattern in settings["enabledModels"])
-    assert "kimi-coding/k3" in settings["enabledModels"]
-    assert any(pattern.startswith("openrouter/") for pattern in settings["enabledModels"])
+    assert settings["enabledModels"] == [
+        "openai-codex/gpt-5.6-terra",
+        "openai-codex/gpt-5.6-sol",
+        "openai-codex/gpt-6-astra",
+        "meta/muse-spark-1.3-contributor",
+    ]
 
 
-def test_pi_project_subagents_allow_twenty_concurrent_workers() -> None:
-    """Allow twenty Pi review workers to bypass Tintin's default queue."""
+def test_pi_project_subagents_enforce_model_scope_with_twenty_workers() -> None:
+    """Keep Tintin workers concurrent while rejecting models outside Pi's scope."""
     settings = json.loads((REPO_ROOT / ".pi" / "subagents.json").read_text())
 
-    assert settings == {"maxConcurrent": 20}
+    assert settings == {"maxConcurrent": 20, "scopeModels": True}
 
 
 def test_pi_project_explore_agent_is_disabled() -> None:
@@ -278,16 +226,197 @@ def test_pi_project_explore_agent_is_disabled() -> None:
     assert yaml.safe_load(frontmatter) == {"enabled": False}
 
 
-def test_pi_project_append_system_forbids_anthropic_agents() -> None:
-    """Tell Pi sessions and project subagents not to select Anthropic models."""
+def test_pi_project_append_system_scopes_subagent_model_selectors() -> None:
+    """Tell Pi sessions to use allowed fully qualified subagent model selectors."""
     text = (REPO_ROOT / ".pi" / "APPEND_SYSTEM.md").read_text()
 
     assert "Anthropic" in text
     assert "Do not select Anthropic providers or models" in text
     assert "Do not launch subagents" in text
-    assert "openai-codex" in text
-    assert "kimi-coding" in text
-    assert "openrouter" in text
+    assert "openai-codex/gpt-5.6-sol" in text
+    assert "Never pass the provider-only `openai-codex`" in text
+    assert "Muse-Spark-1.3" in text
+    assert "`meta`" in text
+
+
+def _assert_referenced_subcommands_exist(runbook_text: str) -> None:
+    """Every ``pi_review_routing.py <cmd>`` the runbook names must be a real subcommand.
+
+    Matching fixed command names as prose only catches a rename by coincidence. Resolving them
+    against the live parser turns the check into a real consistency guard, and it covers commands
+    added to the runbook later.
+
+    :param runbook_text: Body of the review-orchestration runbook.
+    """
+    routing = importlib.import_module("agent._shared.pi_review_routing")
+    subparsers = next(
+        action
+        for action in routing._build_parser()._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    registered = set(subparsers.choices)
+
+    referenced = set(re.findall(r"pi_review_routing\.py ([a-z][a-z-]*)", runbook_text))
+    assert referenced, "runbook names no pi_review_routing subcommand"
+    assert referenced <= registered, (
+        f"runbook references unknown subcommands {sorted(referenced - registered)}; "
+        f"the CLI registers {sorted(registered)}"
+    )
+
+
+def test_pr_review_skills_fetch_base_sha_with_supported_gh_metadata() -> None:
+    """Keep PR review metadata compatible with the installed gh CLI."""
+    skill_paths = (
+        "agent/skills/_shared/repo-review-full-analysis.md",
+        "agent/skills/correctness-review/SKILL.md",
+        "agent/skills/lance-review/SKILL.md",
+        "agent/skills/repo-review-full-no-comments/SKILL.md",
+        "agent/skills/repo-review/SKILL.md",
+    )
+    skills = {path: (REPO_ROOT / path).read_text() for path in skill_paths}
+    metadata_paths = (
+        "agent/skills/_shared/repo-review-full-analysis.md",
+        "agent/skills/repo-review-full-no-comments/SKILL.md",
+        "agent/skills/repo-review/SKILL.md",
+    )
+    for path, text in skills.items():
+        assert "baseRefOid" not in text, path
+        assert "pulls/<n>" not in text, path
+    for path in metadata_paths:
+        assert "number,headRefOid,baseRefName,files,title,headRefName" in skills[path]
+        assert 'gh api "repos/${repo}/pulls/<N>" --jq .base.sha' in skills[path]
+        assert skills[path].count("|| exit $?") >= 3
+        assert "printf 'base_sha=%s\\n' \"$base_sha\"" in skills[path]
+
+
+_PR_METADATA_COMMANDS = (
+    ("agent/skills/_shared/repo-review-full-analysis.md", "Fetch metadata once:"),
+    (
+        "agent/skills/repo-review-full-no-comments/SKILL.md",
+        "never run the command with the literal `<N>` placeholder:",
+    ),
+    ("agent/skills/repo-review/SKILL.md", "remember it:"),
+)
+
+
+def _extract_pr_metadata_command(skill_path: str, metadata_marker: str) -> str:
+    """Extract an executable PR metadata command from a runbook.
+
+    :param skill_path: Runbook containing a PR metadata command.
+    :param metadata_marker: Text immediately preceding the command's Bash fence.
+    :returns: Bash command with block-quote prefixes removed.
+    """
+    skill = (REPO_ROOT / skill_path).read_text()
+    assert metadata_marker in skill, f"missing metadata marker in {skill_path}: {metadata_marker}"
+    metadata_section = skill.split(metadata_marker, maxsplit=1)[1]
+    unquoted_section = "\n".join(line.removeprefix("> ") for line in metadata_section.splitlines())
+    return unquoted_section.split("```bash\n", maxsplit=1)[1].split("\n```", maxsplit=1)[0]
+
+
+def _fake_gh_environment(tmp_path: Path) -> dict[str, str]:
+    """Install a controlled gh executable for metadata command tests.
+
+    :param tmp_path: Temporary directory in which to install the executable.
+    :returns: Process environment preferring the controlled executable.
+    """
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ $1 == repo && $2 == view ]]; then
+  if [[ ${FAIL_GH_COMMAND:-} == repo ]]; then
+    exit 69
+  fi
+  printf '%s\\n' 'tinaudio/synth-setter'
+elif [[ $1 == pr && $2 == view ]]; then
+  if [[ ${FAIL_GH_COMMAND:-} == pr ]]; then
+    exit 66
+  fi
+  if [[ $* != *"--repo tinaudio/synth-setter"* || $* != *baseRefName* || $* == *baseRefOid* ]]; then
+    printf '%s\\n' "unsupported PR metadata arguments: $*" >&2
+    exit 65
+  fi
+  printf '%s\\n' '{"headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}'
+elif [[ $1 == api && $2 == repos/tinaudio/synth-setter/pulls/123 ]]; then
+  if [[ ${FAIL_GH_COMMAND:-} == api ]]; then
+    exit 67
+  fi
+  if [[ $* != *"--jq .base.sha"* ]]; then
+    printf '%s\\n' "incorrect base SHA query: $*" >&2
+    exit 68
+  fi
+  printf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+else
+  exit 64
+fi
+"""
+    )
+    fake_gh.chmod(0o755)
+    return os.environ | {"PATH": f"{tmp_path}:{os.environ['PATH']}"}
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+@pytest.mark.parametrize(("skill_path", "metadata_marker"), _PR_METADATA_COMMANDS)
+def test_pr_review_metadata_command_returns_base_sha_with_supported_gh_fields(
+    tmp_path: Path,
+    skill_path: str,
+    metadata_marker: str,
+) -> None:
+    """Execute each metadata command through a controlled gh boundary.
+
+    :param tmp_path: Temporary directory containing the controlled ``gh`` executable.
+    :param skill_path: Runbook containing a PR metadata command.
+    :param metadata_marker: Text immediately preceding the command's Bash fence.
+    """
+    command = _extract_pr_metadata_command(skill_path, metadata_marker)
+    sh = importlib.import_module("sh")
+
+    result = sh.bash(
+        "-c",
+        command.replace("<N>", "123"),
+        _cwd=REPO_ROOT,
+        _env=_fake_gh_environment(tmp_path),
+    )
+
+    assert str(result).splitlines() == [
+        '{"headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}',
+        "base_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ]
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+@pytest.mark.parametrize(("skill_path", "metadata_marker"), _PR_METADATA_COMMANDS)
+@pytest.mark.parametrize(
+    ("failed_command", "expected_status"), (("repo", 69), ("pr", 66), ("api", 67))
+)
+def test_pr_review_metadata_command_failure_preserves_status(
+    tmp_path: Path,
+    skill_path: str,
+    metadata_marker: str,
+    failed_command: str,
+    expected_status: int,
+) -> None:
+    """Stop the canonical metadata command when either gh lookup fails.
+
+    :param tmp_path: Temporary directory containing the controlled ``gh`` executable.
+    :param skill_path: Runbook containing a PR metadata command.
+    :param metadata_marker: Text immediately preceding the command's Bash fence.
+    :param failed_command: gh command that must return a failure.
+    :param expected_status: Exit status that Bash must preserve.
+    """
+    command = _extract_pr_metadata_command(skill_path, metadata_marker)
+    environment = _fake_gh_environment(tmp_path) | {"FAIL_GH_COMMAND": failed_command}
+    sh = importlib.import_module("sh")
+
+    with pytest.raises(sh.ErrorReturnCode) as exc_info:
+        sh.bash(
+            "-c",
+            command.replace("<N>", "123"),
+            _cwd=REPO_ROOT,
+            _env=environment,
+        )
+
+    assert exc_info.value.exit_code == expected_status
 
 
 def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
@@ -296,29 +425,30 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
         REPO_ROOT / "agent" / "skills" / "_shared" / "repo-review-full-analysis.md"
     ).read_text()
 
-    assert "pi_review_routing.py plan" in text
-    assert "pi_review_routing.py extract-report" in text
-    assert "pi_review_routing.py validate-report" in text
-    assert "pi_review_routing.py transcript-stats" in text
-    assert "pi_review_routing.py provenance" in text
+    _assert_referenced_subcommands_exist(text)
     assert "extract a unique worker JSON object from harmless surrounding prose" in text
     assert '"severity": "block"' in text
     assert "The worker does not render Markdown or attach provenance" in text
     assert text.count("./.venv/bin/python agent/_shared/pi_review_routing.py") == 6
     assert '"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py' in text
+    assert "PI_REVIEW_SKILLS_ROOT" in text
+    assert "Skill tool" not in text
     assert "./.venv/bin/python agent/_shared/review_failure.py deliver" in text
     assert "python3 agent/_shared/pi_review_routing.py" not in text
     assert "Insert a `## PR health` section after the `## Provider incidents`" in text
     assert "Prepend a `## PR health` section" not in text
     assert "run_in_background: true" in text
-    assert "${PI_REVIEW_AFTERCARE_MANIFEST%.json}.assignments" in text
+    # Tintin's Agent tool rejects a call without `description`; omitting it here
+    # cost every worker launch one rejected round-trip (#2683).
+    assert re.search(r"`description: [^`]+`", text)
+    assert "${PI_REVIEW_FOLLOW_UP_MANIFEST%.json}.assignments" in text
     assert re.search(r"never\s+put a glob in a worker prompt", text)
     assert re.search(r"never repair assignment paths\s+with", text)
     assert "480-second foreground deadline" in text
     assert "one validated report per selected skill" in text
     assert "resume the same worker once" in text
     assert "Do not repeat the review" in text
-    assert "unfinished second pass to aftercare" in text
+    assert "unfinished second pass to the follow-up workflow" in text
     assert re.search(r"late Codex-verified\s+findings", text)
     assert "Output file:" in text
     assert "get_subagent_result(wait: true)" in text
@@ -328,12 +458,20 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "at most 6 turns per" in text
     assert "parallel Codex verification wave" in text
     assert "Record its audit status as `deferred`" in text
+    assert re.search(r"ownership\s+transfer", text)
+    assert "exactly one model call owns each pass" in text
+    assert "agent_id" in text
+    assert "output_path" in text
+    assert "treat foreground host exit as proof" in text
     assert "free-pool-only findings never enter aggregation directly" in text
     assert re.search(r"successful Codex\s+pass's effective model", text)
     assert re.search(r"successful Codex pass's\s+`max_turns`", text)
     assert "`openai-codex/gpt-5.6-sol` and `high` thinking" not in text
     assert "max_turns: <plan.max_turns>" in text
-    assert "| Skill | Pass | Model | Thinking | Max turns | Status |" in text
+    assert "Model tiers are fixed by checklist" in text
+    assert "Smart model tier" in text
+    assert "Mechanical model tier" in text
+    assert "| Skill | Model tier | Pass | Model | Thinking | Max turns | Status |" in text
     assert re.search(
         r"Gracefully wrapped `steered` attempts proceed to report\s+validation",
         text,
@@ -342,10 +480,10 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert "review_failure.py deliver" in text
     assert re.search(r"every terminal failure.*delivery helper", text, re.DOTALL)
     assert re.search(r"never merely print the audit\s+and stop", text)
-    assert re.search(r"both Codex\s+and the free pool pass provider preflight", text)
+    assert re.search(r"both Codex and the secondary-review pass provider", text)
     assert "fallback_candidates" in text
-    assert "skip remaining candidates from that provider" in text
-    assert "authentication never triggers Codex fallback" in text
+    assert re.search(r"secondary attempt fails\s+authentication", text)
+    assert re.search(r"authentication never triggers\s+Codex fallback", text)
     assert "Codex fallback" in text
     assert "Free-pool review failed; only Codex ran." in text
     assert "## Provider incidents" in text
@@ -357,8 +495,11 @@ def test_pi_review_policy_wires_routing_and_audit_helpers() -> None:
     assert re.search(r"one bullet per\s+affected attempt", text)
     assert re.search(r"exact model selector and diagnostic", text)
     assert re.search(r"successful Codex pass's effective\s+model to the end", text)
-    assert "claude -p --dangerously-skip-permissions" in text
-    assert "codex exec --dangerously-bypass-approvals-and-sandbox" in text
+    assert "bash agent/_shared/run_pi_review.sh repo-review-full-no-comments --target <PR>" in text
+    # The smoke must stay read-only: repo-review-full posts inline threads.
+    assert "run_pi_review.sh repo-review-full --target" not in text
+    assert "claude -p" not in text
+    assert "codex exec" not in text
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
@@ -407,29 +548,29 @@ def test_pi_review_launcher_runs_one_targeted_skill_to_completion(tmp_path: Path
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
-def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -> None:
+def test_pi_review_launcher_manifest_starts_detached_follow_up(tmp_path: Path) -> None:
     """Drive foreground completion through the real detached-handoff path.
 
-    :param tmp_path: Temporary fake Pi executable and aftercare marker.
+    :param tmp_path: Temporary fake Pi executable and follow-up marker.
     """
     sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent/_shared/run_pi_review.sh"
-    marker = tmp_path / "aftercare-ran"
+    marker = tmp_path / "follow-up-ran"
     manifest_path_file = tmp_path / "manifest-path"
     pi = tmp_path / "pi"
     pi.write_text(
         "#!/bin/bash\n"
-        'if [[ "${SYNTH_SETTER_PI_REVIEW_AFTERCARE:-}" == 1 ]]; then\n'
-        '  touch "${AFTERCARE_MARKER}"\n'
+        'if [[ "${SYNTH_SETTER_PI_REVIEW_FOLLOW_UP:-}" == 1 ]]; then\n'
+        '  touch "${FOLLOW_UP_MARKER}"\n'
         "  exit 0\n"
         "fi\n"
-        'printf \'%s\\n\' "${PI_REVIEW_AFTERCARE_MANIFEST}" > "${MANIFEST_PATH_FILE}"\n'
-        "cat > \"${PI_REVIEW_AFTERCARE_MANIFEST}\" <<'JSON'\n"
+        'printf \'%s\\n\' "${PI_REVIEW_FOLLOW_UP_MANIFEST}" > "${MANIFEST_PATH_FILE}"\n'
+        "cat > \"${PI_REVIEW_FOLLOW_UP_MANIFEST}\" <<'JSON'\n"
         '{"version":1,"mode":"no-comments","repo":"tinaudio/synth-setter",'
         '"pr_number":2174,"base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
         '"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","target":"PR #2174",'
         '"deferred_passes":[{"skill":"correctness-review","pass_name":"free-pool",'
-        '"origin":"primary","model":"kimi-coding/k3",'
+        '"origin":"primary","model":"meta/muse-spark-1.3-contributor",'
         '"verification_model":"openai-codex/gpt-5.6-sol","thinking":"high"}],'
         '"foreground_fingerprints":[]}\n'
         "JSON\n"
@@ -446,7 +587,8 @@ def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -
         _cwd=REPO_ROOT,
         _env={
             **os.environ,
-            "AFTERCARE_MARKER": str(marker),
+            "CI": "",
+            "FOLLOW_UP_MARKER": str(marker),
             "MANIFEST_PATH_FILE": str(manifest_path_file),
             "PATH": f"{tmp_path}:{os.environ['PATH']}",
         },
@@ -457,15 +599,191 @@ def test_pi_review_launcher_manifest_starts_detached_aftercare(tmp_path: Path) -
     assert transcript_match is not None
     transcript = Path(transcript_match.group(1))
     try:
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + _DETACHED_FOLLOW_UP_TIMEOUT_SECONDS
         while not marker.exists() and time.monotonic() < deadline:
-            pass
+            time.sleep(0.01)
         assert str(result).strip() == "foreground-complete"
         assert marker.exists()
     finally:
         manifest.unlink(missing_ok=True)
-        manifest.with_suffix(".log").unlink(missing_ok=True)
+        Path(f"{manifest}.follow-up.log").unlink(missing_ok=True)
+        Path(f"{manifest}.result.json").unlink(missing_ok=True)
         transcript.unlink(missing_ok=True)
+
+
+def _write_ci_follow_up_repo(tmp_path: Path) -> Path:
+    """Create a minimal launcher checkout with the real follow-up consumer.
+
+    :param tmp_path: Temporary root for the checkout and fake executable.
+    :returns: Minimal repository root.
+    """
+    repo_root = tmp_path / "repo"
+    shared = repo_root / "agent" / "_shared"
+    shared.mkdir(parents=True)
+    launcher = shared / "run_pi_review.sh"
+    launcher.write_text((REPO_ROOT / "agent/_shared/run_pi_review.sh").read_text())
+    launcher.chmod(0o755)
+    for filename in ("pi_review_routing.py", "run_pi_review_follow_up.py"):
+        (shared / filename).write_text((REPO_ROOT / "agent/_shared" / filename).read_text())
+    return repo_root
+
+
+def _follow_up_success_payload() -> str:
+    """Return a valid result consumed by the real follow-up supervisor.
+
+    :returns: Serialized successful follow-up result.
+    """
+    return json.dumps(
+        {
+            "status": "complete",
+            "attempts": [
+                {
+                    "skill": "correctness-review",
+                    "pass_name": "free-pool",
+                    "model": "meta/muse-spark-1.3-contributor",
+                    "status": "success",
+                    "agent_id": "agent-follow-up",
+                    "output_path": ".pi/output/agent-follow-up.jsonl",
+                    "detail": "validated report",
+                }
+            ],
+            "diagnostics": [],
+            "late_findings": [],
+            "posted_review_url": None,
+            "child_exit_code": None,
+            "log_tail": "",
+            "completed_at": "2026-08-02T00:00:00Z",
+        }
+    )
+
+
+def _deferred_manifest_payload() -> str:
+    """Return a valid manifest that requires one follow-up pass.
+
+    :returns: Serialized follow-up manifest.
+    """
+    return json.dumps(
+        {
+            "version": 1,
+            "mode": "full",
+            "repo": "tinaudio/synth-setter",
+            "pr_number": 2174,
+            "base_sha": "a" * 40,
+            "head_sha": "b" * 40,
+            "target": "PR #2174",
+            "deferred_passes": [
+                {
+                    "skill": "correctness-review",
+                    "pass_name": "free-pool",
+                    "origin": "primary",
+                    "model": "meta/muse-spark-1.3-contributor",
+                    "verification_model": "openai-codex/gpt-5.6-sol",
+                    "thinking": "high",
+                }
+            ],
+            "foreground_fingerprints": [],
+        }
+    )
+
+
+def _write_manifest_pi(tmp_path: Path) -> None:
+    """Create a fake Pi that drives foreground and real follow-up protocols.
+
+    :param tmp_path: Temporary directory placed first on PATH.
+    """
+    final_event = json.dumps(
+        {
+            "type": "message_end",
+            "message": {"role": "assistant", "content": "foreground-complete"},
+        }
+    )
+    script = f"""#!/usr/bin/env python3
+import os
+from pathlib import Path
+
+if os.environ.get("SYNTH_SETTER_PI_REVIEW_FOLLOW_UP") == "1":
+    if os.environ.get("FOLLOW_UP_FAIL") == "1":
+        raise SystemExit(9)
+    runtime = Path(os.environ["PI_REVIEW_FOLLOW_UP_RUNTIME_MANIFEST"])
+    Path(str(runtime) + ".result.json").write_text({_follow_up_success_payload()!r})
+    raise SystemExit(0)
+manifest = Path(os.environ["PI_REVIEW_FOLLOW_UP_MANIFEST"])
+Path(os.environ["MANIFEST_PATH_FILE"]).write_text(str(manifest))
+manifest.write_text({_deferred_manifest_payload()!r})
+print({final_event!r})
+"""
+    pi = tmp_path / "pi"
+    pi.write_text(script)
+    pi.chmod(0o755)
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_ci_waits_for_supervised_follow_up(tmp_path: Path) -> None:
+    """CI returns the foreground result only after real follow-up succeeds.
+
+    :param tmp_path: Temporary minimal repository and fake Pi executable.
+    """
+    sh = importlib.import_module("sh")
+    repo_root = _write_ci_follow_up_repo(tmp_path)
+    _write_manifest_pi(tmp_path)
+    manifest_path_file = tmp_path / "manifest-path"
+
+    result = sh.Command(str(repo_root / "agent/_shared/run_pi_review.sh"))(
+        "repo-review-full",
+        "--target",
+        "2174",
+        _cwd=repo_root,
+        _env={
+            **os.environ,
+            "CI": "true",
+            "MANIFEST_PATH_FILE": str(manifest_path_file),
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "SYNTH_SETTER_PI_REVIEW": "",
+        },
+    )
+
+    assert str(result).strip() == "foreground-complete"
+    manifest = Path(manifest_path_file.read_text())
+    follow_up_result = json.loads(Path(f"{manifest}.result.json").read_text())
+    assert follow_up_result["status"] == "complete"
+    assert follow_up_result["child_exit_code"] == 0
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_pi_review_launcher_ci_follow_up_failure_withholds_foreground_result(
+    tmp_path: Path,
+) -> None:
+    """CI fails closed instead of publishing success when real follow-up fails.
+
+    :param tmp_path: Temporary minimal repository and fake Pi executable.
+    """
+    sh = importlib.import_module("sh")
+    repo_root = _write_ci_follow_up_repo(tmp_path)
+    _write_manifest_pi(tmp_path)
+    manifest_path_file = tmp_path / "manifest-path"
+    stdout = io.BytesIO()
+
+    with pytest.raises(sh.ErrorReturnCode):
+        sh.Command(str(repo_root / "agent/_shared/run_pi_review.sh"))(
+            "repo-review-full",
+            "--target",
+            "2174",
+            _cwd=repo_root,
+            _env={
+                **os.environ,
+                "FOLLOW_UP_FAIL": "1",
+                "CI": "true",
+                "MANIFEST_PATH_FILE": str(manifest_path_file),
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "SYNTH_SETTER_PI_REVIEW": "",
+            },
+            _out=stdout,
+        )
+
+    manifest = Path(manifest_path_file.read_text())
+    follow_up_result = json.loads(Path(f"{manifest}.result.json").read_text())
+    assert follow_up_result["status"] == "failed"
+    assert stdout.getvalue() == b""
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
@@ -538,7 +856,7 @@ def test_pi_review_launcher_nonzero_exit_withholds_intermediate_text(tmp_path: P
 
     with pytest.raises(sh.ErrorReturnCode):
         sh.Command(str(launcher))(
-            "repo-review-full-no-comments",
+            "repo-review-full",
             _cwd=REPO_ROOT,
             _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
             _out=stdout,
@@ -588,7 +906,7 @@ def test_pi_review_launcher_rejects_zero_pr_number(tmp_path: Path) -> None:
         )
 
 
-def test_aftercare_manifest_free_pool_codex_requires_fallback_origin() -> None:
+def test_follow_up_manifest_free_pool_codex_requires_fallback_origin() -> None:
     """Distinguish independent free-pool coverage from an explicit Codex fallback."""
     base = {
         "version": 1,
@@ -610,45 +928,67 @@ def test_aftercare_manifest_free_pool_codex_requires_fallback_origin() -> None:
     }
 
     with pytest.raises(ValueError, match="origin does not match"):
-        AftercareManifest.model_validate_json(json.dumps({**base, "deferred_passes": [primary]}))
+        FollowUpManifest.model_validate_json(json.dumps({**base, "deferred_passes": [primary]}))
 
     fallback = {**primary, "origin": "codex-fallback"}
-    manifest = AftercareManifest.model_validate_json(
+    manifest = FollowUpManifest.model_validate_json(
         json.dumps({**base, "deferred_passes": [fallback]})
     )
     assert manifest.deferred_passes[0].origin == "codex-fallback"
 
 
-def test_pi_review_launcher_declares_detached_aftercare_contract() -> None:
+def test_pi_review_launcher_declares_detached_follow_up_contract() -> None:
     """Keep deferred second passes auditable after the foreground host exits."""
     launcher = (REPO_ROOT / "agent/_shared/run_pi_review.sh").read_text()
-    aftercare = (REPO_ROOT / "agent/_shared/run_pi_review_aftercare.py").read_text()
+    follow_up = (REPO_ROOT / "agent/_shared/run_pi_review_follow_up.py").read_text()
 
-    assert "PI_REVIEW_AFTERCARE_MANIFEST" in launcher
+    assert "PI_REVIEW_FOLLOW_UP_MANIFEST" in launcher
     assert 'export PI_REVIEW_PYTHON="${review_python}"' in launcher
-    assert '"${review_python}" agent/_shared/run_pi_review_aftercare.py' in launcher
-    assert "start_new_session" in aftercare
-    assert "openai-codex" in aftercare
-    assert "gpt-5.6-terra" in aftercare
-    assert "anthropic" not in aftercare.lower()
+    assert '"${review_python}" agent/_shared/run_pi_review_follow_up.py' in launcher
+    assert '"--supervise"' in follow_up
+    assert "start_new_session" in follow_up
+    launch_source = follow_up.split("def launch_follow_up", 1)[1]
+    assert "stdout=log_file" in launch_source
+    assert "stderr=subprocess.STDOUT" in launch_source
+    assert "openai-codex" in follow_up
+    assert "gpt-5.6-terra" in follow_up
+    assert "anthropic" not in follow_up.lower()
     analysis = (REPO_ROOT / "agent/skills/_shared/repo-review-full-analysis.md").read_text()
     assert '"${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py worker-prompt' in analysis
+    assert "set -o pipefail" in analysis
+    assert "history_fetched=false" in analysis
+    assert "gh api --paginate" in analysis
+    assert "--jq '.[]' | jq -s '.'" in analysis
+    assert "pr_author=<PR-author-login-from-Step-1>" in analysis
+    assert "pi_review_routing.py review-history" in analysis
+    assert '--review-history "$review_history"' in analysis
     assert '`pass_name: "codex"`' in analysis
+
+    follow_up_brief = (REPO_ROOT / "agent/skills/_shared/repo-review-follow-up.md").read_text()
+    assert "set -o pipefail" in follow_up_brief
+    assert "history_fetched=false" in follow_up_brief
+    assert "gh api --paginate" in follow_up_brief
+    assert "--jq '.[]' | jq -s '.'" in follow_up_brief
+    assert "pr_author=<PR-author-login-from-Step-2>" in follow_up_brief
+    assert "pi_review_routing.py review-history" in follow_up_brief
+    assert '--review-history "$review_history"' in follow_up_brief
+    assert "including adopted" in follow_up_brief
+    assert "against the refreshed review history" in follow_up_brief
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
-def test_pi_review_aftercare_launcher_runs_detached_pinned_process(tmp_path: Path) -> None:
-    """Drive the real aftercare entrypoint through manifest validation and process launch.
+def test_pi_review_follow_up_launcher_runs_detached_pinned_process(tmp_path: Path) -> None:
+    """Drive the real follow-up entrypoint through manifest validation and process launch.
 
     :param tmp_path: Temporary directory containing the fake Pi executable.
     """
-    launcher = REPO_ROOT / "agent/_shared/run_pi_review_aftercare.py"
-    manifest = REPO_ROOT / ".agent-reviews/test-aftercare-manifest.json"
-    marker = tmp_path / "aftercare-ran"
+    launcher = REPO_ROOT / "agent/_shared/run_pi_review_follow_up.py"
+    manifest = REPO_ROOT / ".agent-reviews/test-follow-up-manifest.json"
+    marker = tmp_path / "follow-up-ran"
     pi = tmp_path / "pi"
     pi.write_text(
         "#!/bin/bash\n"
-        '[[ "${SYNTH_SETTER_PI_REVIEW_AFTERCARE:-}" == 1 ]]\n'
+        '[[ "${SYNTH_SETTER_PI_REVIEW_FOLLOW_UP:-}" == 1 ]]\n'
         '[[ -z "${SYNTH_SETTER_PI_REVIEW:-}" ]]\n'
         f"touch {marker}\n"
     )
@@ -669,7 +1009,7 @@ def test_pi_review_aftercare_launcher_runs_detached_pinned_process(tmp_path: Pat
                         "skill": "correctness-review",
                         "pass_name": "free-pool",
                         "origin": "primary",
-                        "model": "kimi-coding/k3",
+                        "model": "meta/muse-spark-1.3-contributor",
                         "verification_model": "openai-codex/gpt-5.6-sol",
                         "thinking": "high",
                     }
@@ -688,8 +1028,8 @@ def test_pi_review_aftercare_launcher_runs_detached_pinned_process(tmp_path: Pat
             _env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
         )
         command = json.loads(str(dry_run))
-        assert str(manifest.resolve()) in command[-1]
-        assert "agent/skills/_shared/repo-review-aftercare.md" in command[-1]
+        assert command[0] == sys.executable
+        assert command[-2:] == ["--supervise", str(manifest.resolve())]
 
         result = sh.Command(sys.executable)(
             launcher,
@@ -698,14 +1038,15 @@ def test_pi_review_aftercare_launcher_runs_detached_pinned_process(tmp_path: Pat
             _env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
         )
         pid = int(str(result))
-        deadline = time.monotonic() + 2
+        deadline = time.monotonic() + _DETACHED_FOLLOW_UP_TIMEOUT_SECONDS
         while not marker.exists() and time.monotonic() < deadline:
-            pass
+            time.sleep(0.01)
         assert marker.exists()
         _assert_process_terminated(pid, timeout=2)
     finally:
         manifest.unlink(missing_ok=True)
-        manifest.with_suffix(".log").unlink(missing_ok=True)
+        Path(f"{manifest}.follow-up.log").unlink(missing_ok=True)
+        Path(f"{manifest}.result.json").unlink(missing_ok=True)
 
 
 def test_no_comments_review_uses_isolated_findings_path() -> None:
@@ -809,13 +1150,11 @@ def test_codex_review_launcher_resolves_runtime_model_policy() -> None:
             assert "<N>" not in brief
 
 
-@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_codex_review_python_launcher_executes_resolved_command(tmp_path: Path) -> None:
     """Protect direct-entrypoint execution parity with the shell wrapper.
 
     :param tmp_path: Directory for the fake Codex executable.
     """
-    sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
     codex = tmp_path / "codex"
     codex.write_text(
@@ -829,25 +1168,32 @@ def test_codex_review_python_launcher_executes_resolved_command(tmp_path: Path) 
     shadowed_python.write_text("#!/bin/bash\nexit 1\n")
     shadowed_python.chmod(0o755)
 
-    result = sh.Command(sys.executable)(
-        str(launcher),
-        "pr-review-worker-fast",
-        "--prompt",
-        "routing probe",
-        _cwd=REPO_ROOT,
-        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    environment = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    result = subprocess.run(  # noqa: S603 — fixed interpreter, launcher, and arguments
+        [
+            sys.executable,
+            str(launcher),
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+        ],
+        check=False,
+        capture_output=True,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
     )
 
-    assert str(result) == "structured report"
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == "structured report"
 
 
-@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_codex_review_python_launcher_ignores_blank_ndjson_lines(tmp_path: Path) -> None:
     """Preserve valid reports around blank NDJSON records.
 
     :param tmp_path: Directory for the fake Codex executable.
     """
-    sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.py"
     codex = tmp_path / "codex"
     codex.write_text(
@@ -860,16 +1206,25 @@ def test_codex_review_python_launcher_ignores_blank_ndjson_lines(tmp_path: Path)
     )
     codex.chmod(0o755)
 
-    result = sh.Command(sys.executable)(
-        str(launcher),
-        "pr-review-worker-fast",
-        "--prompt",
-        "routing probe",
-        _cwd=REPO_ROOT,
-        _env={"PATH": f"{tmp_path}:{os.environ['PATH']}"},
+    environment = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    result = subprocess.run(  # noqa: S603 — fixed interpreter, launcher, and arguments
+        [
+            sys.executable,
+            str(launcher),
+            "pr-review-worker-fast",
+            "--prompt",
+            "routing probe",
+        ],
+        check=False,
+        capture_output=True,
+        cwd=REPO_ROOT,
+        env=environment,
+        text=True,
     )
 
-    assert str(result) == "structured report"
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == "structured report"
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")

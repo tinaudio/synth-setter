@@ -2,15 +2,14 @@ program: src/synth_setter/cli/generate_dataset.py
 # Pinned in YAML — wandb sweep CLI does not support OmegaConf resolvers and ignores
 # WANDB_ENTITY / WANDB_PROJECT at sweep-creation time (those only steer wandb.init in each trial).
 entity: tinaudio
-project: synth-setter
+project: synth-setter-generate-dataset
 # Full Surge XT param set — overrides the smoke shard's surge_simple default for both generation
 # and the inline oracle eval. See #489.
 command:
   - ${interpreter}
   - ${program}
   - experiment=generate_dataset/smoke-shard-with-oracle-eval
-  - render.param_spec_name=surge_xt
-  - render.plugin_state_path=presets/surge-base.vstpreset
+  - render=surge_xt
   - ${args_no_hyphens}
 name: generate_dataset_cadence_surge_xt
 method: grid

@@ -1,8 +1,11 @@
 import importlib.metadata
 import json
-import plistlib
+import re
+import shutil
+import subprocess
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
@@ -13,6 +16,16 @@ from pedalboard import VST3Plugin
 from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_PLUGIN_NAME
+from synth_setter.plugin_runtime import plugin_bundle_version, validated_bundle_lease
+from synth_setter.resources import faustwasm_dir
+from synth_setter.renderer_backend import (
+    FAUST_PLUGIN_NAME,
+    PEDALBOARD_BLOCK_SIZE,
+    PYFDN_PLUGIN_NAME,
+    SURGEPY_PLUGIN_NAME,
+    FlushBlocks,
+    pedalboard_flush_blocks,
+)
 
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
@@ -37,50 +50,84 @@ class RenderWorkerLeaked(RuntimeError):
     """
 
 
+def extract_backend_version(renderer_backend: str) -> str:
+    """Return the installed version of a separately versioned rendering host.
+
+    :param renderer_backend: Rendering host whose distribution version is required.
+    :returns: Installed host distribution version.
+    :raises ValueError: The backend has no separate version contract.
+    :raises RuntimeError: Host version probing or package metadata inspection fails.
+    """
+    if renderer_backend == "dawdreamer":
+        return importlib.metadata.version("dawdreamer")
+    if renderer_backend == "faustcpp":
+        if shutil.which("faust") is None or shutil.which("g++") is None:
+            raise RuntimeError("install the Faust CLI and g++ to use renderer_backend='faustcpp'")
+        try:
+            result = subprocess.run(  # noqa: S603
+                ["faust", "--version"],  # noqa: S607
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError(f"Faust CLI version probe failed: {error.stderr}") from error
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError("Faust CLI version probe timed out after 10 seconds") from error
+        match = re.search(r"FAUST Version ([0-9]+(?:\.[0-9]+)+)", result.stdout)
+        if match is None:
+            raise RuntimeError("Faust CLI returned an unrecognized version string")
+        return match.group(1)
+    if renderer_backend == "faustwasm":
+        package = faustwasm_dir() / "vendor" / "package.json"
+        if not package.is_file():
+            raise RuntimeError("packaged @grame/faustwasm metadata is unavailable")
+        try:
+            version = json.loads(package.read_text()).get("version")
+        except (json.JSONDecodeError, AttributeError) as error:
+            raise RuntimeError("packaged @grame/faustwasm metadata is malformed") from error
+        if not isinstance(version, str) or not version.strip():
+            raise RuntimeError("packaged @grame/faustwasm metadata is malformed")
+        return version
+    raise ValueError(f"renderer backend has no separate version contract: {renderer_backend!r}")
+
+
 def extract_renderer_version(plugin_path: Path) -> str:
     """Extract the version string from a VST3 plugin bundle or Python backend.
 
-    The bare Python-backend name (``torchsynth``) resolves to the installed
-    package version (propagating ``importlib.metadata.PackageNotFoundError``
+    Bare Python-backend names resolve to their installed package versions
+    (propagating ``importlib.metadata.PackageNotFoundError``
     when the package is missing). Otherwise, tries the static-metadata files first
     (`Contents/moduleinfo.json` on Linux, `Contents/Info.plist` on macOS), then
     falls back to loading the plugin via pedalboard and reading
     `plugin.version`. The fallback requires a usable X11 display, so callers in
     interpreter-only contexts (the SkyPilot launcher) must avoid it — they pin
-    `renderer_version` in the dataset config that produces the spec and let the
+    `synth.synth_version` in the dataset config (serialized as
+    `render.synth.synth_version` in the spec) and let the
     worker compare against this function's output before rendering (see
     `synth_setter.cli.generate_dataset.generate`).
 
-    :raises FileNotFoundError: plugin_path does not exist.
-    :raises RuntimeError: version cannot be extracted by any method.
-    :raises json.JSONDecodeError: moduleinfo.json is malformed.
-    :raises plistlib.InvalidFileException: Info.plist is malformed.
+    :raises FileNotFoundError: The bundle path or required managed-integrity record is absent.
     """
+    if str(plugin_path) == FAUST_PLUGIN_NAME:
+        return extract_backend_version("dawdreamer")
     if str(plugin_path) == TORCHSYNTH_PLUGIN_NAME:
         return importlib.metadata.version(TORCHSYNTH_PLUGIN_NAME)
+    if str(plugin_path) == PYFDN_PLUGIN_NAME:
+        return importlib.metadata.version("pyFDN")
+    if str(plugin_path) == SURGEPY_PLUGIN_NAME:
+        from synth_setter.data.vst.surgepy_runtime import import_surgepy
+
+        return import_surgepy().getVersion()
     if not plugin_path.exists():
         raise FileNotFoundError(f"Plugin path does not exist: {plugin_path}")
 
-    moduleinfo = plugin_path / "Contents" / "moduleinfo.json"
-    if moduleinfo.is_file():
-        return json.loads(moduleinfo.read_text())["Version"]
-
-    plist = plugin_path / "Contents" / "Info.plist"
-    if plist.is_file():
-        return plistlib.loads(plist.read_bytes())["CFBundleShortVersionString"]
-
-    # Pedalboard fallback: prebuilt plugin bundles (e.g. Surge XT shipped via
-    # .deb) don't always carry moduleinfo.json. Loading the .so via pedalboard
-    # gives us VST3 factory metadata; this requires X11.
-    plugin = VST3Plugin(str(plugin_path))
-    version = plugin.version
-    if not version:
-        raise RuntimeError(f"Could not extract version from {plugin_path}")
-    return version
+    return plugin_bundle_version(plugin_path)
 
 
 def load_plugin(plugin_path: str, plugin_name: str | None = None) -> VST3Plugin:
-    """Load a VST3 plugin instance.
+    """Load a VST3 plugin instance after validating manager-owned integrity.
 
     No warm-up — see ``warmup_plugin``.
 
@@ -91,11 +138,13 @@ def load_plugin(plugin_path: str, plugin_name: str | None = None) -> VST3Plugin:
     :returns: The loaded plugin.
     """
     logger.info(f"Loading plugin {plugin_path}")
-    p = (
-        VST3Plugin(plugin_path)
-        if plugin_name is None
-        else VST3Plugin(plugin_path, plugin_name=plugin_name)
-    )
+    with validated_bundle_lease(Path(plugin_path)) as validated_bundle:
+        validated_path = str(validated_bundle)
+        p = (
+            VST3Plugin(validated_path)
+            if plugin_name is None
+            else VST3Plugin(validated_path, plugin_name=plugin_name)
+        )
     logger.info(f"Plugin {plugin_path} loaded")
     return p
 
@@ -214,10 +263,12 @@ def render_params(
     *,
     plugin: VST3Plugin | None = None,
     warmup: bool = False,
+    flush_blocks: FlushBlocks | None = None,
 ) -> np.ndarray:
     """Render a single audio sample; reuse ``plugin`` if supplied, else load fresh.
 
-    The flush sequence runs every call (preset-state determinism, #489). When
+    Each non-zero ``flush_blocks`` step processes that many silent blocks and then
+    resets the plugin (preset-state determinism, #489). When
     ``plugin`` is supplied, ``plugin_path`` / ``plugin_state_path`` are ignored; the
     caller owns load + preset placement. When ``warmup`` is True, ``warmup_plugin``
     runs after loading (or directly on the supplied plugin) and before the flush
@@ -234,6 +285,8 @@ def render_params(
     :param plugin_state_path: Optional pedalboard plugin-state file to load.
     :param plugin: Existing plugin instance to reuse.
     :param warmup: Whether to run the plugin warm-up sequence.
+    :param flush_blocks: Silent block counts after load, parameter writes, and the render;
+        ``None`` covers ``PEDALBOARD_FLUSH_SECONDS`` at ``sample_rate`` for each step.
     :returns: Rendered audio as a channel-first NumPy array.
     """
     if plugin is None:
@@ -243,31 +296,60 @@ def render_params(
 
     if warmup:
         warmup_plugin(plugin)
+    if flush_blocks is None:
+        flush_blocks = pedalboard_flush_blocks(sample_rate)
+    host = _HostFormat(sample_rate=sample_rate, channels=channels)
 
-    logger.debug("post-load flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush
-    plugin.reset()
+    _flush_and_reset(plugin, host, blocks=flush_blocks.post_load, step="post-load")
 
     logger.debug("setting params")
     set_params(plugin, params)
-    # plugin.reset()
 
-    logger.debug("post-param flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush
-    plugin.reset()
+    _flush_and_reset(plugin, host, blocks=flush_blocks.post_param, step="post-param")
 
     midi_events = make_midi_events(midi_note, velocity, *note_start_and_end)
 
     logger.debug("rendering audio")
     output = plugin.process(
-        midi_events, signal_duration_seconds, sample_rate, channels, 2048, True
+        midi_events, signal_duration_seconds, sample_rate, channels, PEDALBOARD_BLOCK_SIZE, True
     )
 
-    logger.debug("post-render flush")
-    plugin.process([], 32.0, sample_rate, channels, 2048, True)  # flush
-    plugin.reset()
+    _flush_and_reset(plugin, host, blocks=flush_blocks.post_render, step="post-render")
 
     return output
+
+
+@dataclass(frozen=True)
+class _HostFormat:
+    """Sample rate and channel count every host ``process`` call shares.
+
+    .. attribute :: sample_rate
+
+       Audio sample rate in Hz.
+
+    .. attribute :: channels
+
+       Number of output channels.
+    """
+
+    sample_rate: float
+    channels: int
+
+
+def _flush_and_reset(plugin: VST3Plugin, host: _HostFormat, *, blocks: int, step: str) -> None:
+    """Process ``blocks`` silent host blocks and reset the plugin; zero blocks skips both.
+
+    :param plugin: Loaded plugin instance.
+    :param host: Sample rate and channel count of the silent blocks.
+    :param blocks: Number of silent host blocks to process.
+    :param step: Render step name for the debug log.
+    """
+    if blocks == 0:
+        return
+    logger.debug(f"{step} flush")
+    seconds = blocks * PEDALBOARD_BLOCK_SIZE / host.sample_rate
+    plugin.process([], seconds, host.sample_rate, host.channels, PEDALBOARD_BLOCK_SIZE, True)
+    plugin.reset()
 
 
 def make_midi_events(pitch: int, velocity: int, note_start: float, note_end: float):

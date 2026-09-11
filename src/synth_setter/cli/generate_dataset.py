@@ -4,7 +4,7 @@ Two console-script surfaces:
 
 - ``synth-setter-generate-dataset`` → :func:`main` — operator entry; runs the
   spec in-process or dispatches it to SkyPilot based on
-  ``cfg.skypilot_launch.compute_template``.
+  ``cfg.skypilot_launch.compute``.
 - ``synth-setter-generate-dataset-from-hydra`` → :func:`from_hydra` — worker
   entry; pure ``@hydra.main`` re-compose so launcher/worker share argv.
 
@@ -16,17 +16,21 @@ instead of composing one.
 
 from __future__ import annotations
 
+import json
 import platform
 import re
 import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextlib import ExitStack
+from itertools import islice
 from pathlib import Path
+from shutil import rmtree
 from typing import Any, cast
 from uuid import uuid4
 
@@ -39,9 +43,14 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from pydantic import ValidationError
 
-from synth_setter.cli.finalize_dataset import finalize_from_spec
-from synth_setter.data.vst.core import extract_renderer_version
+from synth_setter.cli.finalize_dataset import finalize_tracked
+from synth_setter.data.vst.core import extract_backend_version, extract_renderer_version
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
+from synth_setter.evaluation.oracle_probe import (
+    OracleProbeProvenance,
+    new_oracle_probe_launch_id,
+    upload_oracle_probe,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_shard
 from synth_setter.pipeline.constants import (
@@ -64,7 +73,7 @@ from synth_setter.pipeline.schemas.render_metrics import (
 )
 from synth_setter.pipeline.schemas.skypilot_launch import SkypilotLaunchConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec, Split
-from synth_setter.pipeline.shard_claims import ShardClaims
+from synth_setter.pipeline.shard_claims import ClaimedShard, ShardClaims
 from synth_setter.pipeline.spec_io import (
     upload_spec,
     write_spec_locally,
@@ -93,6 +102,13 @@ _WORKER_REPO_ROOT = "/home/build/synth-setter"
 _WORKER_VENV = "/venv/main"
 # Worker images install an unpacked package, so this module-relative script path is available.
 _RENDERER_SCRIPT = Path(__file__).parents[1] / "data" / "vst" / "generate_vst_dataset.py"
+_BADWINDOW_FAILURE_METRIC = "generation/badwindow_detected"
+_BADWINDOW_SIGNATURE = b"BadWindow (invalid Window parameter)"
+_X_GET_PROPERTY_SIGNATURE = b"20 (X_GetProperty)"
+# Full Lance validation can hold a multi-GiB shard resident; cap that peak to one shard
+# per process while rendering, staging, and cleanup remain independently parallel.
+_FULL_SHARD_VALIDATION_LOCK = threading.Lock()
+_MAX_PARALLEL_SHARD_WORKERS = 16
 
 # The inline eval (predict + re-render + metrics over a whole split) scales its
 # timeout with that split's sample count; per-sample covers all three. See scaled_timeout.
@@ -126,19 +142,18 @@ def _run_oracle_eval_subprocess(
     :param run_id: Canonical ``spec.run_id``; the eval resumes this wandb run
         so its ``audio/*`` metrics land on the generate phase's run.
     :param render: The generation ``RenderConfig``. The eval re-renders
-        predictions via ``predict_vst_audio``; every render field it renders with
-        (param spec, preset, plugin, sample rate, channels, velocity, signal
-        duration) is overridden from this so the re-render matches generation
-        exactly rather than falling back to the render group / CLI defaults.
+        predictions via ``predict_vst_audio``; the backend, lifecycle, plugin,
+        parameter spec, preset, and audio-shape fields are forwarded from this
+        config so evaluation matches generation.
     :param num_workers: Predict DataLoader worker count, forwarded verbatim from
         the generate run's ``datamodule`` config — no platform guard. On
         spawn-start-method platforms (Darwin) the caller must configure ``0``:
         workers pickle the dataset, but the Lance shard handle is not fork-safe.
     :param predict_file: Lance split dataset directory for the datamodule's
         predict dataloader (e.g. ``dataset_root / "train.lance"``).
-    :param metric_prefix: Prepended to every audio metric key the eval logs
-        (both ``audio/*`` and ``shuffled_audio/*``). All splits resume one wandb
-        run, so a bare key is overwritten by the last split; pass ``"<split>/"``
+    :param metric_prefix: Prepended to every audio metric key the eval logs.
+        All splits resume one wandb run, so a bare key is overwritten by the
+        last split; pass ``"<split>/"``
         to namespace it. Empty (the default) leaves keys bare — used for the
         canonical ``test`` split.
     :raises FileNotFoundError: ``dataset_root`` is missing any finalized split
@@ -159,6 +174,14 @@ def _run_oracle_eval_subprocess(
             f"predict_file {predict_file} not found; "
             f"ensure the Lance split exists in {dataset_root} before shelling out."
         )
+    backend_version_override = (
+        []
+        if render.backend_version is None
+        else [f"++render.backend_version={render.backend_version}"]
+    )
+    block_size_override = (
+        [] if render.block_size is None else [f"++render.block_size={render.block_size}"]
+    )
     argv = [
         sys.executable,
         "-m",
@@ -167,13 +190,23 @@ def _run_oracle_eval_subprocess(
         f"datamodule.dataset_root={dataset_root}",
         f"hydra.run.dir={run_dir}",
         "ckpt_path=null",
-        "logger=wandb",
-        # ``+`` adds identity keys absent from ``render/vst.yaml``; generic knobs override normally.
+        "logger=wandb_dataset",
+        # Identity replays through the root synth group (#2565): select the row,
+        # then restate each field so per-run overrides (stub plugins) survive.
         "render=vst",
-        f"+render.param_spec_name={render.param_spec_name}",
-        f"+render.plugin_state_path={render.plugin_state_path}",
-        f"+render.plugin_path={render.plugin_path}",
-        f"+render.renderer_version={render.renderer_version}",
+        f"synth={render.synth.name}",
+        *(
+            f"++synth.{field}={value}"
+            for field, value in render.synth.model_dump(
+                exclude={"name"}, exclude_none=True
+            ).items()
+        ),
+        f"render.renderer_backend={render.renderer_backend}",
+        *backend_version_override,
+        *block_size_override,
+        f"++render.render_contract_version={render.render_contract_version}",
+        f"render.plugin_reload_cadence={render.plugin_reload_cadence}",
+        f"render.gui_toggle_cadence={render.gui_toggle_cadence}",
         f"render.sample_rate={render.sample_rate}",
         f"render.channels={render.channels}",
         f"render.velocity={render.velocity}",
@@ -242,9 +275,8 @@ def _unsupported_cadence_reason(render_cfg: DictConfig) -> str | None:
 def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -> list[str]:
     """Build CLI args for ``generate_vst_dataset.py`` from a spec and shard.
 
-    The flag set is derived from ``RenderConfig.model_fields`` so every renderer
-    config field surfaces as a ``--<field>`` option automatically; adding a
-    field on the model auto-extends the CLI invocation.
+    The flag set is derived from ``RenderConfig`` except for parent-only local
+    retention policy, which runs after staging and never reaches the renderer.
 
     :param spec: Validated dataset specification supplying renderer options.
     :param shard: Shard whose filename and seed select this render invocation.
@@ -261,9 +293,14 @@ def build_generate_args(spec: DatasetSpec, shard: ShardSpec, output_dir: Path) -
         str(_RENDERER_SCRIPT),
         str(output_path),
     ]
-    render_args = spec.render_for_shard(shard).model_dump()
+    render_args = spec.render_for_shard(shard).model_dump(exclude={"retain_local_shards"})
     for key, value in render_args.items():
-        args.extend([f"--{key}", str(value)])
+        # Non-scalars (``synth``) reach the worker's CliSettingsSource via json.loads;
+        # str() would emit a single-quoted Python repr it rejects. bool is an int
+        # subclass, so flags keep their existing "True"/"False" spelling.
+        encoded = str(value) if isinstance(value, str | int | float) else json.dumps(value)
+        args.extend([f"--{key}", encoded])
+    args.extend(["--shard_id", str(shard.shard_id)])
 
     return args
 
@@ -279,8 +316,8 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
     into a re-render.
 
     The launcher builds the spec interpreter-only (no pedalboard / X11) trusting
-    ``configs/render/<spec>.yaml``; the worker — which has pedalboard — verifies
-    the plugin and pinned ``renderer_version`` agree.
+    ``configs/render/<spec>.yaml``; the worker verifies plugin ``synth_version``
+    or, for Faust, the separately pinned rendering-host version.
 
     The spec is pushed to every logger as hyperparameters and, when a
     ``WandbLogger`` is present in ``loggers``, uploaded as a
@@ -290,15 +327,14 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
     both success and failure.
 
     :param spec: Validated dataset spec; rank/world env partitions ``spec.shards``
-        across worker pods, and ``spec.render.renderer_version`` is cross-checked
-        against the loaded plugin.
+        across worker pods, and worker provenance is checked before rendering.
     :param work_dir: Hydra per-run output dir supplied by the caller; created
-        if missing. Shards are written here before the rclone upload.
+        if missing. Shards are staged from here and optionally deleted afterward.
     :param loggers: Lightning loggers instantiated by ``instantiate_loggers`` —
         typically a single ``WandbLogger`` whose ``id`` was pinned to
         ``spec.run_id`` by the caller. May be empty (logger group disabled).
-    :raises RuntimeError: If DawDreamer is unavailable on this worker or the
-        plugin version disagrees with ``spec.render.renderer_version``.
+    :raises RuntimeError: If DawDreamer is unavailable or pinned plugin/backend
+        provenance disagrees with the worker environment.
     """
     ensure_dawdreamer_runtime(spec.render.renderer_backend)
     status = "success"
@@ -315,17 +351,31 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
             log_wandb_provenance()
         _log_spec_artifact(loggers, spec)
         render = spec.render
-        actual_renderer_version = extract_renderer_version(Path(render.plugin_path))
-        if actual_renderer_version != render.renderer_version:
-            raise RuntimeError(
-                f"Renderer version mismatch: spec pins {render.renderer_version!r} but "
-                f"plugin at {render.plugin_path} reports {actual_renderer_version!r}. "
-                "Rebuild the image against the matching SURGE_GIT_REF, or bump "
-                "renderer_version in the dataset config that produced this spec."
+        if render.synth.format == "faust":
+            actual_backend_version = extract_backend_version(render.renderer_backend)
+            if actual_backend_version != render.backend_version:
+                raise RuntimeError(
+                    f"Backend version mismatch: spec pins {render.backend_version!r} but "
+                    f"{render.renderer_backend} reports {actual_backend_version!r}."
+                )
+            logger.bind(
+                backend_version=render.backend_version,
+                renderer_backend=render.renderer_backend,
+            ).info("backend_version_ok")
+        else:
+            actual_synth_version = extract_renderer_version(Path(render.plugin_path))
+            if actual_synth_version != render.synth.synth_version:
+                raise RuntimeError(
+                    f"Synth version mismatch: spec pins {render.synth.synth_version!r} but "
+                    f"plugin at {render.plugin_path} reports {actual_synth_version!r}. "
+                    "Rebuild the image against the matching SURGE_GIT_REF, or bump "
+                    "synth_version in the synth config that produced this spec."
+                )
+            logger.info(
+                "synth_version OK: plugin at {} == {}",
+                render.plugin_path,
+                render.synth.synth_version,
             )
-        logger.info(
-            f"renderer_version OK: plugin at {render.plugin_path} == {render.renderer_version}"
-        )
 
         work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -436,15 +486,15 @@ def _log_shard_metrics(
 
     :param loggers: Lightning loggers — empty list is a no-op.
     :param shard_id: Passed as ``step`` so wandb's x-axis aligns with shard order.
-    :param byte_size: Local shard file size in bytes; stable because shards are
-        retained at ``work_dir``.
+    :param byte_size: Local shard size measured before optional post-stage deletion.
     :param render_seconds: Wall-clock seconds from subprocess invoke through
         upload-end; ``0.0`` on the R2-skip branch.
-    :param rejections: Silent and clipped sampled draws rejected by the renderer.
+    :param rejections: Clipped, non-finite, and silent sampled draws rejected by the renderer.
     """
     payload = {
         "shard/bytes": byte_size,
         "shard/samples_rejected_clipped": rejections.clipped,
+        "shard/samples_rejected_non_finite": rejections.non_finite,
         "shard/samples_rejected_silent": rejections.silent,
         "shard/render_seconds": render_seconds,
     }
@@ -453,6 +503,27 @@ def _log_shard_metrics(
             lg.log_metrics(payload, step=shard_id)
         except Exception as exc:  # noqa: BLE001 — third-party logger failures must not abort the run
             logger.warning(f"log_metrics(shard) failed on {type(lg).__name__}: {exc}")
+
+
+def _log_badwindow_failure(loggers: list[Logger]) -> None:
+    """Record one fatal X11 ``BadWindow`` renderer failure.
+
+    W&B keeps the maximum event marker so the run summary reports whether any attempt failed.
+
+    :param loggers: Lightning loggers — empty list is a no-op.
+    """
+    payload = {_BADWINDOW_FAILURE_METRIC: 1.0}
+    for lg in loggers:
+        try:
+            if isinstance(lg, WandbLogger):
+                lg.experiment.define_metric(_BADWINDOW_FAILURE_METRIC, summary="max")
+            lg.log_metrics(payload)
+        except Exception as exc:  # noqa: BLE001 — third-party logger failures must not abort the run
+            logger.warning(
+                "log_metrics(badwindow) failed on {}: {}",
+                type(lg).__name__,
+                exc,
+            )
 
 
 def _log_summary(
@@ -480,7 +551,7 @@ def _log_summary(
         the R2 skip probes by design).
     :param samples: ``rendered * spec.render.samples_per_shard``.
     :param rate: ``samples / elapsed_s`` (``0.0`` when ``elapsed_s == 0``).
-    :param rejections: Silent and clipped sampled draws rejected across rendered shards.
+    :param rejections: Clipped, non-finite, and silent draws rejected across rendered shards.
     """
     payload = {
         "shards/rendered": rendered,
@@ -490,6 +561,7 @@ def _log_summary(
         "generation/samples": samples,
         "generation/samples_per_second": rate,
         "generation/samples_rejected_clipped": rejections.clipped,
+        "generation/samples_rejected_non_finite": rejections.non_finite,
         "generation/samples_rejected_silent": rejections.silent,
     }
     for lg in loggers:
@@ -511,6 +583,7 @@ def _sum_rejections(
     """
     return RenderRejectionMetrics(
         clipped=left.clipped + right.clipped,
+        non_finite=left.non_finite + right.non_finite,
         silent=left.silent + right.silent,
     )
 
@@ -551,7 +624,8 @@ def _dispatch_shards_parallel(
 ) -> tuple[int, int, RenderRejectionMetrics]:
     """Render+upload owned shards concurrently via a ``ThreadPoolExecutor``.
 
-    Pool size is ``min(max(1, available_cpus() // 2), len(my_range))``. The
+    Pool size is capped at ``_MAX_PARALLEL_SHARD_WORKERS`` after halving the
+    available CPU count and limiting concurrency to the owned shard count. The
     heuristic halves the CPU count to leave headroom for each renderer
     subprocess's own intra-process threading (pedalboard / librosa / BLAS).
 
@@ -574,7 +648,7 @@ def _dispatch_shards_parallel(
         byte size + render duration land in wandb history.
     :returns: Rendered/skipped shard counts and rejection totals over ``my_range``.
     """
-    workers = min(max(1, available_cpus() // 2), len(my_range))
+    workers = min(_MAX_PARALLEL_SHARD_WORKERS, max(1, available_cpus() // 2), len(my_range))
     logger.info(f"parallel dispatch: workers={workers} shards={len(my_range)}")
     rendered = 0
     skipped = 0
@@ -625,17 +699,13 @@ def _dispatch_shards(
             "(use_shard_queue=true; rank/world partitioning bypassed)",
             num_shards=spec.num_shards,
         )
-        if spec.render.parallel:
-            logger.warning(
-                "render.parallel=true is ignored with use_shard_queue=true: "
-                "claims mode renders one claim at a time per machine"
-            )
-        rendered, skipped, rejections = _dispatch_shards_from_claims(
-            _shard_claims_for_spec(spec),
-            spec,
-            work_dir=work_dir,
-            loggers=loggers,
+        claims = _shard_claims_for_spec(spec)
+        dispatch = (
+            _dispatch_shards_from_claims_parallel
+            if spec.render.parallel and spec.num_shards > 0
+            else _dispatch_shards_from_claims
         )
+        rendered, skipped, rejections = dispatch(claims, spec, work_dir=work_dir, loggers=loggers)
         return rendered, skipped, rendered + skipped, rejections
 
     rank, world = read_rank_world_from_env()
@@ -716,6 +786,147 @@ def _dispatch_shards_from_claims(
     return rendered, skipped, rejections
 
 
+def _claim_next_shard(claims: ShardClaims, spec: DatasetSpec) -> ClaimedShard | None:
+    """Claim one shard whose ID belongs to ``spec``.
+
+    :param claims: Claims table from which this worker takes a shard.
+    :param spec: Dataset spec defining allowed shard IDs.
+    :returns: A validated claim, or ``None`` when the queue is drained.
+    :raises ValueError: A claimed shard ID falls outside the spec.
+    """
+    claimed = claims.claim()
+    if claimed is None:
+        return None
+    if not 0 <= claimed.shard_id < spec.num_shards:
+        raise ValueError(f"claimed shard_id {claimed.shard_id} is outside [0, {spec.num_shards})")
+    logger.info(
+        "claimed shard {shard_id} (generation {claim_gen})",
+        shard_id=claimed.shard_id,
+        claim_gen=claimed.claim_gen,
+    )
+    return claimed
+
+
+def _finish_claim_future(
+    claims: ShardClaims,
+    future: Future[tuple[bool, bool, RenderRejectionMetrics]],
+    in_flight: dict[Future[tuple[bool, bool, RenderRejectionMetrics]], ClaimedShard],
+) -> tuple[bool, bool, RenderRejectionMetrics]:
+    """Resolve one render and complete its held claim.
+
+    :param claims: Claims table receiving the fenced completion.
+    :param future: Finished render future.
+    :param in_flight: Submitted futures and their held claims.
+    :returns: Rendered/skipped flags and rejection metrics from ``future``.
+    """
+    claimed = in_flight.pop(future)
+    outcome = future.result()
+    claims.complete(claimed)
+    return outcome
+
+
+def _drain_claim_futures(
+    claims: ShardClaims,
+    in_flight: dict[Future[tuple[bool, bool, RenderRejectionMetrics]], ClaimedShard],
+) -> list[BaseException]:
+    """Complete successful peers while collecting failures.
+
+    :param claims: Claims table receiving fenced completions.
+    :param in_flight: Submitted peer futures and their held claims.
+    :returns: Render or completion failures encountered while draining.
+    """
+    failures: list[BaseException] = []
+    while in_flight:
+        done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+        for future in done:
+            try:
+                _finish_claim_future(claims, future, in_flight)
+            except BaseException as exc:  # every failure is re-raised by the caller
+                failures.append(exc)
+    return failures
+
+
+def _dispatch_shards_from_claims_parallel(
+    claims: ShardClaims,
+    spec: DatasetSpec,
+    *,
+    work_dir: Path,
+    loggers: list[Logger],
+) -> tuple[int, int, RenderRejectionMetrics]:
+    """Claim and render shards with bounded local concurrency.
+
+    :param claims: Claims table from which this worker takes shards.
+    :param spec: Validated dataset spec with at least one shard.
+    :param work_dir: Directory where shards are rendered before upload.
+    :param loggers: Loggers receiving per-shard metrics.
+    :returns: Rendered/skipped counts and rejection totals over won claims.
+    :raises BaseException: Claim, render, or completion fails after successful peers drain.
+    :raises BaseExceptionGroup: Primary and peer-completion failures both occur.
+    """
+    workers = min(
+        _MAX_PARALLEL_SHARD_WORKERS,
+        max(1, available_cpus() // 2),
+        spec.num_shards,
+    )
+    logger.info(f"parallel claims dispatch: workers={workers} shards={spec.num_shards}")
+    pending = iter(lambda: _claim_next_shard(claims, spec), None)
+    rendered = 0
+    skipped = 0
+    rejections = RenderRejectionMetrics()
+    in_flight: dict[Future[tuple[bool, bool, RenderRejectionMetrics]], ClaimedShard] = {}
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        try:
+            for claimed in islice(pending, workers):
+                future = pool.submit(
+                    _render_one_owned_shard, spec, claimed.shard_id, work_dir, loggers
+                )
+                in_flight[future] = claimed
+            while in_flight:
+                done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                for future in done:
+                    did_render, did_skip, shard_rejections = _finish_claim_future(
+                        claims, future, in_flight
+                    )
+                    rendered += int(did_render)
+                    skipped += int(did_skip)
+                    rejections = _sum_rejections(rejections, shard_rejections)
+                for claimed in islice(pending, len(done)):
+                    future = pool.submit(
+                        _render_one_owned_shard, spec, claimed.shard_id, work_dir, loggers
+                    )
+                    in_flight[future] = claimed
+        except BaseException as primary:
+            peer_failures = _drain_claim_futures(claims, in_flight)
+            if peer_failures:
+                raise BaseExceptionGroup(
+                    "parallel claim dispatch failed",
+                    [primary, *peer_failures],
+                ) from primary
+            raise
+    return rendered, skipped, rejections
+
+
+def _cleanup_local_shard(shard_path: Path, *, shard_id: int) -> None:
+    """Delete a staged local shard without invalidating remote success.
+
+    :param shard_path: Rendered Lance directory to remove recursively.
+    :param shard_id: Stable shard identifier included in failure diagnostics.
+    """
+    try:
+        rmtree(shard_path)
+    except OSError as exc:
+        logger.bind(
+            error=str(exc),
+            shard_id=shard_id,
+            shard_path=str(shard_path),
+        ).warning(
+            "local_shard_cleanup_failed: shard_id={} shard_path={} error={}",
+            shard_id,
+            str(shard_path),
+            exc,
+        )
+
+
 def _render_one_owned_shard(
     spec: DatasetSpec,
     shard_id: int,
@@ -724,11 +935,12 @@ def _render_one_owned_shard(
 ) -> tuple[bool, bool, RenderRejectionMetrics]:
     """Render+stage one owned shard, or skip if it is already staged.
 
-    Encapsulates the staging skip-probe + ``_render_and_upload_shard`` invocation
+    Encapsulates the staging skip-probe + ``render_and_upload_shard`` invocation
     so the serial and parallel dispatch arms share one callable. Emits one
     ``shard/bytes`` + ``shard/render_seconds`` history row per call —
     ``render_seconds == 0.0`` on the skip branch, wall-clock from subprocess
-    invoke through upload-end on the render branch.
+    invoke through upload-end on the render branch. Optional local cleanup runs
+    only after that metric is recorded.
 
     :param spec: Validated dataset spec; ``spec.shards[shard_id]`` is fetched.
     :param shard_id: Index into ``spec.shards``; also the ``step`` for the row.
@@ -740,6 +952,7 @@ def _render_one_owned_shard(
     # A Lance shard is staged iff a complete attempt set (sidecar + stats +
     # .valid) exists; orphaned fragment data from a crash must not skip (#1776).
     if shard_has_complete_attempt(spec, shard.shard_id):
+        # Cleanup is single-shot after this invocation's stage call, never on a skip probe.
         logger.info("skipping shard {} — already staged: {}", shard.shard_id, shard.filename)
         # Staged fragment size isn't probed on the skip path; the metrics row
         # deliberately logs 0 bytes for an already-staged lance shard.
@@ -752,12 +965,13 @@ def _render_one_owned_shard(
         )
         return False, True, RenderRejectionMetrics()
     t0 = time.monotonic()
-    byte_size, rejections = _render_and_upload_shard(spec, shard, work_dir)
+    byte_size, rejections = render_and_upload_shard(spec, shard, work_dir, loggers=loggers)
     logger.info(
-        "shard {} render rejections: silent={} clipped={}",
+        "shard {} render rejections: clipped={} non_finite={} silent={}",
         shard_id,
-        rejections.silent,
         rejections.clipped,
+        rejections.non_finite,
+        rejections.silent,
     )
     _log_shard_metrics(
         loggers,
@@ -766,6 +980,8 @@ def _render_one_owned_shard(
         render_seconds=time.monotonic() - t0,
         rejections=rejections,
     )
+    if not spec.render.retain_local_shards:
+        _cleanup_local_shard(work_dir / shard.filename, shard_id=shard.shard_id)
     return True, False, rejections
 
 
@@ -797,23 +1013,37 @@ def _load_render_rejections(metrics_path: Path, shard_id: int) -> RenderRejectio
         ) from exc
 
 
-def _render_and_upload_shard(
+def _is_badwindow_x_get_property_failure(error: subprocess.CalledProcessError) -> bool:
+    """Identify the fatal X11 warmup signature emitted by Xlib.
+
+    :param error: Failed renderer subprocess with its bounded output tail attached.
+    :returns: Whether the output identifies ``BadWindow`` during ``X_GetProperty``.
+    """
+    output = error.output or b""
+    return _BADWINDOW_SIGNATURE in output and _X_GET_PROPERTY_SIGNATURE in output
+
+
+def render_and_upload_shard(
     spec: DatasetSpec,
     shard: ShardSpec,
     work_dir: Path,
+    *,
+    loggers: list[Logger],
+    target_lance_uri: str | None = None,
+    attempt_staging_dir_uri: str | None = None,
 ) -> tuple[int, RenderRejectionMetrics]:
-    """Render a single shard and stage it to R2; shards are retained at ``work_dir``.
+    """Render a single shard and stage it to R2.
 
-    Rendered shards stay on disk under ``work_dir`` for post-mortem inspection
-    (``finalize_dataset`` re-downloads from R2 — launcher and worker pods do not
-    share a filesystem). Peak local disk per rank scales with the number of owned
-    shards. The renderer subprocess is wrapped in a retry loop bounded by
+    The renderer subprocess is wrapped in a retry loop bounded by
     ``spec.render.max_retries`` (default 0 = strict fail-fast); staging is outside
     the loop because its rclone transport already retries via ``--retries=3``.
 
     :param spec: Validated dataset spec; provides the render config and R2 URIs.
     :param shard: Shard to render; names the output dataset and seeds the renderer.
     :param work_dir: Hydra per-run output dir the shard is written under.
+    :param loggers: Receive a metric before a recognized X11 failure propagates.
+    :param target_lance_uri: Growing branch URI receiving uncommitted fragment data.
+    :param attempt_staging_dir_uri: Branch-specific growing sidecar directory.
     :returns: Local shard byte size and validated renderer rejection counts.
     :raises subprocess.CalledProcessError: Renderer (or rclone) subprocess exited non-zero after
         exhausting the retry budget.
@@ -825,12 +1055,17 @@ def _render_and_upload_shard(
     attempt_uuid = uuid4().hex
     # Attempt start marker — append-only; orphaned without a .valid it is
     # the observable evidence of a crashed attempt (#1776).
-    write_rendering_marker(spec, shard.shard_id, worker_id=worker_id, attempt_uuid=attempt_uuid)
-    # Zipped wheels extract the wrapper to a temp file that only lives while
-    # ``as_file()`` is open; ``ExitStack`` keeps it on disk across the retry
-    # loop, and skips materialization on non-Linux.
+    write_rendering_marker(
+        spec,
+        shard.shard_id,
+        worker_id=worker_id,
+        attempt_uuid=attempt_uuid,
+        attempt_staging_dir_uri=attempt_staging_dir_uri,
+    )
+    # ExitStack keeps a zipped-wheel wrapper available across renderer retries.
+    # Non-VST renderers have no X11 dependency, so they bypass materialization.
     with ExitStack() as stack:
-        if sys.platform == "linux":
+        if sys.platform == "linux" and spec.render.synth.format == "vst3":
             wrapper_path = stack.enter_context(as_file(vst_headless_wrapper()))
             args = [str(wrapper_path)]
         else:
@@ -844,7 +1079,9 @@ def _render_and_upload_shard(
             try:
                 _check_call_streamed(args)
                 break
-            except subprocess.CalledProcessError:
+            except subprocess.CalledProcessError as exc:
+                if _is_badwindow_x_get_property_failure(exc):
+                    _log_badwindow_failure(loggers)
                 if attempt + 1 == max_attempts:
                     raise
                 logger.warning(
@@ -866,14 +1103,35 @@ def _render_and_upload_shard(
     logger.info("shard rendered: {} ({} bytes)", shard_path, byte_size)
     # Worker-side validation gates staging — corrupt renders never earn a
     # .valid marker (design §7.3 shard write protocol).
-    shard_errors = validate_shard(shard_path, spec)
+    with _FULL_SHARD_VALIDATION_LOCK:
+        uses_explicit_identity = target_lance_uri is not None or shard.shard_id >= spec.num_shards
+        shard_errors = (
+            validate_shard(shard_path, spec, expected_shard=shard)
+            if uses_explicit_identity
+            else validate_shard(shard_path, spec)
+        )
     if shard_errors:
         raise RuntimeError(
             f"shard {shard.filename} failed local validation: {'; '.join(shard_errors)}"
         )
-    stage_lance_shard_attempt(
-        spec, shard, shard_path, worker_id=worker_id, attempt_uuid=attempt_uuid
-    )
+    if target_lance_uri is None:
+        stage_lance_shard_attempt(
+            spec,
+            shard,
+            shard_path,
+            worker_id=worker_id,
+            attempt_uuid=attempt_uuid,
+        )
+    else:
+        stage_lance_shard_attempt(
+            spec,
+            shard,
+            shard_path,
+            worker_id=worker_id,
+            attempt_uuid=attempt_uuid,
+            target_lance_uri=target_lance_uri,
+            attempt_staging_dir_uri=attempt_staging_dir_uri,
+        )
     logger.info(
         "shard staged: {} -> {}",
         shard.filename,
@@ -975,12 +1233,17 @@ def _worker_python_bootstrap_cmd() -> str:
     )
 
 
-def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
+def _build_worker_cmd(
+    overrides: list[str],
+    spec: DatasetSpec,
+    *,
+    worker_checkout_dir: str = _WORKER_REPO_ROOT,
+) -> str:
     """Reconstruct the worker-side bash command that re-enters Hydra via from_hydra.
 
     Each override is shell-quoted individually so spaces/metachars survive bash
-    interpretation. ``sync_worker_checkout.sh`` runs between cd and exec for
-    the PR-CI bake-lag bypass (see #735 / #841).
+    interpretation. ``sync_worker_checkout.sh`` applies the launcher's pinned
+    worker commit between cd and exec.
 
     ``spec.created_at`` is pinned as a Hydra override so the worker's
     re-compose lands on the same ``r2.prefix`` as the launcher (the
@@ -992,12 +1255,13 @@ def _build_worker_cmd(overrides: list[str], spec: DatasetSpec) -> str:
     :param overrides: Operator's Hydra overrides (``HydraConfig.get().overrides.task``).
     :param spec: Launcher's ``DatasetSpec``; runtime fields are pinned into
         the worker overrides for compose determinism.
+    :param worker_checkout_dir: Repository checkout directory inside the worker.
     :return: Bash one-liner suitable for use as a ``sky.Task`` ``run:`` block.
     """
     pinned_overrides = [f"+created_at={spec.created_at.isoformat()}"]
     all_overrides = list(overrides) + pinned_overrides
     parts = [
-        f"cd {shlex.quote(_WORKER_REPO_ROOT)}",
+        f"cd {shlex.quote(worker_checkout_dir)}",
         _worker_python_bootstrap_cmd(),
         "bash scripts/sync_worker_checkout.sh --python-ready",
         'if [[ "${SYNTH_SETTER_WORKER_PYTHON_RECREATED:-0}" == "1" && '
@@ -1051,8 +1315,8 @@ def main(cfg: DictConfig) -> None:
 
     :param cfg: Hydra-composed dataset cfg.
     :raises ValueError: ``oracle_eval_inline=true`` without
-        ``finalize_inline=true``, or with a zero-size train / val / test split
-        (the eval datamodule opens all three split files unconditionally).
+        ``finalize_inline=true``, with a zero-size train / val / test split,
+        or with a non-boolean ``oracle_eval.upload`` value.
     """
     extras(cfg)
     render_cfg = cfg.get("render")
@@ -1069,10 +1333,11 @@ def main(cfg: DictConfig) -> None:
     spec = spec_from_cfg(cfg)
     sky_cfg = _sky_cfg_from_dataset_cfg(cfg)
 
-    if sky_cfg.compute_template is None:
+    if sky_cfg.compute is None:
         ensure_dawdreamer_runtime(spec.render.renderer_backend)
 
-    if sky_cfg.compute_template is None and cfg.oracle_eval_inline:
+    upload_oracle_evals = False
+    if sky_cfg.compute is None and cfg.oracle_eval_inline:
         if not cfg.finalize_inline:
             raise ValueError(
                 "oracle_eval_inline=true requires finalize_inline=true; "
@@ -1084,6 +1349,12 @@ def main(cfg: DictConfig) -> None:
                 "oracle_eval_inline=true requires all of "
                 f"train_val_test_sizes > 0; got {tuple(spec.train_val_test_sizes)}. "
                 "VSTDataModule opens train.lance / val.lance / test.lance unconditionally."
+            )
+        upload_oracle_evals = OmegaConf.select(cfg, "oracle_eval.upload", default=False)
+        if not isinstance(upload_oracle_evals, bool):
+            raise ValueError(
+                f"oracle_eval.upload must be a boolean, got {upload_oracle_evals!r}; a quoted "
+                '"false" would otherwise upload probe artifacts'
             )
 
     spec_path = write_spec_locally(spec, Path(cfg.paths.output_dir))
@@ -1108,12 +1379,12 @@ def main(cfg: DictConfig) -> None:
             num_shards=spec.num_shards,
         )
 
-    if sky_cfg.compute_template is None:
+    if sky_cfg.compute is None:
         loggers = _loggers_pinned_to_spec(cfg, spec)
-        # finalize runs outside the wandb-tracked region — see #1289.
         generate(spec, Path(cfg.paths.output_dir), loggers)
         if cfg.finalize_inline:
-            finalize_from_spec(spec, Path(cfg.paths.output_dir))
+            # generate() closed its run; finalize gets its own <run_id>-finalize run.
+            finalize_tracked(cfg, spec, Path(cfg.paths.output_dir))
         if cfg.oracle_eval_inline:
             output_dir = Path(cfg.paths.output_dir)
             splits: tuple[Split, ...] = ("train", "val", "test")
@@ -1123,26 +1394,42 @@ def main(cfg: DictConfig) -> None:
                 r2_io.download_dir_no_overwrite(
                     spec.r2.split_lance_uri(split), output_dir / f"{split}.lance"
                 )
+            oracle_probe_launch_id = new_oracle_probe_launch_id() if upload_oracle_evals else None
             for split in splits:
                 # test stays bare; train/val are namespaced so the shared run
                 # keeps one summary key per split (see _run_oracle_eval_subprocess).
                 metric_prefix = "" if split == "test" else f"{split}/"
+                eval_dir = output_dir / "oracle_eval" / split / spec.run_id
                 _run_oracle_eval_subprocess(
                     output_dir,
-                    output_dir / "oracle_eval" / split / spec.run_id,
+                    eval_dir,
                     spec.run_id,
                     render=spec.render,
                     num_workers=cfg.datamodule.num_workers,
                     predict_file=output_dir / f"{split}.lance",
                     metric_prefix=metric_prefix,
                 )
+                if oracle_probe_launch_id is not None:
+                    upload_oracle_probe(
+                        eval_dir,
+                        r2=spec.r2,
+                        launch_id=oracle_probe_launch_id,
+                        provenance=OracleProbeProvenance(
+                            source_dataset_uri=spec.r2.split_lance_uri(split),
+                            source_dataset_task=spec.task_name,
+                            source_split=split,
+                            source_run_id=spec.run_id,
+                            source_render=spec.render,
+                            candidate_render=spec.render,
+                        ),
+                    )
         return
 
     if cfg.finalize_inline or cfg.oracle_eval_inline:
         logger.info(
             f"finalize_inline={cfg.finalize_inline}, "
             f"oracle_eval_inline={cfg.oracle_eval_inline} ignored: "
-            f"skypilot_launch.compute_template={sky_cfg.compute_template!r} "
+            f"skypilot_launch.compute={sky_cfg.compute.name!r} "
             "dispatches to a worker; finalize runs out-of-band via the "
             "finalize-dataset workflow."
         )
@@ -1152,7 +1439,11 @@ def main(cfg: DictConfig) -> None:
 
     sky_cfg = sky_cfg.model_copy(
         update={
-            "cmd": _build_worker_cmd(overrides, spec),
+            "cmd": _build_worker_cmd(
+                overrides,
+                spec,
+                worker_checkout_dir=sky_cfg.worker_checkout_dir,
+            ),
             "job_name": sky_cfg.job_name or _smoke_job_name(spec),
             "extra_envs": {WORKER_SPEC_URI_ENV: spec_uri},
         }

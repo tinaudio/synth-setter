@@ -8,21 +8,26 @@ from __future__ import annotations
 
 import contextlib
 import inspect
+import multiprocessing
 import pickle
+import shutil
 from collections.abc import Iterator
 from itertools import combinations, product
 from pathlib import Path
 from types import SimpleNamespace
 
+import lance
 import numpy as np
 import pytest
 import torch
 from lightning import LightningModule, Trainer
 
+from synth_setter.conditioning import EmbeddingConditioningSpec
 from synth_setter.data.lance_datamodule import LanceVSTDataModule, PrepareBatchCollate
 from synth_setter.data.lance_torch import LanceMapDataset
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot
 from tests.helpers.lance_fixtures import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLES,
@@ -87,6 +92,29 @@ def _params_in_order(loader: torch.utils.data.DataLoader) -> np.ndarray:
     :return: ``(total_rows, num_params)`` array.
     """
     return torch.cat([_unwrap(batch["params"]) for batch in loader]).numpy()
+
+
+def _mel_in_order(loader: torch.utils.data.DataLoader) -> np.ndarray:
+    """Concatenate normalized mel tensors across one loader epoch.
+
+    :param loader: Loader whose epoch is materialized.
+    :returns: All normalized mel rows.
+    """
+    return torch.cat([_unwrap(batch["mel"]) for batch in loader]).numpy()
+
+
+def test_growing_active_record_with_persistent_workers_raises(dataset_root: Path) -> None:
+    """Growing reloads reject workers that could retain stale dataset handles.
+
+    :param dataset_root: Frozen baseline dataset root.
+    """
+    with pytest.raises(ValueError, match="persistent_workers"):
+        LanceVSTDataModule(
+            dataset_root=dataset_root,
+            growing_active_record=dataset_root / "active.json",
+            persistent_workers=True,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
 
 
 class _DDPIndexRecorder(LightningModule):
@@ -157,7 +185,7 @@ class TestPrepareBatchCollate:
         batch = collate(self._raw_batch(num_rows=4))
         assert _unwrap(batch["params"]).shape == (4, NUM_PARAMS)
         assert _unwrap(batch["noise"]).shape == (4, NUM_PARAMS)
-        for key in ("mel_spec", "m2l", "params", "noise", "audio"):
+        for key in ("mel", "m2l", "params", "noise", "audio"):
             assert _unwrap(batch[key]).dtype == torch.float32, key
 
     def test_collate_missing_optional_columns_map_to_none(self) -> None:
@@ -168,7 +196,7 @@ class TestPrepareBatchCollate:
         batch = collate(raw)
         assert batch["audio"] is None
         assert batch["m2l"] is None
-        assert _unwrap(batch["mel_spec"]).shape == (4, *MEL_SHAPE)
+        assert _unwrap(batch["mel"]).shape == (4, *MEL_SHAPE)
 
     def test_collate_normalizes_mel_with_mean_and_std(self) -> None:
         """``(mel - mean) / std`` is applied when stats are provided."""
@@ -180,7 +208,7 @@ class TestPrepareBatchCollate:
         )
         raw = self._raw_batch()
         raw["mel_spec"] = torch.full((4, *MEL_SHAPE), 3.0)
-        mel = _unwrap(collate(raw)["mel_spec"])
+        mel = _unwrap(collate(raw)["mel"])
         assert torch.allclose(mel, torch.full_like(mel, 1.0))
 
     def test_collate_rescale_params_centers_to_minus_one_one(self) -> None:
@@ -316,28 +344,48 @@ class TestLanceMapDataModuleSetup:
 
     def test_constructor_has_no_loader_switch(self) -> None:
         """The public datamodule API has one Lance loading strategy."""
-        assert "loader" not in inspect.signature(LanceVSTDataModule).parameters
+        params = inspect.signature(LanceVSTDataModule).parameters
+        assert "loader" not in params
+        assert "use_fragment_sampler" not in params
+        assert "batch_readahead" not in params
 
-    def test_prepare_data_hydrates_dataset_root_from_r2(
-        self,
-        fake_r2_remote: Path,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
+    def test_prepare_data_r2_source_preflights_credentials_before_reading(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The shared prepare hook materializes configured R2 data locally.
+        """An ``r2://`` source loads credentials before the first Lance read.
 
-        :param fake_r2_remote: Real rclone remote backed by local storage.
-        :param tmp_path: Parent of the initially absent destination.
-        :param monkeypatch: Supplies canonical settings for the local rclone backend.
+        :param tmp_path: Parent of the source and the initially absent destination.
+        :param monkeypatch: Fixture routing the R2 seam at a real local source.
         """
-        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "stub")
-        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "stub")
-        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
-        monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
-        remote = fake_r2_remote / "intermediate-data" / "dataset"
-        remote.mkdir(parents=True)
-        (remote / "stats.npz").write_bytes(b"stats")
+        source = tmp_path / "source"
+        source.mkdir()
+        for split in ("train", "val", "test"):
+            write_seeded_lance_shard(source / f"{split}.lance", num_rows=4, seed=1)
         destination = tmp_path / "downloaded"
+        preflighted = False
+
+        def ensure_r2_env_loaded() -> None:
+            nonlocal preflighted
+            preflighted = True
+
+        def lance_target(uri: str) -> tuple[str, None]:
+            assert preflighted
+            return str(source / uri.rsplit("/", 1)[-1]), None
+
+        def object_size(_uri: str) -> int:
+            assert preflighted
+            return 0
+
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.ensure_r2_env_loaded",
+            ensure_r2_env_loaded,
+        )
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.lance_target", lance_target)
+        monkeypatch.setattr("synth_setter.pipeline.r2_io.object_size", object_size)
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            lambda source_uri, dest_path, exclude=None: None,
+        )
         module = LanceVSTDataModule(
             dataset_root=destination,
             download_dataset_root_uri="r2://intermediate-data/dataset",
@@ -346,7 +394,51 @@ class TestLanceMapDataModuleSetup:
 
         module.prepare_data()
 
-        assert (destination / "stats.npz").read_bytes() == b"stats"
+        assert preflighted
+        assert lance.dataset(str(module.dataset_root / "train.lance")).count_rows() == 4
+
+    def test_prepare_data_places_sidecars_beside_the_materialized_splits(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mel statistics hydrate into the subset directory the loaders read.
+
+        :param tmp_path: Parent of the local source and destination.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        source = tmp_path / "local-source"
+        source.mkdir()
+        for split in ("train", "val", "test"):
+            write_seeded_lance_shard(source / f"{split}.lance", num_rows=4, seed=1)
+        write_mel_stats(source)
+        (source / "dataset.complete").touch()
+        destination = tmp_path / "local-ssd"
+
+        def hydrate(source_uri: str, dest_path: Path, exclude: str | None = None) -> None:
+            dest_path.mkdir(parents=True, exist_ok=True)
+            shutil.copy(source / "stats.npz", dest_path / "stats.npz")
+
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            hydrate,
+        )
+        module = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source.as_uri(),
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+        module.prepare_data()
+        module.setup("fit")
+        try:
+            batch = next(iter(module.train_dataloader()))
+        finally:
+            module.teardown()
+
+        assert (module.dataset_root / "stats.npz").is_file()
+        assert batch["mel"].shape[0] == 2
 
     def test_prepare_data_without_uri_leaves_local_root_unchanged(self, tmp_path: Path) -> None:
         """The conservative default performs no implicit remote download.
@@ -383,6 +475,63 @@ class TestLanceMapDataModuleSetup:
                 assert loader.batch_size == 2, name
                 assert len(loader.dataset) == num_rows, name  # type: ignore[arg-type]
 
+    def test_train_and_validation_loaders_use_independent_worker_counts(
+        self, dataset_root: Path
+    ) -> None:
+        """A nonzero training worker count must not enable validation workers.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=3,
+            val_num_workers=0,
+        ) as module:
+            assert module.train_dataloader().num_workers == 3
+            assert module.val_dataloader().num_workers == 0
+
+    def test_validation_loader_worker_override_is_honored(
+        self, dataset_root: Path
+    ) -> None:
+        """Validation can opt into workers without changing training workers.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=0,
+            val_num_workers=1,
+        ) as module:
+            assert module.val_dataloader().num_workers == 1
+
+    @pytest.mark.dataloader_multiprocess
+    @pytest.mark.xdist_group(name="dataloader-multiprocess")
+    @pytest.mark.slow
+    def test_validation_worker_override_consumes_batch_in_child_processes(
+        self, dataset_root: Path
+    ) -> None:
+        """A validation override must start workers that produce a real Lance batch.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        existing_children = {child.pid for child in multiprocessing.active_children()}
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=0,
+            val_num_workers=2,
+        ) as module:
+            iterator = iter(module.val_dataloader())
+            batch = next(iterator)
+            validation_workers = {
+                child.pid for child in multiprocessing.active_children()
+            } - existing_children
+            assert len(validation_workers) == 2
+            assert _unwrap(batch["params"]).shape == (2, NUM_PARAMS)
+            del iterator
+
     def test_persistent_workers_without_workers_is_effectively_disabled(
         self, dataset_root: Path
     ) -> None:
@@ -411,9 +560,53 @@ class TestLanceMapDataModuleSetup:
             dataset_root=dataset_root,
             batch_size=2,
             num_workers=1,
+            val_num_workers=1,
             persistent_workers=True,
         ) as module:
+            assert module.train_dataloader().persistent_workers is True
             assert module.val_dataloader().persistent_workers is True
+
+    def test_prefetch_factor_with_workers_reaches_loader(self, dataset_root: Path) -> None:
+        """A configured prefetch depth reaches loaders that own worker processes.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            val_num_workers=1,
+            prefetch_factor=4,
+        ) as module:
+            assert module.val_dataloader().prefetch_factor == 4
+
+    def test_prefetch_factor_default_without_workers_loads_in_process(
+        self, dataset_root: Path
+    ) -> None:
+        """The default prefetch depth keeps the in-process path on PyTorch semantics.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(dataset_root=dataset_root, batch_size=2) as module:
+            loader = module.val_dataloader()
+            assert loader.prefetch_factor is None
+            assert _unwrap(next(iter(loader))["params"]).shape == (2, NUM_PARAMS)
+
+    def test_prefetch_factor_without_workers_is_effectively_disabled(
+        self, dataset_root: Path
+    ) -> None:
+        """A configured prefetch depth is safe for in-process loading.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        with _set_up_map_module(
+            dataset_root=dataset_root,
+            batch_size=2,
+            num_workers=0,
+            prefetch_factor=4,
+        ) as module:
+            loader = module.val_dataloader()
+            assert loader.prefetch_factor is None
+            assert _unwrap(next(iter(loader))["params"]).shape == (2, NUM_PARAMS)
 
     def test_map_missing_stats_raises_file_not_found(self, tmp_path: Path) -> None:
         """``use_saved_mean_and_variance=True`` with no ``stats.npz`` errors at setup.
@@ -431,6 +624,41 @@ class TestLanceMapDataModuleSetup:
         )
         with pytest.raises(FileNotFoundError, match="stats.npz"):
             module.setup()
+
+    @pytest.mark.parametrize(
+        ("stage", "loader_name"),
+        [("fit", "train_dataloader"), ("fit", "val_dataloader"), ("test", "test_dataloader")],
+        ids=["train", "val", "test"],
+    )
+    def test_audio_conditioning_reads_waveform_without_mel_stats(
+        self, tmp_path: Path, stage: str, loader_name: str
+    ) -> None:
+        """Raw-audio conditioning serves each model split without ``stats.npz``.
+
+        :param tmp_path: Pytest fixture providing a dataset root without mel statistics.
+        :param stage: Lightning setup stage selecting the requested split.
+        :param loader_name: Dataloader method for the requested split.
+        """
+        root = tmp_path / "audio-data"
+        root.mkdir()
+        for split in ("train", "val", "test"):
+            write_seeded_lance_shard(root / f"{split}.lance", num_rows=4)
+        module = LanceVSTDataModule(
+            dataset_root=root,
+            batch_size=2,
+            conditioning="audio",
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+        module.setup(stage)
+        try:
+            batch = next(iter(getattr(module, loader_name)()))
+        finally:
+            module.teardown(stage)
+
+        assert batch["mel"] is None
+        assert _unwrap(batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
 
     def test_map_unregistered_param_spec_raises_at_setup(self, dataset_root: Path) -> None:
         """Legacy parity: an unregistered ``param_spec_name`` fails fast at setup.
@@ -463,6 +691,92 @@ class TestLanceMapDataModuleSetup:
         try:
             batch = next(iter(module.val_dataloader()))
             assert _unwrap(batch["params"]).shape == (2, NUM_PARAMS)
+        finally:
+            module.teardown()
+
+    def test_setup_test_stage_reads_test_only_root_and_rejects_train_loader(
+        self, tmp_path: Path
+    ) -> None:
+        """The test stage opens only its real Lance split and reports unbuilt access.
+
+        :param tmp_path: Per-test directory holding a partial dataset root.
+        """
+        root = tmp_path / "data"
+        root.mkdir()
+        write_seeded_lance_shard(root / "test.lance", num_rows=4, mel_fill=3.0)
+        write_mel_stats(root, mean=1.0, std=2.0)
+        module = LanceVSTDataModule(
+            dataset_root=root,
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+        module.setup(stage="test")
+        try:
+            batch = next(iter(module.test_dataloader()))
+            mel = _unwrap(batch["mel"])
+            assert torch.allclose(mel, torch.ones_like(mel))
+            with pytest.raises(RuntimeError, match="train.*setup.*test"):
+                module.train_dataloader()
+        finally:
+            module.teardown()
+
+    def test_setup_validate_stage_reads_validation_only_root(self, tmp_path: Path) -> None:
+        """The validate stage serves normalized batches without sibling splits.
+
+        :param tmp_path: Per-test directory holding a partial dataset root.
+        """
+        root = tmp_path / "data"
+        root.mkdir()
+        write_seeded_lance_shard(root / "val.lance", num_rows=4, mel_fill=3.0)
+        write_mel_stats(root, mean=1.0, std=2.0)
+        module = LanceVSTDataModule(
+            dataset_root=root,
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+        module.setup(stage="validate")
+        try:
+            batch = next(iter(module.val_dataloader()))
+            mel = _unwrap(batch["mel"])
+            assert torch.allclose(mel, torch.ones_like(mel))
+        finally:
+            module.teardown()
+
+    def test_setup_predict_stage_reads_external_prediction_split_only(
+        self, tmp_path: Path
+    ) -> None:
+        """The predict stage uses its source's saved stats and includes source audio.
+
+        :param tmp_path: Per-test directory holding separate empty root and predict data.
+        """
+        root = tmp_path / "data"
+        root.mkdir()
+        predict_root = tmp_path / "capture"
+        predict_root.mkdir()
+        predict_file = predict_root / "predict.lance"
+        write_seeded_lance_shard(predict_file, num_rows=4, mel_fill=3.0)
+        write_mel_stats(predict_root, mean=1.0, std=2.0)
+        module = LanceVSTDataModule(
+            dataset_root=root,
+            predict_file=predict_file,
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=ParamSpecName("surge_xt"),
+        )
+
+        module.setup(stage="predict")
+        try:
+            batch = next(iter(module.predict_dataloader()))
+            mel = _unwrap(batch["mel"])
+            assert torch.allclose(mel, torch.ones_like(mel))
+            assert _unwrap(batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
         finally:
             module.teardown()
 
@@ -574,18 +888,42 @@ class TestLanceMapDataModuleFlows:
         assert _unwrap(predict_batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
         assert _unwrap(predict_batch["audio"]).dtype == torch.float32
 
-    def test_m2l_conditioning_swaps_mel_for_music2latent(self, dataset_root: Path) -> None:
-        """``conditioning="m2l"`` projects ``music2latent`` and drops ``mel_spec``.
+    def test_include_audio_reads_training_target_without_changing_conditioning(
+        self, dataset_root: Path
+    ) -> None:
+        """Audio-feedback training projects waveforms alongside stored mel conditioning.
 
         :param dataset_root: Fixture-provided dataset-root directory.
         """
         with _set_up_map_module(
-            dataset_root=dataset_root, batch_size=2, ot=False, conditioning="m2l"
+            dataset_root=dataset_root,
+            batch_size=2,
+            ot=False,
+            include_audio=True,
+        ) as module:
+            train_batch = next(iter(module.train_dataloader()))
+        assert _unwrap(train_batch["mel"]).shape == (2, *MEL_SHAPE)
+        assert _unwrap(train_batch["audio"]).shape == (2, AUDIO_CHANNELS, AUDIO_SAMPLES)
+
+    def test_embedding_spec_routes_music2latent_to_conditioning(
+        self, dataset_root: Path
+    ) -> None:
+        """A spec projects ``music2latent`` to the generic key and drops mel.
+
+        :param dataset_root: Fixture-provided dataset-root directory.
+        """
+        spec = EmbeddingConditioningSpec(
+            column="music2latent", input_shape=(6, 7)
+        )
+        with _set_up_map_module(
+            dataset_root=dataset_root, batch_size=2, ot=False, conditioning=spec
         ) as module:
             batch = next(iter(module.val_dataloader()))
-        assert batch["mel_spec"] is None
+        assert batch["mel"] is None
+        assert batch["m2l"] is None
         np.testing.assert_array_equal(
-            _unwrap(batch["m2l"]).numpy(), make_shard_columns(6, seed=2)["music2latent"][:2]
+            _unwrap(batch["conditioning"]).numpy(),
+            make_shard_columns(6, seed=2)["music2latent"][:2],
         )
 
     def test_mel_normalized_with_saved_stats(self, tmp_path: Path) -> None:
@@ -599,7 +937,7 @@ class TestLanceMapDataModuleFlows:
             write_seeded_lance_shard(root / f"{split}.lance", num_rows=4, mel_fill=3.0)
         write_mel_stats(root, mean=1.0, std=2.0)
         with _set_up_map_module(dataset_root=root, batch_size=2, ot=False) as module:
-            mel = _unwrap(next(iter(module.val_dataloader()))["mel_spec"])
+            mel = _unwrap(next(iter(module.val_dataloader()))["mel"])
         assert torch.allclose(mel, torch.full_like(mel, 1.0))
 
     def test_predict_file_outside_root_uses_its_own_stats(self, tmp_path: Path) -> None:
@@ -622,7 +960,7 @@ class TestLanceMapDataModuleFlows:
             ot=False,
             predict_file=predict_dir / "predict.lance",
         ) as module:
-            mel = _unwrap(next(iter(module.predict_dataloader()))["mel_spec"])
+            mel = _unwrap(next(iter(module.predict_dataloader()))["mel"])
         assert torch.allclose(mel, torch.full_like(mel, 1.0))
 
     def test_batches_are_float32_contiguous_and_writable(self, dataset_root: Path) -> None:
@@ -632,7 +970,7 @@ class TestLanceMapDataModuleFlows:
         """
         with _set_up_map_module(dataset_root=dataset_root, batch_size=2, ot=False) as module:
             batch = next(iter(module.predict_dataloader()))
-        for key in ("mel_spec", "params", "noise", "audio"):
+        for key in ("mel", "params", "noise", "audio"):
             tensor = _unwrap(batch[key])
             assert tensor.dtype == torch.float32, key
             assert tensor.is_contiguous(), key
@@ -684,7 +1022,7 @@ class TestLanceMapDataModuleModes:
         finally:
             module.teardown()
 
-        assert val_batch["mel_spec"] is None
+        assert val_batch["mel"] is None
         assert _unwrap(val_batch["m2l"]).shape == (2, 128, 42)
         assert _unwrap(val_batch["params"]).shape == (2, len(param_specs["surge_4"]))
         assert _unwrap(val_batch["noise"]).shape == _unwrap(val_batch["params"]).shape
@@ -692,6 +1030,24 @@ class TestLanceMapDataModuleModes:
         assert _unwrap(val_batch["params"]).max() < 1
         assert val_batch["audio"] is None
         assert _unwrap(predict_batch["audio"]).shape == (2, 2, 44100 * 4)
+
+    def test_fake_audio_conditioning_populates_waveform_for_training(self, tmp_path: Path) -> None:
+        """Fake raw-audio batches expose waveform conditioning on non-predict splits.
+
+        :param tmp_path: Empty dataset root proving fake mode performs no storage reads.
+        """
+        with _set_up_map_module(
+            dataset_root=tmp_path,
+            batch_size=2,
+            fake=True,
+            conditioning="audio",
+            use_saved_mean_and_variance=True,
+        ) as module:
+            batch = next(iter(module.train_dataloader()))
+
+        assert batch["mel"] is None
+        assert batch["conditioning"] is None
+        assert _unwrap(batch["audio"]).shape == (2, 2, 44_100 * 4)
 
     def test_fake_mode_same_global_seed_reproduces_batch(self, tmp_path: Path) -> None:
         """Fake sample generation remains governed by the global PyTorch RNG.
@@ -710,7 +1066,7 @@ class TestLanceMapDataModuleModes:
 
         first = draw()
         second = draw()
-        for key in ("mel_spec", "params", "noise"):
+        for key in ("mel", "params", "noise"):
             assert torch.equal(_unwrap(first[key]), _unwrap(second[key])), key
 
     @pytest.mark.parametrize(
@@ -735,7 +1091,7 @@ class TestLanceMapDataModuleModes:
             first = next(iterator)
             second = next(iterator)
 
-        for key in ("mel_spec", "params", "noise"):
+        for key in ("mel", "params", "noise"):
             assert torch.equal(_unwrap(first[key]), _unwrap(second[key])), key
 
     def test_repeat_first_batch_every_train_batch_is_the_first(self, dataset_root: Path) -> None:
@@ -797,7 +1153,7 @@ class TestLanceMapDataModuleModes:
         with _set_up_map_module(
             dataset_root=root, batch_size=2, ot=False, use_saved_mean_and_variance=False
         ) as module:
-            mel = _unwrap(next(iter(module.val_dataloader()))["mel_spec"])
+            mel = _unwrap(next(iter(module.val_dataloader()))["mel"])
         assert torch.allclose(mel, torch.full_like(mel, 3.0))
 
     def test_repeat_first_batch_folds_val_but_never_predict(self, dataset_root: Path) -> None:
@@ -831,7 +1187,10 @@ class TestLanceMapDataModuleModes:
 
         def collect(num_workers: int) -> np.ndarray:
             with _set_up_map_module(
-                dataset_root=dataset_root, batch_size=2, ot=False, num_workers=num_workers
+                dataset_root=dataset_root,
+                batch_size=2,
+                ot=False,
+                val_num_workers=num_workers,
             ) as module:
                 return _params_in_order(module.val_dataloader())
 
@@ -851,7 +1210,7 @@ class TestLanceMapDataModuleModes:
         def collect() -> torch.Tensor:
             torch.manual_seed(47)
             with _set_up_map_module(
-                dataset_root=dataset_root, batch_size=2, ot=False, num_workers=2
+                dataset_root=dataset_root, batch_size=2, ot=False, val_num_workers=2
             ) as module:
                 batches = [_unwrap(batch["noise"]) for batch in module.val_dataloader()]
             return torch.stack(batches)
@@ -989,7 +1348,7 @@ class _FlowProbe(LightningModule):
         """
         params = batch["params"]
         noise = batch["noise"]
-        mel = batch["mel_spec"]
+        mel = batch["mel"]
         assert params is not None and params.shape[1] == self.num_params
         assert noise is not None and noise.shape == params.shape
         assert mel is not None and mel.shape[0] == params.shape[0]

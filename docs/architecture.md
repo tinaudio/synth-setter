@@ -8,16 +8,23 @@ individual design docs linked throughout.
 synth-setter is a collection of tools for **synthesizer inversion** (predicting
 synthesizer parameters from audio), **sound matching**, and **preset
 exploration**. The system generates large-scale audio datasets by rendering
-random synthesizer configurations through a VST3 synth, trains neural networks
+random synthesizer configurations through a configured audio renderer, trains neural networks
 on these datasets, and evaluates how well the models recover the original
 parameters.
 
 The pipeline is **synth-agnostic**: rendering, storage, features, distributed
 workers, and the models are all driven by a `ParamSpec` (parameter schema) and a
-`RenderConfig` (plugin path, preset, spec name) looked up from a registry by
-name. Surge XT is the default; OB-Xf is registered as a second synth, and any
-VST3 plugin can be onboarded with **no edits to core pipeline, storage, or model
-code**. See
+`RenderConfig` (backend and synth identity) looked up from a registry by name.
+Surge XT is the default and can render through Pedalboard, DawDreamer, or the
+pinned in-process SurgePy engine. OB-Xf and Ultramaster KR-106 are registered
+VST3 synths; KR-106 also provides the `ultramaster_kr106_single_note` identity,
+which removes controls that cannot affect one fresh isolated note. Faust
+identities compile checked-in source through DawDreamer. Separately,
+`synth-setter-export-fdn-faust` converts one BasicFDN build into a fixed-value `.dsp` artifact
+and compile-checks it without registering a synth. SurgePy
+recreates the native synth for every row and accepts only
+`plugin_reload_cadence: render`. VST3 plugins can be
+onboarded with **no edits to core pipeline, storage, or model code**. See
 [Adding a new synth](guides/adding-a-new-synth.md).
 
 ## System Diagram
@@ -31,7 +38,7 @@ code**. See
  │  │          │    │          │    │          │    │                  │  │
  │  │ Render   │    │ Compose  │    │ Flow     │    │ Predict → Render │  │
  │  │ audio via│    │ into     │    │ matching │    │ → Metrics        │  │
- │  │ VST synth│    │ splits   │    │ model    │    │                  │  │
+ │  │ renderer │    │ splits   │    │ model    │    │                  │  │
  │  └────┬─────┘    └────┬─────┘    └────┬─────┘    └────────┬─────────┘  │
  │       │               │               │                   │            │
  │       ▼               ▼               ▼                   ▼            │
@@ -41,7 +48,7 @@ code**. See
 
  Infrastructure:
    Storage:   Cloudflare R2 (data, coordination)
-   Compute:   RunPod (on-demand workers)
+   Compute:   SkyPilot (RunPod, Vast.ai, local Kubernetes)
    Tracking:  Weights & Biases (metrics, artifacts, lineage)
    Config:    Hydra (composable YAML configs)
    Training:  PyTorch Lightning
@@ -50,18 +57,22 @@ code**. See
 ## Data Flow
 
 1. **Configure** -- Define a dataset in `src/synth_setter/configs/experiment/generate_dataset/*.yaml` (synth, sample
-   count, shard size, parameter spec). The synth is selected by a `render`
-   group override (e.g. `render=surge_xt` or `render=obxf`); each render config
-   names the registered `param_spec_name`, preset, and plugin path. Hydra
+   count, shard size, parameter spec). The synth is selected by the root
+   `synth` group (`synth=surge_xt`, `synth=obxf`, ...), which carries the
+   registered parameter spec, preset, plugin path, and version; the paired
+   `render` group override (e.g. `render=vst`) names the backend and
+   declares backend-specific knobs only. Hydra
    composes the experiment against
    `src/synth_setter/configs/dataset.yaml` and `spec_from_cfg(cfg)` (in
    `src/synth_setter/cli/generate_dataset.py`) builds the unified `DatasetSpec`.
 
-2. **Generate** -- Workers render audio samples through the configured VST3
-   synth, producing Lance
-   shards uploaded to R2. Each shard contains audio waveforms, mel spectrograms,
-   and ground-truth parameter arrays. Workers are fully parallel with no shared
-   state.
+2. **Generate** -- Workers render audio samples through the configured synth
+   backend, producing Lance shards uploaded to R2. Each shard contains audio
+   waveforms, mel spectrograms, and ground-truth parameter arrays. Offline pyFDN
+   rows deterministically retry complete patches after clipped or quiet renders;
+   native impulse responses are the default, with an in-process canonical chirp
+   available by explicit configuration, so R2 is destination-only.
+   Workers are fully parallel with no shared state.
    Design: [data-pipeline.md](design/data-pipeline.md)
 
 3. **Finalize** -- Downloads validated shards, commits their Lance fragments
@@ -80,13 +91,14 @@ code**. See
    through sample-indexed native `lance.torch` map datasets. The sequential native
    loader remains available for streaming workflows — see
    [training-pipeline.md §6.1](design/training-pipeline.md#61-dataset-access). The datamodule class is
-   param-count-agnostic, though the `surge*` configs pin `param_spec_name`, so
-   training a non-Surge dataset overrides `datamodule.param_spec_name=<name>`.
+   param-count-agnostic; synth identity is selected once at the config root via
+   the `synth` group (`synth=<name>`), which VST datamodules, models, and
+   callbacks all resolve through `${synth.param_spec_name}`.
    Design: [training-pipeline.md](design/training-pipeline.md)
 
 5. **Evaluate** -- Three stages: **predict** (model inference on test data),
-   **render** (synthesize audio from predicted parameters via the same VST3
-   synth that generated the dataset), and
+   **render** (synthesize audio from predicted parameters via the same renderer
+   backend that generated the dataset), and
    **metrics** (spectral and transport-based distance metrics). Results upload to
    R2.
    Design: [eval-pipeline.md](design/eval-pipeline.md)
@@ -102,7 +114,7 @@ synth-setter/
 │   │   ├── generate_dataset.py  # Dataset-generation entrypoint
 │   │   └── ...
 │   ├── metrics.py          #   Metric definitions
-│   ├── data/               #   DataModules (Surge, K-Sin, K-Osc, etc.)
+│   ├── data/               #   DataModules (TorchSynth, VST, Lance, audio folders)
 │   ├── models/             #   LightningModules (flow matching, FF, FlowVAE)
 │   │   └── components/     #     Model building blocks (VAE, networks)
 │   ├── utils/              #   Logging, config helpers
@@ -112,13 +124,13 @@ synth-setter/
 │   │   ├── data/           #     Dataset-shaping utilities (lance_staging, lance_finalize, stats, ...)
 │   │   ├── skypilot_launch.py  # SkyPilot launcher CLI
 │   │   └── constants.py    #     Shared constants (`INPUT_SPEC_FILENAME`)
-│   ├── evaluation/         #   Render/metrics library code (predict_vst_audio, compute_audio_metrics, shuffle_pred_audio, audio_probe) shared by cli/eval.py and the training val-audio probe
+│   ├── evaluation/         #   Render/metrics library code (predict_vst_audio, compute_audio_metrics, audio_probe) shared by cli/eval.py and the training val-audio probe
 │   ├── tools/              #   `python -m` utilities (vst_interactive, plot_param2tok, ...)
 │   └── configs/            #   Hydra YAML configs (and SkyPilot Task templates under compute/) — #1236
 │       ├── train.yaml      #     Root training config
 │       ├── dataset.yaml    #     Root dataset-generation config (entrypoint mirrors train.yaml / eval.yaml)
 │       ├── experiment/     #     Experiment configs — training (compose datamodule + model + trainer) and datagen (composes dataset.yaml)
-│       ├── compute/        #     SkyPilot Task YAMLs for the data pipeline launcher (RunPod landed; Vast.ai planned)
+│       ├── compute/        #     SkyPilot compute options (RunPod, Vast.ai, local Kubernetes)
 │       ├── render/         #     Renderer configs (RenderConfig sub-model)
 │       ├── datamodule/     #     DataModule configs (paths, splits, batch size)
 │       ├── model/          #     Model architecture configs
@@ -135,16 +147,24 @@ synth-setter/
 
 ## Key Design Decisions
 
-**Synth-agnostic core, registry as the contract.** A synth is fully described
-by three registered artifacts — a `ParamSpec` (`param_specs[name]`), a baseline
-preset (`plugin_state_paths[name]`), and a `RenderConfig`
-(`src/synth_setter/configs/render/<name>.yaml`)
-— keyed by name in `src/synth_setter/data/vst/param_spec_registry.py`. The
-rendering, Lance storage, mel features, distributed workers, and models all
-read width and behavior from the resolved spec, never from a synth literal.
-Onboarding a new VST3 synth is additive: scaffold a spec with
-`synth-setter-introspect-plugin`, hand-tune it, register it, and write a render
-config — no core edits. See
+**Synth-agnostic core, registry as the contract.** A synth's identity — which
+`ParamSpec`, which plugin, which baseline preset — is authored once in
+`SYNTHS` (`src/synth_setter/synth_spec.py`); `plugin_state_paths` and the
+root identity group `src/synth_setter/configs/synth/<name>.yaml` are
+projections of it, pinned against the table by `tests/test_synth_spec.py` and
+`tests/schemas/test_synth_config.py`. Render configs in
+`src/synth_setter/configs/render/<name>.yaml` declare backend-specific
+settings only and are paired with a `synth=<name>` selection. The `ParamSpec` objects themselves live in
+`src/synth_setter/data/vst/param_spec_registry.py`. The rendering, Lance
+storage, mel features, distributed workers, and models all read width and
+behavior from the resolved spec, never from a synth literal. Faust entries use
+an empty state path and resolve checked-in source by the same identity.
+`studiorack.json`, `studiorack.lock.json`, `plugin_manager.py`,
+`plugin_integrity.py`, `plugin_runtime.py`, and `synth-setter-plugins` manage exact VST3 packages,
+artifact identities, and content-sealed bundles beneath stable `plugins/*.vst3`
+identity paths. Onboarding a
+new VST3 synth is additive: install its package, scaffold and hand-tune a spec,
+then register it against the generic `render=vst` backend. See
 [Adding a new synth](guides/adding-a-new-synth.md).
 
 **R2 as source of truth.** Pipeline state is determined by file existence and
@@ -171,6 +191,29 @@ crashing does not affect others. See
 of W&B (5 GB total budget); at train end the best checkpoint is uploaded to R2
 and the `model-{config_id}` W&B artifact references it as an `s3://` URI. See
 [training-pipeline.md](design/training-pipeline.md) section 6.
+
+**Growing Lance train snapshots.** Long-running offline training can append to
+a native branch without mutating the finalized baseline. The
+`synth-setter-growing-lance init` contract pins the baseline transaction, its
+train-shard count, the producer spec, the total train-shard maximum, and the
+per-refresh request size. The `grow` driver loops enqueue (freezing
+`[high_watermark, min(H + N, max))`), waits for parallel polling `generate`
+workers to stage every position through branch-isolated claims, and finalizes
+each range as a native Lance `Append`. Cumulative Welford state
+and derived statistics are hash-bound before the `<branch>-ready` tag advances.
+At capacity all producer commands are safe no-ops and the daemons exit.
+Copy-paste commands and failure behavior:
+[operations/growing-lance-runbook.md](operations/growing-lance-runbook.md).
+
+`materialize` serializes writers with a file lock and incrementally appends new
+remote fragments to one local `train.lance`; version directories contain only
+remote identity and statistics metadata. `active.json` binds exact remote and
+local transactions and cannot regress. Set `training.growing_active_record` and
+`training.growing_refresh_epoch_interval=1` to rebuild only the train loader at
+epoch boundaries. Validation and test remain on baseline rows and statistics.
+DDP adopts only an exact identity available to every rank, while checkpoint
+resume validates and restores its exact local Lance version before considering
+a newer ready snapshot. Growing jobs require `persistent_workers=false`.
 
 **Storage conventions are shared.** All pipelines (data, training, eval) follow
 the same R2 path structure and ID conventions defined in

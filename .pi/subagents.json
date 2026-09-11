@@ -1,3 +1,4 @@
 {
-  "maxConcurrent": 20
+  "maxConcurrent": 20,
+  "scopeModels": true
 }

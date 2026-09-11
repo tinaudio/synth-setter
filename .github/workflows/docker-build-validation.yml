@@ -34,15 +34,26 @@ on:
     branches: [main]
   pull_request:
     paths:
+      - ".github/actions/setup-surge-xt/**"
+      - ".github/workflows/docker-build-validation.yml"
       - "docker/**"
+      - "package-lock.json"
+      - "package.json"
+      - "pyproject.toml"
+      - "scripts/studiorack/**"
       - "src/synth_setter/configs/image/**"
-      - "src/synth_setter/pipeline/schemas/image_config.py"
       - "src/synth_setter/pipeline/ci/load_image_config.py"
+      - "src/synth_setter/pipeline/schemas/image_config.py"
+      - "src/synth_setter/plugin_manager.py"
       - "src/synth_setter/scripts/load_vst3_check.py"
       - "src/synth_setter/scripts/run-linux-vst-headless.sh"
-      - ".github/workflows/docker-build-validation.yml"
-      - "pyproject.toml"
+      - "studiorack-cardinal.json"
+      - "studiorack-cardinal.lock.json"
+      - "studiorack.json"
+      - "studiorack.lock.json"
       - "tests/docker/**"
+      - "tests/test_plugin_manager.py"
+      - "uv.lock"
 
 # Force-push cancels the PR's stale build (30-60 min each, would otherwise queue);
 # push/dispatch runs get a unique run_id group so main builds are never cancelled.
@@ -174,7 +185,35 @@ jobs:
           set -euo pipefail
           docker run --rm \
             -e SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 \
+            -e SYNTH_SETTER_DEVCONTAINER_EXPECT_USER=root \
             synth-setter:devcontainer-tools-validation \
+            pytest tests/docker/test_devcontainer_tools.py -v
+
+      - name: Build devcontainer-tools-dev-user image (validation only — no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.config.outputs.dockerfile }}
+          target: devcontainer-tools-dev-user
+          platforms: ${{ steps.config.outputs.target_platform }}
+          push: false
+          load: true
+          tags: synth-setter:devcontainer-tools-dev-user-validation
+          build-args: |
+            BUILD_MODE=${{ steps.config.outputs.build_mode }}
+            BASE_IMAGE=${{ steps.config.outputs.base_image }}
+            TORCH_BACKEND=${{ steps.config.outputs.torch_backend }}
+            SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
+          secrets: ""
+          cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
+
+      - name: Smoke test devcontainer-tools-dev-user non-root default
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 \
+            -e SYNTH_SETTER_DEVCONTAINER_EXPECT_USER=dev \
+            synth-setter:devcontainer-tools-dev-user-validation \
             pytest tests/docker/test_devcontainer_tools.py -v
 
   # Push + smoke tests for push-to-main and workflow_dispatch. Holds the
@@ -408,6 +447,20 @@ jobs:
           cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
           cache-to: type=registry,ref=tinaudio/synth-setter:buildcache,mode=max
 
+      # Floating `devcontainer-tools` tag is gated to main like `dev-snapshot`:
+      # RunPod dev launches consume it, so a feature-branch dispatch must not
+      # overwrite it. The immutable `-<sha>` tag is always pushed.
+      - name: Docker metadata (devcontainer-tools)
+        id: meta_devtools
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ steps.config.outputs.image }}
+            ghcr.io/tinaudio/synth-setter
+          tags: |
+            type=raw,value=devcontainer-tools,enable=${{ steps.source.outputs.is_main == 'true' }}
+            type=raw,value=devcontainer-tools-${{ steps.source.outputs.sha }}
+
       - name: Build and push devcontainer-tools image
         uses: docker/build-push-action@v6
         with:
@@ -416,12 +469,42 @@ jobs:
           target: devcontainer-tools
           platforms: ${{ steps.config.outputs.target_platform }}
           push: true
+          tags: ${{ steps.meta_devtools.outputs.tags }}
+          labels: ${{ steps.meta_devtools.outputs.labels }}
+          build-args: |
+            BUILD_MODE=${{ steps.config.outputs.build_mode }}
+            BASE_IMAGE=${{ steps.config.outputs.base_image }}
+            TORCH_BACKEND=${{ steps.config.outputs.torch_backend }}
+            SYNTH_PERMUTATIONS_GIT_REF=${{ steps.source.outputs.sha }}
+          secrets: ""
+          cache-from: type=registry,ref=tinaudio/synth-setter:buildcache
+          cache-to: ""
+
+      # Non-root sibling consumed by .devcontainer/. Same main-only gate as the
+      # root tag: a feature-branch dispatch must not repoint every developer's
+      # devcontainer at an unmerged build. Reuses the devcontainer-tools layers
+      # from the shared buildcache, so this pushes only the config delta.
+      - name: Docker metadata (devcontainer-tools-dev-user)
+        id: meta_devuser
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ steps.config.outputs.image }}
+            ghcr.io/tinaudio/synth-setter
           tags: |
-            ${{ steps.config.outputs.image }}:devcontainer-tools
-            ${{ steps.config.outputs.image }}:devcontainer-tools-${{ steps.source.outputs.sha }}
-            ghcr.io/tinaudio/synth-setter:devcontainer-tools
-            ghcr.io/tinaudio/synth-setter:devcontainer-tools-${{ steps.source.outputs.sha }}
-          labels: ${{ steps.meta.outputs.labels }}
+            type=raw,value=devcontainer-tools-dev-user,enable=${{ steps.source.outputs.is_main == 'true' }}
+            type=raw,value=devcontainer-tools-dev-user-${{ steps.source.outputs.sha }}
+
+      - name: Build and push devcontainer-tools-dev-user image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.config.outputs.dockerfile }}
+          target: devcontainer-tools-dev-user
+          platforms: ${{ steps.config.outputs.target_platform }}
+          push: true
+          tags: ${{ steps.meta_devuser.outputs.tags }}
+          labels: ${{ steps.meta_devuser.outputs.labels }}
           build-args: |
             BUILD_MODE=${{ steps.config.outputs.build_mode }}
             BASE_IMAGE=${{ steps.config.outputs.base_image }}
