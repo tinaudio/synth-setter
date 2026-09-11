@@ -58,6 +58,35 @@ _EXPECTED_PARAMETER_ADDRESSES = {
         ("/churchOrgan/noise_gain", "/churchOrgan/noise_gain"),
         ("/churchOrgan/gate", "/churchOrgan/gate"),
     ),
+    "faust_fdn_n8_mono_householder": (
+        ("delays.0", "/fdnHouseholder/delay_0"),
+        ("delays.1", "/fdnHouseholder/delay_1"),
+        ("delays.2", "/fdnHouseholder/delay_2"),
+        ("delays.3", "/fdnHouseholder/delay_3"),
+        ("delays.4", "/fdnHouseholder/delay_4"),
+        ("delays.5", "/fdnHouseholder/delay_5"),
+        ("delays.6", "/fdnHouseholder/delay_6"),
+        ("delays.7", "/fdnHouseholder/delay_7"),
+        ("input_matrix.0.0", "/fdnHouseholder/input_0"),
+        ("input_matrix.1.0", "/fdnHouseholder/input_1"),
+        ("input_matrix.2.0", "/fdnHouseholder/input_2"),
+        ("input_matrix.3.0", "/fdnHouseholder/input_3"),
+        ("input_matrix.4.0", "/fdnHouseholder/input_4"),
+        ("input_matrix.5.0", "/fdnHouseholder/input_5"),
+        ("input_matrix.6.0", "/fdnHouseholder/input_6"),
+        ("input_matrix.7.0", "/fdnHouseholder/input_7"),
+        ("output_matrix.0.0", "/fdnHouseholder/output_0"),
+        ("output_matrix.0.1", "/fdnHouseholder/output_1"),
+        ("output_matrix.0.2", "/fdnHouseholder/output_2"),
+        ("output_matrix.0.3", "/fdnHouseholder/output_3"),
+        ("output_matrix.0.4", "/fdnHouseholder/output_4"),
+        ("output_matrix.0.5", "/fdnHouseholder/output_5"),
+        ("output_matrix.0.6", "/fdnHouseholder/output_6"),
+        ("output_matrix.0.7", "/fdnHouseholder/output_7"),
+        ("direct_matrix.0.0", "/fdnHouseholder/direct"),
+        ("post_delay.rt_dc_seconds", "/fdnHouseholder/rt_dc_seconds"),
+        ("post_delay.rt_nyquist_seconds", "/fdnHouseholder/rt_nyquist_seconds"),
+    ),
     "faust_filter_osc": (
         ("/SINE_WAVE_OSCILLATOR_oscrs/Amplitude", "/SINE_WAVE_OSCILLATOR_oscrs/Amplitude"),
         ("/SINE_WAVE_OSCILLATOR_oscrs/Frequency", "/SINE_WAVE_OSCILLATOR_oscrs/Frequency"),
@@ -161,7 +190,9 @@ def test_faustwasm_contract_covers_every_canonical_parameter_once() -> None:
     for identity in _EXPECTED_PARAMETER_ADDRESSES:
         spec = resolve_faust_param_spec(ParamSpecName(identity))
         contract = faustwasm_parameter_contract(ParamSpecName(identity))
-        assert [item.canonical_address for item in contract] == spec.synth_param_names
+        assert [item.canonical_address for item in contract] == [
+            name for parameter in spec.synth_params for name in parameter.native_names()
+        ]
 
 
 @pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")

@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from synth_setter.data.vst.faust_sources import resolve_faust_dsp
+from synth_setter.data.vst.faustwasm_contract import flatten_canonical_patch
 from synth_setter.data.vst.faustwasm_artifacts import (
     ArtifactManifest,
     compile_faustwasm_artifact,
@@ -21,7 +22,6 @@ from synth_setter.data.vst.renderers import (
     AudioRenderer,
     ParameterValue,
     _validate_rendered_audio,
-    require_scalar_synth_params,
 )
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.synth_spec import (
@@ -177,14 +177,20 @@ class FaustWasmRenderer(AudioRenderer):
         :returns: Channel-major float32 audio.
         """
         del warmup
-        scalar_params = require_scalar_synth_params(params)
+        scalar_params = flatten_canonical_patch(ParamSpecName(self._manifest.identity), params)
         self._validate_patch(scalar_params)
         frames = int(self.sample_rate * self.signal_duration_seconds)
-        start_frame, end_frame = _quantize_note_window(
-            note_start_and_end,
-            sample_rate=self.sample_rate,
-            frames=frames,
-            signal_duration_seconds=self.signal_duration_seconds,
+        # Mono artifacts receive no note events, so a spec's placeholder window (e.g. pyFDN's
+        # zero-length stub) must not gate the render; only polyphonic captures quantize it.
+        start_frame, end_frame = (
+            (0, frames)
+            if self._manifest.mode == "mono"
+            else _quantize_note_window(
+                note_start_and_end,
+                sample_rate=self.sample_rate,
+                frames=frames,
+                signal_duration_seconds=self.signal_duration_seconds,
+            )
         )
         request = {
             "expectedFaustWasmVersion": self.backend_version,

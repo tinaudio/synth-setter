@@ -33,7 +33,7 @@ from pydantic import (
 )
 
 import synth_setter.renderer_backend as renderer_backend_contract
-from synth_setter.param_spec_name import ValidatedParamSpecName
+from synth_setter.param_spec_name import ParamSpecName, ValidatedParamSpecName
 from synth_setter.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
@@ -278,6 +278,21 @@ class ShardSpec(BaseModel):
         default=0,
         ge=0,
         description="Split-local index of this shard's first sample.",
+    )
+
+
+def _faust_spec_has_array_fields(identity: ParamSpecName) -> bool:
+    """Return whether a Faust identity's spec carries array-valued (multi-slider) fields.
+
+    :param identity: Registered Faust source identity.
+    :returns: ``True`` when any synth parameter expands to more than one compiled slider.
+    """
+    from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
+    from synth_setter.data.vst.param_spec import ContinuousArrayParameter
+
+    return any(
+        isinstance(parameter, ContinuousArrayParameter)
+        for parameter in resolve_faust_param_spec(identity).synth_params
     )
 
 
@@ -749,6 +764,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
         )
         source = resolve_faust_dsp(source_identity)
+        if self.renderer_backend != "faustwasm" and _faust_spec_has_array_fields(source_identity):
+            raise ValueError(
+                f"{source_identity} exposes array-valued fields as sliders; "
+                'only renderer_backend="faustwasm" flattens them'
+            )
         isolated_backends = {"faustcpp", "faustwasm"}
         if self.renderer_backend in isolated_backends:
             if self.render_contract_version == 1:

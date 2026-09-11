@@ -13,6 +13,7 @@ from types import MappingProxyType
 
 import numpy as np
 
+from synth_setter.data.pyfdn_param_spec import build_pyfdn_n8_mono_householder_param_spec
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
@@ -245,6 +246,15 @@ def _shimmer_fdn_param_spec() -> ParamSpec:
     )
 
 
+def _fdn_householder_param_spec() -> ParamSpec:
+    """Build the pyFDN householder specification the Faust FDN renders verbatim.
+
+    :returns: Fresh spec identical to ``pyfdn_n8_mono_householder``, so both backends decode
+        identical rows without sharing one mutable registry object.
+    """
+    return build_pyfdn_n8_mono_householder_param_spec()
+
+
 def _filter_osc_param_spec() -> ParamSpec:
     """Build the filterOSC specification.
 
@@ -277,6 +287,7 @@ _faust_param_spec_builders: Mapping[ParamSpecName, Callable[[], ParamSpec]] = Ma
         ParamSpecName("faust_bright_organ"): _bright_organ_param_spec,
         ParamSpecName("faust_bubble"): _bubble_param_spec,
         ParamSpecName("faust_church_organ"): _church_organ_param_spec,
+        ParamSpecName("faust_fdn_n8_mono_householder"): _fdn_householder_param_spec,
         ParamSpecName("faust_filter_osc"): _filter_osc_param_spec,
         ParamSpecName("faust_kronecker_fdn"): _kronecker_fdn_param_spec,
         ParamSpecName("faust_shimmer_fdn"): _shimmer_fdn_param_spec,

@@ -2,12 +2,37 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import NamedTuple
 
+import numpy as np
+
+from synth_setter.data.pyfdn_param_spec import PYFDN_ORDER, householder_feedback_matrix
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
-from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter
+from synth_setter.data.vst.param_spec import (
+    CategoricalParameter,
+    ContinuousArrayParameter,
+    ContinuousParameter,
+    DiscreteArrayParameter,
+    Parameter,
+    ParameterValue,
+    require_scalar_synth_params,
+)
 from synth_setter.param_spec_name import ParamSpecName
+
+_FDN_HOUSEHOLDER = ParamSpecName("faust_fdn_n8_mono_householder")
+_FDN_WASM_PREFIX = "/fdnHouseholder"
+# Spec-derived fields a source renders as constants; a patch must carry exactly these values.
+_FIXED_DERIVED_FIELDS: Mapping[ParamSpecName, Mapping[str, np.ndarray]] = MappingProxyType(
+    {
+        _FDN_HOUSEHOLDER: MappingProxyType(
+            {"feedback_matrix": householder_feedback_matrix(np.ones(PYFDN_ORDER))}
+        ),
+    }
+)
+_FIXED_DERIVED_ATOL = 1e-9
 
 
 @dataclass(frozen=True)
@@ -56,6 +81,7 @@ _RESERVED_WASM_ADDRESSES = MappingProxyType(
         ),
         ParamSpecName("faust_bubble"): (),
         ParamSpecName("faust_church_organ"): (),
+        _FDN_HOUSEHOLDER: (),
         ParamSpecName("faust_filter_osc"): (),
         ParamSpecName("faust_kronecker_fdn"): (),
     }
@@ -96,6 +122,14 @@ _WASM_ADDRESSES = MappingProxyType(
             "/churchOrgan/gain_lower_octave",
             "/churchOrgan/noise_gain",
             "/churchOrgan/gate",
+        ),
+        _FDN_HOUSEHOLDER: (
+            *(f"{_FDN_WASM_PREFIX}/delay_{index}" for index in range(PYFDN_ORDER)),
+            *(f"{_FDN_WASM_PREFIX}/input_{index}" for index in range(PYFDN_ORDER)),
+            *(f"{_FDN_WASM_PREFIX}/output_{index}" for index in range(PYFDN_ORDER)),
+            f"{_FDN_WASM_PREFIX}/direct",
+            f"{_FDN_WASM_PREFIX}/rt_dc_seconds",
+            f"{_FDN_WASM_PREFIX}/rt_nyquist_seconds",
         ),
         ParamSpecName("faust_filter_osc"): (
             "/SINE_WAVE_OSCILLATOR_oscrs/Amplitude",
@@ -150,36 +184,130 @@ def faustwasm_reserved_addresses(identity: ParamSpecName) -> tuple[str, ...]:
     return _RESERVED_WASM_ADDRESSES[identity]
 
 
+class _SliderDomain(NamedTuple):
+    """Native domain of one compiled slider before its compiler address is bound.
+
+    .. attribute :: canonical_address
+       :type: str
+
+       Canonical coordinate label stored in dataset patches.
+    .. attribute :: minimum
+       :type: float
+
+       Native lower bound.
+    .. attribute :: maximum
+       :type: float
+
+       Native upper bound.
+    .. attribute :: kind
+       :type: str
+
+       ``continuous`` or ``discrete`` domain kind.
+    .. attribute :: values
+       :type: tuple[float, ...] | None
+
+       Exact native values for discrete controls.
+    """
+
+    canonical_address: str
+    minimum: float
+    maximum: float
+    kind: str
+    values: tuple[float, ...] | None
+
+
+def _slider_domains(parameter: Parameter) -> list[_SliderDomain]:
+    """Expand one canonical parameter into per-slider native domains.
+
+    :param parameter: Canonical parameter definition.
+    :returns: One domain per compiled slider, in canonical coordinate order.
+    :raises TypeError: The parameter has no supported native domain.
+    """
+    if isinstance(parameter, ContinuousParameter):
+        return [_SliderDomain(parameter.name, parameter.min, parameter.max, "continuous", None)]
+    if isinstance(parameter, CategoricalParameter):
+        values = tuple(float(value) for value in parameter.raw_values)
+        return [_SliderDomain(parameter.name, min(values), max(values), "discrete", values)]
+    if isinstance(parameter, ContinuousArrayParameter):
+        return [
+            _SliderDomain(name, parameter.min, parameter.max, "continuous", None)
+            for name in parameter.native_names()
+        ]
+    raise TypeError(f"unsupported FaustWasm parameter {type(parameter).__name__}")
+
+
 def faustwasm_parameter_contract(identity: ParamSpecName) -> tuple[FaustWasmParameter, ...]:
     """Return the complete explicit mapping for one checked-in source identity.
 
+    Array parameters expand to one slider per element, named by
+    :meth:`Parameter.native_names` in C order.
+
     :param identity: Faust source and parameter-spec identity.
     :returns: Parameters in canonical specification order.
-    :raises TypeError: A canonical parameter has no supported native domain.
-    :raises ValueError: The address table does not cover every canonical parameter.
+    :raises ValueError: The address table does not cover every canonical slider.
     """
     wasm_addresses = _WASM_ADDRESSES[identity]
-    parameters = resolve_faust_param_spec(identity).synth_params
-    if len(wasm_addresses) != len(parameters):
+    domains = [
+        domain
+        for parameter in resolve_faust_param_spec(identity).synth_params
+        for domain in _slider_domains(parameter)
+    ]
+    if len(wasm_addresses) != len(domains):
         raise ValueError("FaustWasm address mapping is incomplete")
-    contract = []
-    for parameter, wasm_address in zip(parameters, wasm_addresses, strict=True):
-        if isinstance(parameter, ContinuousParameter):
-            minimum, maximum, kind = parameter.min, parameter.max, "continuous"
-            values = None
-        elif isinstance(parameter, CategoricalParameter):
-            values = tuple(float(value) for value in parameter.raw_values)
-            minimum, maximum, kind = min(values), max(values), "discrete"
-        else:
-            raise TypeError(f"unsupported FaustWasm parameter {type(parameter).__name__}")
-        contract.append(
-            FaustWasmParameter(
-                canonical_address=parameter.name,
-                wasm_address=wasm_address,
-                minimum=float(minimum),
-                maximum=float(maximum),
-                kind=kind,
-                values=values,
-            )
+    return tuple(
+        FaustWasmParameter(
+            canonical_address=domain.canonical_address,
+            wasm_address=wasm_address,
+            minimum=float(domain.minimum),
+            maximum=float(domain.maximum),
+            kind=domain.kind,
+            values=domain.values,
         )
-    return tuple(contract)
+        for domain, wasm_address in zip(domains, wasm_addresses, strict=True)
+    )
+
+
+def flatten_canonical_patch(
+    identity: ParamSpecName, params: Mapping[str, ParameterValue]
+) -> dict[str, float]:
+    """Flatten a decoded native patch into the scalar sliders the compiled source exposes.
+
+    :param identity: Faust source and parameter-spec identity.
+    :param params: Renderer-native synth values decoded by the identity's spec.
+    :returns: One float per compiled slider, keyed by canonical slider address.
+    :raises KeyError: A field is neither a spec parameter nor a fixed derived value.
+    :raises ValueError: A field has the wrong shape, a discrete field carries a fractional value,
+        or a fixed derived value differs.
+    """
+    fixed = _FIXED_DERIVED_FIELDS.get(identity, {})
+    parameters = {
+        parameter.name: parameter
+        for parameter in resolve_faust_param_spec(identity).synth_params
+    }
+    unknown = sorted(params.keys() - parameters.keys() - fixed.keys())
+    if unknown:
+        raise KeyError(f"unknown canonical parameter(s): {', '.join(unknown)}")
+    for name, expected in fixed.items():
+        supplied = np.asarray(params[name], dtype=np.float64) if name in params else None
+        if supplied is None or supplied.shape != expected.shape or not np.allclose(
+            supplied, expected, rtol=0.0, atol=_FIXED_DERIVED_ATOL
+        ):
+            raise ValueError(f"{name} must equal the value compiled into {identity}")
+    flat: dict[str, float] = {}
+    for name, parameter in parameters.items():
+        if name not in params:
+            continue
+        value = params[name]
+        if isinstance(parameter, ContinuousArrayParameter):
+            array = np.asarray(value, dtype=np.float64)
+            if array.shape != parameter.shape:
+                raise ValueError(f"{name} must have shape {parameter.shape}, got {array.shape}")
+            # Integer sliders truncate in the DSP, so a fractional value must fail here, not render.
+            if isinstance(parameter, DiscreteArrayParameter) and not np.equal(
+                array, np.rint(array)
+            ).all():
+                raise ValueError(f"{name} must contain only integer values")
+            flat.update(zip(parameter.native_names(), array.reshape(-1).tolist(), strict=True))
+        else:
+            flat.update(require_scalar_synth_params({name: value}))
+    return flat
