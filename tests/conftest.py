@@ -1919,6 +1919,7 @@ def _surge_smoke_render_config(param_spec_name: str, plugin_path: str) -> dict[s
             "synth": {
                 "name": param_spec_name,
                 "param_spec_name": param_spec_name,
+                "note_timing_parameterization": "onset_duration",
                 "plugin_path": plugin_path,
                 "plugin_state_path": plugin_state_paths[param_spec_name],
                 "synth_version": "1.3.4",

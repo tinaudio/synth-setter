@@ -1977,6 +1977,7 @@ def _compose_fake_oracle_eval_cfg(
                     "synth": {
                         "name": param_spec_name,
                         "param_spec_name": param_spec_name,
+                        "note_timing_parameterization": "onset_duration",
                         "plugin_state_path": str(plugin_state_paths[param_spec_name]),
                         "plugin_path": "plugins/fake.vst3",
                         "synth_version": "1.3.4",
