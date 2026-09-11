@@ -18,7 +18,7 @@ import wandb
 from lightning import Callback, LightningDataModule, LightningModule, Trainer, seed_everything
 from lightning.pytorch.loggers import Logger
 from lightning.pytorch.loggers.wandb import WandbLogger
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 from pydantic_settings import CliApp
 
 from synth_setter.cli.migrate_checkpoint import checkpoint_migration_hint
@@ -30,7 +30,7 @@ from synth_setter.evaluation.audio_probe import (
 )
 from synth_setter.evaluation.compute_audio_metrics import load_aggregated_metrics
 from synth_setter.feature_flags import apply_feature_flags
-from synth_setter.model_cache import synth_setter_cache_dir
+from synth_setter.model_cache import retry_external_io, synth_setter_cache_dir
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
     dataset_artifact_ref,
@@ -69,6 +69,10 @@ register_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)
 
 _MAX_EVALUATION_SEED = 2**32 - 1
+
+
+class _CheckpointChangedDuringDownloadError(RuntimeError):
+    """A remote checkpoint changed between metadata lookup and download."""
 
 
 def _load_audio_metrics(metrics_dir: Path) -> dict[str, float]:  # noqa: DOC502 — raised by load_aggregated_metrics
@@ -261,6 +265,16 @@ def _run_predict_postprocessing(cfg: DictConfig) -> dict[str, float]:  # noqa: D
     return {}
 
 
+def _checkpoint_sha256(checkpoint: Path) -> str:
+    """Compute one checkpoint file's SHA-256 digest.
+
+    :param checkpoint: Local checkpoint file.
+    :returns: Lowercase SHA-256 hex digest.
+    """
+    with checkpoint.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def _verify_checkpoint_sha256(checkpoint: Path, expected_sha256: str | None) -> None:
     """Reject checkpoint bytes that do not match their optional provenance pin.
 
@@ -270,8 +284,7 @@ def _verify_checkpoint_sha256(checkpoint: Path, expected_sha256: str | None) -> 
     """
     if expected_sha256 is None:
         return
-    with checkpoint.open("rb") as stream:
-        actual = hashlib.file_digest(stream, "sha256").hexdigest()
+    actual = _checkpoint_sha256(checkpoint)
     if actual != expected_sha256:
         raise RuntimeError(
             f"checkpoint SHA-256 mismatch: expected {expected_sha256}, "
@@ -299,14 +312,16 @@ def _normalize_checkpoint_sha256(expected_sha256: str | None) -> str | None:
     return normalized
 
 
-def _download_verified_checkpoint(r2_uri: str, digest: str, cached: Path) -> None:
-    """Stage and atomically publish one verified remote checkpoint.
+@retry_external_io(retry_exceptions=(_CheckpointChangedDuringDownloadError,))
+def _download_checkpoint(r2_uri: str, expected_sha256: str | None, cached: Path) -> None:
+    """Stage and atomically publish one remote checkpoint.
 
     :param r2_uri: R2 object URI to download.
-    :param digest: Expected lowercase SHA-256 digest.
-    :param cached: Content-addressed destination path.
+    :param expected_sha256: Lowercase SHA-256 digest to enforce, or ``None``.
+    :param cached: Destination path.
     :raises FileNotFoundError: The remote object does not exist.
-    :raises RuntimeError: R2 access fails or downloaded bytes violate the pin.
+    :raises RuntimeError: R2 access fails or downloaded bytes violate the optional pin.
+    :raises _CheckpointChangedDuringDownloadError: The remote object's size changes mid-transfer.
     """
     try:
         r2_io.ensure_r2_env_loaded()
@@ -327,8 +342,10 @@ def _download_verified_checkpoint(r2_uri: str, digest: str, cached: Path) -> Non
     try:
         r2_io.download_to_path(r2_uri, staging)
         if staging.stat().st_size != remote_size:
-            raise RuntimeError(f"downloaded eval checkpoint is incomplete: {r2_uri}")
-        _verify_checkpoint_sha256(staging, digest)
+            raise _CheckpointChangedDuringDownloadError(
+                f"downloaded eval checkpoint is incomplete: {r2_uri}"
+            )
+        _verify_checkpoint_sha256(staging, expected_sha256)
         staging.replace(cached)
     except (FileNotFoundError, subprocess.CalledProcessError) as exc:
         raise RuntimeError(f"rclone cannot download eval checkpoint: {r2_uri}") from exc
@@ -384,9 +401,26 @@ def _cached_remote_checkpoint(r2_uri: str, digest: str) -> Path:
     :param digest: Expected lowercase SHA-256 digest and cache identity.
     :returns: Verified local checkpoint path.
     """
-    return _cached_checkpoint(
-        digest, lambda cached: _download_verified_checkpoint(r2_uri, digest, cached)
-    )
+    return _cached_checkpoint(digest, lambda cached: _download_checkpoint(r2_uri, digest, cached))
+
+
+def _download_unpinned_remote_checkpoint(r2_uri: str) -> Path:
+    """Download current remote bytes into an immutable content-addressed path.
+
+    :param r2_uri: R2 object URI to localize.
+    :returns: Local checkpoint path keyed by the downloaded content digest.
+    """
+    downloads_root = synth_setter_cache_dir() / "checkpoints" / "evaluation" / "downloads"
+    downloads_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".eval-", dir=downloads_root) as temp_dir:
+        downloaded = Path(temp_dir) / "model.ckpt"
+        _download_checkpoint(r2_uri, None, downloaded)
+        digest = _checkpoint_sha256(downloaded)
+
+        def publish(cached: Path) -> None:
+            downloaded.replace(cached)
+
+        return _cached_checkpoint(digest, publish)
 
 
 def _cached_local_checkpoint(source: Path, digest: str) -> Path:
@@ -404,11 +438,13 @@ def _cached_local_checkpoint(source: Path, digest: str) -> Path:
 def _localize_eval_checkpoint(
     checkpoint: str | None,
     expected_sha256: str | None = None,
+    world_size: int = 1,
 ) -> str | None:
-    """Return the verified local checkpoint path Lightning should consume.
+    """Return the local checkpoint path Lightning should consume.
 
     :param checkpoint: Local path, R2-backed URI, or ``None``.
-    :param expected_sha256: SHA-256 pin, required for remote checkpoint bytes.
+    :param expected_sha256: Optional SHA-256 pin for checkpoint bytes.
+    :param world_size: Number of evaluation processes that must consume identical bytes.
     :returns: Local checkpoint path for Lightning, or ``None``.
     :raises ValueError: Checkpoint provenance is contradictory or malformed.
     """
@@ -424,9 +460,11 @@ def _localize_eval_checkpoint(
         if digest is None:
             return checkpoint
         return str(_cached_local_checkpoint(Path(checkpoint), digest))
-    if digest is None:
-        raise ValueError("remote checkpoint requires ckpt_sha256")
     r2_uri = r2_io.from_s3_uri(checkpoint) if checkpoint.startswith("s3://") else checkpoint
+    if digest is None:
+        if world_size != 1:
+            raise ValueError("an unpinned remote checkpoint requires single-process evaluation")
+        return str(_download_unpinned_remote_checkpoint(r2_uri))
     return str(_cached_remote_checkpoint(r2_uri, digest))
 
 
@@ -492,7 +530,6 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             )
         seed_everything(evaluation_seed, workers=True)
     apply_feature_flags(cfg)
-    checkpoint_path = _localize_eval_checkpoint(cfg.ckpt_path, cfg.get("ckpt_sha256"))
 
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)
@@ -512,6 +549,19 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
 
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, logger=logger, callbacks=callbacks)
+
+    configured_checkpoint = cfg.ckpt_path
+    is_unpinned_remote = (
+        cfg.get("ckpt_sha256") is None
+        and isinstance(configured_checkpoint, str)
+        and configured_checkpoint.startswith(("r2://", "s3://"))
+    )
+    checkpoint_path = _localize_eval_checkpoint(
+        configured_checkpoint, cfg.get("ckpt_sha256"), trainer.world_size
+    )
+    if is_unpinned_remote and checkpoint_path is not None:
+        with open_dict(cfg):
+            cfg.ckpt_sha256 = _checkpoint_sha256(Path(checkpoint_path))
 
     object_dict = {
         "cfg": cfg,

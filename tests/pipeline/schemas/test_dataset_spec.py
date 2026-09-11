@@ -121,14 +121,75 @@ class TestRenderConfig:
         assert cfg.audio_dtype == "float16"
         assert cfg.mel_spec_dtype == "float32"
 
-    def test_non_faust_historical_digest_ignores_absent_block_size(self) -> None:
-        """Adding the optional field does not invalidate existing VST shards."""
+    @pytest.mark.parametrize("platform", ["linux", "darwin"])
+    def test_non_faust_historical_digest_ignores_absent_block_size(
+        self, monkeypatch: pytest.MonkeyPatch, platform: str
+    ) -> None:
+        """Adding the optional field does not invalidate existing VST shards.
+
+        :param monkeypatch: Pytest fixture used to stub ``_current_platform``.
+        :param platform: Platform whose historical defaults are projected.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: platform
+        )
         cfg = RenderConfig(**_valid_render_kwargs())
+        restored = RenderConfig.model_validate_json(cfg.model_dump_json())
 
         assert cfg.block_size is None
+        assert restored.shard_metadata().render_contract_digest == (
+            cfg.shard_metadata().render_contract_digest
+        )
         assert (
             cfg.shard_metadata().render_contract_digest
             == "611848f43224078da8d98f866b0428d7c7a24eac7aa472bc537193ac7c9a1abb"
+        )
+
+    def test_v1_omitted_gui_cadence_transport_preserves_darwin_value(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """V1 worker JSON carries effective cadence and omission provenance.
+
+        :param monkeypatch: Pytest fixture used to change platforms across transport.
+        """
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "darwin"
+        )
+        cfg = RenderConfig(**(_valid_render_kwargs() | {"render_contract_version": 1}))
+        serialized = cfg.model_dump_json()
+
+        assert json.loads(serialized)["v1_gui_toggle_cadence_omitted"] is True
+
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+        )
+        restored = RenderConfig.model_validate_json(serialized)
+
+        assert restored.gui_toggle_cadence == "never"
+        assert restored.v1_gui_toggle_cadence_omitted is True
+        assert (
+            restored.shard_metadata().render_contract_digest
+            == "611848f43224078da8d98f866b0428d7c7a24eac7aa472bc537193ac7c9a1abb"
+        )
+
+    def test_non_faust_historical_digest_preserves_explicit_gui_cadence(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An explicitly selected safe cadence remains part of V1 identity.
+
+        :param monkeypatch: Pytest fixture used to change platforms after serialization.
+        """
+        cfg = RenderConfig(**(_valid_render_kwargs() | {"gui_toggle_cadence": "never"}))
+        serialized = cfg.model_dump_json()
+        monkeypatch.setattr(
+            "synth_setter.pipeline.schemas.spec._current_platform", lambda: "linux"
+        )
+        restored = RenderConfig.model_validate_json(serialized)
+
+        assert restored.gui_toggle_cadence == "never"
+        assert (
+            restored.shard_metadata().render_contract_digest
+            == "f04c981c0b6e82029af72272714e4b50f478dca17309c9bb7f6f58da9f551a5e"
         )
 
     @pytest.mark.parametrize("field", ["audio_dtype", "mel_spec_dtype"])
