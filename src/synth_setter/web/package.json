@@ -2,7 +2,13 @@
   "name": "synth-setter-browser-eval",
   "private": true,
   "type": "module",
-  "scripts": {"test": "node --test rk4.test.mjs guidance.test.mjs"},
-  "dependencies": {"onnxruntime-web": "1.29.0"},
-  "devDependencies": {"@playwright/test": "1.63.0"}
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "onnxruntime-web": "1.29.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
 }

@@ -38,6 +38,7 @@ _PARITY_PAIRS: tuple[tuple[FaustBackend, FaustBackend], ...] = (
     ("faustcpp", "faustwasm"),
 )
 _RENDER_SAMPLES = 176_400
+_TAIL_LIMITS = {"mss_max": 0.65, "rms_min": 0.9998, "wmfcc_max": 1.1}
 _BACKEND_VERSIONS: dict[FaustBackend, str] = {
     "dawdreamer": "0.8.3",
     "faustwasm": "0.18.3",
@@ -67,7 +68,7 @@ _PARITY_LIMITS = {
         "sot_max": 0.0001,
         "wmfcc_max": 0.06,
     },
-    # Faust 2.70.3 A/B/A maxima were 3.109090, 1.170763, 0.997801, 0.001048, and 1.901054.
+    # Three Faust 2.37.3 A/B/A runs had maxima 3.120689, 1.174139, 0.997783, 0.001013, and 1.906417.
     ("faustcpp", "faustwasm"): {
         "mel_rmse_max": 3.75,
         "mss_max": 1.5,
@@ -276,3 +277,26 @@ def test_faust_hosts_a_b_a_workload_has_per_render_parity(
     assert metrics["rms"] >= limits["rms_min"], diagnostic
     assert metrics["sot"] <= limits["sot_max"], diagnostic
     assert metrics["wmfcc"] <= limits["wmfcc_max"], diagnostic
+
+
+@pytest.mark.parametrize("sample", [0, 1, 2])
+def test_faustcpp_matches_faustwasm_release_tail(
+    host_results: dict[FaustBackend, _HostResult],
+    sample: int,
+) -> None:
+    """Native C++ preserves the post-0.5-second release and reverb behavior.
+
+    :param host_results: Shared production Lance results.
+    :param sample: Matched workload row.
+    """
+    native_tail = host_results["faustcpp"].audio[sample, :, _COMPARISON_SAMPLES:]
+    wasm_tail = host_results["faustwasm"].audio[sample, :, _COMPARISON_SAMPLES:]
+    metrics = {
+        "mss": float(compute_mss(native_tail, wasm_tail)),
+        "rms": float(compute_rms(native_tail, wasm_tail)),
+        "wmfcc": float(compute_wmfcc(native_tail, wasm_tail)),
+    }
+    diagnostic = {"sample": sample, "metrics": metrics}
+    assert metrics["mss"] <= _TAIL_LIMITS["mss_max"], diagnostic
+    assert metrics["rms"] >= _TAIL_LIMITS["rms_min"], diagnostic
+    assert metrics["wmfcc"] <= _TAIL_LIMITS["wmfcc_max"], diagnostic

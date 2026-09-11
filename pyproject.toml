@@ -406,6 +406,8 @@ namespaces = true
   "faustwasm/**/*.txt",
   "web/*.html",
   "web/*.mjs",
+  "web/fdn/*.mjs",
+  "web/fdn/fixtures/*.json",
   "web/package*.json",
 ]
 

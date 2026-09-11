@@ -10,7 +10,8 @@ const artifactDirectory = process.env.FAUSTWASM_E2E_ARTIFACT;
 const monoArtifactDirectory = process.env.FAUSTWASM_MONO_E2E_ARTIFACT;
 const browserDirectory = path.resolve(import.meta.dirname, "..");
 const runtimePath =
-  process.env.FAUSTWASM_RUNTIME_PATH ?? path.join(browserDirectory, "..", "runtime.mjs");
+  process.env.FAUSTWASM_RUNTIME_PATH ??
+  path.resolve(browserDirectory, "../../../src/synth_setter/faustwasm/runtime.mjs");
 let activeArtifactDirectory;
 let baseUrl;
 let server;
