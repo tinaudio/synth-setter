@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789108398719,
+  "lastUpdate": 1789113463808,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -16794,6 +16794,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.05830180644989014,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5bfeda35639b0ee3e30a1d321dac756c53c02dbc",
+          "message": "internal-feat(faust): add impulse-excited Kronecker FDN identity (#3524)\n\nRegister faust_kronecker_fdn, a mono order-8 feedback delay network whose\nfeedback matrix is the three-level Kronecker product of Coppola (DAFx26),\nmirroring the pyfdn_n8_mono_kronecker control set in Faust UI form.\n\nEvery render starts from a fixed unit impulse, so MIDI conditioning stays\nan unused pipeline stub and dataset rows are deterministic impulse\nresponses. The compiled DSP reproduces the reference Kronecker loop\nsample-exactly (see test_faust_kronecker_fdn).\n\nCloses #3519",
+          "timestamp": "2026-09-11T01:30:16-04:00",
+          "tree_id": "c739facb8783e6c4ab1c17b92bc20ccaefcc4e66",
+          "url": "https://github.com/tinaudio/synth-setter/commit/5bfeda35639b0ee3e30a1d321dac756c53c02dbc"
+        },
+        "date": 1789113459486,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.530438184738159,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.382099973354489,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.03518218174576759,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.015703856945037842,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.228694200515747,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.662577258083312,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.9517083168029785,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.657140452358871,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.046869345009326935,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.053839266300201416,
             "unit": "1-cos"
           },
           {
