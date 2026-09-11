@@ -6,6 +6,8 @@ download_dataset_root_uri: null
 use_saved_mean_and_variance: true
 batch_size: 128
 ot: true
+# Maximum uniform target offset in the normalized [0, 1] parameter domain.
+param_jitter_amount: 0.0
 conditioning: mel
 # Optional sketch-control spec; the `sketch=on` group fills it (#2612).
 sketch: null

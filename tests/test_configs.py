@@ -416,6 +416,13 @@ def test_pyfdn_diffvox_experiment_dispatches_stereo_renderer() -> None:
     assert renderer.channels == 2
 
 
+def test_vst_param_jitter_defaults_off() -> None:
+    """The VST training datamodule requires an explicit nonzero jitter amount."""
+    cfg = _compose("train.yaml", ["datamodule=vst", "model=vst_ffn", "synth=surge_xt"])
+
+    assert cfg.datamodule.param_jitter_amount == 0.0
+
+
 def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
     """Compose a top-level config with overrides, clearing GlobalHydra around it.
 

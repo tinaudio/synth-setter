@@ -7,7 +7,7 @@ from typing import NotRequired, Self, TypedDict
 import numpy as np
 import torch
 from lightning import LightningDataModule
-from pydantic import BaseModel, ConfigDict, PositiveInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PositiveInt, model_validator
 
 from synth_setter.conditioning import (
     NUM_SKETCH_TRACK_ROWS,
@@ -109,6 +109,25 @@ def _sketch_range_validation_error(
     return None
 
 
+class _ParamJitterConfig(BaseModel, frozen=True, strict=True):
+    """Validate the jitter value crossing the Hydra configuration boundary.
+
+    .. attribute :: param_jitter_amount
+
+        Maximum absolute offset in the normalized ``[0, 1]`` domain.
+    """
+
+    param_jitter_amount: float = Field(ge=0, le=1)
+
+
+def _validate_param_jitter_amount(amount: float) -> None:
+    """Reject jitter values outside the strict normalized-domain contract.
+
+    :param amount: Maximum absolute offset in the normalized ``[0, 1]`` domain.
+    """
+    _ParamJitterConfig(param_jitter_amount=amount)
+
+
 def prepare_batch(
     raw: RawBatch,
     *,
@@ -119,6 +138,7 @@ def prepare_batch(
     generator: torch.Generator,
     sketch_profile: SketchControlProfile = "music",
     sketch_pitch_zero_threshold: float | None = None,
+    param_jitter_amount: float = 0.0,
 ) -> dict[str, torch.Tensor | None]:
     """Turn one batch of stored columns into model-ready tensors.
 
@@ -131,6 +151,8 @@ def prepare_batch(
     :param sketch_profile: Numeric and channel-group contract for ``sketch_ctrl``.
     :param sketch_pitch_zero_threshold: Zero-bin ``sketch_ctrl`` pitch
         activations below this value (#2614), or ``None`` to skip.
+    :param param_jitter_amount: Maximum absolute uniform offset in the encoded
+        ``[0, 1]`` domain; zero disables jitter.
     :returns: Model batch with float32 contiguous tensors and ``None`` for unread
         modalities; the stored ``mel_spec`` column is emitted under the ``mel`` key,
         as ``music2latent`` is under ``m2l``.
@@ -139,6 +161,7 @@ def prepare_batch(
     validation_error = _raw_batch_validation_error(raw, sketch_profile)
     if validation_error is not None:
         raise ValueError(validation_error)
+    _validate_param_jitter_amount(param_jitter_amount)
 
     audio_raw = raw.get("audio")
     audio = torch.from_numpy(audio_raw).to(dtype=torch.float32) if audio_raw is not None else None
@@ -183,9 +206,18 @@ def prepare_batch(
         sketch = None
 
     param_array = raw["param_array"]
-    if rescale_params:
-        param_array = param_array * 2 - 1
-    params = torch.from_numpy(param_array).to(dtype=torch.float32)
+    if param_jitter_amount > 0:
+        params = torch.from_numpy(param_array).to(dtype=torch.float32)
+        jitter = torch.empty_like(params).uniform_(
+            -param_jitter_amount, param_jitter_amount, generator=generator
+        )
+        params = (params + jitter).clamp(0, 1)
+        if rescale_params:
+            params = params * 2 - 1
+    else:
+        if rescale_params:
+            param_array = param_array * 2 - 1
+        params = torch.from_numpy(param_array).to(dtype=torch.float32)
     noise = torch.empty_like(params).normal_(generator=generator)
     if ot:
         noise, params, mel, m2l, conditioning, sketch, audio = _hungarian_match(
