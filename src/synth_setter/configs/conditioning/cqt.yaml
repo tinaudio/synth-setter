@@ -1,0 +1,19 @@
+# @package _global_
+
+# CQT log-magnitude conditioning on the `cqt` Lance column written by the
+# add_embeddings CLI for canonical four-second renders.
+defaults:
+  - override /model/encoder: embedpool
+
+model:
+  conditioning:
+    column: cqt
+    input_shape: [256, 401]
+  encoder:
+    embed_dim: ${model.conditioning.input_shape.0}
+    max_seq_len: ${model.conditioning.input_shape.1}
+
+datamodule:
+  conditioning:
+    column: ${model.conditioning.column}
+    input_shape: ${model.conditioning.input_shape}

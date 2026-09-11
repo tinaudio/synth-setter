@@ -18,6 +18,7 @@ from pydantic import (
     model_validator,
 )
 
+from synth_setter.feature_flags import ResolvedFeatureFlags
 from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 from synth_setter.schemas.datamodule_config import DataModuleConfig
 from synth_setter.schemas.model_config import ModelConfig
@@ -60,9 +61,17 @@ class TrainConfig(StrictAllowExtraModel):
 
         Path to a Lightning checkpoint to resume from.
 
+    .. attribute :: feature_flags
+
+        Integer IDs resolved to registered runtime feature-flag records.
+
+    .. attribute :: estimate_normalization_stats
+
+        Estimate online frontend statistics from training waveforms when absent.
+
     .. attribute :: seed
 
-        Seed forwarded to ``lightning.seed_everything``.
+        Seed forwarded to ``lightning.seed_everything`` and calibration sampling.
 
     .. attribute :: optimized_metric
 
@@ -113,11 +122,26 @@ class TrainConfig(StrictAllowExtraModel):
             "this checkpoint and ``trainer.test`` loads it as the test weights."
         ),
     )
+    feature_flags: ResolvedFeatureFlags = Field(
+        default_factory=list,
+        description=(
+            "Integer feature-flag IDs resolved to their registered number, full "
+            "environment-variable name, and description."
+        ),
+    )
+    estimate_normalization_stats: StrictBool = Field(
+        default=False,
+        description=(
+            "Estimate online log-mel normalization from up to 10,000 training "
+            "waveforms when neither the frontend nor dataset supplies statistics."
+        ),
+    )
     seed: NonNegativeInt | None = Field(
         default=None,
         description=(
             "Seed forwarded to ``lightning.seed_everything`` for PyTorch, NumPy, "
-            "and Python's ``random``. ``None`` means non-deterministic."
+            "and Python's ``random``. ``None`` leaves training non-deterministic; "
+            "calibration sampling alone then uses seed 1234."
         ),
     )
     optimized_metric: NonBlankStr | None = Field(

@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import math
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -25,10 +26,7 @@ import numpy as np
 
 from synth_setter.data.vst.dawdreamer_runtime import settle_dawdreamer_preset
 from synth_setter.data.vst.param_map import SynthParamMap
-from synth_setter.data.vst.torchsynth_param_spec import (
-    DEFAULT_NORMALIZED_PATCH,
-    TORCHSYNTH_FULL_PARAM_SPEC,
-)
+from synth_setter.data.vst.param_spec import ParameterValue, require_scalar_synth_params
 from synth_setter.data.vst.surgepy_runtime import (
     SurgePyModule,
     SurgePyNamedParam,
@@ -36,8 +34,16 @@ from synth_setter.data.vst.surgepy_runtime import (
     import_surgepy,
     iter_surgepy_named_params,
 )
+from synth_setter.data.vst.torchsynth_param_spec import (
+    DEFAULT_NORMALIZED_PATCH,
+    TORCHSYNTH_FULL_PARAM_SPEC,
+)
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.renderer_backend import FAUST_PLUGIN_NAME, SURGEPY_PLUGIN_NAME
+from synth_setter.renderer_backend import (
+    DAWDREAMER_FLUSH_BLOCKS,
+    SURGEPY_PLUGIN_NAME,
+    FlushBlocks,
+)
 
 if TYPE_CHECKING:
     from pedalboard import VST3Plugin
@@ -218,6 +224,10 @@ class _DawDreamerModule(Protocol):
     def RenderEngine(self, sample_rate: float, block_size: int) -> _DawDreamerEngine: ...
 
 
+class NonFiniteAudioError(ValueError):
+    """Rendered audio contained NaN or infinity."""
+
+
 def _validate_rendered_audio(
     audio: np.ndarray,
     *,
@@ -230,14 +240,15 @@ def _validate_rendered_audio(
     :param channels: Required output channel count.
     :param samples: Required output sample count.
     :returns: The validated audio without replacement.
-    :raises ValueError: If shape or finiteness is invalid.
+    :raises ValueError: If the shape is invalid.
+    :raises NonFiniteAudioError: If any sample is non-finite.
     """
     if audio.shape != (channels, samples):
         raise ValueError(
             f"rendered audio shape {audio.shape} != expected {(channels, samples)}"
         )
     if not np.isfinite(audio).all():
-        raise ValueError("rendered audio must contain only finite samples")
+        raise NonFiniteAudioError("rendered audio must contain only finite samples")
     return audio
 
 
@@ -247,7 +258,7 @@ class AudioRenderer(ABC):
 
     .. attribute :: plugin_path
 
-       Plugin path or interpreter-resolved backend sentinel.
+       Plugin path, interpreter-resolved backend sentinel, or registry URI.
 
     .. attribute :: sample_rate
 
@@ -275,7 +286,7 @@ class AudioRenderer(ABC):
     @abstractmethod
     def render(
         self,
-        params: dict[str, float],
+        params: Mapping[str, ParameterValue],
         midi_note: int,
         velocity: int,
         note_start_and_end: tuple[float, float],
@@ -300,13 +311,19 @@ class PedalboardRenderer(AudioRenderer):
     .. attribute :: plugin
 
        Optional preloaded pedalboard plugin instance.
+
+    .. attribute :: flush_blocks
+
+       Silent host blocks processed after load, parameter writes, and the render;
+       ``None`` covers ``PEDALBOARD_FLUSH_SECONDS`` at the render sample rate.
     """
 
     plugin: VST3Plugin | None = field(default=None, repr=False)
+    flush_blocks: FlushBlocks | None = None
 
     def render(
         self,
-        params: dict[str, float],
+        params: Mapping[str, ParameterValue],
         midi_note: int,
         velocity: int,
         note_start_and_end: tuple[float, float],
@@ -324,10 +341,11 @@ class PedalboardRenderer(AudioRenderer):
         """
         from synth_setter.data.vst.core import render_params
 
+        scalar_params = require_scalar_synth_params(params)
         return _validate_rendered_audio(
             render_params(
                 self.plugin_path,
-                params,
+                scalar_params,
                 midi_note,
                 velocity,
                 note_start_and_end,
@@ -337,6 +355,7 @@ class PedalboardRenderer(AudioRenderer):
                 plugin_state_path=self.plugin_state_path,
                 plugin=self.plugin,
                 warmup=warmup,
+                flush_blocks=self.flush_blocks,
             ),
             channels=self.channels,
             samples=int(self.sample_rate * self.signal_duration_seconds),
@@ -557,7 +576,7 @@ class SurgePyRenderer(AudioRenderer):
 
     def render(
         self,
-        params: dict[str, float],
+        params: Mapping[str, ParameterValue],
         midi_note: int,
         velocity: int,
         note_start_and_end: tuple[float, float],
@@ -576,8 +595,9 @@ class SurgePyRenderer(AudioRenderer):
         :raises ValueError: If note timing is invalid.
         """
         del warmup
+        scalar_params = require_scalar_synth_params(params)
         self._initialize_synth()
-        self._apply_parameters(params)
+        self._apply_parameters(scalar_params)
         start, end = note_start_and_end
         if not 0.0 <= start < end <= self.signal_duration_seconds:
             raise ValueError("note times must satisfy 0 <= start < end <= signal duration")
@@ -658,7 +678,7 @@ class TorchSynthRenderer(AudioRenderer):
 
     def render(
         self,
-        params: dict[str, float],
+        params: Mapping[str, ParameterValue],
         midi_note: int,
         velocity: int,
         note_start_and_end: tuple[float, float],
@@ -679,6 +699,7 @@ class TorchSynthRenderer(AudioRenderer):
         :raises KeyError: A requested key has no matching voice parameter.
         """
         del velocity, warmup
+        params = require_scalar_synth_params(params)
         # Lazy: pulls torch + lightning, which this module must not import eagerly.
         import torch
 
@@ -711,6 +732,10 @@ class DawDreamerFaustRenderer(AudioRenderer):
 
        Shared source and exact-address parameter-spec identity.
 
+    .. attribute :: source_sha256
+
+       Expected digest of the checked-in source.
+
     .. attribute :: block_size
 
        DawDreamer engine block size.
@@ -729,6 +754,7 @@ class DawDreamerFaustRenderer(AudioRenderer):
     """
 
     param_spec_name: ParamSpecName = field(kw_only=True)
+    source_sha256: str = field(kw_only=True)
     block_size: int = DAWDREAMER_BLOCK_SIZE
     reload_processor_each_render: bool = True
     engine: _DawDreamerEngine = field(init=False, repr=False)
@@ -742,17 +768,23 @@ class DawDreamerFaustRenderer(AudioRenderer):
     def __post_init__(self) -> None:
         """Resolve checked-in identities and compile the first native graph.
 
-        :raises ValueError: The direct renderer configuration accepts an external resource.
+        :raises ValueError: The source reference, state path, or source digest is invalid.
         """
         from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
         from synth_setter.data.vst.faust_sources import resolve_faust_dsp
+        from synth_setter.synth_spec import validate_faust_registry_reference
 
-        if self.plugin_path != FAUST_PLUGIN_NAME:
-            raise ValueError('Faust renderer requires plugin_path="faust"')
+        source_identity = (
+            self.param_spec_name
+            if not self.plugin_path
+            else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
+        )
         if self.plugin_state_path:
             raise ValueError("Faust renderer does not accept plugin_state_path")
-        dsp = resolve_faust_dsp(self.param_spec_name)
-        spec = resolve_faust_param_spec(self.param_spec_name)
+        dsp = resolve_faust_dsp(source_identity)
+        if hashlib.sha256(dsp.source.encode()).hexdigest() != self.source_sha256:
+            raise ValueError("registered Faust source does not match source_sha256")
+        spec = resolve_faust_param_spec(source_identity)
         self._dsp_source = dsp.source
         self._num_voices = dsp.num_voices
         self._parameter_addresses = tuple(spec.synth_param_names)
@@ -779,7 +811,7 @@ class DawDreamerFaustRenderer(AudioRenderer):
 
     def render(
         self,
-        params: dict[str, float],
+        params: Mapping[str, ParameterValue],
         midi_note: int,
         velocity: int,
         note_start_and_end: tuple[float, float],
@@ -796,6 +828,7 @@ class DawDreamerFaustRenderer(AudioRenderer):
         :returns: Rendered audio with channels on the first axis.
         """
         del warmup
+        params = require_scalar_synth_params(params)
         self._validate_parameter_addresses(params)
         if self.reload_processor_each_render and self._has_rendered:
             self._initialize_graph()
@@ -864,6 +897,10 @@ class DawDreamerRenderer(AudioRenderer):
 
        Whether subsequent calls replace the initialized plugin graph.
 
+    .. attribute :: flush_blocks
+
+       Silent engine callbacks after preset load, parameter writes, and the note render.
+
     .. attribute :: engine
 
        DawDreamer render engine instance.
@@ -876,6 +913,7 @@ class DawDreamerRenderer(AudioRenderer):
     block_size: int = DAWDREAMER_BLOCK_SIZE
     parameter_map: SynthParamMap = field(kw_only=True)
     reload_plugin_each_render: bool = True
+    flush_blocks: FlushBlocks = DAWDREAMER_FLUSH_BLOCKS
     engine: _DawDreamerEngine = field(init=False, repr=False)
     plugin: _DawDreamerPlugin = field(init=False, repr=False)
     _parameter_indices: dict[str, int] = field(init=False, repr=False)
@@ -884,7 +922,7 @@ class DawDreamerRenderer(AudioRenderer):
 
     def __post_init__(self) -> None:
         """Create the DawDreamer engine and load the plugin graph."""
-        self.plugin_path = str(Path(self.plugin_path).expanduser().resolve())
+        self.plugin_path = str(Path(self.plugin_path).expanduser().absolute())
         if self.plugin_state_path is not None:
             self.plugin_state_path = str(Path(self.plugin_state_path).expanduser().resolve())
         self._daw = cast(_DawDreamerModule, import_module("dawdreamer"))
@@ -897,10 +935,13 @@ class DawDreamerRenderer(AudioRenderer):
         self._validate_parameter_map()
 
     def _create_graph(self) -> None:
-        """Create a fresh engine, plugin processor, graph, and parameter dispatch."""
+        """Create a fresh engine and open the plugin under its managed lease."""
+        from synth_setter.plugin_runtime import validated_bundle_lease
+
         self.engine = self._daw.RenderEngine(self.sample_rate, self.block_size)
-        self.plugin = self.engine.make_plugin_processor("synth", self.plugin_path)
-        self.engine.load_graph([(self.plugin, [])])
+        with validated_bundle_lease(Path(self.plugin_path)) as validated_bundle:
+            self.plugin = self.engine.make_plugin_processor("synth", str(validated_bundle))
+            self.engine.load_graph([(self.plugin, [])])
         self._parameter_indices = self.parameter_map.dawdreamer_indices()
 
     def _validate_parameter_map(self) -> None:
@@ -939,7 +980,7 @@ class DawDreamerRenderer(AudioRenderer):
 
     def render(
         self,
-        params: dict[str, float],
+        params: Mapping[str, ParameterValue],
         midi_note: int,
         velocity: int,
         note_start_and_end: tuple[float, float],
@@ -956,6 +997,7 @@ class DawDreamerRenderer(AudioRenderer):
         :returns: Rendered audio with channels on the first axis.
         """
         del warmup
+        params = require_scalar_synth_params(params)
         self._validate_parameter_dispatch(params)
         if self.reload_plugin_each_render and self._has_rendered:
             self._initialize_graph()
@@ -964,12 +1006,15 @@ class DawDreamerRenderer(AudioRenderer):
         try:
             for name, value in params.items():
                 self.plugin.set_parameter(self._parameter_indices[name], value)
+            self._settle(self.flush_blocks.post_param)
             start, end = note_start_and_end
             self.plugin.add_midi_note(midi_note, velocity, start, end - start)
             self.engine.render(self.signal_duration_seconds)
-            audio = np.asarray(self.engine.get_audio())
+            # Copy before further callbacks in case the engine hands back its own buffer.
+            audio = np.array(self.engine.get_audio(), copy=True)
         finally:
             self.plugin.clear_midi()
+        self._settle(self.flush_blocks.post_render)
         matched = self._match_channels(audio)
         return _validate_rendered_audio(
             matched,
@@ -1029,8 +1074,18 @@ class DawDreamerRenderer(AudioRenderer):
             self.plugin.load_vst3_preset(self.plugin_state_path)
         else:
             self.plugin.load_preset(self.plugin_state_path)
+        self._settle(self.flush_blocks.post_load)
+
+    def _settle(self, blocks: int) -> None:
+        """Process ``blocks`` silent engine callbacks; zero skips the step.
+
+        :param blocks: Number of block-length callbacks to process.
+        """
+        if blocks == 0:
+            return
         settle_dawdreamer_preset(
             self.engine,
             sample_rate=self.sample_rate,
             block_size=self.block_size,
+            blocks=blocks,
         )

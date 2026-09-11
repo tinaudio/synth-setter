@@ -32,15 +32,23 @@ from einops import rearrange
 from jaxtyping import Float, jaxtyped
 
 from synth_setter.clap import DEFAULT_CLAP_CHECKPOINT, resolve_clap_checkpoint
+from synth_setter.conditioning import (
+    PYFDN_SKETCH_CONTROLS,
+    PYFDN_SKETCH_STRUCT_FIELD,
+    SKETCH_STORAGE_FRAMES,
+)
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
+    CQT_FIELD,
     DEFAULT_PESTO_CHECKPOINT,
     M2L_FIELD,
     MATPAC_PLUS_FIELD,
     MEANAUDIO_16K_FIELD,
     NUM_SKETCH_CONTROLS,
     PARAM_ARRAY_FIELD,
+    PUPUJEPA_LARGE_FIELD,
+    PUPUJEPA_TINY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
     SHIFT_FIELD,
@@ -49,12 +57,17 @@ from synth_setter.data.vst.shapes import (
     SKETCH_VEC_CHILD,
     SSONDO_FIELD,
     T5GEMMA_FIELD,
-    PUPUJEPA_LARGE_FIELD,
-    PUPUJEPA_TINY_FIELD,
     mel_n_frames_from_samples,
 )
 from synth_setter.model_cache import checkpoint_tree_sha256
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.cqt import (
+    CQT_EMBEDDING_DIM,
+    CQTEncodeFn,
+    cqt_artifact_digest,
+    cqt_num_frames,
+    load_cqt_audio_encoder,
+)
 from synth_setter.pipeline.data.matpac_plus import (
     DEFAULT_MATPAC_PLUS_CHECKPOINT,
     MATPAC_PLUS_FRONTEND,
@@ -70,18 +83,6 @@ from synth_setter.pipeline.data.meanaudio import (
     load_meanaudio_audio_encoder,
     meanaudio_artifact_digest,
 )
-from synth_setter.pipeline.data.pupujepa import (
-    PupuJepaEncodeFn,
-    encode_pupujepa_column,
-    encode_pupujepa_large_column,
-    load_pupujepa_audio_encoder,
-)
-from synth_setter.pupujepa import (
-    DEFAULT_PUPUJEPA_CHECKPOINT,
-    PUPUJEPA_LARGE_EMBEDDING_DIM,
-    PUPUJEPA_TINY_EMBEDDING_DIM,
-    pupujepa_artifact_digest,
-)
 from synth_setter.pipeline.data.param_shift import (
     PARAM_SHIFT_INPUT_FIELDS,
     ROW_ID_FIELD,
@@ -89,6 +90,12 @@ from synth_setter.pipeline.data.param_shift import (
     encode_param_shift_column,
     load_param_shifter,
     param_shift_policy_values,
+)
+from synth_setter.pipeline.data.pupujepa import (
+    PupuJepaEncodeFn,
+    encode_pupujepa_column,
+    encode_pupujepa_large_column,
+    load_pupujepa_audio_encoder,
 )
 from synth_setter.pipeline.data.ssondo import (
     DEFAULT_SSONDO_CHECKPOINT,
@@ -98,6 +105,12 @@ from synth_setter.pipeline.data.ssondo import (
     SSONDOEncodeFn,
     load_ssondo_audio_encoder,
     resolve_ssondo_checkpoint,
+)
+from synth_setter.pupujepa import (
+    DEFAULT_PUPUJEPA_CHECKPOINT,
+    PUPUJEPA_LARGE_EMBEDDING_DIM,
+    PUPUJEPA_TINY_EMBEDDING_DIM,
+    pupujepa_artifact_digest,
 )
 from synth_setter.same import (
     DEFAULT_SAME_L_CHECKPOINT,
@@ -109,6 +122,8 @@ from synth_setter.same import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
+from synth_setter.utils.instantiators import close_loggers, instantiate_loggers
+from synth_setter.utils.logging_utils import log_wandb_provenance
 from synth_setter.workspace import operator_workspace
 
 if TYPE_CHECKING:
@@ -144,6 +159,7 @@ SKETCH_ENCODE_MAX_BATCH: int = 32
 # Whole-struct add_columns append works on storage 2.1 and 2.2 datasets;
 # per-child schema evolution (unused here) is the 2.2-only operation.
 SKETCH_VEC_COLUMN: str = f"{SKETCH_STRUCT_FIELD}.{SKETCH_VEC_CHILD}"
+PYFDN_SKETCH_POLICY_VERSION = 2
 
 type M2LEncodeFn = Callable[[np.ndarray], np.ndarray]
 type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
@@ -155,6 +171,7 @@ type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
 type Encoder = (
     M2LEncodeFn
     | ClapEncodeFn
+    | CQTEncodeFn
     | SameEncodeFn
     | SSONDOEncodeFn
     | PupuJepaEncodeFn
@@ -318,6 +335,15 @@ def _clap_artifact_identity(checkpoint: str) -> str:
     return _versioned_artifact_identity("clap", checkpoint_tree_sha256(checkpoint_dir))
 
 
+def _cqt_artifact_identity(checkpoint: str) -> str:
+    """Return the checkpoint-free CQT source and preprocessing identity.
+
+    :param checkpoint: Empty placeholder; CQT has no learned checkpoint.
+    :returns: Versioned source and feature-policy identity.
+    """
+    return _versioned_artifact_identity("cqt", cqt_artifact_digest(checkpoint))
+
+
 def _same_artifact_identity(checkpoint: str) -> str:
     """Resolve and hash one SAME checkpoint tree.
 
@@ -347,7 +373,32 @@ def _sketch_artifact_identity(checkpoint: str) -> str:
     :returns: Versioned installed-package and checkpoint identity.
     """
     version = importlib.metadata.version("pesto-pitch")
-    return _versioned_artifact_identity("sketch", f"package:{version};checkpoint:{checkpoint}")
+    identity = (
+        f"package:{version};checkpoint:{checkpoint};"
+        f"storage:avgmax{SKETCH_STORAGE_FRAMES}"
+    )
+    return _versioned_artifact_identity("sketch", identity)
+
+
+def _pyfdn_sketch_artifact_identity(checkpoint: str) -> str:
+    """Identify the checkpoint-free pyFDN temporal-sketch extraction policy.
+
+    :param checkpoint: Empty placeholder; the extractor has no learned weights.
+    :returns: Versioned DSP, normalization, temporal-bin, and package identity.
+    :raises ValueError: A checkpoint override was supplied.
+    """
+    if checkpoint:
+        raise ValueError("pyfdn_sketch is checkpoint-free and rejects checkpoint overrides")
+    packages = ",".join(
+        f"{name}:{importlib.metadata.version(name)}" for name in ("numpy", "pyfdn", "scipy")
+    )
+    policy = (
+        f"dsp:octave-edc-abel-huang-density-stft-flatness-v{PYFDN_SKETCH_POLICY_VERSION};"
+        "normalization:signed-unit-edc-floor-60db-density-rational-flatness-linear;"
+        "temporal:fractional-log-32-head-0.005-ratio-200-hann-1024-hop-128-frame-center;"
+        f"packages:{packages}"
+    )
+    return _versioned_artifact_identity("pyfdn_sketch", policy)
 
 
 def _ssondo_artifact_identity(checkpoint: str) -> str:
@@ -501,6 +552,34 @@ def _encode_clap_column(
     return _fixed_size_list(vectors, CLAP_EMBEDDING_DIM)
 
 
+def _encode_cqt_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+) -> pa.Array:
+    """Encode one audio batch as a fixed-shape CQT tensor column.
+
+    :param sources: Decoded source columns carrying the ``(B, C, T)`` audio batch.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: CQT encoder over source audio.
+    :returns: Fixed-shape tensor array.
+    :raises ValueError: The encoder returns the wrong shape or non-finite values.
+    """
+    from synth_setter.pipeline.data.lance_shard import tensor_array
+
+    audio = sources[AUDIO_FIELD]
+    encode = cast("CQTEncodeFn", encoder)
+    features = _finite_embedding(CQT_FIELD, encode(audio, sample_rate))
+    expected_shape = (
+        len(audio),
+        CQT_EMBEDDING_DIM,
+        cqt_num_frames(audio.shape[-1], sample_rate),
+    )
+    if features.shape != expected_shape:
+        raise ValueError(
+            f"{CQT_FIELD} encoder produced shape {features.shape}, expected {expected_shape}"
+        )
+    return tensor_array(features, np.dtype("float32"), expected_shape[1:])
+
+
 def same_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
     """Prepare ``(B, C, T)`` audio as float32 stereo at 44.1 kHz.
 
@@ -622,6 +701,17 @@ def _load_clap_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enc
     return load_clap_audio_encoder(checkpoint, config.device)
 
 
+def _load_cqt_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load the checkpoint-free CQT transform on the selected Torch device.
+
+    :param checkpoint: Empty registry placeholder.
+    :param config: Run config supplying the device.
+    :returns: CQT encoder over source audio.
+    """
+    cqt_artifact_digest(checkpoint)
+    return load_cqt_audio_encoder(_resolve_torch_device(config.device))
+
+
 def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Load SAME through the registry's uniform factory signature.
 
@@ -741,6 +831,118 @@ def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> 
     return encode
 
 
+def _require_stored_mono(audio: np.ndarray) -> None:
+    """Reject audio the per-row pyFDN extractor cannot consume.
+
+    :param audio: Decoded stored-audio batch.
+    :raises ValueError: The batch is not ``(B, 1, T)`` mono.
+    """
+    if audio.ndim != 3 or audio.shape[1] != 1:
+        raise ValueError(
+            f"pyfdn_sketch requires stored mono (B, 1, T) audio, got {audio.shape}"
+        )
+
+
+class PyFDNSketchPoolEncoder:
+    """Fan per-row pyFDN sketch extraction across a process pool, bit-exact vs serial.
+
+    The context must be non-fork: lance is live in the backfill process and is not
+    fork-safe. Workers unpickle only the lance-free worker module.
+    """
+
+    def __init__(self, num_workers: int) -> None:
+        """Build the pool once at encoder-load time.
+
+        :param num_workers: Worker processes; the extractor is bandwidth-bound, so returns are sub-
+            linear past a few workers.
+        """
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+
+        self._num_workers = num_workers
+        self._pool = ProcessPoolExecutor(
+            max_workers=num_workers, mp_context=multiprocessing.get_context("spawn")
+        )
+
+    def __call__(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Extract one batch of temporal sketches through the pool.
+
+        :param audio: Stored ``(B, 1, T)`` mono audio batch.
+        :param sample_rate: Source sample rate in Hz.
+        :returns: ``(B, controls, frames)`` float32 control stack.
+        """
+        from synth_setter.pipeline.data.pyfdn_sketch_worker import (
+            extract_reverb_sketch_row,
+        )
+
+        _require_stored_mono(audio)
+        extract = functools.partial(extract_reverb_sketch_row, sample_rate=float(sample_rate))
+        chunksize = max(1, len(audio) // (self._num_workers * 4))
+        rows = self._pool.map(extract, (row[0] for row in audio), chunksize=chunksize)
+        return np.stack(list(rows)).astype(np.float32, copy=False)
+
+    def close(self) -> None:
+        """Release the worker processes."""
+        self._pool.shutdown()
+
+
+def _load_pyfdn_sketch_encoder(
+    checkpoint: str, config: AddEmbeddingsConfig
+) -> Encoder:
+    """Bind the canonical checkpoint-free pyFDN sketch extractor.
+
+    :param checkpoint: Empty registry placeholder.
+    :param config: Uniform registry config supplying the worker count; no device is needed.
+    :returns: Batch adapter over stored mono waveform audio.
+    """
+    _pyfdn_sketch_artifact_identity(checkpoint)
+    if config.num_workers > 1:
+        return PyFDNSketchPoolEncoder(config.num_workers)
+
+    def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        from synth_setter.features import pyfdn_controls
+
+        extract = cast(
+            "Callable[[np.ndarray, float], np.ndarray]",
+            pyfdn_controls.extract_reverb_sketch,
+        )
+        _require_stored_mono(audio)
+        return np.stack(
+            [extract(row[0], sample_rate) for row in audio]
+        ).astype(np.float32, copy=False)
+
+    return encode
+
+
+def _encode_pyfdn_sketch_column(
+    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
+) -> pa.Array:
+    """Encode stored waveform audio as the pyFDN temporal-sketch struct.
+
+    :param sources: Decoded source columns carrying ``(B, 1, T)`` real audio.
+    :param sample_rate: Source sample rate in Hz.
+    :param encoder: Canonical pyFDN sketch extractor batch adapter.
+    :returns: Struct array containing the three temporal control families.
+    :raises ValueError: Controls have the wrong shape, non-finite values, or leave ``[0, 1]``.
+    """
+    from synth_setter.pipeline.data.lance_shard import pyfdn_sketch_struct_array
+
+    audio = sources[AUDIO_FIELD]
+    encode = cast("SketchEncodeFn", encoder)
+    controls = _finite_embedding(PYFDN_SKETCH_STRUCT_FIELD, encode(audio, sample_rate))
+    expected_shape = (len(audio), PYFDN_SKETCH_CONTROLS, SKETCH_STORAGE_FRAMES)
+    if controls.shape != expected_shape:
+        raise ValueError(
+            f"{PYFDN_SKETCH_STRUCT_FIELD} encoder produced shape {controls.shape}, "
+            f"expected {expected_shape}"
+        )
+    if controls.min() < -1.0 or controls.max() > 1.0:
+        raise ValueError(
+            f"{PYFDN_SKETCH_STRUCT_FIELD} controls out of bounds; expected [-1, 1]"
+        )
+    return pyfdn_sketch_struct_array(controls)
+
+
 def _encode_ssondo_column(
     sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
 ) -> pa.Array:
@@ -790,17 +992,22 @@ def _encode_t5gemma_column(
 
 @jaxtyped(typechecker=beartype)
 def _sketch_encode(
-    audio: Float[np.ndarray, "batch channel time"], sample_rate: int, device: str = "cpu"
+    audio: Float[np.ndarray, "batch channel time"],
+    sample_rate: int,
+    device: str = "cpu",
+    max_batch: int = SKETCH_ENCODE_MAX_BATCH,
 ) -> Float[np.ndarray, "batch control frame"]:
-    """Extract sketch controls for one audio batch in memory-capped chunks.
+    """Extract sketch controls for one audio batch in memory-capped sub-batches.
 
-    Every track is per-clip independent, so chunking only moves values within
+    Every track is per-clip independent, so sub-batching only moves values within
     float32 kernel jitter (~1e-6, already batch-size-dependent) while bounding
     extraction RSS at the default Lance batch size.
 
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
     :param device: Torch device the extractor runs on.
+    :param max_batch: Rows per extractor invocation; sizes memory, and on CUDA also
+        GPU utilization (#3131).
     :returns: ``(B, NUM_SKETCH_CONTROLS, F)`` float32 controls.
     """
     import torch
@@ -809,12 +1016,10 @@ def _sketch_encode(
 
     batch = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
     chunks = [
-        extract_sketch_controls_batch(
-            batch[start : start + SKETCH_ENCODE_MAX_BATCH], sample_rate, device=device
-        )
+        extract_sketch_controls_batch(batch[start : start + max_batch], sample_rate, device=device)
         .cpu()
         .numpy()
-        for start in range(0, len(batch), SKETCH_ENCODE_MAX_BATCH)
+        for start in range(0, len(batch), max_batch)
     ]
     return np.concatenate(chunks, axis=0)
 
@@ -832,24 +1037,31 @@ def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
     from synth_setter.features.sketch_controls import load_pesto_model
 
     device = _resolve_torch_device(config.device)
+    # Surfaces a silently-CPU run in the first log lines (#3131).
+    logger.info(
+        "sketch_encoder_loaded", device=device, encode_batch=config.sketch_encode_batch
+    )
     load_pesto_model(checkpoint, device=device)
-    return functools.partial(_sketch_encode, device=device)
+    return functools.partial(_sketch_encode, device=device, max_batch=config.sketch_encode_batch)
 
 
 def _encode_sketch_column(
     sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
 ) -> pa.Array:
-    """Encode one audio batch as the nested sketch-control struct column (#2707).
+    """Encode one audio batch as the pooled nested sketch-control struct (#2707).
 
     :param sources: Decoded source columns carrying the ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
     :param encoder: Sketch extractor over the original audio batch.
-    :returns: Struct array with loudness/centroid/pitch children and the
-        frame-mean ``vec`` IVF companion.
+    :returns: Struct array with canonically pooled loudness/centroid/pitch
+        children and their frame-mean ``vec`` IVF companion.
     :raises ValueError: The encoder output is off the frame grid, non-finite,
         or outside the documented control bounds.
     """
+    import torch
+
     from synth_setter.pipeline.data.lance_shard import sketch_struct_array
+    from synth_setter.sketch import pool_sketch_controls
 
     audio = sources[AUDIO_FIELD]
     encode = cast("SketchEncodeFn", encoder)
@@ -867,7 +1079,8 @@ def _encode_sketch_column(
             f"{SKETCH_STRUCT_FIELD} controls out of bounds: affine rows must lie in [-1, 1] "
             "and pitch rows in [0, 1]"
         )
-    return sketch_struct_array(controls)
+    pooled = pool_sketch_controls(torch.from_numpy(controls)).numpy()
+    return sketch_struct_array(pooled)
 
 
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
@@ -880,6 +1093,21 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_clap_spec_encoder,
         encode_column=_encode_clap_column,
         resolve_artifact_identity=_clap_artifact_identity,
+        supports_cached_conditioning=True,
+    ),
+    "cqt": EmbeddingSpec(
+        name="cqt",
+        column=CQT_FIELD,
+        default_checkpoint="",
+        co_resident=False,
+        index=IndexSpec(
+            pool="mean",
+            vector_column=f"{CQT_FIELD}_vec",
+            vector_dim=CQT_EMBEDDING_DIM,
+        ),
+        load_encoder=_load_cqt_spec_encoder,
+        encode_column=_encode_cqt_column,
+        resolve_artifact_identity=_cqt_artifact_identity,
         supports_cached_conditioning=True,
     ),
     "m2l": EmbeddingSpec(
@@ -922,6 +1150,16 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         encode_column=encode_pupujepa_large_column,
         resolve_artifact_identity=_pupujepa_large_artifact_identity,
         supports_cached_conditioning=True,
+    ),
+    "pyfdn_sketch": EmbeddingSpec(
+        name="pyfdn_sketch",
+        column=PYFDN_SKETCH_STRUCT_FIELD,
+        default_checkpoint="",
+        co_resident=True,
+        index=None,
+        load_encoder=_load_pyfdn_sketch_encoder,
+        encode_column=_encode_pyfdn_sketch_column,
+        resolve_artifact_identity=_pyfdn_sketch_artifact_identity,
     ),
     "same_s": EmbeddingSpec(
         name="same_s",
@@ -1363,102 +1601,110 @@ def _write_columns(
         raise ValueError("no embedding specs given; nothing to write")
     _guard_existing_columns(dataset, specs)
     input_fields = sorted({field for spec in specs for field in spec.input_fields})
-    total_rows = _validate_write_source(dataset, config.batch_size, input_fields)
+    total_rows = _validate_write_source(dataset, config.lance_batch_size, input_fields)
     # Model construction must not consume the seed governing stochastic encoders.
     with torch.random.fork_rng():
         encoders = _load_encoders(specs, config)
-    identities = {spec.name: _resolve_artifact_identity(spec, config) for spec in specs}
-    resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
-    source_identity = _resume_source_identity(
-        dataset,
-        sample_rate=sample_rate,
-        batch_size=config.batch_size,
-        input_fields=input_fields,
-    )
-    _prepare_resume_cache(resume_cache, identities, source_identity)
-    output_columns = [column for spec in specs for column in _output_columns(spec)]
-
-    logger.info("inferring_embedding_schema", columns=output_columns)
-    sample = next(dataset.to_batches(columns=input_fields, limit=1))
-    # Schema probing must not perturb stochastic encoders' persisted outputs.
-    with torch.random.fork_rng():
-        sample_output = _encode_columns(
-            _decoded_sources(sample, input_fields), sample_rate, specs, encoders
+    try:
+        identities = {spec.name: _resolve_artifact_identity(spec, config) for spec in specs}
+        resume_cache = _resume_cache_for_specs(config.resume_cache, config.embeddings, specs)
+        source_identity = _resume_source_identity(
+            dataset,
+            sample_rate=sample_rate,
+            batch_size=config.lance_batch_size,
+            input_fields=input_fields,
         )
-    output_schema = _embedding_output_schema(
-        sample_output.schema, specs, config, identities=identities
-    )
-    logger.info("inferred_embedding_schema", columns=output_columns)
+        _prepare_resume_cache(resume_cache, identities, source_identity)
+        output_columns = [column for spec in specs for column in _output_columns(spec)]
 
-    progress_interval = max(
-        config.batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS
-    )
-    next_progress_row = progress_interval
-    rows_processed = 0
-    started_at = time.monotonic()
-    last_progress_at = started_at
-    last_udf_end = started_at
-    stage_ms: dict[str, float] = {}
-
-    @lance.batch_udf(
-        output_schema=output_schema,
-        checkpoint_file=None if resume_cache is None else str(resume_cache),
-    )
-    def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
-        nonlocal next_progress_row, rows_processed, last_progress_at, last_udf_end
-        udf_started = time.monotonic()
-        sources = _decoded_sources(batch, input_fields)
-        output = _encode_columns(sources, sample_rate, specs, encoders, stage_ms)
-        rows_processed += batch.num_rows
-        now = time.monotonic()
-        interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
-        time_due = now - last_progress_at >= PROGRESS_LOG_INTERVAL_SECONDS
-        if config.debug or interval_due or time_due:
-            timings = {f"{name}_ms": round(duration, 1) for name, duration in stage_ms.items()}
-            logger.info(
-                "embedding_progress",
-                rows_processed=rows_processed,
-                total_rows=total_rows,
-                percent=round(rows_processed / total_rows * 100, 1),
-                rows_per_second=round(rows_processed / max(now - started_at, 1e-9), 1),
-                batch_rows=batch.num_rows,
-                batch_ms=round((now - udf_started) * 1000, 1),
-                interbatch_ms=round((udf_started - last_udf_end) * 1000, 1),
-                **timings,
+        logger.info("inferring_embedding_schema", columns=output_columns)
+        sample = next(dataset.to_batches(columns=input_fields, limit=1))
+        # Schema probing must not perturb stochastic encoders' persisted outputs.
+        with torch.random.fork_rng():
+            sample_output = _encode_columns(
+                _decoded_sources(sample, input_fields), sample_rate, specs, encoders
             )
-            last_progress_at = now
-        if interval_due:
-            next_progress_row = (rows_processed // progress_interval + 1) * progress_interval
-        last_udf_end = time.monotonic()
-        return output
-
-    logger.info(
-        "embedding_write_started",
-        columns=output_columns,
-        total_rows=total_rows,
-        batch_size=config.batch_size,
-        source_version=dataset.version,
-    )
-    dataset.add_columns(udf, read_columns=input_fields, batch_size=config.batch_size)
-    # A zero-batch replay is valid only when the target columns are already committed.
-    uncommitted = [
-        column for column in output_columns if column not in dataset.schema.names
-    ]
-    if uncommitted:
-        raise RuntimeError(
-            f"add_columns returned without committing column(s) {uncommitted} "
-            f"(rows_processed={rows_processed} of {total_rows}); refusing to "
-            "treat the write as done"
+        output_schema = _embedding_output_schema(
+            sample_output.schema, specs, config, identities=identities
         )
-    _delete_resume_cache(resume_cache)
-    logger.info(
-        "wrote_embeddings",
-        columns=output_columns,
-        total_rows=total_rows,
-        rows_processed=rows_processed,
-        committed_version=dataset.version,
-    )
-    encoders.clear()
+        logger.info("inferred_embedding_schema", columns=output_columns)
+
+        progress_interval = max(
+            config.lance_batch_size, (total_rows + MAX_PROGRESS_LOGS - 1) // MAX_PROGRESS_LOGS
+        )
+        next_progress_row = progress_interval
+        rows_processed = 0
+        started_at = time.monotonic()
+        last_progress_at = started_at
+        last_udf_end = started_at
+        stage_ms: dict[str, float] = {}
+
+        @lance.batch_udf(
+            output_schema=output_schema,
+            checkpoint_file=None if resume_cache is None else str(resume_cache),
+        )
+        def udf(batch: pa.RecordBatch) -> pa.RecordBatch:
+            nonlocal next_progress_row, rows_processed, last_progress_at, last_udf_end
+            udf_started = time.monotonic()
+            sources = _decoded_sources(batch, input_fields)
+            output = _encode_columns(sources, sample_rate, specs, encoders, stage_ms)
+            rows_processed += batch.num_rows
+            now = time.monotonic()
+            interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
+            time_due = now - last_progress_at >= PROGRESS_LOG_INTERVAL_SECONDS
+            if config.debug or interval_due or time_due:
+                timings = {f"{name}_ms": round(duration, 1) for name, duration in stage_ms.items()}
+                logger.info(
+                    "embedding_progress",
+                    rows_processed=rows_processed,
+                    total_rows=total_rows,
+                    percent=round(rows_processed / total_rows * 100, 1),
+                    rows_per_second=round(rows_processed / max(now - started_at, 1e-9), 1),
+                    batch_rows=batch.num_rows,
+                    batch_ms=round((now - udf_started) * 1000, 1),
+                    interbatch_ms=round((udf_started - last_udf_end) * 1000, 1),
+                    **timings,
+                )
+                last_progress_at = now
+            if interval_due:
+                next_progress_row = (rows_processed // progress_interval + 1) * progress_interval
+            last_udf_end = time.monotonic()
+            return output
+
+        logger.info(
+            "embedding_write_started",
+            columns=output_columns,
+            total_rows=total_rows,
+            batch_size=config.lance_batch_size,
+            source_version=dataset.version,
+        )
+        dataset.add_columns(udf, read_columns=input_fields, batch_size=config.lance_batch_size)
+        # A zero-batch replay is valid only when the target columns are already committed.
+        uncommitted = [
+            column for column in output_columns if column not in dataset.schema.names
+        ]
+        if uncommitted:
+            raise RuntimeError(
+                f"add_columns returned without committing column(s) {uncommitted} "
+                f"(rows_processed={rows_processed} of {total_rows}); refusing to "
+                "treat the write as done"
+            )
+        _delete_resume_cache(resume_cache)
+        logger.info(
+            "wrote_embeddings",
+            columns=output_columns,
+            total_rows=total_rows,
+            rows_processed=rows_processed,
+            committed_version=dataset.version,
+        )
+    finally:
+        # Pool-backed encoders hold worker processes; release them even when the
+        # pass aborts, so a failed backfill cannot leak spawn workers.
+        for encoder in encoders:
+            closer = getattr(encoder, "close", None)
+            if callable(closer):
+                closer()
+        encoders.clear()
 
 
 def build_index(
@@ -1699,7 +1945,7 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
             if _nested_schema_field(dataset.schema, vector_column) is not None:
                 _matching_index_exists(dataset, vector_column, index=spec.index, config=config)
     if pending:
-        _validate_write_source(dataset, config.batch_size)
+        _validate_write_source(dataset, config.lance_batch_size)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info(
@@ -1708,7 +1954,7 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
         columns=output_columns,
         sample_rate=sample_rate,
         rows=dataset.count_rows(),
-        batch_size=config.batch_size,
+        batch_size=config.lance_batch_size,
     )
     co_resident = [spec for spec in pending if spec.co_resident]
     solo = [spec for spec in pending if not spec.co_resident]
@@ -1879,6 +2125,22 @@ def _open_lance_dataset(uri: str) -> lance.LanceDataset:
     return lance.dataset(uri)
 
 
+def _assert_no_active_wandb_run(cfg: DictConfig) -> None:
+    """Reject a configured W&B logger when this process already owns a run.
+
+    :param cfg: Hydra-composed endpoint config.
+    :raises RuntimeError: If a configured W&B logger would reuse an active run.
+    """
+    logger_cfg = cfg.get("logger")
+    if not logger_cfg or "wandb" not in logger_cfg:
+        return
+
+    import wandb
+
+    if wandb.run is not None:
+        raise RuntimeError("add-embeddings cannot reuse an active W&B run")
+
+
 @hydra.main(
     version_base="1.3", config_path="pkg://synth_setter.configs", config_name="add_embeddings"
 )
@@ -1889,14 +2151,24 @@ def _hydra_main(cfg: DictConfig) -> None:
     """
     from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 
+    loggers = []
+    status = "failed"
     try:
         config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
+        _assert_no_active_wandb_run(cfg)
+        loggers = instantiate_loggers(cfg.get("logger"))
+        for run_logger in loggers:
+            run_logger.log_hyperparams(config.model_dump(mode="json"))
+        log_wandb_provenance()
         _configure_lance_logging(debug=config.debug)
         logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
         add_embeddings(config)
+        status = "success"
     except (OSError, ValueError, RuntimeError, ImportError, subprocess.CalledProcessError) as exc:
         logger.error("add_embeddings_failed", uri=cfg.get("lance_uri"), error=str(exc))
         sys.exit(1)
+    finally:
+        close_loggers(loggers, status)
 
 
 def main() -> None:

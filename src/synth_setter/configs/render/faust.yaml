@@ -1,5 +1,6 @@
-# DawDreamer compiles the selected identity's checked-in source string; no source or preset path is accepted.
-renderer_backend: dawdreamer_faust
+# DawDreamer compiles the selected identity's digest-pinned checked-in source.
+renderer_backend: dawdreamer
+backend_version: "0.8.3"
 sample_rate: 44100
 channels: 2
 velocity: 100
@@ -11,6 +12,7 @@ samples_per_shard: 10000
 samples_per_render_batch: 32
 max_retries: 0
 parallel: false
+retain_local_shards: true
 # Recompile per row so oscillator, delay, filter, and voice state cannot cross samples.
 plugin_reload_cadence: render
 gui_toggle_cadence: never

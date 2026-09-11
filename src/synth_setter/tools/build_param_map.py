@@ -668,11 +668,14 @@ def dump_dawdreamer(
     :param preset_resource: Repository-relative preset resource.
     :param out: Dump destination.
     """
+    from synth_setter.plugin_runtime import validated_bundle_lease
+
     dawdreamer = import_module("dawdreamer")
     engine = dawdreamer.RenderEngine(INTROSPECTION_SAMPLE_RATE, INTROSPECTION_BLOCK_SIZE)
-    loaded = engine.make_plugin_processor("synth", str(plugin.resolve()))
-    # DawDreamer processes restored preset state only after the plugin enters an active graph.
-    engine.load_graph([(loaded, [])])
+    with validated_bundle_lease(plugin) as validated_plugin:
+        loaded = engine.make_plugin_processor("synth", str(validated_plugin))
+        # DawDreamer processes restored preset state only after the plugin enters an active graph.
+        engine.load_graph([(loaded, [])])
     loaded.load_vst3_preset(str(preset.resolve()))
     settle_dawdreamer_preset(
         engine,

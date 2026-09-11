@@ -15,6 +15,8 @@ import pytest
 
 import tests.conftest as conftest_module
 
+PYTEST_COLLECTION_COLD_START_TIMEOUT_SECONDS = 120
+
 
 class _FakeConfig:
     """Minimal pytest config double exposing the marker expression."""
@@ -102,7 +104,7 @@ def test_same_e2e_marker_expression_excluding_vst_collects_encoder_tests(
         check=False,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=PYTEST_COLLECTION_COLD_START_TIMEOUT_SECONDS,
     )
 
     assert result.returncode == 0, result.stderr

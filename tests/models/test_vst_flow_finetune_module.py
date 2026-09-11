@@ -4,6 +4,7 @@ Every arm renders real torchsynth audio through the production differentiable re
 with the production spectral distance; nothing here stands in for the simulator.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +28,8 @@ _BUFFER_SECONDS = _SIGNAL_LENGTH / _SAMPLE_RATE
 # Below this peak the render is silence, and scoring silence against silence leaves the
 # control signal identically zero — every simulator assertion then holds for free.
 _AUDIBLE_PEAK = 1e-4
+# Late enough to stay audible and differentiable, but below 1 so estimate and target differ.
+_LATE_DIFFERENTIABLE_FLOW_TIME = 0.9
 
 
 def _audible_model_rows(rows: int, seed: int) -> torch.Tensor:
@@ -190,6 +193,16 @@ def _batch(rows: int = _BATCH) -> dict[str, torch.Tensor]:
         )
     assert audio.abs().max() > _AUDIBLE_PEAK, "batch is silent; simulator assertions are vacuous"
     return {"params": params, "noise": torch.randn(rows, _WIDTH), "audio": audio}
+
+
+def _late_flow_time(batch_size: int, device: torch.device) -> torch.Tensor:
+    """Keep estimates in TorchSynth's differentiable audible region.
+
+    :param batch_size: Current training batch width, preserved in the output.
+    :param device: Training device, avoiding a cross-device sample-time tensor.
+    :returns: Flow times shaped ``(batch_size, 1)``.
+    """
+    return torch.full((batch_size, 1), _LATE_DIFFERENTIABLE_FLOW_TIME, device=device)
 
 
 def _trainer():
@@ -472,6 +485,33 @@ def _logged_control_metrics(
     return logged
 
 
+def test_finetune_fixed_time_diagnostics_use_controlled_sampling_field(tmp_path: Path) -> None:
+    """Held-out diagnostics measure the finetuned field rather than its frozen base.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    module = _finetune(_base_checkpoint(tmp_path), control_mode="null")
+    batch = _batch()
+    perfect_velocity = batch["params"] - batch["noise"]
+
+    def controlled_field(
+        *args: object, **kwargs: object
+    ) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+        del args, kwargs
+
+        def velocity(x_t: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+            del t
+            return perfect_velocity.to(x_t)
+
+        return velocity
+
+    module._velocity_field = controlled_field  # pyright: ignore[reportAttributeAccessIssue]
+
+    metrics = module._fixed_time_endpoint_mse(batch, batch["noise"])  # noqa: SLF001
+
+    torch.testing.assert_close(metrics["velocity_endpoint_mse/equal_bin_mean"], torch.tensor(0.0))
+
+
 def test_finetune_train_step_loss_carries_no_audio_term(tmp_path: Path) -> None:
     """The cost reaches the run only as control input, so the objective stays pure flow matching.
 
@@ -480,6 +520,34 @@ def test_finetune_train_step_loss_carries_no_audio_term(tmp_path: Path) -> None:
     outputs = _finetune(_base_checkpoint(tmp_path))._train_step(_batch())
 
     assert outputs.audio_term is None
+
+
+def test_finetune_train_step_unequal_column_errors_remain_distinct(tmp_path: Path) -> None:
+    """The finetuning diagnostic preserves each column instead of repeating scalar loss.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    base = _base_module()
+    for parameter in base.parameters():
+        torch.nn.init.zeros_(parameter)
+    module = _finetune(_base_checkpoint(tmp_path, base), control_mode="null")
+
+    def fixed_time(batch_size: int, device: torch.device) -> torch.Tensor:
+        return torch.full((batch_size, 1), 0.5, device=device)
+
+    module._sample_time = fixed_time  # pyright: ignore[reportAttributeAccessIssue]
+    noise = torch.zeros(_BATCH, _WIDTH)
+    noise[:, :3] = torch.tensor([1.0, 2.0, 3.0])
+    batch = {
+        "params": torch.zeros_like(noise),
+        "noise": noise,
+        "audio": torch.zeros(_BATCH, _SIGNAL_LENGTH),
+    }
+
+    outputs = module._train_step(batch)
+
+    assert torch.equal(outputs.per_param_flow_mse[:4], torch.tensor([1.0, 4.0, 9.0, 0.0]))
+    assert torch.equal(outputs.per_param_endpoint_mse[:4], torch.tensor([0.25, 1.0, 2.25, 0.0]))
 
 
 @pytest.mark.slow
@@ -534,6 +602,28 @@ def test_finetune_module_learned_arm_without_encoder_raises(tmp_path: Path) -> N
     """
     with pytest.raises(ValueError, match="control_encoder"):
         _finetune(_base_checkpoint(tmp_path), control_mode="learned_audio")
+
+
+def test_finetune_module_with_endpoint_base_checkpoint_raises(tmp_path: Path) -> None:
+    """An endpoint-stamped base is refused even under the default velocity finetune config.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    payload = {"state_dict": _base_module().state_dict(), "parameterization": "endpoint"}
+    path = tmp_path / "endpoint-base.ckpt"
+    torch.save(payload, path)
+
+    with pytest.raises(ValueError, match="parameterization"):
+        _finetune(path)
+
+
+def test_finetune_module_with_endpoint_parameterization_raises(tmp_path: Path) -> None:
+    """The one-step estimate assumes a velocity field, so an endpoint base is refused.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    with pytest.raises(ValueError, match="parameterization"):
+        _finetune(_base_checkpoint(tmp_path), overrides={"parameterization": "endpoint"})
 
 
 def test_finetune_module_gradient_arm_without_cost_raises(tmp_path: Path) -> None:
@@ -870,13 +960,27 @@ def test_finetune_predict_step_samples_with_a_bound_observation(tmp_path: Path) 
     assert module._sampling_target is None
 
 
+def test_finetune_gradient_control_logs_sampled_time_telemetry(tmp_path: Path) -> None:
+    """Production time sampling reaches whole-batch gradient telemetry.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    metrics = _logged_control_metrics(_finetune(_base_checkpoint(tmp_path)), _batch())
+
+    assert metrics["train/control_active_fraction"][0] == 1.0
+    assert metrics["train/control_signal_norm"][0] > 0.0
+    assert metrics["train/control_cost"][0] > 0.0
+    assert np.isfinite(metrics["train/control_grad_norm"][0])
+
+
 def test_finetune_gradient_control_logs_positive_whole_batch_telemetry(tmp_path: Path) -> None:
     """Active gradient feedback reports signal, cost, and gradient magnitudes.
 
     :param tmp_path: Pytest-provided directory for the base checkpoint.
     """
-    torch.manual_seed(1)
-    metrics = _logged_control_metrics(_finetune(_base_checkpoint(tmp_path)), _batch())
+    module = _finetune(_base_checkpoint(tmp_path))
+    module._sample_time = _late_flow_time  # pyright: ignore[reportAttributeAccessIssue]
+    metrics = _logged_control_metrics(module, _batch())
     options = {
         "on_step": True,
         "on_epoch": False,
@@ -1054,3 +1158,89 @@ def test_controlled_sampling_scores_the_conditional_velocity(tmp_path: Path) -> 
     assert not torch.allclose(conditional, guided), "fixture cannot distinguish the two"
     assert torch.allclose(seen[0], conditional, atol=1e-6)
     assert not torch.allclose(seen[0], guided, atol=1e-6)
+
+
+def _fit_with_checkpointing(module: VSTFlowFinetuneModule, root: Path) -> Path:
+    """Fit one step and return the ``last.ckpt`` Lightning wrote.
+
+    :param module: Finetune module to fit.
+    :param root: Directory Lightning writes the checkpoint under.
+    :returns: Path to the saved checkpoint.
+    """
+    from lightning import Trainer
+    from lightning.pytorch.callbacks import ModelCheckpoint
+
+    trainer = Trainer(
+        max_steps=1,
+        accelerator="cpu",
+        logger=False,
+        default_root_dir=root,
+        callbacks=[ModelCheckpoint(dirpath=root, save_last=True)],
+        limit_val_batches=0,
+        enable_progress_bar=False,
+    )
+    trainer.fit(module, datamodule=_data())
+    return root / "last.ckpt"
+
+
+def test_finetune_without_base_checkpoint_takes_its_weights_from_a_lightning_checkpoint(
+    tmp_path: Path,
+) -> None:
+    """Evaluating or resuming needs no base file: the finetune checkpoint alone restores the weights.
+
+    :param tmp_path: Directory for the base and finetune checkpoints.
+    """
+    from lightning import Trainer
+
+    trained = _finetune(_base_checkpoint(tmp_path), control_mode="null")
+    saved = _fit_with_checkpointing(trained, tmp_path / "run")
+
+    restored = _finetune(None, control_mode="null")  # pyright: ignore[reportArgumentType]
+    Trainer(accelerator="cpu", logger=False, enable_progress_bar=False).validate(
+        restored, datamodule=_data(), ckpt_path=saved, weights_only=False
+    )
+
+    for name, value in trained.state_dict().items():
+        torch.testing.assert_close(restored.state_dict()[name], value, msg=name)
+
+
+def test_finetune_fit_without_base_or_resume_checkpoint_raises(tmp_path: Path) -> None:
+    """A fresh fit with neither weight source would finetune a random field, so it is refused.
+
+    :param tmp_path: Unused output directory.
+    """
+    module = _finetune(None, control_mode="null")  # pyright: ignore[reportArgumentType]
+
+    with pytest.raises(ValueError, match="base_checkpoint"):
+        _trainer().fit(module, datamodule=_data())
+
+
+def test_finetune_checkpoint_records_the_base_digest_and_rejects_another_base(
+    tmp_path: Path,
+) -> None:
+    """The saved run names the base it started from, so a swapped base file cannot resume it.
+
+    :param tmp_path: Directory for the two base checkpoints and the finetune checkpoint.
+    """
+    import hashlib
+
+    from lightning import Trainer
+
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    torch.manual_seed(0)
+    base_a = _base_checkpoint(tmp_path / "a")
+    saved = _fit_with_checkpointing(_finetune(base_a, control_mode="null"), tmp_path / "run")
+
+    assert torch.load(saved, weights_only=False)["base_checkpoint_sha256"] == (
+        hashlib.sha256(base_a.read_bytes()).hexdigest()
+    )
+    # _base_module seeds itself, so shift one weight to make a genuinely different base.
+    other_base = _base_module()
+    with torch.no_grad():
+        next(other_base.vector_field.parameters()).add_(1.0)
+    other = _finetune(_base_checkpoint(tmp_path / "b", other_base), control_mode="null")
+    with pytest.raises(ValueError, match="base_checkpoint"):
+        Trainer(accelerator="cpu", logger=False, enable_progress_bar=False).validate(
+            other, datamodule=_data(), ckpt_path=saved, weights_only=False
+        )

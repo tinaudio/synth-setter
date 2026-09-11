@@ -33,9 +33,11 @@ several existing `surge*` keys use shorter legacy names (e.g. `surge_xt` →
 `presets/surge-base.vstpreset`) that the registry maps explicitly.
 
 This workflow is specifically for VST3 plugins. Checked-in Faust programs use a
-registered source/spec pair instead: their `plugin_state_paths` entry is empty,
-they render through the `dawdreamer_faust` backend (`render=faust`), and parameter names preserve the
-exact addresses reported by Faust compilation.
+`registry://faust/<registered-source-name>` plugin path, no state path, and the
+`dawdreamer` backend (`render=faust`); the URI derives `format: faust`. Parameter names preserve the exact
+addresses reported by Faust compilation. The
+[shimmer FDN experiment](faust-shimmer-fdn.md) uses fixed impulse excitation rather
+than MIDI-conditioned synthesis.
 
 The one genuinely hard part is the `ParamSpec`: pedalboard can enumerate a
 plugin's parameters, but raw names and 0–1 ranges carry **no semantics** — which
@@ -130,6 +132,13 @@ The draft is a starting point, not a finished spec. Open
   choices (waveform, filter type) with optional sample weights; `encoding`
   is `"scalar"` or `"onehot"`.
 - `DiscreteLiteralParameter(name, min, max, encoding)` — an integer range.
+- `ContinuousArrayParameter(name, shape, min, max)` — a fixed-shape float array
+  (delay lines, gain matrices) encoded elementwise onto `[0, 1]`.
+- `DiscreteArrayParameter(name, shape, min, max)` — the integer counterpart,
+  decoded back to `int64`.
+- `AngleArrayParameter(name, shape)` — a fixed-shape array of radians carried as
+  one `(cos θ, sin θ)` pair per angle, so `±π` share one encoding and the loss
+  is seam-aware; decode projects predictions onto the unit circle.
 - `NoteDurationParameter(name, max_note_duration_seconds)` — samples when the
   note starts and ends within the audio buffer (not an ADSR envelope); lives in
   the `note_params` list.
@@ -137,19 +146,23 @@ The draft is a starting point, not a finished spec. Open
 A `ParamSpec` takes two lists: `synth_params` (the synth's parameters) and
 `note_params` (`pitch`, a `DiscreteLiteralParameter` whose MIDI window the
 registered specs set to 48–72 — widen or narrow it for your synth — plus
-`note_start_and_end`). Prune parameters that don't
-affect the rendered tone (bypass, MIDI-routing, polyphony, glide) so the model
-learns only meaningful dimensions. Curated widths vary widely across the
+`note_start_and_end`). Prune parameters that cannot affect the identity's
+rendering contract so the model learns only meaningful dimensions. Verify
+performance controls such as polyphony and glide against the real host before
+pruning them; their effect depends on the synth's voice-allocation behavior.
+Curated widths vary widely across the
 registered specs — from a 4-parameter toy spec to the full 162-parameter Surge
 patch:
 
-| Synth                        | `synth_params` | encoded width |
-| ---------------------------- | -------------- | ------------- |
-| `surge_4` (4-param toy spec) | 4              | 7             |
-| `cardinal`                   | 9              | 13            |
-| `surge_simple`               | 89             | 92            |
-| `obxf`                       | 94             | 187           |
-| `surge_xt`                   | 162            | 300           |
+| Synth                           | `synth_params` | encoded width |
+| ------------------------------- | -------------- | ------------- |
+| `surge_4` (4-param toy spec)    | 4              | 7             |
+| `cardinal`                      | 9              | 13            |
+| `surge_simple`                  | 89             | 92            |
+| `obxf`                          | 94             | 187           |
+| `ultramaster_kr106_single_note` | 42             | 80            |
+| `ultramaster_kr106`             | 58             | 246           |
+| `surge_xt`                      | 162            | 300           |
 
 The encoded width (`param_specs[name].encoded_width`) exceeds the curated count
 (`len(spec.synth_params)`) because onehot-encoded categoricals expand one
@@ -254,9 +267,11 @@ rendering, so pin the exact version you onboarded against.
 
 `--register` writes the output files and rewrites the registry module, so run
 `make format` and commit before generating — the smoke run reads the committed
-checkout. Faust source identities are registered manually with an empty state
-entry and rendered via `render=faust` (the `dawdreamer_faust` backend group);
-the VST3 introspection command does not generate them.
+checkout. Faust source identities are registered manually with a
+`registry://faust/<registered-source-name>` plugin path, checked-in
+`source_sha256`, and no state path. The URI derives `format: faust`; these
+identities render via `render=faust`, and the VST3 introspection command does not
+generate them.
 
 ## Step 4 — Generate a smoke dataset
 
@@ -278,10 +293,12 @@ This renders a small smoke dataset, proving the synth resolves through
 ## Optional — bake the synth into the Docker image
 
 To run the synth in CI or on distributed workers, add its exact package version
-and VST3 bundle basename to `studiorack.json`. Include the package in the
-`builder-install-studiorack-plugins` selection and the Docker presence/load
-checks. Keep source-build fallbacks only when the registry has no compatible
-artifact for a supported image platform. Dataset generation resolves the stable
+and VST3 bundle basename to `studiorack.json`. Add every selected Linux x64 and
+macOS artifact identity to `studiorack.lock.json`, verifying each digest against
+the downloaded bytes. Include the package in the `builder-install-studiorack-plugins`
+selection and the Docker presence/load checks. Keep source-build fallbacks only
+when the registry has no compatible artifact for a supported image platform.
+Dataset generation resolves the stable
 alias from the synth identity; `SYNTH_SETTER_PLUGIN_PATH` only sets the default
 for tests and interactive tools that do not compose a synth config.
 

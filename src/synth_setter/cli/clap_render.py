@@ -27,14 +27,17 @@ from synth_setter.clap import (
 )
 from synth_setter.conditioning import resolve_embedding_conditioning
 from synth_setter.data.vst.core import write_wav
-from synth_setter.data.vst.param_spec import decode_model_output
+from synth_setter.data.vst.param_spec import (
+    decode_model_output,
+    require_note_params,
+    require_scalar_synth_params,
+)
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.model_cache import synth_setter_cache_dir
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import RenderConfig
-from synth_setter.renderer_factory import make_audio_renderer
-from synth_setter.synth_spec import SynthSpec
+from synth_setter.renderer_factory import anchor_render_preset, make_audio_renderer
 from synth_setter.workspace import operator_workspace
 
 _DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
@@ -502,20 +505,6 @@ def _predict_patch(
     return prediction.detach().cpu()
 
 
-def _workspace_render_config(render: RenderConfig) -> RenderConfig:
-    """Anchor a relative preset path to the operator workspace.
-
-    :param render: Composed render configuration.
-    :returns: Configuration with a concrete preset path.
-    """
-    preset = Path(render.plugin_state_path).expanduser()
-    if preset.is_absolute():
-        return render
-    synth_values = render.synth.model_dump()
-    synth_values["plugin_state_path"] = str(operator_workspace() / preset)
-    return render.model_copy(update={"synth": SynthSpec.model_validate(synth_values)})
-
-
 def _render_wav(prediction: torch.Tensor, render: RenderConfig, output: Path) -> np.ndarray:
     """Decode one prediction and persist its production Surge render.
 
@@ -525,13 +514,16 @@ def _render_wav(prediction: torch.Tensor, render: RenderConfig, output: Path) ->
     :returns: Channel-first rendered waveform written to ``output``.
     """
     spec = param_specs[render.param_spec_name]
-    synth_params, note_params = decode_model_output(prediction[0].float().numpy(), spec)
+    synth_values, note_values = decode_model_output(prediction[0].float().numpy(), spec)
+    synth_params = require_scalar_synth_params(synth_values)
+    note_params = require_note_params(note_values)
+    note_start, note_end = sorted(note_params["note_start_and_end"])
     renderer = make_audio_renderer(render)
     audio = renderer.render(
         synth_params,
         int(note_params["pitch"]),
         render.velocity,
-        note_params["note_start_and_end"],
+        (note_start, note_end),
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     write_wav(audio, str(output), render.sample_rate, render.channels)
@@ -662,7 +654,7 @@ def main(
     click.echo("Loading inverse checkpoint...", err=True)
     expected_inverse_sha256 = settings.inverse_checkpoint_sha256 if checkpoint is None else None
     inverse_checkpoint = resolve_inverse_checkpoint(inverse_source, expected_inverse_sha256)
-    render = _workspace_render_config(settings.render)
+    render = anchor_render_preset(settings.render)
     prediction = _predict_patch(
         embedding,
         inverse_checkpoint,

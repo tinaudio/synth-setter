@@ -10,5 +10,6 @@ head:
   embed_dim: 256
   d_model: ${model.encoder.out_dim}
   num_heads: ${model.encoder_num_heads}
+  n_conditioning_outputs: ${oc.select:model.vector_field.num_layers,1}
   pos_enc: sin
   max_seq_len: 44

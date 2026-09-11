@@ -57,6 +57,10 @@ main() {
       ;;
   esac
 
+  local review_python
+  review_python="$(resolve_review_python)"
+  export PI_REVIEW_PYTHON="${review_python}"
+
   local target_instruction="Resolve the target from the current branch."
   if (( $# == 3 )); then
     if [[ "${2}" != "--target" || ! "${3}" =~ ^[1-9][0-9]*$ ]]; then
@@ -66,26 +70,69 @@ main() {
     target_instruction="Review PR #${3}."
   fi
 
+  if [[ "${skill}" == "repo-review-full-no-comments" && $# == 1 ]]; then
+    local branch open_pr_number repo repo_owner
+    branch="$(git branch --show-current)"
+    if ! repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" ||
+      [[ ! "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+      echo "Unable to resolve the current GitHub repository." >&2
+      return 2
+    fi
+    repo_owner="${repo%%/*}"
+    if ! open_pr_number="$(
+      gh api --method GET "repos/${repo}/pulls" \
+        -f state=open -f "head=${repo_owner}:${branch}" -f per_page=2 \
+        --jq '.[].number'
+    )"; then
+      echo "Unable to resolve whether the current branch has an open PR." >&2
+      return 2
+    fi
+    if [[ -n "${open_pr_number}" ]]; then
+      if [[ ! "${open_pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Open PR lookup returned an ambiguous result." >&2
+        return 2
+      fi
+      target_instruction="Review PR #${open_pr_number}."
+    else
+      local attempt claim_output limit
+      if claim_output="$(
+        "${review_python}" agent/_shared/review_sentinel.py claim "${branch}"
+      )"; then
+        read -r attempt limit <<<"${claim_output}"
+        echo "Pre-PR sentinel review attempt ${attempt}/${limit}." >&2
+      else
+        local claim_status=$?
+        if (( claim_status == 3 )); then
+          limit="${claim_output}"
+          echo "Pre-PR sentinel review limit reached after ${limit} attempts." >&2
+          echo \
+            "Refusing another repo-review-full-no-comments run. Open the PR and continue with /repo-review-full so the public GitHub review bot can review subsequent changes." \
+            >&2
+          return 2
+        fi
+        echo "Unable to claim a pre-PR sentinel review attempt." >&2
+        return 2
+      fi
+    fi
+  fi
+
   local prompt
   prompt="Execute ${skill} using its Pi-native execution path. ${target_instruction} \
 The launcher set SYNTH_SETTER_PI_REVIEW=1; execute the skill in this session \
 and do not invoke run_pi_review.sh again. Follow the skill exactly, use the \
-absolute PI_REVIEW_AFTERCARE_MANIFEST path for any deferred-pass handoff, and \
+absolute PI_REVIEW_FOLLOW_UP_MANIFEST path for any deferred-pass handoff, and \
 return only the specified foreground deliverable."
 
   export SYNTH_SETTER_PI_REVIEW=1
-  local aftercare_manifest review_root run_id transcript
+  local follow_up_manifest review_root run_id transcript
   review_root="$(pwd)/.agent-reviews"
   run_id="$(date -u +%Y%m%dT%H%M%SZ).$$"
   transcript="${review_root}/pi-review-host.${run_id}.jsonl"
-  aftercare_manifest="${review_root}/pi-review-aftercare.${run_id}.json"
-  export PI_REVIEW_AFTERCARE_MANIFEST="${aftercare_manifest}"
+  follow_up_manifest="${review_root}/pi-review-follow-up.${run_id}.json"
+  export PI_REVIEW_FOLLOW_UP_MANIFEST="${follow_up_manifest}"
   umask 077
   mkdir -p "${review_root}"
   echo "Live Pi transcript: ${transcript}" >&2
-  local review_python
-  review_python="$(resolve_review_python)"
-  export PI_REVIEW_PYTHON="${review_python}"
   local final_output
   if ! final_output="$(
     pi \
@@ -103,19 +150,32 @@ return only the specified foreground deliverable."
     echo "Pi review host failed; inspect live transcript: ${transcript}" >&2
     return 1
   fi
-  if [[ -s "${PI_REVIEW_AFTERCARE_MANIFEST}" ]]; then
-    local aftercare_pid
-    if aftercare_pid="$(
-      "${review_python}" agent/_shared/run_pi_review_aftercare.py \
-        "${PI_REVIEW_AFTERCARE_MANIFEST}"
-    )"; then
+  if [[ -s "${PI_REVIEW_FOLLOW_UP_MANIFEST}" ]]; then
+    if [[ "${CI:-}" == "true" ]]; then
+      if ! "${review_python}" agent/_shared/run_pi_review_follow_up.py \
+        --supervise "${PI_REVIEW_FOLLOW_UP_MANIFEST}"; then
+        echo \
+          "Synchronous Pi review follow-up failed: ${PI_REVIEW_FOLLOW_UP_MANIFEST}" \
+          >&2
+        return 1
+      fi
       echo \
-        "Deferred Pi review aftercare: ${PI_REVIEW_AFTERCARE_MANIFEST} (PID ${aftercare_pid})" \
+        "Synchronous Pi review follow-up completed: ${PI_REVIEW_FOLLOW_UP_MANIFEST}" \
         >&2
     else
-      echo \
-        "Deferred Pi review aftercare failed to launch: ${PI_REVIEW_AFTERCARE_MANIFEST}" \
-        >&2
+      local follow_up_pid
+      if follow_up_pid="$(
+        "${review_python}" agent/_shared/run_pi_review_follow_up.py \
+          "${PI_REVIEW_FOLLOW_UP_MANIFEST}"
+      )"; then
+        echo \
+          "Deferred Pi review follow-up: ${PI_REVIEW_FOLLOW_UP_MANIFEST} (PID ${follow_up_pid})" \
+          >&2
+      else
+        echo \
+          "Deferred Pi review follow-up failed to launch: ${PI_REVIEW_FOLLOW_UP_MANIFEST}" \
+          >&2
+      fi
     fi
   fi
   printf '%s\n' "${final_output}"

@@ -7,6 +7,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from typing import cast
 
 import numpy as np
 import pytest
@@ -125,7 +126,10 @@ def _decoded_note_params(dataset: TorchSynthDataset, index: int) -> NoteParams:
     :returns: The row's decoded pitch and note window.
     """
     _, params, _ = dataset[index]
-    return TORCHSYNTH_FULL_PARAM_SPEC.decode(params[0].numpy())[1]
+    return cast(
+        NoteParams,
+        TORCHSYNTH_FULL_PARAM_SPEC.decode(params[0].numpy())[1],
+    )
 
 
 def test_dataset_note_columns_vary_across_rows_within_the_spec_ranges() -> None:

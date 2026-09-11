@@ -13,6 +13,14 @@ from jaxtyping import Float, jaxtyped
 from lance.file import LanceFileReader
 from pydantic import ValidationError
 
+from synth_setter.conditioning import (
+    PYFDN_SKETCH_CONTROLS,
+    PYFDN_SKETCH_EDC_BANDS,
+    PYFDN_SKETCH_ECHO_DENSITY_CHILD,
+    PYFDN_SKETCH_EDC_CHILD,
+    PYFDN_SKETCH_SPECTRAL_FLATNESS_CHILD,
+    SKETCH_STORAGE_FRAMES,
+)
 from synth_setter.data.vst.shapes import (
     AUDIO_MP3_FIELD,
     AUDIO_MP3_FIELD_METADATA,
@@ -146,6 +154,41 @@ def sketch_struct_array(
             SKETCH_CENTROID_CHILD,
             SKETCH_PITCH_CHILD,
             SKETCH_VEC_CHILD,
+        ],
+    )
+
+
+@jaxtyped(typechecker=beartype)
+def pyfdn_sketch_struct_array(
+    controls: Float[np.ndarray, "batch control frame"],
+) -> pa.StructArray:
+    """Split pyFDN temporal controls into their fixed Lance storage children.
+
+    :param controls: Float-compatible ``(B, 10, 32)`` reverb controls.
+    :returns: Struct array containing EDC, echo-density, and spectral-flatness children.
+    :raises ValueError: The control stack does not have shape ``(B, 10, 32)``.
+    """
+    expected_inner_shape = (PYFDN_SKETCH_CONTROLS, SKETCH_STORAGE_FRAMES)
+    contiguous = np.ascontiguousarray(controls, dtype=np.float32)
+    if contiguous.ndim != 3 or contiguous.shape[1:] != expected_inner_shape:
+        raise ValueError(
+            f"pyFDN sketch controls have shape {contiguous.shape}, "
+            f"expected (batch, {PYFDN_SKETCH_CONTROLS}, {SKETCH_STORAGE_FRAMES})"
+        )
+    return pa.StructArray.from_arrays(
+        [
+            tensor_array(
+                contiguous[:, :PYFDN_SKETCH_EDC_BANDS],
+                np.dtype("float32"),
+                (PYFDN_SKETCH_EDC_BANDS, SKETCH_STORAGE_FRAMES),
+            ),
+            _fixed_size_list_array(contiguous[:, PYFDN_SKETCH_EDC_BANDS]),
+            _fixed_size_list_array(contiguous[:, PYFDN_SKETCH_EDC_BANDS + 1]),
+        ],
+        names=[
+            PYFDN_SKETCH_EDC_CHILD,
+            PYFDN_SKETCH_ECHO_DENSITY_CHILD,
+            PYFDN_SKETCH_SPECTRAL_FLATNESS_CHILD,
         ],
     )
 
@@ -414,6 +457,30 @@ def lance_fragment(
             f"{fragment_schema_mismatch_detail(physical, schema)}"
         )
     return fragment
+
+
+def commit_lance_branch(
+    branch: lance.LanceDataset,
+    schema: pa.Schema,
+    fragments: Sequence[lance.fragment.FragmentMetadata],
+    *,
+    transaction_properties: dict[str, str] | None = None,
+) -> lance.LanceDataset:
+    """Overwrite one native Lance branch with staged fragment metadata.
+
+    :param branch: Checked-out branch receiving the new manifest version.
+    :param schema: Arrow schema shared by every selected fragment.
+    :param fragments: Fragment metadata whose files live in the parent dataset namespace.
+    :param transaction_properties: Durable identity attached to the branch transaction.
+    :returns: The branch checked out at the committed version.
+    """
+    operation = lance.LanceOperation.Overwrite(schema, list(fragments))
+    transaction = lance.Transaction(
+        read_version=branch.version,
+        operation=operation,
+        transaction_properties=transaction_properties,
+    )
+    return lance.LanceDataset.commit(branch, transaction)
 
 
 def commit_lance_dataset(

@@ -344,6 +344,21 @@ def test_learned_signal_does_not_backpropagate_into_the_target() -> None:
     assert target.grad is None
 
 
+def test_learned_signal_mismatched_audio_geometry_raises() -> None:
+    """A mono target cannot broadcast across a multichannel rendered residual."""
+
+    def render(theta: torch.Tensor) -> torch.Tensor:
+        return theta[:, :1, None].expand(-1, 2, _SIGNAL_LENGTH)
+
+    with pytest.raises(ValueError, match="matching channel/sample shapes"):
+        learned_control_signal(
+            theta_hat=_theta(),
+            target_audio=_target(),
+            render=render,
+            encoder=torch.nn.Flatten(start_dim=1),
+        )
+
+
 def test_control_net_accepts_a_rank_one_control() -> None:
     """A cost-only signal is naturally shaped (batch,), which flatten(start_dim=1) rejects."""
     net = ControlNet(field_dim=_WIDTH, control_dim=1, hidden_dim=8)

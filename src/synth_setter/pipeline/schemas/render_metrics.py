@@ -22,6 +22,10 @@ class RenderRejectionMetrics(BaseModel):
 
         Renders rejected for exceeding the amplitude bounds.
 
+    .. attribute :: non_finite
+
+        Renders rejected for containing NaN or infinity.
+
     .. attribute :: silent
 
         Renders rejected for falling below the loudness threshold.
@@ -30,6 +34,7 @@ class RenderRejectionMetrics(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     clipped: NonNegativeInt = 0
+    non_finite: NonNegativeInt = 0
     silent: NonNegativeInt = 0
 
 

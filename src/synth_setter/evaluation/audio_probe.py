@@ -146,16 +146,19 @@ def run_audio_probe(  # noqa: DOC502 — raised by the subprocess.run calls
         )
 
     metrics_dir = probe_dir / METRICS_DIRNAME
+    metrics_argv = [
+        sys.executable,
+        "-m",
+        _COMPUTE_AUDIO_METRICS_MODULE,
+        str(probe_dir / AUDIO_DIRNAME),
+        str(metrics_dir),
+        "-w",
+        str(num_workers),
+    ]
+    if settings.renderer_backend == "pyfdn":
+        metrics_argv.extend(["--renderer-backend", "pyfdn"])
     _run_captured(
-        [
-            sys.executable,
-            "-m",
-            _COMPUTE_AUDIO_METRICS_MODULE,
-            str(probe_dir / AUDIO_DIRNAME),
-            str(metrics_dir),
-            "-w",
-            str(num_workers),
-        ],
+        metrics_argv,
         "metrics",
         timeout=scaled_timeout(
             n_samples,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -16,6 +17,7 @@ import torch
 from lightning import Trainer
 from torch.utils.data import DataLoader, Dataset
 
+from synth_setter.data.vst.param_spec import ContinuousParameter, ParamSpec
 from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
@@ -124,9 +126,17 @@ def _flow_vae_module() -> VSTFlowVAEModule:
     )
 
 
-def _flow_matching_module() -> VSTFlowMatchingModule:
+def _flow_matching_module(
+    *,
+    validation_cfg_strength: float = 1.0,
+    param_spec: str | None = "surge_4",
+    seeded_evaluation: bool = False,
+) -> VSTFlowMatchingModule:
     """Build a tiny real flow-matching module with a 2-step validation sampler.
 
+    :param validation_cfg_strength: Content guidance scale used by validation.
+    :param param_spec: Registered spec used by structured validation metrics.
+    :param seeded_evaluation: Whether evaluation uses seed-derived local noise.
     :returns: Module wired for the test batch shapes.
     """
     vector_field = ApproxEquivTransformer(
@@ -154,8 +164,10 @@ def _flow_matching_module() -> VSTFlowMatchingModule:
         optimizer=partial(torch.optim.Adam, lr=1e-3),  # pyright: ignore[reportArgumentType]
         scheduler=None,  # pyright: ignore[reportArgumentType]
         num_params=_NUM_PARAMS,
+        param_spec=param_spec,
         validation_sample_steps=2,
-        validation_cfg_strength=1.0,
+        validation_cfg_strength=validation_cfg_strength,
+        seeded_evaluation=seeded_evaluation,
     )
 
 
@@ -228,7 +240,7 @@ def test_flow_vae_validation_loop_emits_per_param_metric() -> None:
     dataloader = DataLoader(cast(Dataset[dict[str, torch.Tensor]], [_batch()]), batch_size=None)
     trainer.validate(_flow_vae_module(), dataloaders=dataloader)
 
-    assert torch.isfinite(trainer.callback_metrics["per_param_mse/a_amp_eg_attack"])
+    assert torch.isfinite(trainer.callback_metrics["val/per_param_mse/a_amp_eg_attack"])
 
 
 def test_validation_step_preds_are_the_feed_forward_nets_predictions() -> None:
@@ -269,19 +281,224 @@ def test_validation_step_preds_depend_on_input() -> None:
     assert not torch.allclose(preds_a, preds_b)
 
 
-def test_flow_matching_validation_preds_vary_with_sampling_noise() -> None:
-    """The flow-matching sampler is stochastic by design: fresh noise, fresh preds.
-
-    Pins that validation sampling draws new noise per call rather than caching a
-    trajectory, while the shape/finiteness contract holds for every draw.
-    """
-    torch.manual_seed(0)
+def test_flow_matching_validation_default_uses_fresh_global_noise() -> None:
+    """Default validation preserves the original global-noise sampling contract."""
     module = _flow_matching_module()
     batch = _batch()
+    torch.manual_seed(123)
+    expected_noise = torch.randn_like(batch["params"])
+    expected_state = torch.random.get_rng_state()
+    expected = module._sample(  # noqa: SLF001
+        module._get_conditioning_from_batch(batch),  # noqa: SLF001
+        expected_noise,
+        2,
+        1.0,
+        sketch_cfg_strength=None,
+        control_tokens=module._control_token_branches_from_batch(batch),  # noqa: SLF001
+    )
 
-    preds_a = module.validation_step(batch, batch_idx=0)["preds"]
-    preds_b = module.validation_step(batch, batch_idx=0)["preds"]
+    torch.manual_seed(123)
+    actual = module.validation_step(batch, batch_idx=3)["preds"]
+
+    torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
+    assert torch.equal(torch.random.get_rng_state(), expected_state)
+
+
+def test_flow_matching_test_default_consumes_fresh_global_noise() -> None:
+    """Default test sampling advances the global RNG by one initial-noise batch."""
+    module = _flow_matching_module()
+    batch = _batch()
+    torch.manual_seed(321)
+    torch.randn_like(batch["params"])
+    expected_state = torch.random.get_rng_state()
+
+    torch.manual_seed(321)
+    module.test_step(batch, batch_idx=0)
+
+    assert torch.equal(torch.random.get_rng_state(), expected_state)
+
+
+def test_flow_matching_validation_seeded_repeats_with_fixed_batch_index() -> None:
+    """Seeded validation is stable across epochs without resetting global RNG."""
+    torch.manual_seed(0)
+    module = _flow_matching_module(seeded_evaluation=True)
+    batch = _batch()
+
+    preds_a = module.validation_step(batch, batch_idx=3)["preds"]
+    torch.randn(100)
+    preds_b = module.validation_step(batch, batch_idx=3)["preds"]
 
     assert preds_a.shape == preds_b.shape == batch["params"].shape
-    assert torch.isfinite(preds_a).all() and torch.isfinite(preds_b).all()
+    torch.testing.assert_close(preds_a, preds_b, rtol=0.0, atol=0.0)
+
+
+def test_flow_matching_seeded_validation_does_not_advance_global_rng() -> None:
+    """Seeded local evaluation noise leaves unrelated sampling streams unchanged."""
+    module = _flow_matching_module(seeded_evaluation=True)
+    batch = _batch()
+    state = torch.random.get_rng_state()
+
+    module.validation_step(batch, batch_idx=0)
+
+    assert torch.equal(torch.random.get_rng_state(), state)
+
+
+def test_flow_matching_seeded_evaluation_noise_changes_with_seed() -> None:
+    """Otherwise-identical seeded modules derive different noise from different seeds."""
+    params = _batch()["params"]
+    torch.manual_seed(11)
+    first = _flow_matching_module(seeded_evaluation=True)._evaluation_noise(  # noqa: SLF001
+        params, 0, "val"
+    )
+    torch.manual_seed(12)
+    second = _flow_matching_module(seeded_evaluation=True)._evaluation_noise(  # noqa: SLF001
+        params, 0, "val"
+    )
+
+    assert not torch.equal(first, second)
+
+
+def test_flow_matching_seeded_evaluation_noise_separates_stage_batch_and_rank() -> None:
+    """Stage, batch, and rank coordinates select different seeded initial states."""
+    module = _flow_matching_module(seeded_evaluation=True)
+    params = _batch()["params"]
+
+    val_first = module._evaluation_noise(params, 0, "val")  # noqa: SLF001
+    val_second = module._evaluation_noise(params, 1, "val")  # noqa: SLF001
+    test_first = module._evaluation_noise(params, 0, "test")  # noqa: SLF001
+    module._trainer = SimpleNamespace(global_rank=1)  # pyright: ignore[reportAttributeAccessIssue]
+    rank_one = module._evaluation_noise(params, 0, "val")  # noqa: SLF001
+
+    assert not torch.equal(val_first, val_second)
+    assert not torch.equal(val_first, test_first)
+    assert not torch.equal(val_first, rank_one)
+
+
+def test_flow_matching_sample_batch_changed_explicit_noise_changes_prediction() -> None:
+    """The public sampler remains sensitive to its explicit initial state."""
+    module = _flow_matching_module()
+    batch = _batch()
+    zeros = torch.zeros_like(batch["params"])
+    ones = torch.ones_like(batch["params"])
+
+    preds_a = module.sample_batch(
+        batch,
+        noise=zeros,
+        content_cfg_strength=1.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+    preds_b = module.sample_batch(
+        batch,
+        noise=ones,
+        content_cfg_strength=1.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+
     assert not torch.equal(preds_a, preds_b)
+
+
+def test_flow_matching_validation_without_scalar_pitch_skips_pitch_residuals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A registered spec without scalar MIDI pitch retains core validation metrics.
+
+    :param monkeypatch: Registry projection replacement scoped to this test.
+    """
+    import synth_setter.data.vst as vst
+
+    spec_without_pitch = ParamSpec(
+        synth_params=[ContinuousParameter(f"param_{index}") for index in range(_NUM_PARAMS)],
+        note_params=[],
+    )
+    monkeypatch.setattr(
+        vst, "param_specs", {**vst.param_specs, "without_pitch": spec_without_pitch}
+    )
+    module = _flow_matching_module(param_spec="without_pitch")
+
+    outputs = module.validation_step(_batch(), batch_idx=0)
+
+    assert torch.isfinite(outputs["param_mse"])
+
+
+def test_flow_matching_validation_loop_logs_signed_pitch_residuals() -> None:
+    """Lightning aggregates all signed pitch residual diagnostics over validation."""
+    trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        enable_checkpointing=False,
+        enable_model_summary=False,
+        logger=False,
+    )
+    dataloader = DataLoader(cast(Dataset[dict[str, torch.Tensor]], [_batch()]), batch_size=None)
+
+    trainer.validate(
+        _flow_matching_module(),
+        dataloaders=dataloader,
+    )
+
+    assert torch.isfinite(trainer.callback_metrics["val/pitch_residual_continuous_mean_semitones"])
+    assert torch.isfinite(trainer.callback_metrics["val/pitch_residual_floor_mean_semitones"])
+    assert torch.isfinite(trainer.callback_metrics["val/pitch_residual_nearest_mean_semitones"])
+
+
+def test_flow_matching_validation_loop_row_weights_signed_pitch_residuals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lightning averages real signed pitch residuals over rows, not batches.
+
+    :param monkeypatch: Deterministic validation sampler replacement scoped to this test.
+    """
+    from synth_setter.data.vst import param_specs
+
+    module = _flow_matching_module()
+    param_spec = param_specs["surge_4"]
+    pitch_span = next(
+        span for parameter, span in param_spec.encoded_slices() if parameter.name == "pitch"
+    )
+    target_params = torch.zeros(_BATCH, param_spec.encoded_width)
+    sampled_params = torch.zeros_like(target_params)
+    sampled_params[:, pitch_span] = torch.tensor(
+        [-0.3541666666666667, 0.1875, 0.20833334]
+    ).unsqueeze(1)
+    sampled_by_batch_size = {2: sampled_params[:2], 1: sampled_params[2:]}
+
+    def deterministic_sample(
+        _conditioning: object,
+        noise: torch.Tensor,
+        *_args: object,
+        **_kwargs: object,
+    ) -> torch.Tensor:
+        return sampled_by_batch_size[noise.shape[0]]
+
+    monkeypatch.setattr(module, "_sample", deterministic_sample)
+    full_batch = {**_batch(), "params": target_params}
+    first_batch = {name: values[:2] for name, values in full_batch.items()}
+    second_batch = {name: values[2:] for name, values in full_batch.items()}
+    trainer = Trainer(
+        accelerator="cpu",
+        devices=1,
+        enable_checkpointing=False,
+        enable_model_summary=False,
+        logger=False,
+    )
+    dataloader = DataLoader(
+        cast(Dataset[dict[str, torch.Tensor]], [first_batch, second_batch]),
+        batch_size=None,
+    )
+
+    trainer.validate(module, dataloaders=dataloader)
+
+    torch.testing.assert_close(
+        trainer.callback_metrics["val/pitch_residual_continuous_mean_semitones"],
+        torch.tensor(0.16666667),
+    )
+    torch.testing.assert_close(
+        trainer.callback_metrics["val/pitch_residual_floor_mean_semitones"],
+        torch.tensor(-0.33333334),
+    )
+    torch.testing.assert_close(
+        trainer.callback_metrics["val/pitch_residual_nearest_mean_semitones"],
+        torch.tensor(0.33333334),
+    )

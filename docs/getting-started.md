@@ -59,7 +59,7 @@ first.
 The pre-commit hooks run Ruff (linting + formatting), pyright (type checking),
 mdformat, codespell, and several other checks automatically on each commit.
 
-> **Prefer pip or conda?** See
+> **Prefer plain pip?** See
 > [Appendix A](#appendix-a-manual-environment-setup) for a
 > walkthrough using your own Python interpreter and environment tooling.
 
@@ -83,10 +83,17 @@ make install-surge-xt
 
 The target runs `npm ci`, so the Studiorack CLI and its transitive core are
 reproduced from `package-lock.json`. It then installs the exact
-`surge-synthesizer/surge` version in `studiorack.json`. Studiorack stores archive
-packages under its versioned `pluginsDir`; native installers may use the
-platform VST3 directory. `synth-setter-plugins` resolves either layout and
-creates the checkout alias.
+`surge-synthesizer/surge` version in `studiorack.json`. The patched core compares
+its host-selected registry artifact with `studiorack.lock.json` before download.
+Studiorack stores archive packages under its versioned `pluginsDir`; native
+installers may use the platform VST3 directory. Before invoking a native
+installer, `synth-setter-plugins` atomically records candidate snapshots beneath
+the managed package version. Transient failures retry the same pinned installer,
+even when an earlier attempt changed a candidate; adoption proceeds only after a
+successful installer exit and compares output with the original snapshot. Native
+bundles remain installer-owned symlink targets, but runtime consumption uses a
+manager-owned content snapshot verified against the seal. A source change during
+snapshotting fails closed before the plugin opens.
 
 The default managed directory is
 `~/.local/share/synth-setter/studiorack` on Linux and
@@ -101,11 +108,19 @@ make install-plugins
 Studiorack determines artifact compatibility from the host platform and
 architecture. Native installer packages may request administrator privileges;
 headless environments should run the install command with their normal
-privilege mechanism. Unsupported package/host combinations fail rather than
-falling back to an unpinned download.
+privilege mechanism. Unsupported package/host combinations and registry
+URL/digest drift fail rather than falling back to an unpinned download. Re-run
+the install command to repair an empty, partial, or modified managed bundle.
 
-If a manifest package is already installed in Studiorack storage or a standard
-system VST3 directory, refresh checkout aliases without reinstalling it:
+On Linux x86_64, `make install-ultramaster-kr106` builds KR-106 from the source
+revision pinned in the Makefile, then asks Studiorack to seal and link the
+bundle. This avoids the release binary's glibc requirement on Ubuntu 22.04.
+The build requires CMake, a C++17 compiler, and the ALSA, X11, FreeType,
+WebKitGTK, and OpenGL development packages. Its reusable checkout and build
+artifacts live under `~/.cache/synth-setter/ultramaster-kr106-<version>/`.
+
+If a manifest package has a valid completion seal in Studiorack storage,
+refresh its checkout alias without reinstalling it:
 
 ```bash
 make link-plugins
@@ -132,9 +147,11 @@ call synth-setter's R2 preflight.
 make test-fast
 ```
 
-This runs the quick CPU-only test suite (excludes slow, gpu, mps, and
-requires_vst). All tests should pass. If you see import errors, double-check
-that the virtual environment is active and dependencies installed correctly.
+This runs the curated CPU-only inner-loop suite with a two-minute budget. It
+covers schemas, models, evaluation, features, pipeline configuration, and VST
+logic without hardware-dependent or infrastructure tests. Run `make test-medium` for the complete
+non-slow CPU suite. If you see import errors, double-check that the virtual
+environment is active and dependencies installed correctly.
 
 > **Writing or reading tests?** See
 > [docs/reference/testing.md](reference/testing.md) for the fixtures,
@@ -183,9 +200,10 @@ experiments. **None of these are needed for the TorchSynth quickstart above.**
 
 ### 4a. Surge XT (VST Plugin)
 
-[Surge XT](https://surge-synthesizer.github.io/) is the open-source synthesizer
-used for audio dataset generation. The data pipeline renders audio by
-programmatically driving this plugin.
+[Surge XT](https://surge-synthesizer.github.io/) is the default managed VST3
+for audio dataset generation. Other registered synths may require separate
+plugin installation; see [`SYNTHS`](../src/synth_setter/synth_spec.py) and
+[Adding a new synth](guides/adding-a-new-synth.md).
 
 Installation is covered in [section 2d](#2d-install-the-surge-xt-vst3).
 `make install-surge-xt` provisions the pinned package; `make link-plugins`
@@ -620,7 +638,7 @@ ______________________________________________________________________
 `make install` is the canonical path for most users — it installs uv, a
 managed Python 3.12.13 interpreter, the venv, dependencies, and pre-commit.
 This appendix is for users who want to manage Python and the environment
-themselves (pip, conda, pyenv, system Python, etc.).
+themselves (pip, pyenv, system Python, etc.).
 
 **Requirement:** see the `requires-python` field in `pyproject.toml`
 (currently `>=3.12,<3.13`; `pip` enforces this). Development and CI use the
@@ -642,24 +660,7 @@ pre-commit install
 
 Drop `-e` for a non-editable install.
 
-### A.2. conda
-
-```bash
-conda create -n synth-setter python=3.12.13
-conda activate synth-setter
-
-# conda owns the torch stack; uv pulls the rest of the runtime + dev tooling
-# from the `dev` dependency-group (plain pip can't install groups). See #1139.
-pip install uv==0.11.28
-uv pip install --group dev -e .
-pre-commit install
-```
-
-The project's runtime packages (hydra-core, librosa, etc.) ship through PyPI
-rather than conda-forge, so we install everything via uv inside the conda
-environment.
-
-### A.3. uv pip without `make install`
+### A.2. uv pip without `make install`
 
 If you want to drive uv directly (e.g., to point at a specific interpreter
 you manage yourself):
@@ -673,7 +674,7 @@ pre-commit install
 
 This is what `make install` does under the hood.
 
-### A.4. GPU vs CPU PyTorch
+### A.3. GPU vs CPU PyTorch
 
 The `torch` dependency-group pins `torch>=2.0.0` without fixing the CPU/CUDA
 build. After installing the project, override with the wheel you want from the
