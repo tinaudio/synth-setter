@@ -33,11 +33,11 @@ Chromium build.
 The bundle is produced from a `pyfdn/flow_sketch` checkpoint and its training mel statistics by
 `synth-setter-export-browser-fdn-bundle` (see the [CLI reference](../reference/cli.md)). The
 validated export of the 2026-09-08 `flow_sketch` run is content-addressed by the SHA-256 of its
-`manifest.json` and stored under `r2:experiments/browser-fdn/<sha256>`; the digest CI uses is
-pinned in `.github/workflows/browser-fdn-e2e.yml`:
+`manifest.json` and stored under `r2:experiments/browser-fdn/<sha256>`; the digest every
+browser FDN workflow uses is pinned in `src/synth_setter/web/fdn/BUNDLE_SHA256`:
 
 ```bash
-BUNDLE_SHA256=b86aa3474cb86311615c5c01ede0a35e6445982052979dbe11649f6717f98f2d
+BUNDLE_SHA256=$(cat src/synth_setter/web/fdn/BUNDLE_SHA256)
 rclone copy --checksum "r2:experiments/browser-fdn/${BUNDLE_SHA256}" build/fdn-bundle
 echo "${BUNDLE_SHA256}  build/fdn-bundle/manifest.json" | sha256sum --check
 ```
@@ -108,11 +108,12 @@ It fetches the pinned bundle from R2, exports the Faust artifact from source, ru
 suite, executes the e2e test, and fails if that test was skipped. Screenshots, run records, and
 the target WAV are uploaded as the `browser-fdn-e2e-<run id>` artifact.
 
-`Browser pyFDN site` (`.github/workflows/browser-fdn-site.yml`) builds the complete static
-site on demand and uploads it as the `browser-fdn-site` artifact, ready to unzip and serve with
-any static file server. Publishing it to a public host is not automated: the repository's
-GitHub Pages deployment belongs to the documentation site, and the checkpoint behind the bundle
-is private.
+`Browser pyFDN site` (`.github/workflows/browser-fdn-site.yml`) builds the static site on
+demand and uploads it as the `browser-fdn-site` artifact without the `model/` directory: the
+graphs are a full export of a private checkpoint and must not enter an artifact of this public
+repository. To serve the artifact, unzip it and copy the fetched bundle in as `model/`.
+Publishing to a public host is not automated: the repository's GitHub Pages deployment belongs
+to the documentation site.
 
 ## Troubleshooting
 
