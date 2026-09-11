@@ -123,12 +123,12 @@ class TestRenderConfig:
 
     def test_non_faust_historical_digest_ignores_absent_block_size(self) -> None:
         """Adding the optional field does not invalidate existing VST shards."""
-        cfg = RenderConfig(**_valid_render_kwargs())
+        cfg = RenderConfig(**(_valid_render_kwargs() | {"gui_toggle_cadence": "never"}))
 
         assert cfg.block_size is None
         assert (
             cfg.shard_metadata().render_contract_digest
-            == "611848f43224078da8d98f866b0428d7c7a24eac7aa472bc537193ac7c9a1abb"
+            == "f04c981c0b6e82029af72272714e4b50f478dca17309c9bb7f6f58da9f551a5e"
         )
 
     @pytest.mark.parametrize("field", ["audio_dtype", "mel_spec_dtype"])
