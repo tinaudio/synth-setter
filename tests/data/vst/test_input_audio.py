@@ -85,6 +85,42 @@ def test_input_audio_pool_real_lance_row_returns_mono_waveform(
     assert pool.materialized_path.is_dir()
 
 
+def test_input_audio_pool_real_lance_row_returns_stereo_waveform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    audio = np.arange(2 * _FRAMES, dtype=np.float32).reshape(1, 2, _FRAMES) / 100
+    txid = _write_source(source_root, audio)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    pool = InputAudioPool(
+        _source(source_root, txid),
+        sample_rate=_SAMPLE_RATE,
+        frames=_FRAMES,
+        input_channels=2,
+    )
+
+    assert pool.take(0).shape == (2, _FRAMES)
+    np.testing.assert_array_equal(pool.take(0), audio[0])
+
+
+def test_input_audio_pool_mono_source_for_stereo_renderer_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    audio = np.zeros((1, 1, _FRAMES), dtype=np.float32)
+    txid = _write_source(source_root, audio)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    with pytest.raises(ValueError, match="input audio row shape"):
+        InputAudioPool(
+            _source(source_root, txid),
+            sample_rate=_SAMPLE_RATE,
+            frames=_FRAMES,
+            input_channels=2,
+        )
+
+
 def test_input_audio_pool_row_selection_retry_changes_row(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

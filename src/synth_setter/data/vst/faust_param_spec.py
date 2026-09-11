@@ -245,6 +245,21 @@ def _shimmer_fdn_param_spec() -> ParamSpec:
     )
 
 
+def _fdn_effect_param_spec() -> ParamSpec:
+    """Build the stereo FDN effect specification.
+
+    :returns: Fresh exact-address FDN effect specification.
+    """
+    return ParamSpec(
+        [
+            ContinuousParameter(name="/fdnEffect/damping", min=500.0, max=18_000.0),
+            ContinuousParameter(name="/fdnEffect/decay", min=0.0, max=0.95),
+            _unit_parameter("/fdnEffect/dryWet"),
+        ],
+        _note_params(),
+    )
+
+
 def _filter_osc_param_spec() -> ParamSpec:
     """Build the filterOSC specification.
 
@@ -277,6 +292,7 @@ _faust_param_spec_builders: Mapping[ParamSpecName, Callable[[], ParamSpec]] = Ma
         ParamSpecName("faust_bright_organ"): _bright_organ_param_spec,
         ParamSpecName("faust_bubble"): _bubble_param_spec,
         ParamSpecName("faust_church_organ"): _church_organ_param_spec,
+        ParamSpecName("faust_fdn_effect"): _fdn_effect_param_spec,
         ParamSpecName("faust_filter_osc"): _filter_osc_param_spec,
         ParamSpecName("faust_kronecker_fdn"): _kronecker_fdn_param_spec,
         ParamSpecName("faust_shimmer_fdn"): _shimmer_fdn_param_spec,

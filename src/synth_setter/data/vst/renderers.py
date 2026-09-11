@@ -306,16 +306,19 @@ class AudioRenderer(ABC):
     def render_with_input(
         self,
         params: Mapping[str, ParameterValue],
-        mono_buffer: np.ndarray,
+        input_buffer: np.ndarray,
     ) -> np.ndarray:
-        """Render a caller-provided mono source through an effect backend.
+        """Render caller audio in the backend's exact channel and frame geometry.
+
+        pyFDN accepts ``(frames,)`` mono; FaustWASM effects accept
+        ``(2, frames)`` stereo. Implementations never remix or resample.
 
         :param params: Renderer-native parameter values keyed by renderer identity.
-        :param mono_buffer: Mono input waveform with one value per output frame.
+        :param input_buffer: Input waveform in the backend-native geometry.
         :returns: Rendered audio with channels on the first axis.
         :raises NotImplementedError: The backend does not accept external audio.
         """
-        del params, mono_buffer
+        del params, input_buffer
         raise NotImplementedError(
             f"{type(self).__name__} does not support caller-provided input audio"
         )
