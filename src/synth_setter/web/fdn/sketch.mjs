@@ -6,7 +6,7 @@ export const SKETCH_CONTROLS = 10;
 export const SKETCH_INTERVALS = 32;
 const ANALYSIS_WINDOW = 1024;
 const ANALYSIS_HOP = 128;
-const EDC_FLOOR_DB = -60;
+export const EDC_FLOOR_DB = -60;
 const LOG_HEAD_FRACTION = 0.005;
 const LOG_RANGE_RATIO = 200;
 // erfc(1/sqrt(2)): the Gaussian reference density of Abel & Huang.
@@ -26,7 +26,7 @@ function peakNormalized(ir, sampleRate) {
 }
 
 // Sample edges s_k = round(f_k N) with f_0 = 0 and f_k = 0.005 · 200^((k-1)/31).
-function logTimeEdges(samples) {
+export function logTimeEdges(samples) {
   const edges = new Int32Array(SKETCH_INTERVALS + 1);
   for (let k = 1; k <= SKETCH_INTERVALS; k++) {
     const fraction = k === SKETCH_INTERVALS ? 1 : LOG_HEAD_FRACTION * LOG_RANGE_RATIO ** ((k - 1) / (SKETCH_INTERVALS - 1));
@@ -38,7 +38,7 @@ function logTimeEdges(samples) {
   return edges;
 }
 
-function poolSampleTrack(track, edges) {
+export function poolSampleTrack(track, edges) {
   const pooled = new Float64Array(SKETCH_INTERVALS);
   for (let k = 0; k < SKETCH_INTERVALS; k++) {
     let sum = 0;
@@ -48,12 +48,12 @@ function poolSampleTrack(track, edges) {
   return pooled;
 }
 
-function frameCenters(samples) {
+export function frameCenters(samples) {
   const count = Math.floor((samples - ANALYSIS_WINDOW) / ANALYSIS_HOP) + 1;
   return Int32Array.from({ length: count }, (_, index) => index * ANALYSIS_HOP + ANALYSIS_WINDOW / 2);
 }
 
-function poolFrameTrack(track, centers, edges) {
+export function poolFrameTrack(track, centers, edges) {
   const totals = new Float64Array(SKETCH_INTERVALS);
   const counts = new Int32Array(SKETCH_INTERVALS);
   for (let index = 0; index < centers.length; index++) {
@@ -130,11 +130,14 @@ function echoDensity(response) {
   return dense;
 }
 
+// Diffuse density 1 maps to 0 so the reference sits at the centre of model space.
+export const normalizeEchoDensity = (density) => (2 * density) / (1 + density) - 1;
+
 function echoDensityTrack(response, edges) {
   const centers = frameCenters(response.length);
   const dense = echoDensity(response);
   const perFrame = Float64Array.from(centers, (center) => dense[center]);
-  return poolFrameTrack(perFrame, centers, edges).map((density) => (2 * density) / (1 + density) - 1);
+  return poolFrameTrack(perFrame, centers, edges).map(normalizeEchoDensity);
 }
 
 function spectralFlatnessTrack(response, edges) {
