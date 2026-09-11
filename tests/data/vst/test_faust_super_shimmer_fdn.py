@@ -54,6 +54,10 @@ _EXPECTED_DOMAINS = [
 
 
 def _compile_super_shimmer():
+    """Compile the registered DSP into a fresh graph.
+
+    :returns: Engine and processor with reset delay and filter state.
+    """
     dd = import_module("dawdreamer")
     dsp = resolve_faust_dsp(_IDENTITY)
     engine = dd.RenderEngine(_SAMPLE_RATE, _BLOCK_SIZE)
@@ -66,6 +70,11 @@ def _compile_super_shimmer():
 
 
 def _default_patch() -> dict[str, float]:
+    """Build a wet-only midpoint patch with pitch paths bypassed.
+
+    :returns: Native scalar controls for isolated effect comparisons.
+    :raises TypeError: A registered control has an unsupported parameter kind.
+    """
     patch: dict[str, float] = {}
     for parameter in resolve_faust_param_spec(_IDENTITY).synth_params:
         if isinstance(parameter, ContinuousParameter):
@@ -80,6 +89,11 @@ def _default_patch() -> dict[str, float]:
 
 
 def _render(patch: dict[str, float]) -> np.ndarray:
+    """Render a fixed impulse through a fresh processor.
+
+    :param patch: Complete native control mapping.
+    :returns: Stereo audio in channel-first layout.
+    """
     engine, processor = _compile_super_shimmer()
     for address, value in patch.items():
         assert processor.set_parameter(address, value)
@@ -113,30 +127,80 @@ def test_super_shimmer_fdn_registry_pins_source_geometry_and_digest() -> None:
     assert synth.source_sha256 == hashlib.sha256(dsp.source.encode()).hexdigest()
 
 
-def test_super_shimmer_fdn_granular_controls_change_wet_tail() -> None:
-    """The fixed-ratio granular lines respond to grain timing and jitter controls."""
-    compact_patch = _default_patch()
-    cloud_patch = dict(compact_patch)
-    compact_patch.update({_GRAIN_DURATION: 0.04, _GRAIN_POSITION: 0.08, _GRAIN_JITTER: 0.0})
-    cloud_patch.update({_GRAIN_DURATION: 0.12, _GRAIN_POSITION: 0.25, _GRAIN_JITTER: 0.02})
+@pytest.mark.parametrize(
+    ("address", "low", "high"),
+    [
+        (_GRAIN_DURATION, 0.04, 0.12),
+        (_GRAIN_POSITION, 0.08, 0.25),
+        (_GRAIN_JITTER, 0.0, 0.02),
+        (_LFO_RATE, 0.01, 0.5),
+        (_LFO_DEPTH, 0.0, 256.0),
+    ],
+)
+def test_super_shimmer_fdn_single_texture_control_changes_wet_tail(
+    address: str, low: float, high: float
+) -> None:
+    """Each texture control independently changes the rendered feedback tail.
 
-    compact = _render(compact_patch)
-    cloud = _render(cloud_patch)
+    :param address: Native granular or modulation control address.
+    :param low: First endpoint of the exposed control domain.
+    :param high: Second endpoint, changed without altering any other control.
+    """
+    first_patch = _default_patch()
+    first_patch[address] = low
+    second_patch = dict(first_patch)
+    second_patch[address] = high
 
-    assert not np.allclose(compact[:, 6_000:], cloud[:, 6_000:], atol=1e-7, rtol=1e-5)
+    first = _render(first_patch)
+    second = _render(second_patch)
+
+    assert not np.allclose(first[:, 6_000:], second[:, 6_000:], atol=1e-7, rtol=1e-5)
 
 
-def test_super_shimmer_fdn_lfo_controls_change_wet_tail() -> None:
-    """Phase-offset delay modulation responds to its exposed rate and depth."""
-    static_patch = _default_patch()
-    modulated_patch = dict(static_patch)
-    static_patch[_LFO_DEPTH] = 0.0
-    modulated_patch.update({_LFO_RATE: 0.5, _LFO_DEPTH: 256.0})
+@pytest.mark.parametrize("line", range(8))
+def test_super_shimmer_fdn_shift_line_enabled_changes_wet_tail(line: int) -> None:
+    """Each of the eight retained pitch paths contributes to the rendered tail.
 
-    static = _render(static_patch)
-    modulated = _render(modulated_patch)
+    :param line: Zero-based pitch-shifting delay-line index.
+    """
+    bypassed_patch = _default_patch()
+    bypassed_patch["/superShimmerFDN/Shimmer/transpose"] = 1200.0
+    enabled_patch = dict(bypassed_patch)
+    enabled_patch[f"/superShimmerFDN/Shimmer/shifted_lines/line__{line}"] = 1.0
 
-    assert not np.allclose(static[:, 6_000:], modulated[:, 6_000:], atol=1e-7, rtol=1e-5)
+    bypassed = _render(bypassed_patch)
+    enabled = _render(enabled_patch)
+
+    assert not np.allclose(bypassed[:, 6_000:], enabled[:, 6_000:], atol=1e-7, rtol=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("address", "low", "high"),
+    [
+        ("/superShimmerFDN/Shimmer/transpose", -1200.0, 1200.0),
+        ("/superShimmerFDN/Shimmer/window", 256.0, 4096.0),
+    ],
+)
+def test_super_shimmer_fdn_single_pitch_control_changes_wet_tail(
+    address: str, low: float, high: float
+) -> None:
+    """Transpose and window independently affect an enabled pitch path.
+
+    :param address: Native pitch-shifter control address.
+    :param low: First control value.
+    :param high: Second control value with the remaining patch fixed.
+    """
+    first_patch = _default_patch()
+    first_patch["/superShimmerFDN/Shimmer/shifted_lines/line__0"] = 1.0
+    first_patch["/superShimmerFDN/Shimmer/transpose"] = 1200.0
+    first_patch[address] = low
+    second_patch = dict(first_patch)
+    second_patch[address] = high
+
+    first = _render(first_patch)
+    second = _render(second_patch)
+
+    assert not np.allclose(first[:, 6_000:], second[:, 6_000:], atol=1e-7, rtol=1e-5)
 
 
 def test_super_shimmer_fdn_wet_output_has_finite_bounded_tail() -> None:
