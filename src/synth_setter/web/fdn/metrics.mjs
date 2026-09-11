@@ -253,6 +253,8 @@ export function evaluateImpulseResponses(target, pred, sampleRate) {
   assertFiniteSignal(target, "target");
   assertFiniteSignal(pred, "prediction");
   if (target.length !== pred.length) throw new Error("target and prediction must have the same length");
+  // The energy-decay STFT needs at least one full window; shorter responses have no decay to read.
+  if (target.length < EDC_WINDOW) throw new Error(`impulse responses must contain at least ${EDC_WINDOW} samples`);
   if (sampleRate !== octaveBands.sample_rate) {
     throw new Error(`impulse-response metrics support only ${octaveBands.sample_rate} Hz`);
   }
