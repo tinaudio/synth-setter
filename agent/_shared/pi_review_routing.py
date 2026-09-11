@@ -65,14 +65,14 @@ PI_REVIEW_MAX_TURNS = 12
 _MECHANICAL_LOW_LINE_LIMIT = 200
 _HIGH_RISK_LINE_LIMIT = 800
 _CODEX_SETUP = "authenticate with `/login openai-codex`"
-_SECONDARY_REVIEW_SETUP = "authenticate with `/login meta`"
+_SECONDARY_REVIEW_SETUP = "authenticate with `/login openrouter`"
 
 _SMART_CODEX_CANDIDATES = (
     "openai-codex/gpt-5.6-sol",
     "openai-codex/gpt-5.6-terra",
 )
 _MECHANICAL_CODEX_CANDIDATES = ("openai-codex/gpt-5.6-terra",)
-_SECONDARY_REVIEW_CANDIDATES = ("meta/muse-spark-1.3-contributor",)
+_SECONDARY_REVIEW_CANDIDATES = ("openrouter/z-ai/glm-5.3-flash",)
 REVIEW_FILTER_MODEL = "openai-codex/gpt-6-astra"
 PINNED_REVIEW_MODELS = frozenset(
     (

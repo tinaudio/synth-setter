@@ -207,7 +207,7 @@ def test_pi_project_settings_pin_review_pool_providers_only() -> None:
         "openai-codex/gpt-5.6-terra",
         "openai-codex/gpt-5.6-sol",
         "openai-codex/gpt-6-astra",
-        "meta/muse-spark-1.3-contributor",
+        "openrouter/z-ai/glm-5.3-flash",
     ]
 
 
@@ -235,8 +235,24 @@ def test_pi_project_append_system_scopes_subagent_model_selectors() -> None:
     assert "Do not launch subagents" in text
     assert "openai-codex/gpt-5.6-sol" in text
     assert "Never pass the provider-only `openai-codex`" in text
-    assert "Muse-Spark-1.3" in text
-    assert "`meta`" in text
+    assert "GLM-5.3-Flash" in text
+    assert "openrouter" in text
+    assert "Muse-Spark" not in text
+    assert "`meta`" not in text
+
+
+def test_pi_review_credential_docs_scope_auth_to_approved_providers() -> None:
+    """Document only the credentials needed by the pinned review routes."""
+    credential_guide = (
+        REPO_ROOT / "docs" / "operations" / "credential-rotation-guide.md"
+    ).read_text()
+    github_actions = (REPO_ROOT / "docs" / "reference" / "github-actions.md").read_text()
+
+    assert "`openai-codex` and `openrouter` review pool" in credential_guide
+    assert 'jq -c \'{"openai-codex": .["openai-codex"], "openrouter": .openrouter}\'' in (
+        credential_guide
+    )
+    assert "approved `openai-codex` and `openrouter` credentials" in github_actions
 
 
 def _assert_referenced_subcommands_exist(runbook_text: str) -> None:
@@ -570,7 +586,7 @@ def test_pi_review_launcher_manifest_starts_detached_follow_up(tmp_path: Path) -
         '"pr_number":2174,"base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
         '"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","target":"PR #2174",'
         '"deferred_passes":[{"skill":"correctness-review","pass_name":"free-pool",'
-        '"origin":"primary","model":"meta/muse-spark-1.3-contributor",'
+        '"origin":"primary","model":"openrouter/z-ai/glm-5.3-flash",'
         '"verification_model":"openai-codex/gpt-5.6-sol","thinking":"high"}],'
         '"foreground_fingerprints":[]}\n'
         "JSON\n"
@@ -640,7 +656,7 @@ def _follow_up_success_payload() -> str:
                 {
                     "skill": "correctness-review",
                     "pass_name": "free-pool",
-                    "model": "meta/muse-spark-1.3-contributor",
+                    "model": "openrouter/z-ai/glm-5.3-flash",
                     "status": "success",
                     "agent_id": "agent-follow-up",
                     "output_path": ".pi/output/agent-follow-up.jsonl",
@@ -676,7 +692,7 @@ def _deferred_manifest_payload() -> str:
                     "skill": "correctness-review",
                     "pass_name": "free-pool",
                     "origin": "primary",
-                    "model": "meta/muse-spark-1.3-contributor",
+                    "model": "openrouter/z-ai/glm-5.3-flash",
                     "verification_model": "openai-codex/gpt-5.6-sol",
                     "thinking": "high",
                 }
@@ -1009,7 +1025,7 @@ def test_pi_review_follow_up_launcher_runs_detached_pinned_process(tmp_path: Pat
                         "skill": "correctness-review",
                         "pass_name": "free-pool",
                         "origin": "primary",
-                        "model": "meta/muse-spark-1.3-contributor",
+                        "model": "openrouter/z-ai/glm-5.3-flash",
                         "verification_model": "openai-codex/gpt-5.6-sol",
                         "thinking": "high",
                     }

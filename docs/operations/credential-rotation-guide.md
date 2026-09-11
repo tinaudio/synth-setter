@@ -287,7 +287,7 @@ ______________________________________________________________________
 ### Pi PR review (`PI_AUTH_JSON`, `GIT_PAT`)
 
 **What:** `PI_AUTH_JSON` contains the Pi credentials for the approved
-`openai-codex`, `kimi-coding`, and `openrouter` review pool. `GIT_PAT` gives the
+`openai-codex` and `openrouter` review pool. `GIT_PAT` gives the
 automatic review workflow read-only Contents access to private
 `tinaudio/skills`. The workflow loads either secret only when `ktinubu` is the
 author, initial actor, and rerun actor for a same-repository PR event.
@@ -299,9 +299,9 @@ author, initial actor, and rerun actor for a same-repository PR event.
 
 **Rotation steps:**
 
-1. Authenticate the three approved Pi providers locally.
+1. Authenticate the two approved Pi providers locally.
 2. Replace `PI_AUTH_JSON` without printing its contents:
-   `jq -c '{"openai-codex": .["openai-codex"], "openrouter": .openrouter, "kimi-coding": .["kimi-coding"]}' ~/.pi/agent/auth.json | gh secret set PI_AUTH_JSON --repo tinaudio/synth-setter`.
+   `jq -c '{"openai-codex": .["openai-codex"], "openrouter": .openrouter}' ~/.pi/agent/auth.json | gh secret set PI_AUTH_JSON --repo tinaudio/synth-setter`.
 3. For `GIT_PAT`, create a fine-grained token restricted to `tinaudio/skills`
    with read-only Contents access, update the secret, then revoke the old token.
 

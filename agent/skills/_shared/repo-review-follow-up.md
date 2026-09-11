@@ -120,7 +120,7 @@ not present in the runtime manifest.
        {
          "skill": "correctness-review",
          "pass_name": "free-pool",
-         "model": "meta/muse-spark-1.3-contributor",
+         "model": "openrouter/z-ai/glm-5.3-flash",
          "status": "success",
          "agent_id": "<Tintin agent id or null>",
          "output_path": "<Tintin transcript path or null>",
