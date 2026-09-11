@@ -1,0 +1,128 @@
+# SLAP retrieval datasets
+
+SLAP retrieval uses a separate Lance dataset for each source split. Unlike
+embedding-column augmentation, which preserves one row per training example,
+this export creates two searchable entries per source row without copying
+waveforms, spectrograms, or parameter arrays.
+
+## Row contract
+
+| Column               | Meaning                                                               |
+| -------------------- | --------------------------------------------------------------------- |
+| `row_uuid`           | Persisted source-row UUID, shared by the two retrieval entries        |
+| `is_param_embedding` | `true` for the parameter projection; `false` for the audio projection |
+| `slap`               | Normalized float32 EMA projection in the shared SLAP space            |
+
+The retrieval key is `(row_uuid, is_param_embedding)`. `row_uuid` alone is
+unique in the source, not in the retrieval table. An audio-content UUID is
+not a substitute: different source rows can contain identical audio.
+
+Both modalities use the same checkpoint. The export takes projected vectors,
+not backbone representations or online predictor outputs. It follows the
+Lance training batch contract: source parameters in `[0, 1]` are rescaled to
+`[-1, 1]`, and stored mels use the checkpoint's training mean and standard
+deviation when normalization is enabled. Mel spectrograms are not recomputed
+with a different frontend. Source parameter and mel columns are not modified.
+
+## Provenance and discovery
+
+Each retrieval dataset identifies its source URI, split, exact Lance version
+and transaction identity, checkpoint content identity, resolved model
+configuration, projection policy, vector dimension, and row counts.
+
+The source receives a discovery pointer only after its retrieval dataset and
+any requested index are complete. That pointer records the output URI/version
+and the source version used to compute it. Updating source metadata creates a
+later source version; that later version is not the input snapshot.
+
+Source UUIDs must be persisted before pinning the export snapshot. Historical
+snapshots without UUIDs cannot be retroactively changed. Keep the referenced
+source version available: the retrieval table contains no audio or parameters
+from which to reconstruct a deleted source snapshot.
+
+Run only one writer per source split and output table. Native Lance commit
+conflicts are surfaced; the exporter does not retry mutating transactions
+blindly. Publication is per split, not an atomic transaction across all splits
+or both datasets. A failed pointer update can leave a complete retrieval dataset with
+no source-side discovery pointer. Matching reruns should repair publication,
+not duplicate rows; a conflicting export must not silently overwrite the
+existing table.
+
+## Retrieval
+
+Search the `slap` column using a projection from the same checkpoint and
+normalization policy. Join returned UUIDs to the recorded source snapshot to
+recover parameters or audio. Deduplicate by UUID when the caller wants one
+result per source example.
+
+Without a modality filter, parameter and audio entries compete for the same
+nearest-neighbor result set. Use `is_param_embedding` when only one modality is
+wanted. Train, validation, and test exports remain separate; do not combine
+them for training-time retrieval unless cross-split access is deliberate.
+
+## Running an export
+
+```bash
+synth-setter-export-slap \
+  model=slap_ast_audio_vst_ff_param \
+  synth=surge_xt \
+  source_root_uri=r2://bucket/source \
+  output_root_uri=r2://bucket/slap \
+  ckpt_path=/path/to/model.ckpt \
+  mel_stats_path=/path/to/training/stats.npz \
+  source_versions.train=12 \
+  source_versions.val=7 \
+  source_versions.test=5
+```
+
+Use the exact source versions you intend to export. If a selected head lacks
+UUIDs, the exporter adds them and records both the requested version and the
+resulting UUID-bearing input snapshot. Reuse the same request on reruns.
+When exporting a historical UUID-bearing snapshot, the discovery pointer still
+records that historical input version; it does not assert freshness against
+the current source head.
+
+To select only train, also remove the unused version entries:
+
+```bash
+synth-setter-export-slap \
+  source_root_uri=/data/source output_root_uri=/data/slap \
+  ckpt_path=/path/to/model.ckpt \
+  mel_stats_path=/path/to/training/stats.npz \
+  'splits=[train]'  source_versions.train=12 \
+  '~source_versions.val' '~source_versions.test'
+```
+
+`device=null` selects CUDA when available, otherwise CPU; override with
+`device=cpu` or `device=cuda`. `batch_size` bounds inference batches, but
+UUID uniqueness validation keeps an in-memory set proportional to the number
+of source rows.
+
+Set `build_index=true` to build an IVF-PQ index. `metric` defaults to `cosine`;
+`num_partitions` can be specified, and `num_sub_vectors` must divide the vector
+width. Index training also requires enough rows for Lance's codebook training;
+small exports can omit the index and use exact search. An indexing failure
+retains an incomplete output without publishing a source pointer.
+
+Checkpoint and mel-statistics paths are local files. Dataset roots
+accept local paths, file URIs, and configured R2 URIs; S3-form URIs use the R2
+backend, not arbitrary AWS credentials.
+
+## Checkpoint configuration
+
+The exporter requires the checkpoint and its matching Hydra model
+configuration explicitly. The model configuration includes architecture
+settings and resolved synth parameter dimensions; choosing the same model
+name with different training overrides is not sufficient.
+
+`use_saved_mean_and_variance=true` matches the training default. Mel-input
+models require `mel_stats_path` pointing to the statistics used for training,
+not statistics recomputed from the retrieval split. Set
+`use_saved_mean_and_variance=false` only for checkpoints trained without mel
+normalization. Waveform-input models do not require mel statistics. The export
+identity includes the effective preprocessing policy and statistics content
+hash so changed statistics cannot silently reuse previous vectors.
+
+Only load trusted checkpoints and model configurations. Hydra model targets
+instantiate Python code; these inputs are not a safe format for untrusted
+uploads.

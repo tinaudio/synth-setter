@@ -12,6 +12,7 @@ from synth_setter.conditioning import (
     SKETCH_CENTROID_ROW,
     SKETCH_LOUDNESS_ROW,
     SKETCH_PITCH_SLICE,
+    SketchControlProfile,
     SketchControls,
     SketchControlSpec,
     resolve_sketch_controls,
@@ -27,6 +28,7 @@ _BATCH = 2
 _D_MODEL = 16
 _NUM_FRAMES = 11
 _NUM_CONTROL_TOKENS = 4
+_REVERB_FRAMES = 32
 
 
 def _controls(batch: int = _BATCH, seed: int = 0) -> torch.Tensor:
@@ -43,13 +45,37 @@ def _controls(batch: int = _BATCH, seed: int = 0) -> torch.Tensor:
     return controls
 
 
-def _tokens_module(seed: int = 0) -> SketchControlTokens:
+def _tokens_module(seed: int = 0, profile: SketchControlProfile = "music") -> SketchControlTokens:
     """Build a small token module with non-zero projection weights.
 
     :param seed: RNG seed for the randomized projection weights.
+    :param profile: Channel layout selected for tokenization.
     :returns: Module whose three projections were re-randomized after zero-init.
     """
-    module = SketchControlTokens(d_model=_D_MODEL, num_control_tokens=_NUM_CONTROL_TOKENS)
+    module = SketchControlTokens(
+        d_model=_D_MODEL,
+        num_control_tokens=_NUM_CONTROL_TOKENS,
+        profile=profile,
+    )
+    generator = torch.Generator().manual_seed(seed)
+    with torch.no_grad():
+        for projection in module.projections.values():
+            linear = cast(torch.nn.Linear, projection)
+            linear.weight.copy_(torch.randn(linear.weight.shape, generator=generator))
+    return module
+
+
+def _reverb_tokens_module(seed: int = 0) -> SketchControlTokens:
+    """Build a temporal reverb tokenizer with live projections.
+
+    :param seed: RNG seed for projection weights.
+    :returns: Reverb tokenizer on the canonical temporal grid.
+    """
+    module = SketchControlTokens(
+        d_model=_D_MODEL,
+        num_control_tokens=_REVERB_FRAMES,
+        profile="pyfdn_reverb",
+    )
     generator = torch.Generator().manual_seed(seed)
     with torch.no_grad():
         for projection in module.projections.values():
@@ -74,8 +100,45 @@ class TestSketchControlSpec:
         """Spec defaults pin the approved column, token budget, and threshold."""
         spec = SketchControlSpec(num_frames=401)
         assert spec.column == "sketch"
+        assert spec.profile == "music"
         assert spec.num_control_tokens == 32
         assert spec.pitch_zero_threshold == 0.1
+
+    def test_pyfdn_reverb_profile_has_temporal_layout(self) -> None:
+        """The reverb profile pins its channel and temporal-group layout."""
+        spec = SketchControlSpec(num_frames=32, profile="pyfdn_reverb")
+
+        assert spec.layout.num_controls == 10
+        assert spec.layout.group_names == ("edc", "echo_density", "spectral_flatness")
+        assert spec.layout.group_widths == (8, 1, 1)
+
+    def test_tiv_profile_is_online_audio_only_with_one_control_group(self) -> None:
+        """TIV opts into audio extraction and exposes all coordinates as one group."""
+        spec = SketchControlSpec(
+            profile="tiv",
+            source="online",
+            sample_rate=44_100,
+            num_frames=32,
+        )
+
+        assert spec.layout.num_controls == 12
+        assert spec.layout.group_names == ("tiv",)
+        assert spec.layout.group_widths == (12,)
+
+    def test_tiv_profile_without_audio_source_rejected(self) -> None:
+        """TIV cannot silently request a nonexistent stored sketch column."""
+        with pytest.raises(ValueError, match="tiv sketch requires source='online'"):
+            SketchControlSpec(profile="tiv", num_frames=32)
+
+    def test_online_audio_source_without_sample_rate_rejected(self) -> None:
+        """Online extraction requires the waveform sample rate explicitly."""
+        with pytest.raises(ValueError, match="sample_rate"):
+            SketchControlSpec(profile="tiv", source="online", num_frames=32)
+
+    def test_pyfdn_reverb_profile_rejects_noncanonical_frames(self) -> None:
+        """Reverb controls retain one token for each canonical stored frame."""
+        with pytest.raises(ValueError, match="pyfdn_reverb sketch requires"):
+            SketchControlSpec(num_frames=31, profile="pyfdn_reverb")
 
     def test_extra_field_rejected(self) -> None:
         """Unknown fields fail loudly under the strict config."""
@@ -237,12 +300,160 @@ class TestSketchControlTokens:
             atol=0,
         )
 
+    def test_music_profile_preserves_projection_parameter_names(self) -> None:
+        """Default-profile checkpoints retain the established projection keys."""
+        module = SketchControlTokens(d_model=_D_MODEL)
+
+        assert tuple(module.state_dict()) == (
+            "positional_encoding",
+            "projections.loudness.weight",
+            "projections.centroid.weight",
+            "projections.pitch.weight",
+        )
+
     def test_forward_wrong_channel_count_raises_shape_error(self) -> None:
-        """Jaxtyping rejects a wrong channel count at the call boundary."""
+        """The music profile rejects tensors outside its channel contract."""
         module = _tokens_module()
         bad = torch.rand(_BATCH, NUM_SKETCH_CONTROLS - 1, _NUM_FRAMES)
-        with pytest.raises(TypeCheckError):
+        with pytest.raises((TypeCheckError, ValueError), match="channel|shape"):
             module(bad, _keep_all())
+
+
+class TestTIVSketchControlTokens:
+    """Validate temporal TIV pooling and channel contracts."""
+
+    @pytest.mark.gpu
+    def test_forward_tiv_cpu_and_cuda_outputs_are_numerically_equivalent(self) -> None:
+        """TIV pooling and projection preserve outputs across CPU and CUDA."""
+        if not torch.cuda.is_available():
+            pytest.skip("requires CUDA")
+        module = _tokens_module(seed=19, profile="tiv")
+        controls = torch.randn(2, 12, 47, generator=torch.Generator().manual_seed(23))
+        keep = torch.ones(2, 1, dtype=torch.bool)
+
+        with torch.no_grad():
+            expected = module(controls, keep)
+            actual = module.cuda()(controls.cuda(), keep.cuda()).cpu()
+
+        torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
+
+    def test_forward_pools_tiv_coordinates_by_mean(self) -> None:
+        """TIV coordinates use average pooling rather than music pitch maxima."""
+        module = SketchControlTokens(d_model=1, num_control_tokens=2, profile="tiv")
+        with torch.no_grad():
+            cast(torch.nn.Linear, module.projections["tiv"]).weight.fill_(1.0)
+        controls = torch.zeros(1, 12, 4)
+        controls[0, 0] = torch.tensor([0.0, 2.0, 4.0, 6.0])
+        keep = torch.ones(1, 1, dtype=torch.bool)
+
+        contribution = module(controls, keep) - module.unconditional(1)
+
+        torch.testing.assert_close(contribution[0, :, 0], torch.tensor([1.0, 5.0]))
+
+    def test_forward_tiv_wrong_channel_count_raises(self) -> None:
+        """TIV rejects controls not carrying six real-imaginary pairs."""
+        module = SketchControlTokens(d_model=_D_MODEL, profile="tiv")
+
+        with pytest.raises(ValueError, match="12 channels"):
+            module(torch.randn(_BATCH, 11, _NUM_FRAMES), torch.ones(_BATCH, 1, dtype=torch.bool))
+
+
+class TestPyFDNReverbSketchControlTokens:
+    """Validate pyFDN temporal alignment and CFG dropout invariants."""
+
+    def test_forward_returns_one_token_per_reverb_frame(self) -> None:
+        """Token count equals the canonical reverb frame count."""
+        module = _reverb_tokens_module()
+        controls = torch.randn(_BATCH, 10, _REVERB_FRAMES, dtype=torch.float32)
+
+        assert module(controls, _keep_all()).shape == (
+            _BATCH,
+            _REVERB_FRAMES,
+            _D_MODEL,
+        )
+
+    @pytest.mark.parametrize("group_index", range(3))
+    def test_forward_each_reverb_group_drop_is_independent(self, group_index: int) -> None:
+        """Dropping one reverb group equals zeroing only that group's channels.
+
+        :param group_index: Reverb group omitted from the token sum.
+        """
+        module = _reverb_tokens_module()
+        controls = torch.randn(_BATCH, 10, _REVERB_FRAMES)
+        keep = _keep_all()
+        keep[:, group_index] = False
+        zeroed = controls.clone()
+        group_slice = module.layout.group_slices[group_index]
+        zeroed[:, group_slice] = 0.0
+
+        torch.testing.assert_close(module(controls, keep), module(zeroed, _keep_all()))
+
+    def test_forward_all_reverb_groups_dropped_returns_positional_encoding(self) -> None:
+        """Global reverb all-drop leaves only temporal position."""
+        module = _reverb_tokens_module()
+        controls = torch.randn(_BATCH, 10, _REVERB_FRAMES)
+
+        torch.testing.assert_close(
+            module(controls, torch.zeros(_BATCH, 3, dtype=torch.bool)),
+            module.unconditional(_BATCH),
+        )
+
+    @pytest.mark.parametrize("row", [0, 8, 9])
+    def test_forward_reverb_change_affects_only_same_frame(self, row: int) -> None:
+        """A reverb descriptor cannot leak into neighboring temporal tokens.
+
+        :param row: Representative channel from each reverb group.
+        """
+        module = _reverb_tokens_module()
+        base = torch.zeros(1, 10, _REVERB_FRAMES)
+        changed = base.clone()
+        changed[0, row, 2] = 1.0
+
+        delta = module(changed, _keep_all(1)) - module(base, _keep_all(1))
+
+        assert torch.count_nonzero(delta[0, :2]) == 0
+        assert torch.count_nonzero(delta[0, 2]) > 0
+        assert torch.count_nonzero(delta[0, 3:]) == 0
+
+    def test_forward_reverb_wrong_channel_count_raises(self) -> None:
+        """The reverb profile rejects tensors outside its channel contract."""
+        module = _reverb_tokens_module()
+
+        with pytest.raises(ValueError, match="10 channels"):
+            module(torch.randn(_BATCH, 9, _REVERB_FRAMES), _keep_all())
+
+    def test_forward_reverb_wrong_frame_count_raises(self) -> None:
+        """The reverb profile rejects temporal resampling at the model boundary."""
+        module = _reverb_tokens_module()
+
+        with pytest.raises(ValueError, match="32 frames"):
+            module(torch.randn(_BATCH, 10, 31), _keep_all())
+
+    def test_forward_reverb_non_float32_raises(self) -> None:
+        """The reverb profile rejects descriptor tensors outside float32."""
+        module = _reverb_tokens_module()
+
+        with pytest.raises(ValueError, match="float32"):
+            module(torch.randn(_BATCH, 10, _REVERB_FRAMES).double(), _keep_all())
+
+    def test_forward_reverb_wrong_group_count_raises(self) -> None:
+        """The reverb profile requires one keep decision per projection group."""
+        module = _reverb_tokens_module()
+
+        with pytest.raises(ValueError, match="3 keep groups"):
+            module(
+                torch.randn(_BATCH, 10, _REVERB_FRAMES),
+                torch.ones(_BATCH, 2, dtype=torch.bool),
+            )
+
+    def test_constructor_reverb_noncanonical_token_count_raises(self) -> None:
+        """Reverb tokenizers cannot resample or broadcast temporal descriptors."""
+        with pytest.raises(ValueError, match="32 control tokens"):
+            SketchControlTokens(
+                d_model=_D_MODEL,
+                num_control_tokens=_NUM_CONTROL_TOKENS,
+                profile="pyfdn_reverb",
+            )
 
 
 def _field(pe_type: str = "none") -> ApproxEquivTransformer:

@@ -34,8 +34,9 @@ al.](https://benhayes.net). The original code is available
 [here](https://github.com/ben-hayes/synth-permutations).
 
 [Surge XT](https://surge-synthesizer.github.io/), developed by the Surge
-Synth Team, is the synthesizer used for dataset generation and is integrated
-under the GPL-3.0 license.
+Synth Team, is the default synthesizer for dataset generation and is integrated
+under the GPL-3.0 license. Additional synth identities are registered in
+[`SYNTHS`](src/synth_setter/synth_spec.py).
 
 ## Features
 
@@ -58,8 +59,10 @@ digests must match each manifest's same-stem lock, such as
 [`studiorack.lock.json`](studiorack.lock.json) or
 [`studiorack-cardinal.lock.json`](studiorack-cardinal.lock.json), and completed
 bundles receive a content seal before aliasing. `make install-plugins` installs
-every package in the manifest. Unsupported package/host combinations and
-registry drift fail explicitly.
+every package in the manifest. On Linux x86_64, Ultramaster KR-106 is built
+from its pinned source revision before Studiorack seals and links it because its
+registry binary is incompatible with Ubuntu 22.04. Unsupported package/host
+combinations and registry drift fail explicitly.
 
 ## Installation
 
@@ -96,7 +99,7 @@ make install-surge-xt
 > available for unmanaged and legacy Surge installs. See
 > [docs/getting-started.md §2d](docs/getting-started.md#2d-install-the-surge-xt-vst3).
 
-> **Prefer pip or conda?** If you'd rather manage the Python interpreter and
+> **Prefer plain pip?** If you'd rather manage the Python interpreter and
 > venv yourself, see
 > [docs/getting-started.md Appendix A](docs/getting-started.md#appendix-a-manual-environment-setup)
 > for a walkthrough using `uv pip install --group dev -e .` inside your own
@@ -128,8 +131,11 @@ in [docs/reference/dependency-management.md](docs/reference/dependency-managemen
 # Render a CLAP-conditioned Surge patch and upload the WAV to R2
 synth-setter-clap "frog croak"
 
-# Run tests
+# Run the strict two-minute test tier
 make test-fast
+
+# Run the complete non-slow CPU suite
+make test-medium
 
 # Run all pre-commit hooks (formatting + linting)
 make format
@@ -163,7 +169,8 @@ direct experimental path. CLAP candidates accept `--clap-sample-steps` and
 `--clap-cfg-strength` for solver and guidance A/B runs; both settings are part of
 the resume identity and published provenance.
 
-See the project documentation for a full walkthrough.
+See the project documentation for a full walkthrough. For stored/online AST
+comparisons and calibration, see [online AST normalization](docs/reference/ast-normalization.md).
 
 ## Project Structure
 
@@ -243,10 +250,14 @@ New to the project? These are the docs worth skimming first, in order:
 
 Further reading (mostly for contributors and maintainers):
 
+- **[CLI command cookbook](docs/reference/cli.md)** — copy-ready commands for
+  dataset generation, finalization, embeddings, training, and SkyPilot jobs
 - [`docs/design/`](docs/design/) — training pipeline, evaluation pipeline,
   storage provenance spec, SkyPilot integration, implementation plans
 - [`docs/reference/`](docs/reference/) — configuration reference, Docker,
   GitHub Actions, W&B integration
+- **[SurgePy browser evaluation](docs/guides/surgepy-browser-evaluation.md)** —
+  real checkpoint → ONNX Runtime Web → native audio/metrics, with the E2E CI playbook
 - [`docs/guides/vst-interactive.md`](docs/guides/vst-interactive.md) —
   human-in-the-loop tool for auditioning predicted VST parameters and
   capturing patches into a labeled dataset

@@ -14,7 +14,11 @@ from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf
 from pydantic import ValidationError
 
-from synth_setter.data.vst.param_spec_registry import param_specs, plugin_state_paths
+from synth_setter.data.vst.param_spec_registry import (
+    param_specs,
+    plugin_state_paths,
+    resolve_param_spec_width,
+)
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.renderer_backend import TORCHSYNTH_PLUGIN_NAME
 from synth_setter.synth_spec import (
@@ -22,6 +26,7 @@ from synth_setter.synth_spec import (
     SynthName,
     SynthSpec,
     resolve_synth,
+    validate_faust_registry_reference,
     validate_synth_identity,
 )
 
@@ -42,6 +47,29 @@ class TestSynthSpecValidation:
                 synth_version="1.0.2",
             )
 
+    def test_legacy_faust_sentinel_without_legacy_backend_is_rejected(self) -> None:
+        """The Faust sentinel is migrated only as part of the exact legacy render pair."""
+        with pytest.raises(ValidationError, match="format"):
+            SynthSpec(
+                name=SynthName("faust_bubble"),
+                param_spec_name=ParamSpecName("faust_bubble"),
+                plugin_path="faust",
+                plugin_state_path="",
+                synth_version="0.8.3",
+            )
+
+    def test_explicit_vst_format_rejects_legacy_faust_sentinel(self) -> None:
+        """The reserved legacy sentinel cannot be treated as a VST bundle path."""
+        with pytest.raises(ValidationError, match="legacy Faust"):
+            SynthSpec(
+                name=SynthName("faust_bubble"),
+                param_spec_name=ParamSpecName("faust_bubble"),
+                format="vst3",
+                plugin_path="faust",
+                plugin_state_path="",
+                synth_version="0.8.3",
+            )
+
     def test_a_vst_plugin_accepts_a_preset_path(self) -> None:
         """A plugin-hosted synth carries the baseline preset it was mapped against."""
         spec = SynthSpec(
@@ -53,6 +81,16 @@ class TestSynthSpecValidation:
         )
 
         assert spec.plugin_state_path == "presets/obxf-base.vstpreset"
+
+    def test_missing_plugin_path_is_rejected(self) -> None:
+        """A plugin-hosted identity cannot omit its runtime artifact location."""
+        with pytest.raises(ValidationError, match="plugin_path"):
+            SynthSpec(  # type: ignore[call-arg]
+                name=SynthName("obxf"),
+                param_spec_name=ParamSpecName("obxf"),
+                plugin_state_path="presets/obxf-base.vstpreset",
+                synth_version="1.0.3",
+            )
 
     def test_missing_synth_version_is_rejected(self) -> None:
         """A synth identity without an artifact version is incomplete."""
@@ -101,9 +139,112 @@ class TestSynthSpecValidation:
         with pytest.raises(KeyError):
             resolve_synth(SynthName("not_a_synth"))
 
+    def test_faust_registry_reference_returns_registered_identity(self) -> None:
+        """A canonical reference resolves to its checked-in source identity."""
+        identity = validate_faust_registry_reference(
+            "registry://faust/faust_bright_organ", "faust_bright_organ"
+        )
+
+        assert identity == "faust_bright_organ"
+
+    @pytest.mark.parametrize(
+        "reference",
+        [
+            "registry:/faust/faust_bright_organ",
+            "registry://other/faust_bright_organ",
+            "registry://faust/faust_bright_organ/extra",
+            "registry://faust/faust_bright_organ?version=1",
+        ],
+    )
+    def test_malformed_faust_registry_reference_raises(self, reference: str) -> None:
+        """Only the exact registry scheme, namespace, and one-part identity are accepted.
+
+        :param reference: Malformed registry reference under test.
+        """
+        with pytest.raises(ValueError, match="registry://faust/<registered-source-name>"):
+            validate_faust_registry_reference(reference, "faust_bright_organ")
+
+    def test_unknown_faust_registry_reference_raises(self) -> None:
+        """A canonical-looking reference cannot select an unregistered source."""
+        with pytest.raises(ValueError, match="not registered"):
+            validate_faust_registry_reference("registry://faust/faust_unknown", "faust_unknown")
+
+    def test_mismatched_faust_registry_reference_raises(self) -> None:
+        """The reference identity must agree with the selected parameter specification."""
+        with pytest.raises(ValueError, match="faust_bubble.*faust_bright_organ"):
+            validate_faust_registry_reference(
+                "registry://faust/faust_bubble", "faust_bright_organ"
+            )
+
+    def test_registry_reference_without_format_derives_faust(self) -> None:
+        """A recognized registry URI supplies its non-filesystem representation format."""
+        values = SYNTHS[SynthName("faust_bright_organ")].model_dump(exclude={"format"})
+
+        spec = SynthSpec.model_validate(values)
+
+        assert spec.format == "faust"
+
+    def test_registry_reference_without_string_identity_is_rejected(self) -> None:
+        """A registry URI cannot infer Faust for an untyped source identity."""
+        values = SYNTHS[SynthName("faust_bright_organ")].model_dump(exclude={"format"})
+        values["param_spec_name"] = None
+
+        with pytest.raises(ValidationError, match="param_spec_name"):
+            SynthSpec.model_validate(values)
+
+    def test_non_faust_format_rejects_source_digest(self) -> None:
+        """A VST identity cannot carry checked-in Faust source provenance."""
+        values = SYNTHS[SynthName("surge_xt")].model_dump()
+        values["source_sha256"] = "0" * 64
+
+        with pytest.raises(ValidationError, match="source_sha256 is supported only"):
+            SynthSpec.model_validate(values)
+
+    def test_faust_format_rejects_unregistered_source_digest(self) -> None:
+        """A Faust identity pins the digest registered for its checked-in source."""
+        values = SYNTHS[SynthName("faust_bright_organ")].model_dump()
+        values["source_sha256"] = "0" * 64
+
+        with pytest.raises(ValidationError, match="registered source_sha256"):
+            SynthSpec.model_validate(values)
+
+    def test_registry_reference_with_mismatched_explicit_format_raises(self) -> None:
+        """An explicitly authored format cannot contradict a Faust registry URI."""
+        values = SYNTHS[SynthName("faust_bright_organ")].model_dump()
+        values["format"] = "vst3"
+        values["source_sha256"] = None
+
+        with pytest.raises(ValidationError, match="requires format='faust'"):
+            SynthSpec.model_validate(values)
+
 
 class TestSynthsTable:
     """Cross-registry invariants that previously had no enforcement."""
+
+    def test_faust_identity_declares_registered_source_reference(self) -> None:
+        """Faust source identity uses the in-process registry rather than a file path."""
+        synth = SYNTHS[SynthName("faust_bright_organ")]
+
+        assert synth.format == "faust"
+        assert synth.plugin_path == "registry://faust/faust_bright_organ"
+        assert synth.synth_version == "1"
+        assert synth.source_sha256 == (
+            "a1bf9f6e45ebbf78dd11fc18603cda048a91a778af1ad79683339b1951813465"
+        )
+
+    @pytest.mark.parametrize("name", _ALL_SYNTHS)
+    def test_every_identity_declares_its_supported_format(self, name: str) -> None:
+        """Every registered synth identifies the representation consumed by its backend.
+
+        :param name: Registry key under test.
+        """
+        assert SYNTHS[SynthName(name)].format in {
+            "faust",
+            "pyfdn",
+            "surgepy",
+            "torchsynth",
+            "vst3",
+        }
 
     @pytest.mark.parametrize("name", _ALL_SYNTHS)
     def test_every_entry_names_a_registered_param_spec(self, name: str) -> None:
@@ -153,7 +294,16 @@ class TestSynthsTable:
         ).is_file()
 
         assert packaged == (
-            synth.param_spec_name in {"cardinal", "surge_4", "surge_simple", "surge_xt"}
+            synth.param_spec_name
+            in {
+                "cardinal",
+                "surge_4",
+                "surge_simple",
+                "surge_xt",
+                "ultramaster_kr106",
+                "ultramaster_kr106_onehot",
+                "ultramaster_kr106_single_note",
+            }
         )
 
     @pytest.mark.parametrize(
@@ -188,7 +338,17 @@ class TestSynthConfigGroup:
         with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
             group = compose(config_name=f"synth/{name}").synth
 
-        assert OmegaConf.to_container(group) == SYNTHS[SynthName(name)].model_dump()
+        expected = SYNTHS[SynthName(name)].model_dump(exclude={"format"}, exclude_none=True)
+        assert OmegaConf.to_container(group) == expected
+
+    def test_ultramaster_onehot_selector_resolves_configured_width(self) -> None:
+        """The opt-in Hydra selector and width resolver agree on 250 columns."""
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            group = compose(config_name="synth/ultramaster_kr106_onehot").synth
+
+        assert group.name == "ultramaster_kr106_onehot"
+        assert group.param_spec_name == "ultramaster_kr106_onehot"
+        assert resolve_param_spec_width(group.param_spec_name) == 250
 
     def test_group_covers_every_registered_synth(self) -> None:
         """No table entry lacks a config group, and no group lacks a table entry."""
@@ -246,6 +406,21 @@ class TestValidateSynthIdentity:
         """A spec that contradicts the registry row is rejected."""
         cfg = OmegaConf.create({"synth": _synth_node("surge_xt", param_spec_name="surge_4")})
         with pytest.raises(ValueError, match="surge_4"):
+            validate_synth_identity(cfg)
+
+    def test_surge_xt_overridden_to_surgepy_format_requires_variant_identity(self) -> None:
+        """A backend-format override cannot retain the VST3 registry identity."""
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="synth/surge_xt",
+                overrides=[
+                    "++synth.format=surgepy",
+                    "synth.plugin_path=surgepy",
+                    "synth.plugin_state_path=presets/surge-base.fxp",
+                ],
+            )
+
+        with pytest.raises(ValueError, match="surge_xt_surgepy"):
             validate_synth_identity(cfg)
 
     def test_overridden_binding_fields_pass_and_survive(self) -> None:

@@ -187,10 +187,11 @@ def test_add_embeddings_real_meanaudio_lance_conditions_embedding_pool(
     check_call_streamed(
         [
             str(command),
+            "logger=[]",
             f"lance_uri={dataset_path}",
             "embeddings=[meanaudio_16k]",
             f"device={device}",
-            "batch_size=1",
+            "lance_batch_size=1",
             "build_index=false",
             f"paths.log_dir={tmp_path / 'logs'}",
             f"hydra.run.dir={tmp_path / 'run'}",
@@ -217,7 +218,7 @@ def test_add_embeddings_real_meanaudio_lance_conditions_embedding_pool(
     encoder = _conditioning_encoder()
     with torch.inference_mode():
         conditioned = encoder(torch.from_numpy(sequence))
-    assert conditioned.shape == (2, 512)
+    assert conditioned.shape == (2, 8, 512)
     assert torch.isfinite(conditioned).all()
     assert conditioned.std() > 0.0
     assert not torch.allclose(conditioned[0], conditioned[1])

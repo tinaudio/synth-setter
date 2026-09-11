@@ -752,20 +752,25 @@ def _assert_round_trip_matches(
             f"{expected_synth_patches[i]} within tolerances "
             f"(abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
         )
-        assert decoded_note_params == pytest.approx(
-            expected_note_patches[i], rel=_RELATIVE_TOLERANCE, abs=_ABSOLUTE_TOLERANCE
-        ), (
-            f"sample {i}: decoded note params {decoded_note_params} do not match input "
-            f"{expected_note_patches[i]} within tolerances "
-            f"(abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
-        )
         assert isinstance(decoded_note_params, dict)
         assert decoded_note_params.keys() == {"pitch", "note_start_and_end"}
         assert isinstance(decoded_note_params["pitch"], int)
+        assert decoded_note_params["pitch"] == expected_note_patches[i]["pitch"], f"sample {i}"
+        # pytest.approx compares tuple values inside a mapping exactly, so the
+        # note window is compared on its own with the shared tolerances.
+        assert decoded_note_params["note_start_and_end"] == pytest.approx(
+            expected_note_patches[i]["note_start_and_end"],
+            rel=_RELATIVE_TOLERANCE,
+            abs=_ABSOLUTE_TOLERANCE,
+        ), (
+            f"sample {i}: decoded note window {decoded_note_params['note_start_and_end']} "
+            f"does not match input {expected_note_patches[i]['note_start_and_end']} within "
+            f"tolerances (abs={_ABSOLUTE_TOLERANCE}, rel={_RELATIVE_TOLERANCE})"
+        )
         assert isinstance(decoded_note_params["note_start_and_end"], tuple)
         start, end = decoded_note_params["note_start_and_end"]
-        assert isinstance(start, np.floating)
-        assert isinstance(end, np.floating)
+        assert isinstance(start, float)
+        assert isinstance(end, float)
 
     return RoundTripMetrics(
         mss_max=max(mss_values),
@@ -1262,6 +1267,71 @@ def _clipped_audio() -> np.ndarray:
     return np.stack([sine, sine], axis=0)
 
 
+def _nonfinite_audio() -> np.ndarray:
+    """Return a correctly shaped render containing one non-finite sample.
+
+    :returns: Channel-leading stereo audio containing one NaN.
+    """
+    audio = _loud_audio()
+    audio[0, 0] = np.nan
+    return audio
+
+
+def test_generate_sample_nonfinite_render_sampled_params_resamples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-finite sampled render is rejected without aborting the shard.
+
+    :param monkeypatch: Replaces rendering and parameter sampling with deterministic fakes.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+
+    spec = param_specs[_SPEC_NAME]
+    render_outputs = iter([_nonfinite_audio(), _loud_audio()])
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.render_params", lambda *a, **kw: next(render_outputs)
+    )
+    sample_returns = iter([(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * 2)
+    monkeypatch.setattr(spec, "sample", lambda rng=None: next(sample_returns))
+
+    sample = generate_vst_dataset.generate_sample(
+        renderer=_pedalboard_renderer(),
+        velocity=_VELOCITY,
+        min_loudness=_MIN_LOUDNESS,
+        param_spec=spec,
+        seed=generate_vst_dataset.SampleSeed(master_seed=7, max_attempts=2),
+    )
+
+    assert sample.attempt == 1
+    assert sample.non_finite_rejections == 1
+
+
+def test_generate_sample_nonfinite_render_fixed_synth_params_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-finite fixed patch remains fail-fast because retries cannot change it.
+
+    :param monkeypatch: Replaces rendering with deterministic non-finite audio.
+    """
+    from synth_setter.data.vst import generate_vst_dataset
+    from synth_setter.data.vst.renderers import NonFiniteAudioError
+
+    spec = param_specs[_SPEC_NAME]
+    monkeypatch.setattr(
+        "synth_setter.data.vst.core.render_params", lambda *a, **kw: _nonfinite_audio()
+    )
+
+    with pytest.raises(NonFiniteAudioError, match="finite"):
+        generate_vst_dataset.generate_sample(
+            renderer=_pedalboard_renderer(),
+            velocity=_VELOCITY,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=spec,
+            fixed_synth_params=_HARDCODED_SYNTH_PARAMS,
+            fixed_note_params=_HARDCODED_NOTE_PARAMS,
+        )
+
+
 def test_generate_sample_clipped_render_sampled_params_resamples(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1376,8 +1446,7 @@ def test_generate_sample_wrong_shape_render_sampled_params_raises(
 ) -> None:
     """A wrong-shape render stays fatal on the sampling path — it is a backend bug.
 
-    Only the amplitude check is sampled-data rejection; shape/finiteness violations mean the
-    renderer broke its contract and must not be retried.
+    Shape violations mean the renderer broke its contract and must not be retried.
 
     :param monkeypatch: Active monkeypatch fixture for render/sample fakes.
     """

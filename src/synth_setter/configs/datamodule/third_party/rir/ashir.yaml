@@ -1,0 +1,11 @@
+defaults:
+  - /datamodule/third_party/base@_here_
+  - _self_
+
+# Binaural room IRs only; headphone compensation and compatibility filters are not room responses.
+dataset_uri: r2://experiments/third_party/ASHIR/all.lance
+dataset_version: 1
+audio_column: source_bytes
+row_filter: "audio_decodable = true AND source_path LIKE 'BRIRs/%'"
+downmix: true
+peak_normalize: true

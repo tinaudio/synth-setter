@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 import importlib.metadata
 import importlib.util
 import plistlib
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -20,10 +22,143 @@ from synth_setter.data.vst.core import (
     render_params,
     warmup_plugin,
 )
+from synth_setter.renderer_backend import FlushBlocks
 from tests.data.vst._fake_plugin import FakeVST3Plugin
 
 if TYPE_CHECKING:
     from pedalboard import VST3Plugin
+
+
+class TestExtractBackendVersion:
+    """Rendering-host package version extractor."""
+
+    @staticmethod
+    def _replace_packaged_resources(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> Path:
+        resource_directory = tmp_path / "faustwasm"
+        monkeypatch.setattr(core, "faustwasm_dir", lambda: resource_directory)
+        return resource_directory / "vendor/package.json"
+
+    def test_faustwasm_missing_package_metadata_raises_packaging_error(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """An incomplete installed package reports missing bundled metadata.
+
+        :param monkeypatch: Replaces packaged resource discovery.
+        :param tmp_path: Isolated package resource directory.
+        """
+        self._replace_packaged_resources(monkeypatch, tmp_path)
+
+        with pytest.raises(RuntimeError, match="packaged @grame/faustwasm metadata is unavailable"):
+            core.extract_backend_version("faustwasm")
+
+    @pytest.mark.parametrize(
+        "contents",
+        ['{}', '{"version": ""}', '{"version": 3}', "not-json"],
+    )
+    def test_faustwasm_invalid_package_metadata_raises_actionable_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        contents: str,
+    ) -> None:
+        """Missing, non-string, and malformed versions share a metadata error.
+
+        :param monkeypatch: Replaces packaged resource discovery.
+        :param tmp_path: Isolated package resource directory.
+        :param contents: Invalid package metadata under test.
+        """
+        package = self._replace_packaged_resources(monkeypatch, tmp_path)
+        package.parent.mkdir(parents=True)
+        package.write_text(contents)
+
+        with pytest.raises(RuntimeError, match="packaged @grame/faustwasm metadata is malformed"):
+            core.extract_backend_version("faustwasm")
+
+    def test_faustcpp_version_probe_returns_semantic_version(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A valid compiler banner returns only its semantic version.
+
+        :param monkeypatch: Stubs executable discovery and compiler output.
+        """
+        monkeypatch.setattr(core.shutil, "which", lambda _executable: "/usr/bin/tool")
+        monkeypatch.setattr(
+            core.subprocess,
+            "run",
+            MagicMock(
+                return_value=subprocess.CompletedProcess(
+                    ["faust", "--version"], 0, stdout="FAUST Version 2.37.3\n", stderr=""
+                )
+            ),
+        )
+
+        assert core.extract_backend_version("faustcpp") == "2.37.3"
+
+    def test_faustcpp_failed_version_probe_raises_runtime_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed compiler probe preserves its stderr diagnostic.
+
+        :param monkeypatch: Stubs executable discovery and compiler failure.
+        """
+        monkeypatch.setattr(core.shutil, "which", lambda _executable: "/usr/bin/tool")
+        monkeypatch.setattr(
+            core.subprocess,
+            "run",
+            MagicMock(
+                side_effect=subprocess.CalledProcessError(
+                    1, ["faust", "--version"], stderr="broken compiler"
+                )
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match="version probe failed: broken compiler"):
+            core.extract_backend_version("faustcpp")
+
+    def test_faustcpp_unrecognized_version_banner_raises_runtime_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A successful probe without a semantic banner fails closed.
+
+        :param monkeypatch: Stubs executable discovery and malformed output.
+        """
+        monkeypatch.setattr(core.shutil, "which", lambda _executable: "/usr/bin/tool")
+        monkeypatch.setattr(
+            core.subprocess,
+            "run",
+            MagicMock(
+                return_value=subprocess.CompletedProcess(
+                    ["faust", "--version"], 0, stdout="unknown", stderr=""
+                )
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match="unrecognized version string"):
+            core.extract_backend_version("faustcpp")
+
+    def test_faustcpp_version_probe_timeout_raises_runtime_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hung native compiler probe preserves the backend error contract.
+
+        :param monkeypatch: Stubs executable discovery and the version subprocess.
+        """
+        monkeypatch.setattr(core.shutil, "which", lambda _executable: "/usr/bin/tool")
+        monkeypatch.setattr(
+            core.subprocess,
+            "run",
+            MagicMock(side_effect=subprocess.TimeoutExpired(["faust", "--version"], 10)),
+        )
+
+        with pytest.raises(RuntimeError, match="version probe timed out after 10 seconds"):
+            core.extract_backend_version("faustcpp")
+
+    def test_unversioned_backend_rejects_separate_version_lookup(self) -> None:
+        """A host without an independent version contract fails closed."""
+        with pytest.raises(ValueError, match="no separate version contract"):
+            core.extract_backend_version("pedalboard")
 
 
 class TestExtractRendererVersion:
@@ -80,6 +215,10 @@ class TestExtractRendererVersion:
         assert extract_renderer_version(Path("faust")) == importlib.metadata.version(
             "dawdreamer"
         )
+
+    def test_pyfdn_backend_name_reads_installed_package_version(self) -> None:
+        """The pyFDN sentinel resolves provenance from the installed package."""
+        assert extract_renderer_version(Path("pyfdn")) == importlib.metadata.version("pyFDN")
 
     @pytest.mark.slow
     @pytest.mark.requires_surgepy
@@ -496,3 +635,81 @@ class TestRenderParamsPreloadedPlugin:
         )
 
         assert warmup_calls == [cached]
+
+
+class _FlushRecordingPlugin(FakeVST3Plugin):
+    """Fake plugin recording every empty-MIDI flush duration and each reset."""
+
+    def __init__(self) -> None:
+        super().__init__("plugins/Surge XT.vst3")
+        self.flush_durations: list[float] = []
+        self.reset_count = 0
+
+    def reset(self) -> None:
+        self.reset_count += 1
+
+    def process(  # noqa: PLR0913
+        self,
+        midi_events: Iterable[tuple[Sequence[int], float]],
+        duration_seconds: float,
+        sample_rate: float,
+        channels: int,
+        block_size: int,
+        tail: bool,
+    ) -> np.ndarray:
+        events = list(midi_events)
+        if not events:
+            self.flush_durations.append(duration_seconds)
+        return super().process(events, duration_seconds, sample_rate, channels, block_size, tail)
+
+
+class TestRenderParamsFlushBlocks:
+    """``render_params`` runs one host flush per configured non-zero block count."""
+
+    @staticmethod
+    def _render(plugin: _FlushRecordingPlugin, **kwargs: object) -> np.ndarray:
+        return render_params(
+            "plugins/Surge XT.vst3",
+            params={},
+            midi_note=60,
+            velocity=100,
+            note_start_and_end=(0.0, 1.0),
+            signal_duration_seconds=1.0,
+            sample_rate=44100,
+            channels=2,
+            plugin=cast("VST3Plugin", plugin),
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    def test_default_flush_blocks_run_three_32_second_flushes(self) -> None:
+        """Verify default Pedalboard flush behavior."""
+        plugin = _FlushRecordingPlugin()
+
+        self._render(plugin)
+
+        assert plugin.flush_durations == [pytest.approx(690 * 2048 / 44100)] * 3
+        assert plugin.reset_count == 3
+
+    def test_zero_flush_blocks_skip_flush_and_reset(self) -> None:
+        """A zero count skips that step's flush and its reset entirely."""
+        plugin = _FlushRecordingPlugin()
+
+        output = self._render(
+            plugin, flush_blocks=FlushBlocks(post_load=0, post_param=0, post_render=0)
+        )
+
+        assert plugin.flush_durations == []
+        assert plugin.reset_count == 0
+        assert np.any(output)
+
+    def test_flush_blocks_scale_each_step_by_host_block_size(self) -> None:
+        """Each step flushes ``blocks * 2048`` samples at the render sample rate."""
+        plugin = _FlushRecordingPlugin()
+
+        self._render(plugin, flush_blocks=FlushBlocks(post_load=2, post_param=0, post_render=5))
+
+        assert plugin.flush_durations == [
+            pytest.approx(2 * 2048 / 44100),
+            pytest.approx(5 * 2048 / 44100),
+        ]
+        assert plugin.reset_count == 2

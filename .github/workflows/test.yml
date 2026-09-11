@@ -9,6 +9,7 @@ on:
       - "tests/**"
       - "src/synth_setter/configs/**"
       - "scripts/**"
+      - "Makefile"
       - "package*.json"
       - "pyproject.toml"
       - "studiorack-cardinal.json"
@@ -19,6 +20,7 @@ on:
       - "agent/_shared/**"
       - "agent/hooks/**"
       - "agent/skills/**"
+      - ".github/actions/install-rclone/**"
       - ".github/workflows/test.yml"
   pull_request:
     branches: [main, "release/*", "dev"]
@@ -27,6 +29,7 @@ on:
       - "tests/**"
       - "src/synth_setter/configs/**"
       - "scripts/**"
+      - "Makefile"
       - "package*.json"
       - "pyproject.toml"
       - "studiorack-cardinal.json"
@@ -37,6 +40,7 @@ on:
       - "agent/_shared/**"
       - "agent/hooks/**"
       - "agent/skills/**"
+      - ".github/actions/install-rclone/**"
       - ".github/workflows/test.yml"
 
 permissions:
@@ -87,9 +91,19 @@ jobs:
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
 
+      - name: Install rclone
+        uses: ./.github/actions/install-rclone
+
+      - name: Run strict fast tier (two-minute wall-clock limit)
+        env:
+          HYDRA_FULL_ERROR: "1"
+        run: |
+          budget_seconds="$(make --no-print-directory -s fast-test-budget)"
+          timeout --signal=KILL "${budget_seconds}s" make test-fast
+
       # Marker filter + coverage flags live in `make test-ci-unit` so they
       # can't drift from cpu-slow.yml / nightly.yml — see #1353.
-      - name: Run pytest with coverage
+      - name: Run medium pytest suite with coverage
         env:
           HYDRA_FULL_ERROR: "1"
         run: make test-ci-unit
@@ -132,7 +146,7 @@ jobs:
       - name: List dependencies
         run: uv pip list --python .venv/bin/python
 
-      - name: Run pytest with coverage
+      - name: Run medium pytest suite with coverage
         env:
           HYDRA_FULL_ERROR: "1"
         run: make test-ci-unit

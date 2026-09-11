@@ -52,6 +52,9 @@ task_name: "train"
 # overwrite from command line with `python train.py tags="[first_tag, second_tag]"`
 tags: ["dev"]
 
+# Integer IDs resolved through the runtime feature-flag registry.
+feature_flags: []
+
 # set False to skip model training
 train: True
 
@@ -62,7 +65,10 @@ test: True
 # simply provide checkpoint path to resume training
 ckpt_path: null
 
-# seed for random number generators in pytorch, numpy and python.random
+# Estimate online log-mel normalization from at most 10,000 training waveforms.
+estimate_normalization_stats: false
+
+# Seed for all training randomness. Calibration alone defaults to 1234 when null.
 seed: null
 
 training:
@@ -71,7 +77,7 @@ training:
   resume: null
   # Optional `r2://bucket/key` override for the checkpoint upload target the model
   # W&B artifact references; null auto-derives
-  # `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt`.
+  # `r2://{r2.bucket}/checkpoints/{training_config_id}/{training_run_id}/{launch_uuid}/model.ckpt`.
   upload_checkpoints_uri: null
   # Mirror each ModelCheckpoint write to R2 mid-run (synchronous on rank 0; best
   # for single-device runs) so a host crash before train-end can't strand it.
@@ -81,3 +87,7 @@ training:
   val_audio_probe: auto
   # Samples taken from the first val batch; each costs a plugin load plus a render.
   val_audio_probe_samples: 5
+  # Atomic local growing-snapshot record; null keeps the finalized baseline pinned.
+  growing_active_record: null
+  # Lightning rebuilds train loaders only at this epoch cadence; 0 disables reload.
+  growing_refresh_epoch_interval: 0

@@ -24,7 +24,7 @@ from __future__ import annotations
 from importlib.abc import Traversable
 from importlib.resources import as_file, files
 
-__all__ = ["as_file", "configs_dir", "param_map", "vst_headless_wrapper"]
+__all__ = ["as_file", "configs_dir", "faustwasm_dir", "param_map", "vst_headless_wrapper"]
 
 
 def configs_dir() -> Traversable:
@@ -38,6 +38,14 @@ def configs_dir() -> Traversable:
     :returns: Traversable pointing at the shipped Hydra config tree.
     """
     return files("synth_setter") / "configs"
+
+
+def faustwasm_dir() -> Traversable:
+    """Return the packaged FaustWasm Node runtime directory.
+
+    :returns: Traversable containing the Node entrypoints and pinned runtime.
+    """
+    return files("synth_setter") / "faustwasm"
 
 
 def param_map(param_spec_name: str) -> Traversable:

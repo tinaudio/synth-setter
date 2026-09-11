@@ -1,0 +1,47 @@
+# @package _global_
+
+defaults:
+  - /experiment/surge/flow_simple
+  - override /callbacks: eval_vst
+  - override /datamodule: third_party/nsynth_sketch
+  - override /logger: wandb
+  - override /render: surgepy
+  - override /sketch: "on"
+  - override /synth: surge_simple_surgepy
+  - _self_
+
+experiment_name: flow-sketch-nsynth
+run_name: cfg-c8-s8
+mode: predict
+evaluation_only: true
+seed: 3407
+
+consumed_train_artifact_alias: v0
+consumed_train_config_id: flow_sketch_prelim
+ckpt_path: r2://intermediate-data/checkpoints/flow_sketch_prelim/flow_sketch_prelim-20260902T044048985Z-eed5063da1164b1e92ac62a55ffc17b3/last.ckpt
+ckpt_sha256: d20cd4c3c86ae062a206f05596072b230c8aa86334920c775c2b4fec04aefc9e
+
+logger:
+  wandb:
+    entity: khaledtinubu-n-a
+    project: synth-setter
+    group: flow-sketch-nsynth
+
+model:
+  compile: false
+  test_cfg_strength: 8.0
+  test_sample_steps: 200
+  test_sketch_cfg_strength: 8.0
+
+datamodule:
+  batch_size: 8
+  num_workers: 4
+  row_limit: null
+
+evaluation:
+  compute_metrics: true
+  no_params: true
+  num_workers: 8
+  render_vst: true
+  rerender_target: false
+  upload_output_dir_uri: null

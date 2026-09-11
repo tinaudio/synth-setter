@@ -3,6 +3,7 @@
 import math
 from pathlib import Path
 
+import pytest
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
@@ -12,6 +13,7 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.workspace import operator_workspace
 
 
+@pytest.mark.parametrize("param_spec_name", ["surge_xt"], indirect=True)
 def test_evaluate_csv_logger_with_partial_wandb_overlay_returns_metrics(
     tmp_path: Path,
     fake_surge_smoke_datasets: Path,

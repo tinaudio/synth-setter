@@ -27,7 +27,12 @@ def pool_sketch_controls(
     :param controls: Loudness, centroid, and pitch controls on any temporal grid.
     :param output_frames: Frames retained along the pooled time axis.
     :returns: Controls with averaged tracks and maximum-pooled pitch activations.
+    :raises ValueError: The source grid is empty or output frames are nonpositive.
     """
+    if controls.shape[-1] == 0 or output_frames <= 0:
+        raise ValueError("Sketch pooling requires nonempty input and positive output frames")
+    if controls.shape[-1] == output_frames:
+        return controls.clone()
     tracks = F.adaptive_avg_pool1d(controls[:, : SKETCH_PITCH_SLICE.start], output_frames)
     pitch = F.adaptive_max_pool1d(controls[:, SKETCH_PITCH_SLICE], output_frames)
     return torch.cat((tracks, pitch), dim=1)

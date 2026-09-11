@@ -386,6 +386,17 @@ def test_ff_cached_embedding_predictions_decode_inside_param_spec_domain(
         assert not out_of_domain, f"decoded outside the spec domain: {out_of_domain}"
 
 
+def test_model_audio_conditioning_squeezes_singleton_channel_axis() -> None:
+    """Mono Lance audio is presented to waveform encoders as batch by samples."""
+    module = _flow_module("audio")
+    audio = torch.randn(2, 1, 32)
+
+    actual = module._get_conditioning_from_batch({"audio": audio})  # noqa: SLF001
+
+    assert actual.shape == (2, 32)
+    torch.testing.assert_close(actual, audio[:, 0])
+
+
 def test_model_embedding_spec_reads_generic_conditioning_key() -> None:
     """Spec-driven models consume the canonical embedding tensor."""
     module = _flow_module(EmbeddingConditioningSpec(column="clap", input_shape=(5,)))

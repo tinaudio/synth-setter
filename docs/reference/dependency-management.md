@@ -14,7 +14,7 @@ command differs by hardware, and how to keep the committed `uv.lock` honest.
 | Verify the lock is in sync           | `uv lock --check`                                              |
 | Regenerate the lock after a dep edit | `uv lock` (then commit the diff)                               |
 
-The standard runtime installs TinyMU's MATPAC and MeanAudio's VAE packages from immutable Git commits.
+The standard runtime installs CQT_pytorch, TinyMU's MATPAC, and MeanAudio's VAE packages from immutable Git commits.
 
 `--frozen` errors instead of silently re-resolving when the lock and
 `pyproject.toml` disagree. CI uses it for the main project install everywhere
@@ -110,20 +110,20 @@ groups, and `uv pip` only with an explicit `--group`, so a plain
 
 Lite CI jobs install with a bare `pip install -e .` (no `--no-deps`, no
 hand-picked deps) plus an import smoke-guard. Full installs that cannot honor
-`[tool.uv.sources]` (plain pip / conda) drive the heavy stack through uv groups:
+`[tool.uv.sources]` (plain pip) drive the heavy stack through uv groups:
 
 - `Makefile`'s `make install` → `uv pip install --group dev -e .`.
 - `scripts/sync_worker_checkout.sh` (SkyPilot worker) → `uv pip install --group runtime -e .`.
-- `environment.yaml` + `.github/workflows/test-conda.yml` (Conda) → conda owns
-  torch; `uv pip install --group dev -e .` pulls the rest.
 - `.github/workflows/docs.yml` (mkdocs build) → `uv pip install --group dev`/`--group docs --group runtime`.
 - `.github/workflows/test-dataset-finalization.yml` (oracle smoke) → `uv pip install --group dev -e .`.
 
 Only the `cpu`/`cu128` backend-routing extras remain in
 `[project.optional-dependencies]`, because `[tool.uv.sources]` keys on extras.
-The commit-pinned `stable-audio-3`, `tinymu`, and `meanaudio` runtimes plus
-`ssondo==0.3.1` belong to the `torch` group, so normal heavy installs support
-SAME, S-SONDO, T5Gemma, TinyMU, and MeanAudio encoders without feature extras.
+The commit-pinned `cqt-nsgt-pytorch`, `stable-audio-3`, `tinymu`, and `meanaudio`
+runtimes plus `ssondo==0.3.1` belong to the `torch` group, so normal heavy installs
+support CQT, SAME, S-SONDO, T5Gemma, TinyMU, and MeanAudio encoders without feature extras.
+CQT_pytorch is installed from Git because its PyPI distribution is stale and upstream publishes
+no tags; the immutable revision is authoritative in `CQT_PACKAGE_COMMIT`.
 TinyMU exposes MATPAC through its public package API and declares its own
 third-party runtime dependencies. The Stable Audio 3 package-scoped uv metadata
 override relaxes upstream's torch and torchaudio pins while retaining the numpy

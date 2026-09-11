@@ -30,9 +30,13 @@ _PREDICT_SHARDS = {
         f"{_PREDICT_MODULE}.x__render_prediction_artifacts__mutmut_1",
         f"{_PREDICT_MODULE}.x__render_prediction_artifacts__mutmut_1?",
     ],
-    "evaluation-predict-render-audio-leading-2-4": [
-        f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_[2-4]",
-        f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_[2-4]?*",
+    "evaluation-predict-render-audio-leading-2": [
+        f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_2",
+        f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_2?*",
+    ],
+    "evaluation-predict-render-audio-leading-3-4": [
+        f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_[3-4]",
+        f"{_PREDICT_MODULE}.x_render_prediction_audio__mutmut_[3-4]?*",
     ],
     "evaluation-predict-render-artifacts-leading-2-9-and-100-149": [
         f"{_PREDICT_MODULE}.x__render_prediction_artifacts__mutmut_[2-9]",

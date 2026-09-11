@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import pickle
 import re
@@ -12,11 +13,24 @@ import lance
 import numpy as np
 import pyarrow as pa
 import pytest
+import soundfile as sf
 import torch
 from lance.blob import blob_array, blob_field
 from pedalboard.io import AudioFile
 
-from synth_setter.data.third_party_datamodule import ThirdPartyAudioDataModule, decode_clip
+from synth_setter.conditioning import (
+    NUM_SKETCH_CONTROLS,
+    SKETCH_CENTROID_ROW,
+    SKETCH_CTRL_FIELD,
+    SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_SLICE,
+    SketchControls,
+)
+from synth_setter.data.third_party_datamodule import (
+    AudioDecodeError,
+    ThirdPartyAudioDataModule,
+    decode_clip,
+)
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_N_MELS, make_spectrogram
 from tests.helpers.lance_fixtures import wav_bytes, write_blob_audio_corpus
 
@@ -77,9 +91,15 @@ def _datamodule(
     amplitude_scale: float = 1.0,
     dataset_version: int = 1,
     row_limit: int | None = None,
+    row_filter: str | None = None,
+    downmix: bool = False,
+    peak_normalize: bool = False,
     num_workers: int = 0,
     use_saved_mean_and_variance: bool = False,
     mel_stats_uri: str | None = None,
+    mel_stats_sha256: str | None = None,
+    stats_cache_dir: str | None = None,
+    sketch: SketchControls = None,
 ) -> ThirdPartyAudioDataModule:
     """Build a datamodule over a corpus with the tiny render contract.
 
@@ -89,9 +109,15 @@ def _datamodule(
     :param amplitude_scale: Gain applied to decoded audio.
     :param dataset_version: Immutable Lance snapshot to serve.
     :param row_limit: Cap on served rows, or ``None`` for the whole corpus.
+    :param row_filter: Optional Lance SQL predicate selecting the served rows.
+    :param downmix: Whether multichannel sources are averaged before channel mapping.
+    :param peak_normalize: Whether each clip is rescaled to unit peak before length-pinning.
     :param num_workers: Dataloader worker processes.
     :param use_saved_mean_and_variance: Whether mel is standardized.
     :param mel_stats_uri: Statistics source when standardization is on.
+    :param mel_stats_sha256: Optional digest pin for the statistics bytes.
+    :param stats_cache_dir: Optional content-addressed statistics cache root.
+    :param sketch: Optional live sketch-control specification.
     :returns: Configured, un-setup datamodule.
     """
     return ThirdPartyAudioDataModule(
@@ -104,9 +130,15 @@ def _datamodule(
         audio_column=audio_column,
         amplitude_scale=amplitude_scale,
         row_limit=row_limit,
+        row_filter=row_filter,
+        downmix=downmix,
+        peak_normalize=peak_normalize,
         num_workers=num_workers,
         use_saved_mean_and_variance=use_saved_mean_and_variance,
         mel_stats_uri=mel_stats_uri,
+        mel_stats_sha256=mel_stats_sha256,
+        stats_cache_dir=stats_cache_dir,
+        sketch=sketch,
     )
 
 
@@ -226,17 +258,54 @@ def test_predict_batch_saved_statistics_normalize_mel(tmp_path: Path) -> None:
     mean = np.full((MEL_N_MELS, 1), -40.0, dtype=np.float32)
     std = np.full((MEL_N_MELS, 1), 4.0, dtype=np.float32)
     np.savez(stats_file, mean=mean, std=std)
+    expected_bytes = stats_file.read_bytes()
+    digest = hashlib.sha256(expected_bytes).hexdigest()
 
     plain = _first_batch(_datamodule(tmp_path / "corpus.lance"))["mel"]
-    normalized = _first_batch(
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        use_saved_mean_and_variance=True,
+        mel_stats_uri=str(stats_file),
+        mel_stats_sha256=digest,
+        stats_cache_dir=str(tmp_path / "stats-cache"),
+    )
+    normalized = _first_batch(datamodule)["mel"]
+    stats_file.write_bytes(b"replacement statistics")
+    reused = _first_batch(
         _datamodule(
             tmp_path / "corpus.lance",
             use_saved_mean_and_variance=True,
             mel_stats_uri=str(stats_file),
+            mel_stats_sha256=digest,
+            stats_cache_dir=str(tmp_path / "stats-cache"),
         )
     )["mel"]
 
+    assert datamodule.cached_stats_path() != stats_file
+    assert datamodule.cached_stats_path().read_bytes() == expected_bytes
     assert torch.allclose(normalized, (plain + 40.0) / 4.0, atol=1e-5)
+    assert torch.equal(reused, normalized)
+
+
+def test_mel_statistics_digest_mismatch_raises(tmp_path: Path) -> None:
+    """Normalization rejects statistics that differ from their provenance pin.
+
+    :param tmp_path: Isolated corpus and statistics directory.
+    """
+    corpus = tmp_path / "corpus.lance"
+    _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=38)])
+    stats_file = tmp_path / "stats.npz"
+    np.savez(stats_file, mean=np.float32(0.0), std=np.float32(1.0))
+
+    datamodule = _datamodule(
+        corpus,
+        use_saved_mean_and_variance=True,
+        mel_stats_uri=str(stats_file),
+        mel_stats_sha256="0" * 64,
+    )
+
+    with pytest.raises(ValueError, match="mel statistics SHA-256 mismatch"):
+        datamodule.setup("predict")
 
 
 def test_saved_statistics_without_uri_raises(tmp_path: Path) -> None:
@@ -316,6 +385,259 @@ def test_row_limit_caps_served_rows(tmp_path: Path) -> None:
     datamodule.setup("predict")
 
     assert sum(len(batch["audio"]) for batch in datamodule.predict_dataloader()) == 3
+
+
+def _write_rir_corpus(path: Path, clips: Sequence[np.ndarray]) -> None:
+    """Write a corpus in the RIR publication shape: mixed media with a decodable flag.
+
+    Odd rows are marked as non-audio containers, mirroring SOFA/MAT/PDF objects
+    stored next to WAV impulse responses.
+
+    :param path: Destination Lance dataset.
+    :param clips: One clip per row.
+    """
+    write_blob_audio_corpus(
+        path,
+        clips,
+        sample_rate=_SOURCE_SAMPLE_RATE,
+        audio_column="source_bytes",
+        extra_columns={
+            "source_path": pa.array(
+                [f"IRs/{'stereo' if i % 2 == 0 else 'docs'}/row-{i}" for i in range(len(clips))]
+            ),
+            "audio_decodable": pa.array([i % 2 == 0 for i in range(len(clips))]),
+        },
+    )
+
+
+def test_row_filter_serves_only_matching_rows_in_stored_order(tmp_path: Path) -> None:
+    """A Lance predicate selects the served rows without rewriting the corpus.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    clips = [_tone(_DURATION_SECONDS, seed=i) for i in range(6)]
+    _write_rir_corpus(tmp_path / "corpus.lance", clips)
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        audio_column="source_bytes",
+        row_filter="audio_decodable = true AND source_path LIKE 'IRs/stereo/%'",
+    )
+    datamodule.setup("predict")
+    served = torch.cat([batch["audio"] for batch in datamodule.predict_dataloader()])
+
+    unfiltered = _datamodule(tmp_path / "corpus.lance", audio_column="source_bytes")
+    unfiltered.setup("predict")
+    stored = torch.cat([batch["audio"] for batch in unfiltered.predict_dataloader()])
+    assert len(served) == 3
+    assert torch.equal(served, stored[[0, 2, 4]])
+
+
+def test_row_filter_combined_with_row_limit_caps_matching_rows(tmp_path: Path) -> None:
+    """The row limit bounds the filtered selection, not the raw corpus.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_rir_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=i) for i in range(6)])
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        audio_column="source_bytes",
+        row_filter="audio_decodable = true",
+        row_limit=2,
+    )
+    datamodule.setup("predict")
+
+    assert sum(len(batch["audio"]) for batch in datamodule.predict_dataloader()) == 2
+
+
+def test_row_filter_matching_no_rows_raises(tmp_path: Path) -> None:
+    """An empty selection fails at setup instead of writing an empty sweep.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_rir_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS, seed=i) for i in range(2)])
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        audio_column="source_bytes",
+        row_filter="source_path LIKE 'nowhere/%'",
+    )
+    with pytest.raises(ValueError, match="row_filter"):
+        datamodule.setup("predict")
+
+
+@pytest.mark.parametrize("row_filter", ["", "   ", 7])
+def test_non_string_or_blank_row_filter_raises(tmp_path: Path, row_filter: object) -> None:
+    """A blank or non-string predicate is a config typo, not a whole-corpus sweep.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param row_filter: Rejected predicate value.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS)])
+
+    with pytest.raises(ValueError, match="row_filter"):
+        _datamodule(tmp_path / "corpus.lance", row_filter=row_filter)  # type: ignore[arg-type]
+
+
+def _stereo_wav_bytes(left: np.ndarray, right: np.ndarray) -> bytes:
+    """Encode one two-channel clip as WAV bytes.
+
+    :param left: ``(frames,)`` left-channel samples.
+    :param right: ``(frames,)`` right-channel samples.
+    :returns: WAV container bytes.
+    """
+    buffer = io.BytesIO()
+    with AudioFile(
+        buffer, "w", format="wav", samplerate=_SOURCE_SAMPLE_RATE, num_channels=2
+    ) as handle:
+        handle.write(np.stack([left, right]).astype(np.float32))
+    return buffer.getvalue()
+
+
+def test_decode_clip_downmix_averages_channels_onto_a_mono_contract() -> None:
+    """Opposite-phase stereo averages to silence, proving a mean rather than a channel pick."""
+    clip = _tone(_DURATION_SECONDS)
+
+    audio = decode_clip(
+        _stereo_wav_bytes(clip, -clip),
+        sample_rate=_TARGET_SAMPLE_RATE,
+        channels=1,
+        num_samples=_TARGET_SAMPLES,
+        amplitude_scale=1.0,
+        downmix=True,
+    )
+
+    assert audio.shape == (1, _TARGET_SAMPLES)
+    assert np.abs(audio).max() < 1e-4  # PCM16 quantization of the two channels
+
+
+def test_decode_clip_downmix_of_identical_channels_matches_mono_decode() -> None:
+    """A dual-mono source decodes exactly as its mono equivalent after downmixing."""
+    clip = _tone(_DURATION_SECONDS)
+    common = {
+        "sample_rate": _TARGET_SAMPLE_RATE,
+        "channels": 1,
+        "num_samples": _TARGET_SAMPLES,
+        "amplitude_scale": 1.0,
+    }
+
+    stereo = decode_clip(_stereo_wav_bytes(clip, clip), downmix=True, **common)
+    mono = decode_clip(wav_bytes(clip, _SOURCE_SAMPLE_RATE), **common)
+
+    assert np.allclose(stereo, mono, atol=1e-6)
+
+
+def _float_wav_bytes(clip: np.ndarray) -> bytes:
+    """Encode one mono clip as a 32-bit float WAV, which can carry samples beyond ±1.
+
+    :param clip: ``(frames,)`` float32 samples.
+    :returns: WAV container bytes.
+    """
+    buffer = io.BytesIO()
+    sf.write(buffer, clip.astype(np.float32), _SOURCE_SAMPLE_RATE, format="WAV", subtype="FLOAT")
+    return buffer.getvalue()
+
+
+_DECODE_CONTRACT = {
+    "sample_rate": _SOURCE_SAMPLE_RATE,
+    "channels": 1,
+    "num_samples": int(_DURATION_SECONDS * _SOURCE_SAMPLE_RATE),
+    "amplitude_scale": 1.0,
+}
+
+
+def test_decode_clip_peak_normalize_brings_a_hot_float_source_to_unit_peak() -> None:
+    """An unnormalized float impulse response peaking above 1 is served at unit peak."""
+    clip = _tone(_DURATION_SECONDS) * 4.0
+
+    audio = decode_clip(_float_wav_bytes(clip), peak_normalize=True, **_DECODE_CONTRACT)
+
+    assert np.isclose(np.abs(audio).max(), 1.0)
+    assert np.allclose(audio[0], clip / np.abs(clip).max(), atol=1e-6)
+
+
+def test_decode_clip_peak_normalize_raises_a_quiet_source_to_unit_peak() -> None:
+    """Peak normalization scales up as well as down, so corpus level is irrelevant."""
+    clip = _tone(_DURATION_SECONDS) * 0.1
+
+    audio = decode_clip(_float_wav_bytes(clip), peak_normalize=True, **_DECODE_CONTRACT)
+
+    assert np.isclose(np.abs(audio).max(), 1.0)
+
+
+def test_decode_clip_peak_normalize_leaves_silence_silent() -> None:
+    """An all-zero clip has no peak to scale by and must not become NaN."""
+    clip = np.zeros(int(_DURATION_SECONDS * _SOURCE_SAMPLE_RATE), dtype=np.float32)
+
+    audio = decode_clip(_float_wav_bytes(clip), peak_normalize=True, **_DECODE_CONTRACT)
+
+    assert np.all(audio == 0.0)
+
+
+def test_decode_clip_without_peak_normalize_rejects_a_hot_float_source() -> None:
+    """The existing storage-range guard still stands when normalization is off."""
+    clip = _tone(_DURATION_SECONDS) * 4.0
+
+    with pytest.raises(ValueError, match=r"\[-1, 1\]"):
+        decode_clip(_float_wav_bytes(clip), **_DECODE_CONTRACT)
+
+
+def test_predict_dataloader_workers_are_spawned_not_forked(tmp_path: Path) -> None:
+    """Workers start fresh processes: a forked child inherits Lance's native runtime and hangs.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS)])
+    datamodule = _datamodule(tmp_path / "corpus.lance", num_workers=1)
+    datamodule.setup("predict")
+
+    loader = datamodule.predict_dataloader()
+
+    assert loader.multiprocessing_context.get_start_method() == "spawn"
+    assert sum(len(batch["audio"]) for batch in loader) == 1
+
+
+@pytest.mark.parametrize("switch", ["downmix", "peak_normalize"])
+@pytest.mark.parametrize("value", ["false", 0, None])
+def test_non_boolean_decode_switch_raises(tmp_path: Path, switch: str, value: object) -> None:
+    """A quoted or numeric switch value is a config typo that must not enable the switch.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    :param switch: Decode switch under test.
+    :param value: Rejected non-boolean value.
+    """
+    _write_corpus(tmp_path / "corpus.lance", [_tone(_DURATION_SECONDS)])
+
+    with pytest.raises(ValueError, match=switch):
+        _datamodule(tmp_path / "corpus.lance", **{switch: value})  # type: ignore[arg-type]
+
+
+def test_row_filter_starts_with_excludes_underscore_wildcard_decoys(tmp_path: Path) -> None:
+    """A literal-prefix predicate keeps `Omni_ir_*` and drops `OmniAir_*`, which LIKE would match.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    clips = [_tone(_DURATION_SECONDS, seed=i) for i in range(3)]
+    write_blob_audio_corpus(
+        tmp_path / "corpus.lance",
+        clips,
+        sample_rate=_SOURCE_SAMPLE_RATE,
+        audio_column="source_bytes",
+        extra_columns={
+            "source_path": pa.array(["Omni_ir_a.wav", "OmniAir_b.wav", "Omni_ir_c.wav"]),
+            "audio_decodable": pa.array([True, True, True]),
+        },
+    )
+
+    datamodule = _datamodule(
+        tmp_path / "corpus.lance",
+        audio_column="source_bytes",
+        row_filter="starts_with(source_path, 'Omni_ir_')",
+    )
+    datamodule.setup("predict")
+
+    assert sum(len(batch["audio"]) for batch in datamodule.predict_dataloader()) == 2
 
 
 def test_multichannel_source_disagreeing_with_contract_raises() -> None:
@@ -427,6 +749,68 @@ def test_r2_statistics_are_downloaded_and_normalize_the_batch(fake_r2_remote: Pa
     assert torch.allclose(normalized, (plain + 30.0) / 2.0, atol=1e-5)
 
 
+def test_decode_clip_rejects_out_of_range_source_before_resampling() -> None:
+    """Substantive source overflow cannot be hidden by output clipping."""
+    source_rate = 16_000
+    buffer = io.BytesIO()
+    sf.write(
+        buffer,
+        np.full(source_rate, 1.2, dtype=np.float32),
+        source_rate,
+        format="WAV",
+        subtype="FLOAT",
+    )
+
+    with pytest.raises(ValueError, match="source audio leaves"):
+        decode_clip(
+            buffer.getvalue(),
+            sample_rate=44_100,
+            channels=2,
+            num_samples=44_100,
+            amplitude_scale=1.0,
+        )
+
+
+def test_decode_clip_rejects_positive_pcm16_tolerance_as_source_overflow() -> None:
+    """PCM16's negative endpoint tolerance does not admit positive overflow."""
+    source_rate = 16_000
+    buffer = io.BytesIO()
+    sf.write(
+        buffer,
+        np.full(source_rate, 1.00002, dtype=np.float32),
+        source_rate,
+        format="WAV",
+        subtype="FLOAT",
+    )
+
+    with pytest.raises(ValueError, match="source audio leaves"):
+        decode_clip(
+            buffer.getvalue(),
+            sample_rate=44_100,
+            channels=2,
+            num_samples=44_100,
+            amplitude_scale=1.0,
+        )
+
+
+def test_decode_clip_clamps_resampling_ringing_to_storage_range() -> None:
+    """Band-limited resampling cannot leave otherwise normalized audio above full scale."""
+    source_rate = 16_000
+    samples = np.arange(source_rate, dtype=np.float32)
+    square = np.sign(np.sin(2 * np.pi * 3000.0 * samples / source_rate)).astype(np.float32)
+
+    clip = decode_clip(
+        wav_bytes(square, source_rate),
+        sample_rate=44_100,
+        channels=2,
+        num_samples=44_100,
+        amplitude_scale=1.0,
+    )
+
+    assert np.isfinite(clip).all()
+    assert np.abs(clip).max() == 1.0
+
+
 def test_decode_rejects_audio_outside_the_storage_range(tmp_path: Path) -> None:
     """Gain that drives a clip past full scale is rejected, not fed to the mel front-end.
 
@@ -487,19 +871,20 @@ def test_corpus_audio_column_without_blob_encoding_raises(tmp_path: Path) -> Non
         _datamodule(tmp_path / "corpus.lance").setup("predict")
 
 
-def test_corpus_served_from_an_r2_uri(fake_r2_remote: Path) -> None:
-    """The shipped configs name ``r2://`` corpora, so that resolution is served too.
-
-    Exercises the ``lance_target`` translation and storage-options wiring the
-    published configs depend on, which a local-path corpus never reaches.
+@pytest.mark.parametrize("scheme", ["r2", "s3"])
+def test_corpus_served_from_an_r2_backed_uri(fake_r2_remote: Path, scheme: str) -> None:
+    """Both accepted URI spellings resolve through the configured R2 remote.
 
     :param fake_r2_remote: Root backing the ``r2:`` remote as a local filesystem.
+    :param scheme: Public URI scheme used by the caller.
     """
     corpus = fake_r2_remote / "experiments" / "third_party" / "Tiny" / "test.lance"
     corpus.parent.mkdir(parents=True)
     _write_corpus(corpus, [_tone(_DURATION_SECONDS, seed=26)])
 
-    batch = _first_batch(_datamodule("r2://experiments/third_party/Tiny/test.lance"))
+    batch = _first_batch(
+        _datamodule(f"{scheme}://experiments/third_party/Tiny/test.lance")
+    )
 
     assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)
 
@@ -584,6 +969,161 @@ def test_native_blob_v2_column_is_servable(tmp_path: Path) -> None:
     assert batch["audio"].shape == (1, _TARGET_CHANNELS, _TARGET_SAMPLES)
 
 
+def test_nsynth_sketch_batch_native_blob_v2_preserves_order_and_model_shapes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A real Blob-v2 batch retains ordered audio and emits normalized model inputs.
+
+    :param tmp_path: Isolated corpus and statistics directory.
+    :param monkeypatch: Replaces only resource-heavy PESTO extraction for this fast contract test.
+    """
+    clips = [
+        np.full(_SOURCE_SAMPLE_RATE // 2, 0.25, dtype=np.float32),
+        np.full(_SOURCE_SAMPLE_RATE // 2, -0.5, dtype=np.float32),
+    ]
+    table = pa.table(
+        {AUDIO_FIELD: blob_array([wav_bytes(clip, _SOURCE_SAMPLE_RATE) for clip in clips])},
+        schema=pa.schema([blob_field(AUDIO_FIELD)]),
+    )
+    corpus = tmp_path / "nsynth-test.lance"
+    lance.write_dataset(table, corpus, mode="create", data_storage_version="2.2")
+    stats_file = tmp_path / "training-stats.npz"
+    np.savez(
+        stats_file,
+        mean=np.full((MEL_N_MELS, 1), -10.0, dtype=np.float32),
+        std=np.full((MEL_N_MELS, 1), 2.0, dtype=np.float32),
+    )
+
+    def fixed_controls(audio: torch.Tensor, sample_rate: int) -> torch.Tensor:
+        del sample_rate
+        return torch.zeros(audio.shape[0], NUM_SKETCH_CONTROLS, 64, device=audio.device)
+
+    monkeypatch.setattr(
+        "synth_setter.data.third_party_datamodule.extract_sketch_controls_batch",
+        fixed_controls,
+    )
+    datamodule = _datamodule(
+        corpus,
+        row_limit=None,
+        use_saved_mean_and_variance=True,
+        mel_stats_uri=str(stats_file),
+        sketch={"column": "sketch", "num_frames": 32, "num_control_tokens": 32},
+    )
+    datamodule.setup("predict")
+    raw_batch = next(iter(datamodule.predict_dataloader()))
+    normalized = datamodule.on_before_batch_transfer(raw_batch, 0)
+    batch = datamodule.on_after_batch_transfer(normalized, 0)
+
+    expected_mel = (make_spectrogram(batch[AUDIO_FIELD][0].numpy(), _TARGET_SAMPLE_RATE) + 10.0) / 2.0
+    assert set(batch) == {AUDIO_FIELD, "mel", SKETCH_CTRL_FIELD}
+    assert sum(len(served[AUDIO_FIELD]) for served in datamodule.predict_dataloader()) == 2
+    assert batch[AUDIO_FIELD].shape == (2, _TARGET_CHANNELS, _TARGET_SAMPLES)
+    assert batch[AUDIO_FIELD][0].mean() > 0
+    assert batch[AUDIO_FIELD][1].mean() < 0
+    assert batch["mel"].shape == (2, _TARGET_CHANNELS, MEL_N_MELS, _MEL_FRAMES)
+    assert torch.allclose(batch["mel"][0], torch.from_numpy(expected_mel), atol=1e-5)
+    assert batch[SKETCH_CTRL_FIELD].shape == (2, NUM_SKETCH_CONTROLS, 32)
+
+
+def test_nsynth_sketch_batch_pools_controls_and_zeroes_weak_pitch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live controls use canonical scalar/pitch pooling and the checkpoint threshold.
+
+    :param tmp_path: Isolated datamodule path; no corpus access occurs.
+    :param monkeypatch: Supplies deterministic full-frame controls before real pooling.
+    """
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 64)
+    controls[:, SKETCH_LOUDNESS_ROW, 1::2] = 1.0
+    controls[:, SKETCH_CENTROID_ROW, ::2] = 1.0
+    controls[:, SKETCH_PITCH_SLICE.start, :] = 0.05
+    controls[:, SKETCH_PITCH_SLICE.start + 1, 1::2] = 0.2
+    monkeypatch.setattr(
+        "synth_setter.data.third_party_datamodule.extract_sketch_controls_batch",
+        lambda audio, sample_rate: controls,
+    )
+    datamodule = _datamodule(
+        tmp_path / "unused.lance",
+        sketch={
+            "column": "sketch",
+            "num_frames": 32,
+            "num_control_tokens": 32,
+            "pitch_zero_threshold": 0.1,
+        },
+    )
+
+    batch = datamodule.on_after_batch_transfer(
+        {AUDIO_FIELD: torch.zeros(1, _TARGET_CHANNELS, _TARGET_SAMPLES)}, 0
+    )
+
+    pooled = batch[SKETCH_CTRL_FIELD]
+    assert torch.equal(pooled[0, SKETCH_LOUDNESS_ROW], torch.full((32,), 0.5))
+    assert torch.equal(pooled[0, SKETCH_CENTROID_ROW], torch.full((32,), 0.5))
+    assert torch.count_nonzero(pooled[0, SKETCH_PITCH_SLICE.start]) == 0
+    assert torch.equal(pooled[0, SKETCH_PITCH_SLICE.start + 1], torch.full((32,), 0.2))
+
+
+def test_nsynth_sketch_noncanonical_frame_count_raises(tmp_path: Path) -> None:
+    """A live sketch config cannot drift from the checkpoint's 32-frame contract.
+
+    :param tmp_path: Isolated placeholder corpus path.
+    """
+    with pytest.raises(ValueError, match="32"):
+        _datamodule(
+            tmp_path / "unused.lance",
+            sketch={"column": "sketch", "num_frames": 64, "num_control_tokens": 64},
+        )
+
+
+@pytest.mark.slow
+def test_nsynth_sketch_batch_real_pesto_emits_finite_canonical_controls(tmp_path: Path) -> None:
+    """A real PESTO extraction consumes Blob-v2 audio through the datamodule hooks.
+
+    :param tmp_path: Isolated corpus and statistics directory.
+    """
+    sample_rate = 16_000
+    samples = np.arange(sample_rate // 2, dtype=np.float32)
+    clip = (0.5 * np.sin(2 * np.pi * 440.0 * samples / sample_rate)).astype(np.float32)
+    corpus = tmp_path / "nsynth-test.lance"
+    table = pa.table(
+        {AUDIO_FIELD: blob_array([wav_bytes(clip, sample_rate)])},
+        schema=pa.schema([blob_field(AUDIO_FIELD)]),
+    )
+    lance.write_dataset(table, corpus, mode="create", data_storage_version="2.2")
+    stats_file = tmp_path / "training-stats.npz"
+    np.savez(
+        stats_file,
+        mean=np.zeros((_TARGET_CHANNELS, MEL_N_MELS, _MEL_FRAMES), dtype=np.float32),
+        std=np.ones((_TARGET_CHANNELS, MEL_N_MELS, _MEL_FRAMES), dtype=np.float32),
+    )
+    datamodule = _datamodule(
+        corpus,
+        sample_rate=sample_rate,
+        use_saved_mean_and_variance=True,
+        mel_stats_uri=str(stats_file),
+        sketch={"column": "sketch", "num_frames": 32, "num_control_tokens": 32},
+    )
+    datamodule.setup("predict")
+    raw_batch = next(iter(datamodule.predict_dataloader()))
+    normalized = datamodule.on_before_batch_transfer(raw_batch, 0)
+
+    batch = datamodule.on_after_batch_transfer(normalized, 0)
+
+    controls = batch[SKETCH_CTRL_FIELD]
+    assert controls.shape == (1, NUM_SKETCH_CONTROLS, 32)
+    assert controls.dtype == torch.float32
+    assert torch.isfinite(controls).all()
+    assert torch.all((-1.0 <= controls[:, : SKETCH_PITCH_SLICE.start]))
+    assert torch.all((controls[:, : SKETCH_PITCH_SLICE.start] <= 1.0))
+    pitch = controls[0, SKETCH_PITCH_SLICE]
+    assert torch.all((0.0 <= pitch) & (pitch <= 1.0))
+    expected_a4_bin = 69 * 3
+    assert torch.all((pitch.argmax(dim=0) - expected_a4_bin).abs() <= 1)
+    assert torch.all(pitch.amax(dim=0) >= 0.1)
+    assert batch[AUDIO_FIELD].shape == (1, _TARGET_CHANNELS, sample_rate // 2)
+    assert "params" not in batch
+
+
 def test_statistics_overflowing_float32_are_rejected(tmp_path: Path) -> None:
     """Statistics that become infinite in float32 would silently zero the features.
 
@@ -629,6 +1169,18 @@ def _wav(clip: np.ndarray, sample_rate: int = _SOURCE_SAMPLE_RATE) -> bytes:
     :returns: WAV container bytes.
     """
     return wav_bytes(clip, sample_rate)
+
+
+def test_decode_clip_unsupported_container_raises_audio_decode_error() -> None:
+    """Container failures remain distinguishable from render-contract failures."""
+    with pytest.raises(AudioDecodeError):
+        decode_clip(
+            b"not audio",
+            sample_rate=_TARGET_SAMPLE_RATE,
+            channels=_TARGET_CHANNELS,
+            num_samples=_TARGET_SAMPLES,
+            amplitude_scale=1.0,
+        )
 
 
 def test_decode_clip_pads_short_audio_and_upmixes() -> None:

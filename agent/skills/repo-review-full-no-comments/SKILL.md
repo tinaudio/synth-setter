@@ -1,8 +1,8 @@
 ---
 name: repo-review-full-no-comments
 description: |-
-  Multi-skill review (same fan-out as `/repo-review-full`) that prints the
-  aggregated BLOCK/WARN/NIT report instead of posting inline comments. Routes every
+  Multi-skill review (same fan-out and Astra judge as `/repo-review-full`) that
+  prints final BLOCK/WARN/NIT/LOW CONFIDENCE dispositions and the complete audit. Routes every
   host harness through Pi and works against an open PR or local branch. Requires
   the tinaudio-synth-setter-skills plugin.
 ---
@@ -66,18 +66,24 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > appears below — never run the command with the literal `<N>` placeholder:
 >
 > ```bash
-> gh pr view <N> --repo "$(gh repo view --json nameWithOwner -q .nameWithOwner)" \
->   --json number,headRefOid,baseRefOid,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup
+> repo="$(gh repo view --json nameWithOwner -q .nameWithOwner)" || exit $?
+> gh pr view <N> --repo "$repo" \
+>   --json number,headRefOid,baseRefName,files,title,headRefName,mergeable,mergeStateStatus,statusCheckRollup \
+>   || exit $?
+> base_sha="$(gh api "repos/${repo}/pulls/<N>" --jq .base.sha)" || exit $?
+> printf 'base_sha=%s\n' "$base_sha"
 > ```
 >
 > This is the exact call from `agent/skills/_shared/repo-review-full-analysis.md`
 > Step 1 — use that file's guidance for parsing it.
 >
-> **Local-branch mode.** Use this when no `<N>` was passed AND
-> `gh pr view --json number` fails / returns nothing for the current branch.
-> Derive the same fields from local git:
+> **Local-branch mode.** Use this when no `<N>` was passed and a successful
+> open-PR lookup scoped to `<current-repository-owner>:<current-branch>` returns
+> no PR. A lookup failure is a terminal error, not evidence that the branch has
+> no PR. Derive the same fields from local git:
 >
 > ```bash
+> repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 > base_ref=$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)
 > base_sha=$(git merge-base HEAD "origin/${base_ref}")
 > head_sha=$(git rev-parse HEAD)
@@ -89,8 +95,9 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > Build a synthetic metadata object equivalent to the `gh pr view` JSON:
 >
 > - `number`: `null` — no PR yet; use the branch name in any user-facing text.
+> - `repo`: `repo` — the non-empty `owner/name` resolved above; never use `null`.
 > - `headRefOid`: `head_sha`
-> - `baseRefOid`: `base_sha`
+> - `base_sha`: computed merge base SHA.
 > - `headRefName`: `head_ref`
 > - `title`: `git log -1 --pretty=%s` (informational only).
 > - `files`: parsed `git diff --name-status` output.
@@ -212,7 +219,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >
 > ## Summary
 >
-> - B BLOCK, W WARN, N NIT across K skills
+> - B BLOCK, W WARN, N NIT, L LOW CONFIDENCE across K skills
 > - PR-health flags: <M merge-conflict / F failing-check>  (omit if zero or in local-branch mode)
 > - Reviewed at: <full-sha-from-git-rev-parse-HEAD>
 > - <next-step tip>
@@ -260,7 +267,7 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 >
 >   ## Summary
 >
->   - 0 BLOCK, 0 WARN, 0 NIT
+>   - 0 BLOCK, 0 WARN, 0 NIT, 0 LOW CONFIDENCE
 >   - Reviewed at: <sha>
 >   - Progress: branch <head_ref>; HEAD <current_head>; upstream <current_upstream>; worktree <worktree_state>; unchanged review count 0.
 >   ```
@@ -278,6 +285,10 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 
 ## Notes
 
+- The shared launcher permits at most three local pre-PR invocations per branch.
+  On a fourth request it refuses before starting Pi and directs the caller to
+  open the PR and continue with `/repo-review-full`, which uses the public GitHub
+  review bot. Explicit PR-mode dry runs do not consume the pre-PR budget.
 - This skill's foreground result is side-effect-free on GitHub. For an existing
   PR, detached follow-up may post one review containing only new Codex-verified
   findings from passes deferred at the response deadline. It rechecks the exact
@@ -289,6 +300,6 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 - Like `/repo-review-full`, this skill depends on the
   `tinaudio-synth-setter-skills` plugin being enabled. If a sub-skill
   invocation fails, surface the error — don't silently skip.
-- Preserve every skill's candidate through aggregation. The final Sol signal
-  filter may drop a semantic duplicate before delivery while retaining the
-  original skill attribution for each kept finding.
+- Preserve every skill's candidate and stable ID through aggregation. The final
+  Astra judge may reclassify or drop it; every original field, final class, and
+  rationale remains in the audit.

@@ -15,6 +15,7 @@ from typing import Any, cast
 import pytest
 import sh
 
+from agent._shared.pi_review_routing import finding_fingerprint
 from agent._shared.run_pi_review_follow_up import (
     _MAX_LOG_BYTES,
     FollowUpResult,
@@ -31,7 +32,7 @@ def _manifest(tmp_path: Path, *, output_path: Path | None = None) -> Path:
         "skill": "correctness-review",
         "pass_name": "free-pool",
         "origin": "primary",
-        "model": "kimi-coding/k3",
+        "model": "meta/muse-spark-1.3-contributor",
         "verification_model": "openai-codex/gpt-5.6-sol",
         "thinking": "high",
     }
@@ -56,6 +57,74 @@ def _manifest(tmp_path: Path, *, output_path: Path | None = None) -> Path:
     return manifest
 
 
+def test_follow_up_result_retains_drop_adjudication_for_audit() -> None:
+    """Keep dropped late candidates in the durable follow-up result."""
+    payload = json.loads(_valid_result())
+    payload["late_findings"] = [
+        {
+            "id": finding_fingerprint(
+                skill="correctness-review",
+                severity="block",
+                path="agent/example.py",
+                line=42,
+                description="Claimed defect.",
+            ),
+            "skill": "correctness-review",
+            "original_severity": "block",
+            "path": "agent/example.py",
+            "line": 42,
+            "description": "Claimed defect.",
+            "final_disposition": "drop",
+            "rationale": "The changed code cannot reach the claimed path.",
+        }
+    ]
+
+    result = FollowUpResult.model_validate_json(json.dumps(payload))
+
+    assert result.late_findings[0].original_severity == "block"
+    assert result.late_findings[0].final_disposition == "drop"
+
+
+def test_follow_up_result_mismatched_adjudication_fingerprint_rejected() -> None:
+    """Reject detached audit rows whose evidence no longer matches their identity."""
+    payload = json.loads(_valid_result())
+    payload["late_findings"] = [
+        {
+            "id": "1" * 64,
+            "skill": "correctness-review",
+            "original_severity": "block",
+            "path": "agent/example.py",
+            "line": 42,
+            "description": "Claimed defect.",
+            "final_disposition": "drop",
+            "rationale": "The changed code cannot reach the claimed path.",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="fingerprint"):
+        FollowUpResult.model_validate_json(json.dumps(payload))
+
+
+def test_follow_up_result_unknown_adjudication_skill_rejected() -> None:
+    """Reject late audit rows without valid worker provenance."""
+    payload = json.loads(_valid_result())
+    payload["late_findings"] = [
+        {
+            "id": "1" * 64,
+            "skill": "unknown-review",
+            "original_severity": "warn",
+            "path": "agent/example.py",
+            "line": 42,
+            "description": "Claimed concern.",
+            "final_disposition": "warn",
+            "rationale": "The changed path is reachable.",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="Unknown review skill"):
+        FollowUpResult.model_validate_json(json.dumps(payload))
+
+
 def _result_path(manifest: Path) -> Path:
     return Path(f"{manifest}.result.json")
 
@@ -72,7 +141,7 @@ def _valid_result(*, status: str = "complete") -> str:
                 {
                     "skill": "correctness-review",
                     "pass_name": "free-pool",
-                    "model": "kimi-coding/k3",
+                    "model": "meta/muse-spark-1.3-contributor",
                     "status": "success",
                     "agent_id": "agent-follow-up",
                     "output_path": ".pi/output/agent-follow-up.jsonl",
@@ -451,7 +520,7 @@ def test_supervisor_mixed_ownership_reports_one_terminal_status_per_pass(tmp_pat
             "skill": "code-health",
             "pass_name": "free-pool",
             "origin": "primary",
-            "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+            "model": "meta/muse-spark-1.3-contributor",
             "verification_model": "openai-codex/gpt-5.6-terra",
             "thinking": "medium",
             "agent_id": "agent-still-running",

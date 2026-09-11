@@ -338,6 +338,199 @@ def test_rk4_step_integrates_two_argument_time_field() -> None:
     torch.testing.assert_close(result, torch.tensor([[1.1051708]]))
 
 
+def test_sample_batch_same_explicit_noise_returns_identical_predictions() -> None:
+    """Explicit noise makes repeated sketch sampling deterministic."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+    noise = batch["noise"].clone()
+
+    first = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+    second = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+
+    assert first.shape == (_BATCH, _NUM_PARAMS)
+    assert first.dtype is torch.float32
+    assert torch.equal(first, second)
+    assert not first.requires_grad
+
+
+def test_sample_batch_guidance_and_sketch_controls_change_fixed_noise_output() -> None:
+    """The public sampler consumes both CFG axes and sketch-control values."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    model.vector_field = _BranchField()
+    assert model.sketch_tokens is not None
+    with torch.no_grad():
+        for projection in model.sketch_tokens.projections.children():
+            assert isinstance(projection, torch.nn.Linear)
+            projection.weight.fill_(1.0)
+    batch = _batch(with_sketch=True)
+    noise = torch.zeros_like(batch["noise"])
+    baseline = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=0.0,
+        sample_steps=1,
+    )
+    content_guided = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=1.0,
+        sketch_cfg_strength=0.0,
+        sample_steps=1,
+    )
+    sketch_guided = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+    )
+    changed_batch = dict(batch)
+    changed_batch["sketch_ctrl"] = torch.zeros_like(batch["sketch_ctrl"])
+    changed_controls = model.sample_batch(
+        changed_batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+    )
+
+    branches = model._control_token_branches_from_batch(  # noqa: SLF001
+        cast(dict[str, torch.Tensor | None], batch)
+    )
+    assert branches is not None
+    sketch_delta = (branches.conditional - branches.unconditional).mean(dim=(1, 2)).unsqueeze(1)
+    torch.testing.assert_close(content_guided, baseline + 10.0)
+    torch.testing.assert_close(sketch_guided, baseline + sketch_delta.expand_as(baseline))
+    assert not torch.equal(sketch_guided, changed_controls)
+
+
+def test_fixed_time_diagnostics_use_conditional_sketch_tokens() -> None:
+    """Held-out endpoint diagnostics respond to conditional sketch controls."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    model.vector_field = _BranchField()
+    assert model.sketch_tokens is not None
+    with torch.no_grad():
+        for projection in model.sketch_tokens.projections.children():
+            assert isinstance(projection, torch.nn.Linear)
+            projection.weight.fill_(1.0)
+    batch = _batch(with_sketch=True)
+    changed_batch = dict(batch)
+    changed_batch["sketch_ctrl"] = torch.zeros_like(batch["sketch_ctrl"])
+
+    original = model._fixed_time_endpoint_mse(batch, batch["noise"])  # noqa: SLF001
+    changed = model._fixed_time_endpoint_mse(  # noqa: SLF001
+        changed_batch, batch["noise"]
+    )
+
+    assert not torch.equal(
+        original["velocity_endpoint_mse/equal_bin_mean"],
+        changed["velocity_endpoint_mse/equal_bin_mean"],
+    )
+
+
+def test_sample_batch_active_conditioning_none_raises_value_error() -> None:
+    """The active conditioning field cannot use an inactive field's ``None`` sentinel."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+    batch_with_missing_conditioning = {**batch, "mel": None}
+
+    with pytest.raises(ValueError, match="conditioning.*'mel'.*must contain a tensor"):
+        model.sample_batch(
+            batch_with_missing_conditioning,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=2,
+        )
+
+
+def test_sample_batch_wrong_noise_shape_raises() -> None:
+    """Explicit noise must provide one parameter vector per input row."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="noise shape"):
+        model.sample_batch(
+            batch,
+            noise=torch.zeros((_BATCH, _NUM_PARAMS + 1)),
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=2,
+        )
+
+
+def test_sample_batch_nonfinite_noise_raises() -> None:
+    """Explicit noise must contain finite flow states."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+    noise = batch["noise"].clone()
+    noise[0, 0] = float("nan")
+
+    with pytest.raises(ValueError, match="finite"):
+        model.sample_batch(
+            batch,
+            noise=noise,
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+        )
+
+
+def test_sample_batch_negative_guidance_raises() -> None:
+    """Guidance cannot reverse a conditioning direction."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="sketch_cfg_strength"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=-1.0,
+        )
+
+
+def test_sample_batch_negative_content_guidance_raises() -> None:
+    """Content guidance cannot reverse its conditioning direction."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="content_cfg_strength"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=-1.0,
+            sketch_cfg_strength=1.0,
+        )
+
+
+def test_sample_batch_nonpositive_steps_raises() -> None:
+    """Sampling requires at least one integration step."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=0,
+        )
+
+
 def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
     """Sketch-configured training consumes ``sketch_ctrl`` and stays finite."""
     module = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
@@ -345,6 +538,41 @@ def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
     loss = module._train_step(_batch(with_sketch=True)).loss  # noqa: SLF001
 
     assert torch.isfinite(loss)
+
+
+def test_train_step_pyfdn_reverb_profile_uses_temporal_groups() -> None:
+    """Flow construction and training use the selected reverb layout."""
+    module = _module(SketchControlSpec(num_frames=32, profile="pyfdn_reverb"))
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
+
+    loss = module._train_step(batch).loss  # noqa: SLF001
+
+    assert module.sketch_tokens is not None
+    assert tuple(module.sketch_tokens.projections) == (
+        "edc",
+        "echo_density",
+        "spectral_flatness",
+    )
+    assert torch.isfinite(loss)
+
+
+def test_sample_batch_pyfdn_reverb_profile_returns_parameter_rows() -> None:
+    """Inference accepts temporal reverb controls and preserves parameter shape."""
+    module = _module(SketchControlSpec(num_frames=32, profile="pyfdn_reverb"))
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
+
+    predictions = module.sample_batch(
+        batch,
+        noise=batch["noise"],
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=2,
+    )
+
+    assert predictions.shape == (_BATCH, _NUM_PARAMS)
+    assert torch.isfinite(predictions).all()
 
 
 def test_train_step_none_spec_ignores_sketch_free_batch() -> None:
@@ -504,6 +732,44 @@ def test_sketch_conditioned_training_fixed_batch_lowers_loss_and_updates_project
     assert all(
         torch.count_nonzero(cast(torch.nn.Linear, projection).weight) == 0
         for projection in projections
+    )
+
+    optimizer = torch.optim.Adam(module.parameters(), lr=1e-2)
+    torch.manual_seed(11)
+    initial_loss = module._train_step(batch).loss.item()  # noqa: SLF001
+
+    for _ in range(100):
+        optimizer.zero_grad(set_to_none=True)
+        loss = module._train_step(batch).loss  # noqa: SLF001
+        loss.backward()
+        optimizer.step()
+
+    torch.manual_seed(11)
+    final_loss = module._train_step(batch).loss.item()  # noqa: SLF001
+
+    assert final_loss < 0.01
+    assert final_loss < initial_loss / 100
+    assert all(
+        torch.count_nonzero(cast(torch.nn.Linear, projection).weight) > 0
+        for projection in module.sketch_tokens.projections.values()
+    )
+
+
+@pytest.mark.slow
+def test_pyfdn_reverb_training_fixed_batch_lowers_loss_and_updates_projections() -> None:
+    """A fixed reverb batch trains every temporal-group projection."""
+    module = _module(
+        SketchControlSpec(num_frames=32, profile="pyfdn_reverb"),
+        sketch_dropout_rate=0.0,
+        all_conditioning_dropout_rate=0.0,
+        cfg_dropout_rate=0.0,
+    )
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
+    assert module.sketch_tokens is not None
+    assert all(
+        torch.count_nonzero(cast(torch.nn.Linear, projection).weight) == 0
+        for projection in module.sketch_tokens.projections.values()
     )
 
     optimizer = torch.optim.Adam(module.parameters(), lr=1e-2)

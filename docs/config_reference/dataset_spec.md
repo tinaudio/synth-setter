@@ -15,6 +15,13 @@ Nested under `DatasetSpec.render`:
 
 ::: synth_setter.pipeline.schemas.spec.RenderConfig
 
+`renderer_backend: pyfdn` selects the native in-process pyFDN renderer. It
+uses fixed zero-valued MIDI compatibility inputs with the common `AudioRenderer`,
+defaults `pyfdn_excitation` to a four-second impulse response, and stores mono
+44.1 kHz audio as float32. Setting `pyfdn_excitation: chirp` explicitly selects
+the locally generated canonical chirp; neither mode requires a source path, R2
+download, or SkyPilot mount.
+
 Nested entries inside the computed `DatasetSpec.shards` tuple:
 
 ::: synth_setter.pipeline.schemas.spec.ShardSpec

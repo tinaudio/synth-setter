@@ -32,7 +32,7 @@ def test_dataset_compose_enforce_tags_true_and_default_tags() -> None:
         cfg = compose(config_name="dataset", overrides=["experiment=generate_dataset/smoke-shard"])
 
     assert cfg.extras.enforce_tags is True
-    assert cfg.tags == ["dev", "generate_dataset"]
+    assert cfg.tags == ["generate_dataset", "smoke-shard"]
 
 
 def test_dataset_compose_with_tags_still_builds_dataset_spec() -> None:

@@ -1,0 +1,20 @@
+# FaustWasm compiles the selected digest-pinned source and renders in isolated Node workers.
+renderer_backend: faustwasm
+backend_version: "0.18.3"
+block_size: 128
+render_contract_version: 2
+sample_rate: 44100
+channels: 2
+velocity: 100
+signal_duration_seconds: 4.0
+min_loudness: -55.0
+audio_dtype: float16
+mel_spec_dtype: float32
+samples_per_shard: 10000
+samples_per_render_batch: 32
+max_retries: 0
+parallel: false
+retain_local_shards: true
+plugin_reload_cadence: render
+gui_toggle_cadence: never
+param_sample_cadence: sample

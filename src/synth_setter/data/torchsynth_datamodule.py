@@ -6,6 +6,7 @@ audio batch on the training machine without materializing an audio dataset.
 
 from __future__ import annotations
 
+import math
 import sys
 import threading
 import types
@@ -61,19 +62,23 @@ def _torchsynth_types() -> tuple[type, type]:
     :returns: TorchSynth's ``SynthConfig`` and ``Voice`` types.
     """
     try:
-        import pytorch_lightning.core.lightning  # noqa: F401
-    except ModuleNotFoundError:
-        import pytorch_lightning
+        try:
+            import pytorch_lightning.core.lightning  # noqa: F401
+        except ModuleNotFoundError:
+            import pytorch_lightning
 
-        shim = types.ModuleType("pytorch_lightning.core.lightning")
-        # setattr (not ``shim.LightningModule = ...``) so pyright doesn't flag the
-        # attribute as unknown on a dynamically created ModuleType.
-        setattr(shim, "LightningModule", pytorch_lightning.LightningModule)
-        sys.modules["pytorch_lightning.core.lightning"] = shim
-    from torchsynth.config import SynthConfig
-    from torchsynth.synth import Voice
+            shim = types.ModuleType("pytorch_lightning.core.lightning")
+            # setattr (not ``shim.LightningModule = ...``) so pyright doesn't flag the
+            # attribute as unknown on a dynamically created ModuleType.
+            setattr(shim, "LightningModule", pytorch_lightning.LightningModule)
+            sys.modules["pytorch_lightning.core.lightning"] = shim
+        from torchsynth.config import SynthConfig
+        from torchsynth.synth import Voice
 
-    return SynthConfig, Voice
+        return SynthConfig, Voice
+    finally:
+        # TorchSynth 1.0.2 replaces this process-global constant with a float32 estimate.
+        torch.pi = math.pi
 
 
 @dataclass

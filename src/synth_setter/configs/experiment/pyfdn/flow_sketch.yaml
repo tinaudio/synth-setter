@@ -1,0 +1,9 @@
+# @package _global_
+
+defaults:
+  - /experiment/pyfdn/flow
+  - override /sketch: pyfdn_reverb
+  - _self_
+
+run_name: flow-sketch
+tags: [pyfdn, flow, sketch]

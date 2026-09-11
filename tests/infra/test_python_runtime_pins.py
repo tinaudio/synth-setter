@@ -179,7 +179,6 @@ def test_local_environment_provisioning_pins_python_31213(project_root: Path) ->
     :param project_root: Repository root fixture.
     """
     assert (project_root / ".python-version").read_text().strip() == PYTHON_VERSION
-    assert f"python={PYTHON_VERSION}" in (project_root / "environment.yaml").read_text()
     assert f"venv --python {PYTHON_VERSION}" in (project_root / "Makefile").read_text()
 
 

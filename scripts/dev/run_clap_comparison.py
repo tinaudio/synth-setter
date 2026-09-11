@@ -45,6 +45,7 @@ from synth_setter.pipeline.data.meanaudio_generation import (
     validate_meanaudio_s_full_latent,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.renderer_factory import anchor_render_preset
 
 BASELINE_SUITE = "r2://experiments/clap-renders/suites/clap-suite-20260731T211818136757Z"
 BASELINE_CHECKPOINT = (
@@ -292,7 +293,7 @@ def render_meanaudio_candidate(
         raise RuntimeError("default CLAP checkpoint SHA-256 mismatch")
     text_embedding = clap_render._encode_text(prompt, clap_checkpoint_dir, selected_device)
     inverse_checkpoint = clap_render.resolve_inverse_checkpoint(checkpoint)
-    render = clap_render._workspace_render_config(settings.render)
+    render = anchor_render_preset(settings.render)
     model = VSTFlowMatchingModule.load_from_checkpoint(
         inverse_checkpoint,
         map_location=selected_device,

@@ -16,15 +16,15 @@ def test_generate_canonical_pyfdn_source_has_exact_waveform_contract() -> None:
     """The canonical source is finite contiguous channel-first float32 audio."""
     source = generate_canonical_pyfdn_source()
 
-    assert source.shape == (1, 192_000)
+    assert source.shape == (1, 176_400)
     assert source.dtype == np.float32
     assert source.flags.c_contiguous
     assert np.isfinite(source).all()
     assert not source.flags.writeable
     with pytest.raises(ValueError, match="cannot set WRITEABLE flag"):
         source.setflags(write=True)
-    assert np.any(source[0, :48_000] != 0.0)
-    np.testing.assert_array_equal(source[0, 48_000:], np.zeros(144_000, dtype=np.float32))
+    assert np.any(source[0, :44_100] != 0.0)
+    np.testing.assert_array_equal(source[0, 44_100:], np.zeros(132_300, dtype=np.float32))
 
 
 def test_generate_canonical_pyfdn_source_uses_exact_librosa_chirp_call(
@@ -38,20 +38,25 @@ def test_generate_canonical_pyfdn_source_uses_exact_librosa_chirp_call(
 
     def chirp(**kwargs: object) -> np.ndarray:
         received.update(kwargs)
-        return np.ones(48_000, dtype=np.float64)
+        return np.ones(44_100, dtype=np.float64)
 
     monkeypatch.setattr(pyfdn_source.librosa, "chirp", chirp)
+    monkeypatch.setattr(
+        pyfdn_source,
+        "PYFDN_CANONICAL_SOURCE_SHA256",
+        "ae5c41d9d29ac976049f6b1c3d59c3a02fa963a62f0e36866b679d89cf49b076",
+    )
 
     source = generate_canonical_pyfdn_source()
 
     assert received == {
         "fmin": 20.0,
         "fmax": 20_000.0,
-        "sr": 48_000,
-        "length": 48_000,
+        "sr": 44_100,
+        "length": 44_100,
         "linear": False,
     }
-    np.testing.assert_array_equal(source[0, :48_000], np.full(48_000, 0.1, np.float32))
+    np.testing.assert_array_equal(source[0, :44_100], np.full(44_100, 0.1, np.float32))
 
 
 def test_generate_canonical_pyfdn_source_nonfinite_chirp_raises(
@@ -61,7 +66,7 @@ def test_generate_canonical_pyfdn_source_nonfinite_chirp_raises(
 
     :param monkeypatch: Scoped invalid librosa chirp replacement.
     """
-    invalid = np.zeros(48_000, dtype=np.float64)
+    invalid = np.zeros(44_100, dtype=np.float64)
     invalid[1] = np.nan
     monkeypatch.setattr(pyfdn_source.librosa, "chirp", lambda **_: invalid)
 
@@ -76,7 +81,7 @@ def test_generate_canonical_pyfdn_source_out_of_range_chirp_raises(
 
     :param monkeypatch: Scoped out-of-range librosa chirp replacement.
     """
-    invalid = np.full(48_000, 1.01, dtype=np.float64)
+    invalid = np.full(44_100, 1.01, dtype=np.float64)
     monkeypatch.setattr(pyfdn_source.librosa, "chirp", lambda **_: invalid)
 
     with pytest.raises(ValueError, match="amplitude"):
@@ -85,7 +90,7 @@ def test_generate_canonical_pyfdn_source_out_of_range_chirp_raises(
 
 def test_generate_canonical_pyfdn_source_has_bounded_near_zero_start() -> None:
     """Default librosa phase starts near zero and the excitation never exceeds 0.1."""
-    excitation = generate_canonical_pyfdn_source()[0, :48_000]
+    excitation = generate_canonical_pyfdn_source()[0, :44_100]
 
     assert abs(float(excitation[0])) < 1e-7
     peak = np.max(np.abs(excitation))
@@ -97,16 +102,16 @@ def test_generate_canonical_pyfdn_source_matches_representative_locked_samples()
     source = generate_canonical_pyfdn_source()
 
     np.testing.assert_allclose(
-        source[0, [0, 1, 2, 12_000, 24_000, 36_000, 47_999]],
+        source[0, [0, 1, 2, 11_025, 22_050, 33_075, 44_099]],
         np.array(
             [
                 6.1232338e-18,
-                2.6181791e-04,
-                5.2367174e-04,
+                2.8497365e-04,
+                5.6998961e-04,
                 6.5586314e-02,
                 -8.5105821e-02,
                 -1.9153437e-02,
-                -9.6530151e-03,
+                -3.2231044e-02,
             ],
             dtype=np.float32,
         ),
@@ -138,13 +143,13 @@ def test_canonical_pyfdn_source_provenance_has_complete_source_spec() -> None:
         "implementation": "librosa.chirp",
         "fmin_hz": 20.0,
         "fmax_hz": 20_000.0,
-        "sample_rate_hz": 48_000,
-        "chirp_frames": 48_000,
-        "total_frames": 192_000,
+        "sample_rate_hz": 44_100,
+        "chirp_frames": 44_100,
+        "total_frames": 176_400,
         "linear": False,
         "phi": None,
         "amplitude": 0.1,
-        "tail_frames": 144_000,
+        "tail_frames": 132_300,
         "channels": 1,
         "dtype": "float32",
         "layout": "channel_first",
