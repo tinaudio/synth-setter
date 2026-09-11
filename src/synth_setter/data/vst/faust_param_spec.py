@@ -189,6 +189,9 @@ def _kronecker_fdn_param_spec() -> ParamSpec:
     return ParamSpec(
         [
             ContinuousParameter(name="/kroneckerFDN/Decay/t60", min=0.1, max=4.0),
+            ContinuousParameter(
+                name="/kroneckerFDN/Decay/t60_nyquist", min=0.1, max=4.0
+            ),
             *(
                 ContinuousParameter(name=f"/kroneckerFDN/Delays/d{i}", min=400.0, max=1200.0)
                 for i in range(8)

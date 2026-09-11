@@ -65,6 +65,7 @@ _EXPECTED_PARAMETER_ADDRESSES = {
     ),
     "faust_kronecker_fdn": (
         ("/kroneckerFDN/Decay/t60", "/kroneckerFDN/Decay_t60"),
+        ("/kroneckerFDN/Decay/t60_nyquist", "/kroneckerFDN/Decay_t60_nyquist"),
         ("/kroneckerFDN/Delays/d0", "/kroneckerFDN/Delays_d0"),
         ("/kroneckerFDN/Delays/d1", "/kroneckerFDN/Delays_d1"),
         ("/kroneckerFDN/Delays/d2", "/kroneckerFDN/Delays_d2"),

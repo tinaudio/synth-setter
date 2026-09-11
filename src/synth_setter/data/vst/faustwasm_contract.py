@@ -104,6 +104,7 @@ _WASM_ADDRESSES = MappingProxyType(
         ),
         ParamSpecName("faust_kronecker_fdn"): (
             "/kroneckerFDN/Decay_t60",
+            "/kroneckerFDN/Decay_t60_nyquist",
             "/kroneckerFDN/Delays_d0",
             "/kroneckerFDN/Delays_d1",
             "/kroneckerFDN/Delays_d2",

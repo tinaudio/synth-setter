@@ -22,7 +22,7 @@ IDENTITY = "faust_kronecker_fdn"
 # Faust reports UI controls in traversal order: decay, delays, input gains,
 # kernel angles, reflect flags, output gains, dry.
 EXPECTED_SYNTH_PARAM_NAMES = (
-    ("/kroneckerFDN/Decay/t60",)
+    ("/kroneckerFDN/Decay/t60", "/kroneckerFDN/Decay/t60_nyquist")
     + tuple(f"/kroneckerFDN/Delays/d{i}" for i in range(8))
     + tuple(f"/kroneckerFDN/Input/b{i}" for i in range(8))
     + tuple(f"/kroneckerFDN/Kernel/a{i}" for i in range(3))
@@ -30,8 +30,8 @@ EXPECTED_SYNTH_PARAM_NAMES = (
     + tuple(f"/kroneckerFDN/Output/c{i}" for i in range(8))
     + ("/kroneckerFDN/Output/dry",)
 )
-EXPECTED_ENCODED_WIDTH = 38
-_REFLECT_OFFSET = 20
+EXPECTED_ENCODED_WIDTH = 39
+_REFLECT_OFFSET = 21
 _DELAYS = (601, 773, 839, 911, 997, 1063, 1129, 1181)
 _RENDER_SECONDS = 0.5
 _MIDI_NOTE = 60
@@ -59,12 +59,14 @@ def _audible_patch() -> dict[str, float]:
         patch[f"/kroneckerFDN/Kernel/a{index}"] = np.pi / 4
         patch[f"/kroneckerFDN/Kernel/r{index}"] = 1.0
     patch["/kroneckerFDN/Decay/t60"] = 1.5
+    patch["/kroneckerFDN/Decay/t60_nyquist"] = 0.8
     return patch
 
 
-def _renderer() -> AudioRenderer:
-    """Build a short mono production-shaped Kronecker render configuration.
+def _renderer(signal_duration_seconds: float = _RENDER_SECONDS) -> AudioRenderer:
+    """Build a mono production-shaped Kronecker render configuration.
 
+    :param signal_duration_seconds: Render duration in seconds.
     :returns: Audio renderer for the registered Kronecker identity.
     """
     config = RenderConfig(
@@ -74,7 +76,7 @@ def _renderer() -> AudioRenderer:
         sample_rate=44100,
         channels=1,
         velocity=_MIDI_VELOCITY,
-        signal_duration_seconds=_RENDER_SECONDS,
+        signal_duration_seconds=signal_duration_seconds,
         min_loudness=-55.0,
         samples_per_render_batch=1,
         samples_per_shard=1,
@@ -84,11 +86,32 @@ def _renderer() -> AudioRenderer:
     return make_audio_renderer(config)
 
 
+def _shelf_coefficients(delay: int, rt_dc: float, rt_nyquist: float) -> tuple[float, float, float]:
+    """Return the pyFDN first-order shelf coefficients for one delay line.
+
+    :param delay: Delay length in samples.
+    :param rt_dc: DC reverberation time in seconds.
+    :param rt_nyquist: Nyquist reverberation time in seconds.
+    :returns: ``(b0, b1, a1)`` matching ``first_order_shelf_biquad`` at 6 kHz.
+    """
+    crossover = min(6000.0, 44100 / 5) / 44100 * 2 * np.pi
+    tangent = np.tan(crossover)
+    gain_dc = 0.001 ** (delay / (rt_dc * 44100))
+    gain_nyquist = 0.001 ** (delay / (rt_nyquist * 44100))
+    ratio = np.sqrt(gain_dc / gain_nyquist)
+    normalizer = tangent / ratio + 1
+    return (
+        (tangent * ratio + 1) * gain_nyquist / normalizer,
+        (tangent * ratio - 1) * gain_nyquist / normalizer,
+        (tangent / ratio - 1) / normalizer,
+    )
+
+
 def _numpy_impulse_response(frames: int) -> np.ndarray:
     """Simulate the pinned patch through the reference Kronecker loop.
 
-    Faust's `~` contributes one implicit sample of delay on the feedback path,
-    so feedback reads the previous delay outputs.
+    Loop order mirrors pyFDN's ``process_fdn``: the shelf filters delay
+    outputs before the feedback matrix and the output taps.
 
     :param frames: Impulse-response length in samples.
     :returns: Mono reference response shaped ``(frames,)``.
@@ -96,24 +119,32 @@ def _numpy_impulse_response(frames: int) -> np.ndarray:
     feedback = kronecker_feedback_matrix(
         np.full(3, np.pi / 4), np.ones(3, dtype=np.int64)
     )
-    gains = 0.001 ** (np.asarray(_DELAYS) / (1.5 * 44100))
+    coefficients = [_shelf_coefficients(delay, 1.5, 0.8) for delay in _DELAYS]
     excitation = np.zeros(frames)
     excitation[0] = 1.0
     states = np.zeros(8)
-    previous = np.zeros(8)
+    previous_input = np.zeros(8)
+    previous_output = np.zeros(8)
     lines = [np.zeros(delay) for delay in _DELAYS]
     heads = [0] * 8
     response = np.zeros(frames)
     for frame in range(frames):
-        recirculated = feedback @ previous
         for index in range(8):
             states[index] = lines[index][heads[index]]
-            lines[index][heads[index]] = (
-                0.5 * excitation[frame] + gains[index] * recirculated[index]
+            b0, b1, a1 = coefficients[index]
+            filtered = (
+                b0 * states[index]
+                + b1 * previous_input[index]
+                - a1 * previous_output[index]
             )
+            previous_input[index] = states[index]
+            previous_output[index] = filtered
+            states[index] = filtered
+        recirculated = feedback @ states
+        for index in range(8):
+            lines[index][heads[index]] = 0.5 * excitation[frame] + recirculated[index]
             heads[index] = (heads[index] + 1) % _DELAYS[index]
         response[frame] = 0.125 * states.sum()
-        previous = states.copy()
     return response
 
 
@@ -160,6 +191,40 @@ def test_kronecker_fdn_matches_reference_kronecker_loop() -> None:
     audio = renderer.render(_audible_patch(), _MIDI_NOTE, _MIDI_VELOCITY, _NOTE_WINDOW)
 
     assert np.allclose(audio[0, :4096], _numpy_impulse_response(4096), atol=1e-5)
+
+
+def test_kronecker_fdn_matches_pyfdn_render() -> None:
+    """The Faust DSP reproduces pyFDN's render up to float32 precision."""
+    from synth_setter.data.pyfdn_instrument import PyFDNRenderer
+
+    patch = _audible_patch()
+    angles = np.array([patch[f"/kroneckerFDN/Kernel/a{i}"] for i in range(3)])
+    reflects = np.array(
+        [int(patch[f"/kroneckerFDN/Kernel/r{i}"]) for i in range(3)], dtype=np.int64
+    )
+    renderer = _renderer(signal_duration_seconds=4.0)
+    faust = renderer.render(patch, _MIDI_NOTE, _MIDI_VELOCITY, _NOTE_WINDOW)
+    pyfdn = PyFDNRenderer(
+        param_spec_name=ParamSpecName("pyfdn_n8_mono_kronecker"),
+    ).render(
+        {
+            "delays": np.asarray(_DELAYS, dtype=np.int64),
+            "input_matrix": np.array(
+                [[patch[f"/kroneckerFDN/Input/b{i}"]] for i in range(8)]
+            ),
+            "output_matrix": np.array(
+                [[patch[f"/kroneckerFDN/Output/c{i}"] for i in range(8)]]
+            ),
+            "direct_matrix": np.array([[patch["/kroneckerFDN/Output/dry"]]]),
+            "post_delay.rt_dc_seconds": patch["/kroneckerFDN/Decay/t60"],
+            "post_delay.rt_nyquist_seconds": patch["/kroneckerFDN/Decay/t60_nyquist"],
+            "kronecker_angles": angles,
+            "kronecker_reflect": reflects,
+            "feedback_matrix": kronecker_feedback_matrix(angles, reflects),
+        }
+    )
+
+    assert np.allclose(faust, pyfdn, rtol=0.0, atol=1e-5)
 
 
 def test_kronecker_fdn_repeated_renders_are_identical() -> None:
