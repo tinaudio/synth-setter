@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789083889131,
+  "lastUpdate": 1789102971803,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -16626,6 +16626,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03541964292526245,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b131f5aa68ca8f65de8421d17db1c212b903379f",
+          "message": "internal-fix(data-pipeline): support Faust 2.37 parameter paths (#3488)",
+          "timestamp": "2026-09-10T23:41:35-04:00",
+          "tree_id": "381e18e4d39e92f8c3ecbaeb0a0e38142b2d8f34",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b131f5aa68ca8f65de8421d17db1c212b903379f"
+        },
+        "date": 1789102968126,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.91216778755188,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.078787559617776,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02305893413722515,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.02179497480392456,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.481513500213623,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.33496635783331,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.81876277923584,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.870184651762247,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03494272753596306,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.048738837242126465,
             "unit": "1-cos"
           },
           {
