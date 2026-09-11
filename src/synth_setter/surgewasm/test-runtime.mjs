@@ -101,11 +101,14 @@ test('renderSurge_model_native_parameter_subset_matches_live_host', async () => 
     assert.ok(result.left.some((sample) => sample !== 0));
 });
 
-test('renderSurge_native_parameter_change_changes_audio', async () => {
+test('renderSurge_closed_filter_attenuates_note_energy', async () => {
     const baseline = await render();
     const changed = await render([{ id: 308, name: 'A Filter 1 Cutoff', value: 0 }]);
 
-    assert.notDeepEqual(changed.left, baseline.left);
+    // Random oscillator phase can change samples even when parameter writes are ignored.
+    const baselineEnergy = baseline.left.reduce((sum, sample) => sum + sample * sample, 0);
+    const filteredEnergy = changed.left.reduce((sum, sample) => sum + sample * sample, 0);
+    assert.ok(filteredEnergy < baselineEnergy * 0.1, `cutoff did not attenuate the note: ${filteredEnergy} / ${baselineEnergy}`);
 });
 
 test('renderSurge_equal_note_endpoints_preserve_zero_duration', async () => {
