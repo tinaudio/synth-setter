@@ -73,6 +73,7 @@ jobs:
       - name: Build exact upstream engine and separate host
         run: |
           source build/emsdk/emsdk_env.sh
+          node --test src/synth_setter/surgewasm/test-build.mjs
           node src/synth_setter/surgewasm/build.mjs --cache build/surge-source --output build/surge-engine
       - name: Configure real R2 artifacts
         uses: ./.github/actions/setup-r2

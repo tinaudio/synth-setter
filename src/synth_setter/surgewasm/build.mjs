@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { access, copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -65,9 +65,12 @@ const prepareCache = async (cache) => {
     if (!await pathExists(cache)) {
         await mkdir(dirname(cache), { recursive: true });
         await run('git', ['clone', '--filter=blob:none', '--no-checkout', SOURCE_URL, cache]);
+    } else {
+        const root = await output('git', ['rev-parse', '--show-toplevel'], { cwd: cache });
+        if (await realpath(root) !== await realpath(cache)) fail('cache must name a Git checkout root');
+        const status = await output('git', ['status', '--porcelain'], { cwd: cache });
+        if (status) fail(`cached source is dirty: ${cache}`);
     }
-    const status = await output('git', ['status', '--porcelain'], { cwd: cache });
-    if (status) fail(`cached source is dirty: ${cache}`);
     await run('git', ['fetch', 'origin', SOURCE_COMMIT], { cwd: cache });
     await run('git', ['checkout', '--detach', SOURCE_COMMIT], { cwd: cache });
     await run('git', ['submodule', 'sync', '--recursive'], { cwd: cache });
