@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import urlparse
 
 from pydantic import (
     BaseModel,
@@ -68,6 +69,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DatasetSpec",
+    "InputAudioSource",
     "OutputFormat",
     "R2Location",
     "RenderConfig",
@@ -281,6 +283,71 @@ class ShardSpec(BaseModel):
     )
 
 
+class InputAudioSource(BaseModel):  # noqa: DOC603 — field descriptions live on Pydantic Fields.
+    """Pinned dataset split used as the per-sample effect excitation.
+
+    .. attribute :: model_config
+
+        Strict, frozen, extra-forbid Pydantic configuration.
+
+    .. attribute :: dataset_uri
+
+        Local path, file URI, or R2 URI naming the dataset root.
+
+    .. attribute :: split
+
+        Split containing the source audio rows.
+
+    .. attribute :: snapshot_txid
+
+        Lance transaction UUID pinning the source snapshot.
+
+    .. attribute :: sampling_seed
+
+        Independent seed for source-row selection.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    dataset_uri: str = Field(description="Local, file://, or r2:// dataset root URI.")
+    split: Literal["train", "val", "test"] = Field(
+        default="train", description="Dataset split containing source audio."
+    )
+    snapshot_txid: str = Field(description="Pinned Lance transaction UUID for the split.")
+    sampling_seed: int = Field(
+        default=0, description="Independent seed mixed into deterministic source-row selection."
+    )
+
+    @field_validator("dataset_uri")
+    @classmethod
+    def _dataset_uri_must_be_supported(cls, value: str) -> str:
+        """Require a non-blank local path, file URI, or R2 URI.
+
+        :param value: Candidate dataset root.
+        :returns: Validated dataset root unchanged.
+        :raises ValueError: The value is blank or uses another URI scheme.
+        """
+        if not value.strip():
+            raise ValueError("dataset_uri must not be blank")
+        scheme = urlparse(value).scheme
+        if scheme not in ("", "file", "r2"):
+            raise ValueError("dataset_uri must be a local path, file:// URI, or r2:// URI")
+        return value
+
+    @field_validator("snapshot_txid")
+    @classmethod
+    def _snapshot_txid_must_not_be_blank(cls, value: str) -> str:
+        """Require an explicit non-blank Lance transaction pin.
+
+        :param value: Candidate transaction UUID.
+        :returns: Validated transaction UUID unchanged.
+        :raises ValueError: The value is blank.
+        """
+        if not value.strip():
+            raise ValueError("snapshot_txid must not be blank")
+        return value
+
+
 class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Pydantic Fields.
     """Renderer-specific configuration nested as ``DatasetSpec.render``.
 
@@ -336,6 +403,10 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             "Input used by pyFDN: its impulse response by default, or the canonical "
             "chirp when explicitly selected."
         ),
+    )
+    input_audio_source: InputAudioSource | None = Field(
+        default=None,
+        description="Pinned dataset split supplying per-sample pyFDN input audio.",
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
     channels: int = Field(description="Audio channel count.")
@@ -693,11 +764,20 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             or self.plugin_path == PYFDN_PLUGIN_NAME
         )
         if self.renderer_backend != "pyfdn":
+            if self.input_audio_source is not None:
+                raise ValueError("input_audio_source requires renderer_backend='pyfdn'")
             if pyfdn_identity:
                 raise ValueError("all pyFDN identities require renderer_backend='pyfdn'")
             if self.pyfdn_excitation is not None:
                 raise ValueError("pyfdn_excitation requires renderer_backend='pyfdn'")
             return self
+        if self.input_audio_source is not None:
+            if self.pyfdn_excitation == "chirp":
+                raise ValueError(
+                    "input_audio_source cannot be combined with pyfdn_excitation='chirp'"
+                )
+            if self.render_contract_version == 1:
+                raise ValueError("input_audio_source rejects render_contract_version=1")
         if not registered_pyfdn:
             raise ValueError("pyfdn requires a registered pyfdn synth identity")
         if self.plugin_path != PYFDN_PLUGIN_NAME or self.plugin_state_path:
@@ -945,7 +1025,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
                 synth["plugin_path"] = FAUST_PLUGIN_NAME
                 synth["synth_version"] = self.backend_version
         if self.renderer_backend == "pyfdn":
-            excitation = self.pyfdn_excitation or "impulse"
+            excitation = (
+                "dataset"
+                if self.input_audio_source is not None
+                else (self.pyfdn_excitation or "impulse")
+            )
             contract["pyfdn_excitation"] = excitation
             if excitation == "chirp":
                 contract["canonical_source_sha256"] = (

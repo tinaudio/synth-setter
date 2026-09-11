@@ -72,6 +72,19 @@ def test_audio_renderer_is_an_abstract_dataclass() -> None:
         )
 
 
+def test_audio_renderer_external_input_unsupported_backend_raises() -> None:
+    """Hosted synth backends reject effect-style caller-provided audio."""
+    renderer = PedalboardRenderer(
+        plugin_path="plugin.vst3",
+        sample_rate=44_100,
+        channels=1,
+        signal_duration_seconds=1.0,
+    )
+
+    with pytest.raises(NotImplementedError, match="does not support"):
+        renderer.render_with_input({}, np.zeros(44_100, dtype=np.float32))
+
+
 def test_renderer_dataclasses_reject_positional_configuration() -> None:
     """Renderer configuration must be explicit at construction sites."""
     with pytest.raises(TypeError):

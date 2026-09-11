@@ -12,12 +12,15 @@ from scipy.signal import sosfreqz
 import synth_setter.data.pyfdn_instrument as pyfdn_instrument
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
 from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_DIFFVOX_PARAM_SPEC,
+    PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_PARAM_SPEC,
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
     PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
+    PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
 )
 from synth_setter.data.pyfdn_source import canonical_pyfdn_source_provenance
-from synth_setter.data.vst.param_spec import ParameterValues
+from synth_setter.data.vst.param_spec import ParameterValues, ParamSpec
 from synth_setter.data.vst.renderers import NonFiniteAudioError
 from synth_setter.param_spec_name import ParamSpecName
 
@@ -146,6 +149,88 @@ def test_pyfdn_renderer_fixed_householder_spec_returns_finite_impulse_response()
     assert audio.shape == (1, 176_400)
     assert audio.dtype == np.float32
     assert np.isfinite(audio).all()
+
+
+def test_pyfdn_renderer_dataset_input_returns_finite_deterministic_output() -> None:
+    params, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
+    source = np.linspace(-0.1, 0.1, 176_400, dtype=np.float32)
+    renderer = PyFDNRenderer()
+
+    first = renderer.render_with_input(params, source)
+    second = renderer.render_with_input(params, source)
+
+    assert first.shape == (1, 176_400)
+    assert first.dtype == np.float32
+    assert np.isfinite(first).all()
+    np.testing.assert_array_equal(second, first)
+
+
+def test_pyfdn_renderer_distinct_dataset_inputs_produce_distinct_outputs() -> None:
+    params, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
+    first_source = np.zeros(176_400, dtype=np.float32)
+    first_source[0] = 0.25
+    second_source = np.zeros(176_400, dtype=np.float32)
+    second_source[1] = 0.25
+    renderer = PyFDNRenderer()
+
+    first = renderer.render_with_input(params, first_source)
+    second = renderer.render_with_input(params, second_source)
+
+    assert not np.array_equal(first, second)
+
+
+@pytest.mark.parametrize(
+    ("identity", "param_spec", "channels"),
+    [
+        (
+            "pyfdn_n8_mono_householder_vector",
+            PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
+            1,
+        ),
+        (
+            "pyfdn_pitchshift_n8_mono_householder",
+            PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+            1,
+        ),
+        (
+            "pyfdn_gotz_n8_mono_fixed_delays",
+            PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_PARAM_SPEC,
+            1,
+        ),
+        ("pyfdn_diffvox", PYFDN_DIFFVOX_PARAM_SPEC, 2),
+    ],
+)
+def test_pyfdn_renderer_dataset_input_supported_topology_returns_expected_shape(
+    identity: str,
+    param_spec: ParamSpec,
+    channels: int,
+) -> None:
+    params, _ = param_spec.sample(np.random.default_rng(123))
+    source = np.zeros(176_400, dtype=np.float32)
+    source[0] = 0.01
+
+    audio = PyFDNRenderer(
+        param_spec_name=ParamSpecName(identity), channels=channels
+    ).render_with_input(params, source)
+
+    assert audio.shape == (channels, 176_400)
+    assert np.isfinite(audio).all()
+
+
+def test_pyfdn_renderer_dataset_input_wrong_shape_raises() -> None:
+    params, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
+
+    with pytest.raises(ValueError, match="shape"):
+        PyFDNRenderer().render_with_input(params, np.zeros(16, dtype=np.float32))
+
+
+def test_pyfdn_renderer_dataset_input_nonfinite_raises() -> None:
+    params, _ = PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC.sample(np.random.default_rng(123))
+    source = np.zeros(176_400, dtype=np.float32)
+    source[0] = np.nan
+
+    with pytest.raises(ValueError, match="finite"):
+        PyFDNRenderer().render_with_input(params, source)
 
 
 def test_pyfdn_renderer_nonfinite_extreme_prediction_raises_without_repair(

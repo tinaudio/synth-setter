@@ -17,6 +17,7 @@ import pytest
 
 from synth_setter.cli.generate_dataset import build_generate_args
 from synth_setter.data.vst.generate_vst_dataset import SampleSeed, VSTDataSample, main
+from synth_setter.data.vst.input_audio import InputAudioPool
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst.renderers import AudioRenderer
@@ -387,6 +388,7 @@ def test_writer_persists_nonzero_accepted_attempt(
         warmup: bool = False,
         seed: SampleSeed | None = None,
         audio_dtype: str = "float16",
+        input_audio_pool: InputAudioPool | None = None,
     ) -> VSTDataSample:
         sample = original_generate_sample(
             renderer,
@@ -398,6 +400,7 @@ def test_writer_persists_nonzero_accepted_attempt(
             warmup=warmup,
             seed=seed,
             audio_dtype=audio_dtype,
+            input_audio_pool=input_audio_pool,
         )
         sample.attempt = 2
         sample.sampler_seed = seed_for_sample(_BASE_SEED, 12, 2)

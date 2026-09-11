@@ -25,6 +25,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
     VSTDataSample,
     generate_sample,
 )
+from synth_setter.data.vst.input_audio import InputAudioPool
 from synth_setter.data.vst.param_spec import ParameterValue, ParamSpec
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.renderers import AudioRenderer, PedalboardRenderer
@@ -122,6 +123,15 @@ def _render_in_batches(
         renderer without ``plugin_reload_cadence="once"`` (validator regression).
     """
     num_samples = render_cfg.samples_per_shard
+    input_audio_pool = (
+        InputAudioPool(
+            render_cfg.input_audio_source,
+            sample_rate=render_cfg.sample_rate,
+            frames=int(render_cfg.sample_rate * render_cfg.signal_duration_seconds),
+        )
+        if render_cfg.input_audio_source is not None
+        else None
+    )
     share_params = render_cfg.param_sample_cadence == "shard"
     clipped_rejections = 0
     non_finite_rejections = 0
@@ -184,6 +194,7 @@ def _render_in_batches(
                     max_attempts=render_cfg.attempts_per_sample,
                 ),
                 audio_dtype=render_cfg.audio_dtype,
+                input_audio_pool=input_audio_pool,
             )
             if share_params and shared_synth is None:
                 shared_synth = sample.synth_params
