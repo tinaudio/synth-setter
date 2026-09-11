@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from functools import partial
+from typing import cast
 
 import pytest
 import torch
@@ -380,9 +381,20 @@ def test_ff_cached_embedding_predictions_decode_inside_param_spec_domain(
         out_of_domain = {
             name: value
             for name, value in decoded.items()
-            if name in bounds and not bounds[name][0] <= value <= bounds[name][1]
+            if name in bounds and not bounds[name][0] <= cast(float, value) <= bounds[name][1]
         }
         assert not out_of_domain, f"decoded outside the spec domain: {out_of_domain}"
+
+
+def test_model_audio_conditioning_squeezes_singleton_channel_axis() -> None:
+    """Mono Lance audio is presented to waveform encoders as batch by samples."""
+    module = _flow_module("audio")
+    audio = torch.randn(2, 1, 32)
+
+    actual = module._get_conditioning_from_batch({"audio": audio})  # noqa: SLF001
+
+    assert actual.shape == (2, 32)
+    torch.testing.assert_close(actual, audio[:, 0])
 
 
 def test_model_embedding_spec_reads_generic_conditioning_key() -> None:

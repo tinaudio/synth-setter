@@ -7,3 +7,7 @@ renderer_backend: dawdreamer
 gui_toggle_cadence: never
 # Cardinal's Rack engine free-runs, so only a per-render instance is reproducible.
 plugin_reload_cadence: render
+# Null defers each step to the DawDreamer backend default (#3245).
+post_load_flush_blocks: null
+post_param_flush_blocks: null
+post_render_flush_blocks: null

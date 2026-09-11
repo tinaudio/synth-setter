@@ -33,22 +33,27 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from hydra import compose, initialize_config_module
+from hydra.core.global_hydra import GlobalHydra
 
 from synth_setter.cli.generate_dataset import (
     _RENDERER_SCRIPT,
     _dispatch_shards,
     _dispatch_shards_from_claims,
+    _dispatch_shards_from_claims_parallel,
     _dispatch_shards_parallel,
     _load_render_rejections,
     _render_one_owned_shard,
     build_generate_args,
     generate,
+    render_and_upload_shard,
 )
 from synth_setter.pipeline.constants import INPUT_SPEC_FILENAME
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt
@@ -56,13 +61,14 @@ from synth_setter.pipeline.schemas.render_metrics import (
     RenderRejectionMetrics,
     render_metrics_path,
 )
-from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig, ShardSpec
 from synth_setter.pipeline.shard_claims import ShardClaims
 from synth_setter.resources import vst_headless_wrapper
 from synth_setter.synth_spec import SYNTHS, SynthName
 from tests.helpers.dummy_shards import stub_renderer
 from tests.helpers.finalize_shards import write_minimal_lance_shard
 from tests.helpers.subprocess_args import find_script_index
+from tests.helpers.xvfb import install_failing_xvfb
 
 VST_HEADLESS_WRAPPER = str(vst_headless_wrapper())
 
@@ -80,6 +86,105 @@ def _write_lance_split(path: Path, num_rows: int) -> None:
     import pyarrow as pa
 
     lance.write_dataset(pa.table({"audio": pa.array(range(num_rows))}), str(path))
+
+
+class _ObservedLock:
+    """Expose lock contention while retaining ordinary mutex semantics."""
+
+    def __init__(self, waiter_started: threading.Event) -> None:
+        """Create a mutex that signals when a contending caller arrives.
+
+        :param waiter_started: Set before a caller waits on an occupied mutex.
+        """
+        self._lock = threading.Lock()
+        self._waiter_started = waiter_started
+
+    def __enter__(self) -> None:
+        if self._lock.locked():
+            self._waiter_started.set()
+        self._lock.acquire()
+
+    def __exit__(self, *_args: object) -> None:
+        self._lock.release()
+
+
+class _ValidationConcurrencyHarness:
+    """Coordinate two shard completion paths without timing-based sleeps."""
+
+    def __init__(self, first_shard: ShardSpec) -> None:
+        """Create synchronization gates for the first shard's completion path.
+
+        :param first_shard: Shard whose validation and staging are held open.
+        """
+        self.first_validation_started = threading.Event()
+        self.release_first_validation = threading.Event()
+        self.validation_waiter_started = threading.Event()
+        self.first_stage_started = threading.Event()
+        self.release_first_stage = threading.Event()
+        self.second_validation_started = threading.Event()
+        self.validation_lock = _ObservedLock(self.validation_waiter_started)
+        self._first_filename = first_shard.filename
+        self._first_shard_id = first_shard.shard_id
+
+    def validate(self, shard_path: Path, _spec: DatasetSpec) -> list[str]:
+        """Block the first validation and observe entry into the second.
+
+        :param shard_path: Rendered shard identifying the first or second path.
+        :param _spec: Dataset spec accepted by the validation boundary.
+        :returns: An empty validation-error list.
+        """
+        if shard_path.name == self._first_filename:
+            self.first_validation_started.set()
+            assert self.release_first_validation.wait(timeout=5.0)
+        else:
+            assert self.first_stage_started.wait(timeout=5.0)
+            self.second_validation_started.set()
+        return []
+
+    def stage(
+        self,
+        _spec: DatasetSpec,
+        shard: ShardSpec,
+        _shard_path: Path,
+        *,
+        worker_id: str,
+        attempt_uuid: str,
+    ) -> None:
+        """Hold first-shard staging open so second validation can overlap it.
+
+        :param _spec: Dataset spec accepted by the staging boundary.
+        :param shard: Shard whose staging may be held open.
+        :param _shard_path: Local shard path accepted by the staging boundary.
+        :param worker_id: Worker identity accepted by the staging boundary.
+        :param attempt_uuid: Attempt identity accepted by the staging boundary.
+        """
+        del worker_id, attempt_uuid
+        if shard.shard_id == self._first_shard_id:
+            self.first_stage_started.set()
+            assert self.release_first_stage.wait(timeout=5.0)
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Install the observed mutex and controlled completion boundaries.
+
+        :param monkeypatch: Pytest patcher for the shard completion boundaries.
+        """
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset._FULL_SHARD_VALIDATION_LOCK",
+            self.validation_lock,
+        )
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.write_rendering_marker",
+            lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.validate_shard", self.validate)
+        monkeypatch.setattr(
+            "synth_setter.cli.generate_dataset.stage_lance_shard_attempt", self.stage
+        )
+
+    def release(self) -> None:
+        """Release both gates during normal completion or assertion failure."""
+        self.release_first_validation.set()
+        self.release_first_stage.set()
 
 
 def _render_valid_shard(args: list[str], spec: DatasetSpec) -> None:
@@ -130,6 +235,57 @@ def _renderer_argv_lists(mock: MagicMock) -> list[list[str]]:
         for call in mock.call_args_list
         if not (call.args and call.args[0] and call.args[0][0] == "rclone")
     ]
+
+
+def _capture_renderer_dispatch(
+    spec: DatasetSpec,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[str]:
+    """Capture renderer argv before execution or marker I/O.
+
+    :param spec: Dataset specification dispatched at the shard boundary.
+    :param work_dir: Scratch output directory passed to the renderer.
+    :param monkeypatch: Replaces marker I/O and stops at subprocess dispatch.
+    :returns: Renderer command assembled for the first shard.
+    """
+    import synth_setter.cli.generate_dataset as generate_dataset
+
+    renderer_args: list[str] = []
+
+    def _capture_then_stop(args: list[str]) -> None:
+        renderer_args.extend(args)
+        raise subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr(generate_dataset, "_check_call_streamed", _capture_then_stop)
+    monkeypatch.setattr(generate_dataset, "write_rendering_marker", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        render_and_upload_shard(spec, spec.shards[0], work_dir, loggers=[])
+    return renderer_args
+
+
+def _compose_renderer_spec(synth_group: str, render_group: str) -> DatasetSpec:
+    """Compose a production renderer pair into its validated dataset spec.
+
+    :param synth_group: Hydra synth registry selection.
+    :param render_group: Hydra renderer configuration selection.
+    :returns: Validated dataset spec for the selected renderer pair.
+    """
+    try:
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            cfg = compose(
+                config_name="dataset",
+                overrides=[
+                    "experiment=generate_dataset/smoke-shard",
+                    f"synth={synth_group}",
+                    f"render={render_group}",
+                    "render.gui_toggle_cadence=never",
+                ],
+            )
+            return DatasetSpec.from_hydra_cfg(cfg)
+    finally:
+        GlobalHydra.instance().clear()
 
 
 def _base_spec_kwargs(tmp_path: Path, **overrides: object) -> dict[str, object]:
@@ -690,7 +846,7 @@ class TestRunFromSpecUri:
         mock_wandb_logger.assert_called_once_with(
             save_dir=str(work_dir),
             name=f"resume-{spec.task_name}-{spec.run_id}",
-            project="synth-setter",
+            project="synth-setter-generate-dataset",
             entity=None,
             group=spec.run_id,
             job_type="data-generation-resume",
@@ -894,6 +1050,60 @@ class TestRun(RenderSeamFixtures):
         assert renderer_script.as_posix().endswith("synth_setter/data/vst/generate_vst_dataset.py")
         assert renderer_script.is_absolute()
         assert renderer_script.is_file()
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux headless dispatch contract")
+    def test_vst_shard_failing_xvfb_invokes_headless_wrapper(
+        self,
+        spec: DatasetSpec,
+        fake_r2_remote: Path,  # noqa: ARG002
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A VST shard reaches the shipped wrapper before renderer startup.
+
+        :param spec: VST-configured dataset specification.
+        :param fake_r2_remote: Activates the local-filesystem ``r2:`` remote.
+        :param tmp_path: Scratch root for the work directory and failing Xvfb.
+        :param monkeypatch: Installs a deterministic failing Xvfb executable.
+        """
+        marker = install_failing_xvfb(tmp_path, monkeypatch)
+
+        with pytest.raises(subprocess.CalledProcessError):
+            generate(spec, tmp_path / "work", [])
+
+        assert marker.read_text() == "called"
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="Linux headless dispatch contract")
+    @pytest.mark.parametrize(
+        ("synth_group", "render_group"),
+        [
+            pytest.param("faust_bright_organ", "faust", id="dawdreamer-faust"),
+            pytest.param("faust_bright_organ", "faustwasm", id="faustwasm"),
+            pytest.param("pyfdn_n8_mono_householder", "pyfdn", id="pyfdn"),
+            pytest.param("surge_simple_surgepy", "surgepy", id="surgepy"),
+            pytest.param("torchsynth_simple", "torchsynth", id="torchsynth"),
+        ],
+    )
+    def test_non_vst_shard_bypasses_headless_wrapper(
+        self,
+        synth_group: str,
+        render_group: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A non-VST shard dispatches Python without the VST wrapper.
+
+        :param synth_group: Production synth identity under test.
+        :param render_group: Compatible production renderer under test.
+        :param tmp_path: Caller-supplied work directory.
+        :param monkeypatch: Captures the renderer command before execution.
+        """
+        non_vst_spec = _compose_renderer_spec(synth_group, render_group)
+
+        renderer_args = _capture_renderer_dispatch(non_vst_spec, tmp_path, monkeypatch)
+
+        assert renderer_args[0] == sys.executable
+        assert VST_HEADLESS_WRAPPER not in renderer_args
 
     def test_uploads_shard_to_r2_after_generation(
         self,
@@ -1323,6 +1533,44 @@ class TestRun(RenderSeamFixtures):
 
         assert not shard_has_complete_attempt(spec, spec.shards[0].shard_id)
 
+    def test_generate_pyfdn_resolves_in_process_package_version(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Native pyFDN reaches shard dispatch through its package sentinel.
+
+        :param tmp_path: Per-test shard work directory.
+        """
+        kwargs = _base_spec_kwargs(
+            tmp_path,
+            train_val_test_sizes=[1, 0, 0],
+            render={
+                "synth": SYNTHS[SynthName("pyfdn_n8_mono_householder")].model_dump(mode="json"),
+                "renderer_backend": "pyfdn",
+                "pyfdn_excitation": "impulse",
+                "sample_rate": 44_100,
+                "channels": 1,
+                "velocity": 0,
+                "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "audio_dtype": "float32",
+                "mel_spec_dtype": "float32",
+                "samples_per_render_batch": 1,
+                "samples_per_shard": 1,
+                "gui_toggle_cadence": "never",
+                "plugin_reload_cadence": "render",
+            },
+        )
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+        with patch(
+            "synth_setter.cli.generate_dataset._dispatch_shards",
+            return_value=(0, 0, 0, RenderRejectionMetrics()),
+        ) as dispatch:
+            generate(spec, tmp_path, [])
+
+        dispatch.assert_called_once()
+
     def test_synth_version_mismatch_raises_before_uploads(
         self,
         patched_subprocess: MagicMock,
@@ -1346,6 +1594,38 @@ class TestRun(RenderSeamFixtures):
             generate(spec, tmp_path, [])
         patched_subprocess.assert_not_called()
         assert not (fake_r2_remote / spec.r2.bucket / spec.r2.prefix).exists()
+
+    def test_faust_backend_version_mismatch_raises_before_rendering(
+        self,
+        patched_subprocess: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Fail before rendering when the Faust host version disagrees with the spec.
+
+        :param patched_subprocess: Subprocess dispatcher; asserted never invoked.
+        :param tmp_path: Pytest temporary directory used for worker output.
+        """
+        kwargs = _base_spec_kwargs(tmp_path)
+        kwargs["render"] = {
+            **kwargs["render"],  # type: ignore[dict-item]
+            "synth": SYNTHS[SynthName("faust_bright_organ")],
+            "renderer_backend": "dawdreamer",
+            "backend_version": "0.8.3",
+            "gui_toggle_cadence": "never",
+        }
+        spec = DatasetSpec(**kwargs)  # type: ignore[arg-type]
+
+        with (
+            patch("synth_setter.cli.generate_dataset.ensure_dawdreamer_runtime"),
+            patch(
+                "synth_setter.cli.generate_dataset.extract_backend_version",
+                return_value="0.9.0",
+            ),
+            pytest.raises(RuntimeError, match="Backend version mismatch"),
+        ):
+            generate(spec, tmp_path, [])
+
+        patched_subprocess.assert_not_called()
 
     def test_run_defaults_to_single_worker_when_skypilot_env_absent(
         self,
@@ -1834,9 +2114,8 @@ class TestRun(RenderSeamFixtures):
     ) -> None:
         """``render.parallel=True`` + 4 shards → ≥2 worker threads; every shard stages.
 
-        Pins ``available_cpus`` to 8 so the dispatch heuristic
-        ``min(max(1, available_cpus() // 2), len(my_range))`` resolves to 4
-        workers regardless of CI runner CPU count. The dispatcher stub blocks
+        Pins ``available_cpus`` to 8 so the capped half-affinity heuristic
+        resolves to 4 workers regardless of CI runner CPU count. The dispatcher stub blocks
         each render until the second thread enters, forcing the pool to
         actually parallelize.
 
@@ -1871,6 +2150,47 @@ class TestRun(RenderSeamFixtures):
         assert len(thread_ids) >= 2
         for shard in spec.shards:
             assert shard_has_complete_attempt(spec, shard.shard_id)
+
+    def test_full_shard_validation_serializes_only_validation(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Concurrent completion paths validate one-at-a-time without serializing staging.
+
+        :param tmp_path: Per-test work directory for two rendered Lance shards.
+        :param monkeypatch: Installs deterministic validation and staging boundaries.
+        """
+        spec = _multi_shard_spec(tmp_path, n=2)
+        concurrency = _ValidationConcurrencyHarness(spec.shards[0])
+        concurrency.install(monkeypatch)
+
+        with (
+            patch(
+                "synth_setter.cli.generate_dataset._check_call_streamed",
+                side_effect=lambda args: _render_valid_shard(args, spec),
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            first = executor.submit(
+                render_and_upload_shard, spec, spec.shards[0], tmp_path, loggers=[]
+            )
+            try:
+                assert concurrency.first_validation_started.wait(timeout=5.0)
+                second = executor.submit(
+                    render_and_upload_shard, spec, spec.shards[1], tmp_path, loggers=[]
+                )
+                assert concurrency.validation_waiter_started.wait(timeout=5.0)
+                assert not concurrency.second_validation_started.is_set()
+                concurrency.release_first_validation.set()
+                assert concurrency.first_stage_started.wait(timeout=5.0)
+                assert concurrency.second_validation_started.wait(timeout=5.0)
+                assert not first.done()
+                concurrency.release_first_stage.set()
+                first.result(timeout=5.0)
+                second.result(timeout=5.0)
+            finally:
+                concurrency.release()
 
     def test_parallel_render_propagates_subprocess_failure(
         self,
@@ -2213,45 +2533,90 @@ class TestRunWithShardClaims(RenderSeamFixtures):
 
         assert claims.status_counts() == {"claimed": 1}
 
-    def test_generate_claims_mode_ignores_render_parallel_with_warning(
+    def test_generate_claims_mode_parallel_bounds_claims_and_completes_all(
         self,
         patched_subprocess: MagicMock,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
-        """``render.parallel=true`` + claims mode warns and never enters the thread pool.
+        """Blocked renders hold one claim per local worker before slots refill.
 
-        :param patched_subprocess: Renderer stub; renders succeed.
-        :param monkeypatch: Guards the parallel dispatcher against being called.
-        :param tmp_path: Caller-supplied work_dir for ``generate()``.
+        :param patched_subprocess: Renderer boundary held until claim state is inspected.
+        :param monkeypatch: Pins two local render workers.
+        :param tmp_path: Caller-supplied work directory.
         """
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 4)
+        base = _claims_spec(tmp_path, n=4)
+        spec = base.model_copy(
+            update={"render": base.render.model_copy(update={"parallel": True})}
+        )
+        claims = self._populate(spec, [0, 1, 2, 3])
+        two_renders_started = threading.Event()
+        release_renders = threading.Event()
+        active_renders = 0
+        lock = threading.Lock()
+
+        def _blocked_renderer(args: list[str]) -> None:
+            nonlocal active_renders
+            with lock:
+                active_renders += 1
+                if active_renders == 2:
+                    two_renders_started.set()
+            if not release_renders.wait(timeout=5.0):
+                raise AssertionError("test did not release blocked renders")
+            _render_valid_shard(args, spec)
+
+        patched_subprocess.side_effect = _blocked_renderer
+
+        with ThreadPoolExecutor(max_workers=1) as test_pool:
+            dispatch = test_pool.submit(generate, spec, tmp_path, [])
+            try:
+                assert two_renders_started.wait(timeout=5.0)
+                assert claims.status_counts() == {"available": 2, "claimed": 2}
+            finally:
+                release_renders.set()
+            dispatch.result(timeout=10.0)
+
+        assert claims.status_counts() == {"done": 4}
+
+    def test_generate_claims_mode_parallel_failure_completes_successful_peer(
+        self,
+        patched_subprocess: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A failed claim stays held while its successful in-flight peer completes.
+
+        :param patched_subprocess: Renderer boundary failing one synchronized call.
+        :param monkeypatch: Pins two local render workers.
+        :param tmp_path: Caller-supplied work directory.
+        """
+        monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 4)
         base = _claims_spec(tmp_path, n=2)
         spec = base.model_copy(
             update={"render": base.render.model_copy(update={"parallel": True})}
         )
         claims = self._populate(spec, [0, 1])
-        patched_subprocess.side_effect = stub_renderer(spec)
+        render_barrier = threading.Barrier(2, timeout=5.0)
+        call_count = 0
+        lock = threading.Lock()
 
-        def _parallel_must_not_fire(*_args: object, **_kwargs: object) -> tuple[int, int]:
-            raise AssertionError("_dispatch_shards_parallel must not run in claims mode")
+        def _one_failure(args: list[str]) -> None:
+            nonlocal call_count
+            with lock:
+                call_count += 1
+                should_fail = call_count == 1
+            render_barrier.wait()
+            if should_fail:
+                raise subprocess.CalledProcessError(1, "generate_vst_dataset.py")
+            _render_valid_shard(args, spec)
 
-        monkeypatch.setattr(
-            "synth_setter.cli.generate_dataset._dispatch_shards_parallel",
-            _parallel_must_not_fire,
-        )
-        from loguru import logger as loguru_logger
+        patched_subprocess.side_effect = _one_failure
 
-        warnings: list[str] = []
-        sink_id = loguru_logger.add(lambda m: warnings.append(str(m)), level="WARNING")
-        try:
+        with pytest.raises(subprocess.CalledProcessError):
             generate(spec, tmp_path, [])
-        finally:
-            loguru_logger.remove(sink_id)
 
-        assert any("render.parallel=true is ignored" in w for w in warnings)
-        assert shard_has_complete_attempt(spec, spec.shards[0].shard_id)
-        assert shard_has_complete_attempt(spec, spec.shards[1].shard_id)
-        assert claims.status_counts() == {"done": 2}
+        assert claims.status_counts() == {"claimed": 1, "done": 1}
 
     def test_generate_shard_already_in_r2_completes_without_render(
         self,
@@ -2321,7 +2686,9 @@ class TestBuildGenerateArgs:
         option_keys: set[str] = {arg.lstrip("-") for arg in args if arg.startswith("--")}
 
         assert option_keys == {*RenderConfig.model_fields.keys(), "shard_id"} - {
-            "retain_local_shards"
+            "retain_local_shards",
+            # Worker-transport provenance marker (exclude=True); never a CLI flag.
+            "v1_gui_toggle_cadence_omitted",
         }
 
     def test_args_start_with_python_and_script(self, spec: DatasetSpec) -> None:
@@ -2925,14 +3292,14 @@ class TestMainDispatchBranches:
         with pytest.raises(ValueError, match="skypilot_launch.cmd is launcher-internal"):
             _call_hydra_main(gd.main)
 
-    def test_main_finalize_inline_true_invokes_finalize_from_spec(
+    def test_main_finalize_inline_true_invokes_finalize_tracked(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """finalize_inline=true on the local-run branch invokes finalize_from_spec.
+        """finalize_inline=true on the local-run branch invokes finalize_tracked.
 
         Composes a real ``smoke-shard`` experiment with the new flag set,
-        stubs ``generate`` to a no-op, and replaces ``finalize_from_spec``
+        stubs ``generate`` to a no-op, and replaces ``finalize_tracked``
         with a mock so the test pins the wire (call + spec identity)
         without needing real rclone against a finalize-shaped remote. The
         end-to-end marker upload is already covered by the Phase 1
@@ -2940,7 +3307,7 @@ class TestMainDispatchBranches:
         sibling test.
 
         :param monkeypatch: Pytest fixture used to patch argv +
-            ``generate`` + ``finalize_from_spec``.
+            ``generate`` + ``finalize_tracked``.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -2959,12 +3326,12 @@ class TestMainDispatchBranches:
 
         monkeypatch.setattr(gd, "generate", _capture_spec)
         finalize_mock = MagicMock()
-        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+        monkeypatch.setattr(gd, "finalize_tracked", finalize_mock)
 
         _call_hydra_main(gd.main)
 
         finalize_mock.assert_called_once()
-        called_spec, called_work_dir = finalize_mock.call_args[0]
+        _cfg, called_spec, called_work_dir = finalize_mock.call_args[0]
         assert isinstance(called_spec, DatasetSpec)
         assert called_spec is captured["spec"]
         assert isinstance(called_work_dir, Path)
@@ -2979,7 +3346,7 @@ class TestMainDispatchBranches:
         omits the override.
 
         :param monkeypatch: Pytest fixture used to patch argv +
-            ``generate`` + ``finalize_from_spec``.
+            ``generate`` + ``finalize_tracked``.
         """
         import synth_setter.cli.generate_dataset as gd
 
@@ -2991,7 +3358,7 @@ class TestMainDispatchBranches:
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
         finalize_mock = MagicMock()
-        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+        monkeypatch.setattr(gd, "finalize_tracked", finalize_mock)
 
         _call_hydra_main(gd.main)
 
@@ -3008,13 +3375,13 @@ class TestMainDispatchBranches:
 
         SkyPilot delegation hands the run to a worker pod; finalize must
         run out-of-band via the finalize-dataset workflow rather than fire
-        from the launcher process. Pins both halves: ``finalize_from_spec``
+        from the launcher process. Pins both halves: ``finalize_tracked``
         is not called, and an INFO log fires (wording unpinned).
 
         :param mock_logger: Patched ``generate_dataset.logger`` — the
             established loguru capture pattern in this file.
         :param monkeypatch: Pytest fixture used to patch argv + dispatch +
-            ``finalize_from_spec`` (asserted unreached).
+            ``finalize_tracked`` (asserted unreached).
         :param tmp_path: Pytest fixture providing a fresh test directory for
             the minimal compute template.
         """
@@ -3036,7 +3403,7 @@ class TestMainDispatchBranches:
             lambda *_a, **_k: pytest.fail("generate must not fire on dispatch branch"),
         )
         finalize_mock = MagicMock()
-        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+        monkeypatch.setattr(gd, "finalize_tracked", finalize_mock)
 
         _call_hydra_main(gd.main)
 
@@ -3070,18 +3437,21 @@ class TestMainDispatchBranches:
             f"synth.plugin_path={TEST_PLUGIN_VST3}",
             "finalize_inline=true",
             "oracle_eval_inline=true",
+            "oracle_eval.upload=true",
             # Override smoke-shard's [12, 0, 0] — the zero-size guard rejects
             # train_val_test_sizes with any zero split for oracle_eval_inline.
             "train_val_test_sizes=[12, 4, 4]",
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
-        monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
+        monkeypatch.setattr(gd, "finalize_tracked", MagicMock())
         # finalize writes each split to R2; ``main`` materializes them locally for
         # the eval. Stub that download so no real rclone runs against a bare remote.
         monkeypatch.setattr(gd.r2_io, "download_dir_no_overwrite", MagicMock())
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
+        upload_mock = MagicMock(return_value="r2://bucket/probes/dataset-oracle/probe")
+        monkeypatch.setattr(gd, "upload_oracle_probe", upload_mock)
 
         # Capture the resolved output_dir so the eval's dataset_root can be
         # pinned to the exact dir generate+finalize wrote the shards into.
@@ -3097,8 +3467,15 @@ class TestMainDispatchBranches:
 
         _call_hydra_main(gd.main)
 
-        # One invocation per split.
+        # One invocation and upload per split.
         assert oracle_mock.call_count == 3
+        assert upload_mock.call_count == 3
+        launch_ids = {call.kwargs["launch_id"] for call in upload_mock.call_args_list}
+        assert len(launch_ids) == 1
+        assert all(
+            call.kwargs["provenance"].source_render == call.kwargs["provenance"].candidate_render
+            for call in upload_mock.call_args_list
+        )
         output_dir = observed["output_dir"]
         assert isinstance(output_dir, Path)
         splits = ("train", "val", "test")
@@ -3134,6 +3511,76 @@ class TestMainDispatchBranches:
             assert run_dir.parent.name == split
             assert run_dir.parent.parent.parent == dataset_root
             assert call.kwargs["metric_prefix"] == prefix
+
+    @pytest.mark.parametrize("upload_override", [[], ["oracle_eval.upload=false"]])
+    def test_main_oracle_eval_upload_disabled_keeps_successful_evals_local(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        upload_override: list[str],
+    ) -> None:
+        """Unrequested or explicitly disabled uploads keep inline evaluations local.
+
+        :param monkeypatch: Patches generation, finalization, download, eval, and upload seams.
+        :param upload_override: Optional explicit archival opt-out.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"synth.plugin_path={TEST_PLUGIN_VST3}",
+            "finalize_inline=true",
+            "oracle_eval_inline=true",
+            *upload_override,
+            "train_val_test_sizes=[12,4,4]",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+        monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
+        monkeypatch.setattr(gd, "finalize_tracked", MagicMock())
+        monkeypatch.setattr(gd.r2_io, "download_dir_no_overwrite", MagicMock())
+        oracle_mock = MagicMock()
+        monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
+
+        def _fail_upload(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("oracle_eval.upload=false must not archive eval outputs")
+
+        monkeypatch.setattr(gd, "upload_oracle_probe", _fail_upload, raising=False)
+
+        _call_hydra_main(gd.main)
+
+        assert oracle_mock.call_count == 3
+
+    def test_main_oracle_eval_upload_quoted_false_raises_before_generation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Reject a string upload flag before local generation starts.
+
+        :param monkeypatch: Patches CLI arguments and the generation boundary.
+        """
+        import synth_setter.cli.generate_dataset as gd
+
+        argv = [
+            "synth-setter-generate-dataset",
+            "experiment=generate_dataset/smoke-shard",
+            f"synth.plugin_path={TEST_PLUGIN_VST3}",
+            "finalize_inline=true",
+            "oracle_eval_inline=true",
+            'oracle_eval.upload="false"',
+            "train_val_test_sizes=[12,4,4]",
+        ]
+        monkeypatch.setattr("sys.argv", argv)
+        monkeypatch.setenv("HYDRA_FULL_ERROR", "1")
+        generate_mock = MagicMock()
+        upload_spec_mock = MagicMock()
+        monkeypatch.setattr(gd, "generate", generate_mock)
+        monkeypatch.setattr(gd, "upload_spec", upload_spec_mock)
+
+        with pytest.raises(ValueError, match="oracle_eval.upload must be a boolean"):
+            _call_hydra_main(gd.main)
+
+        generate_mock.assert_not_called()
+        upload_spec_mock.assert_not_called()
 
     def test_run_oracle_eval_subprocess_builds_expected_argv(
         self,
@@ -3196,7 +3643,7 @@ class TestMainDispatchBranches:
         assert "ckpt_path=null" in called_argv
         # The eval resumes the generate run rather than opening a fresh one, so
         # its audio/* metrics share the run id (logger=null crashed Hydra — see #1331).
-        assert "logger=wandb" in called_argv
+        assert "logger=wandb_dataset" in called_argv
         # id exists in logger/wandb.yaml (plain override); resume is absent (+append).
         assert "logger.wandb.id=some-run-id" in called_argv
         assert "+logger.wandb.resume=must" in called_argv
@@ -3204,11 +3651,14 @@ class TestMainDispatchBranches:
         # the structure while synth identity comes from the generation RenderConfig.
         assert "render=vst" in called_argv
         assert "synth=surge_xt" in called_argv
-        assert "synth.param_spec_name=surge_xt" in called_argv
-        assert "synth.plugin_state_path=presets/surge-base.vstpreset" in called_argv
-        assert "synth.plugin_path=plugins/Surge XT.vst3" in called_argv
-        assert f"synth.synth_version={render.synth.synth_version}" in called_argv
+        assert "++synth.param_spec_name=surge_xt" in called_argv
+        assert "++synth.plugin_state_path=presets/surge-base.vstpreset" in called_argv
+        assert "++synth.plugin_path=plugins/Surge XT.vst3" in called_argv
+        assert f"++synth.synth_version={render.synth.synth_version}" in called_argv
+        assert not any("synth.source_sha256=" in argument for argument in called_argv)
         assert f"render.renderer_backend={render.renderer_backend}" in called_argv
+        assert not any("render.backend_version=" in argument for argument in called_argv)
+        assert f"++render.render_contract_version={render.render_contract_version}" in called_argv
         assert f"render.plugin_reload_cadence={render.plugin_reload_cadence}" in called_argv
         assert f"render.gui_toggle_cadence={render.gui_toggle_cadence}" in called_argv
         assert f"render.sample_rate={render.sample_rate}" in called_argv
@@ -3226,6 +3676,85 @@ class TestMainDispatchBranches:
         # Default (test split) carries no prefix override: its keys stay bare
         # ``audio/*`` so existing sweeps/dashboards keep working.
         assert not any(a.startswith("+evaluation.metric_prefix=") for a in called_argv)
+
+    @pytest.mark.parametrize(
+        (
+            "synth_name",
+            "renderer_backend",
+            "backend_version",
+            "block_size",
+            "contract_version",
+        ),
+        [
+            ("faust_bright_organ", "dawdreamer", "0.8.3", None, 2),
+            ("faust_bright_organ", "faustwasm", "0.18.3", 64, 2),
+            ("surge_xt", "pedalboard", None, None, 2),
+            ("surge_xt", "pedalboard", None, None, 1),
+        ],
+    )
+    def test_run_oracle_eval_subprocess_argv_composes_real_eval_config(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        spec: DatasetSpec,
+        synth_name: str,
+        renderer_backend: str,
+        backend_version: str | None,
+        block_size: int | None,
+        contract_version: int,
+    ) -> None:
+        """Production oracle argv composes Faust, VST, and legacy render identities.
+
+        :param monkeypatch: Captures the subprocess boundary after production builds argv.
+        :param tmp_path: Roots the finalized dataset fixture and eval run directory.
+        :param spec: Source of a valid baseline render configuration.
+        :param synth_name: Registry identity transported to the eval process.
+        :param renderer_backend: Renderer backend transported to the eval process.
+        :param backend_version: Optional backend version transported to the eval process.
+        :param block_size: Optional FaustWasm processing block size transported to eval.
+        :param contract_version: Render contract version transported to the eval process.
+        """
+        from hydra import compose, initialize_config_module
+
+        import synth_setter.cli.generate_dataset as gd
+
+        streamed_call_mock = MagicMock()
+        monkeypatch.setattr(gd, "_check_call_streamed", streamed_call_mock)
+
+        dataset_root = tmp_path / "data"
+        dataset_root.mkdir()
+        for name in ("train.lance", "val.lance", "stats.npz"):
+            (dataset_root / name).touch()
+        predict_file = dataset_root / "test.lance"
+        _write_lance_split(predict_file, 1)
+        render = spec.render.model_copy(
+            update={
+                "synth": SYNTHS[SynthName(synth_name)],
+                "renderer_backend": renderer_backend,
+                "backend_version": backend_version,
+                "block_size": block_size,
+                "render_contract_version": contract_version,
+            }
+        )
+
+        gd._run_oracle_eval_subprocess(
+            dataset_root,
+            tmp_path / "oracle_eval" / synth_name,
+            "some-run-id",
+            render=render,
+            num_workers=0,
+            predict_file=predict_file,
+        )
+        argv = streamed_call_mock.call_args.args[0]
+        with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+            composed = compose(config_name="eval", overrides=argv[3:])
+
+        assert composed.synth.format == render.synth.format
+        assert composed.synth.plugin_path == render.synth.plugin_path
+        assert composed.render.renderer_backend == renderer_backend
+        assert composed.render.get("backend_version") == backend_version
+        assert composed.render.get("block_size") == block_size
+        assert composed.render.render_contract_version == contract_version
 
     def test_run_oracle_eval_subprocess_metric_prefix_adds_override(
         self,
@@ -3397,7 +3926,7 @@ class TestMainDispatchBranches:
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(gd, "generate", lambda _spec, _work_dir, _loggers: None)
-        monkeypatch.setattr(gd, "finalize_from_spec", MagicMock())
+        monkeypatch.setattr(gd, "finalize_tracked", MagicMock())
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
@@ -3460,7 +3989,7 @@ class TestMainDispatchBranches:
         finalize_mock = MagicMock()
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "generate", generate_mock)
-        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+        monkeypatch.setattr(gd, "finalize_tracked", finalize_mock)
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="requires finalize_inline=true"):
@@ -3479,7 +4008,7 @@ class TestMainDispatchBranches:
         regardless of stage, so any zero-size split would FileNotFoundError
         deep inside Lightning. The launcher catches the misconfig up front.
 
-        :param monkeypatch: Patches argv and the ``generate`` / ``finalize_from_spec``
+        :param monkeypatch: Patches argv and the ``generate`` / ``finalize_tracked``
             / oracle-eval seams; the test asserts none of them is reached.
         """
         import synth_setter.cli.generate_dataset as gd
@@ -3499,7 +4028,7 @@ class TestMainDispatchBranches:
         finalize_mock = MagicMock()
         oracle_mock = MagicMock()
         monkeypatch.setattr(gd, "generate", generate_mock)
-        monkeypatch.setattr(gd, "finalize_from_spec", finalize_mock)
+        monkeypatch.setattr(gd, "finalize_tracked", finalize_mock)
         monkeypatch.setattr(gd, "_run_oracle_eval_subprocess", oracle_mock)
 
         with pytest.raises(ValueError, match="train_val_test_sizes > 0"):
@@ -3517,7 +4046,8 @@ class TestMainDispatchBranches:
     ) -> None:
         """Dispatch branch: ``oracle_eval_inline=true`` is logged-and-ignored, not raised.
 
-        SkyPilot hands the run to a worker pod; oracle eval runs out-of-band
+        Its upload value is likewise ignored rather than validated because SkyPilot
+        hands the run to a worker pod; oracle eval runs out-of-band
         via its own workflow. Asserts no eval subprocess fires and the INFO
         log mentions the override was ignored.
 
@@ -3536,6 +4066,7 @@ class TestMainDispatchBranches:
             f"synth.plugin_path={TEST_PLUGIN_VST3}",
             "skypilot_launch/compute=runpod/smoke",
             "oracle_eval_inline=true",
+            'oracle_eval.upload="not-a-bool"',
         ]
         monkeypatch.setattr("sys.argv", argv)
         monkeypatch.setattr(sl, "dispatch_via_skypilot", lambda *_a, **_k: None)
@@ -3927,12 +4458,75 @@ def test_worker_id_sanitizes_hostname_for_object_key_use(
     assert generate_dataset._worker_id() == "pod-host-1-x"
 
 
+def test_parallel_claims_failure_completes_fast_peer_before_slow_peer_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A successful peer completes while a slower peer still drains.
+
+    :param monkeypatch: Pins three workers and replaces the renderer boundary.
+    :param tmp_path: Builds the claims spec and receives dispatcher work.
+    """
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 6)
+    spec = _claims_spec(tmp_path, n=3)
+    claims = MagicMock()
+    claims.claim.side_effect = [
+        SimpleNamespace(shard_id=0, claim_gen=1),
+        SimpleNamespace(shard_id=1, claim_gen=1),
+        SimpleNamespace(shard_id=2, claim_gen=1),
+        None,
+    ]
+    all_started = threading.Barrier(3, timeout=5.0)
+    release_slow_peer = threading.Event()
+    fast_peer_completed = threading.Event()
+
+    def _render(
+        _spec: DatasetSpec, shard_id: int, *_args: object
+    ) -> tuple[bool, bool, RenderRejectionMetrics]:
+        all_started.wait()
+        if shard_id == 0:
+            raise subprocess.CalledProcessError(1, "renderer")
+        if shard_id == 2 and not release_slow_peer.wait(timeout=5.0):
+            raise AssertionError("test did not release slow peer")
+        return True, False, RenderRejectionMetrics()
+
+    def _complete(claimed: SimpleNamespace) -> None:
+        if claimed.shard_id == 1:
+            fast_peer_completed.set()
+
+    monkeypatch.setattr("synth_setter.cli.generate_dataset._render_one_owned_shard", _render)
+    claims.complete.side_effect = _complete
+
+    with ThreadPoolExecutor(max_workers=1) as test_pool:
+        dispatch = test_pool.submit(
+            _dispatch_shards_from_claims_parallel,
+            claims,
+            spec,
+            work_dir=tmp_path,
+            loggers=[],
+        )
+        try:
+            assert fast_peer_completed.wait(timeout=5.0)
+        finally:
+            release_slow_peer.set()
+        with pytest.raises(subprocess.CalledProcessError):
+            dispatch.result(timeout=5.0)
+
+    assert sorted(call.args[0].shard_id for call in claims.complete.call_args_list) == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "dispatch",
+    [_dispatch_shards_from_claims, _dispatch_shards_from_claims_parallel],
+)
 def test_claims_dispatch_aggregates_rejections_without_rclone(
+    dispatch: Callable[..., tuple[int, int, RenderRejectionMetrics]],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """Claims dispatch returns exact totals from completed claim reports.
 
+    :param dispatch: Serial or parallel claims dispatcher under test.
     :param monkeypatch: Replaces the renderer boundary.
     :param tmp_path: Builds the claims spec and receives the dispatcher work path.
     """
@@ -3944,15 +4538,15 @@ def test_claims_dispatch_aggregates_rejections_without_rclone(
         None,
     ]
     outcomes = {
-        0: (True, False, RenderRejectionMetrics(clipped=1, silent=2)),
-        1: (True, False, RenderRejectionMetrics(clipped=3, silent=5)),
+        0: (True, False, RenderRejectionMetrics(clipped=1, non_finite=2, silent=3)),
+        1: (True, False, RenderRejectionMetrics(clipped=4, non_finite=5, silent=6)),
     }
     monkeypatch.setattr(
         "synth_setter.cli.generate_dataset._render_one_owned_shard",
         lambda _spec, shard_id, _work_dir, _loggers: outcomes[shard_id],
     )
 
-    rendered, skipped, rejections = _dispatch_shards_from_claims(
+    rendered, skipped, rejections = dispatch(
         claims,
         spec,
         work_dir=tmp_path,
@@ -3960,7 +4554,7 @@ def test_claims_dispatch_aggregates_rejections_without_rclone(
     )
 
     assert (rendered, skipped) == (2, 0)
-    assert rejections == RenderRejectionMetrics(clipped=4, silent=7)
+    assert rejections == RenderRejectionMetrics(clipped=5, non_finite=7, silent=9)
     assert claims.complete.call_count == 2
 
 
@@ -4000,6 +4594,89 @@ def test_dispatch_shards_claims_mode_relays_rejections_and_claim_count(
 
     assert (rendered, skipped, assigned) == (2, 1, 3)
     assert rejections == expected
+
+
+@pytest.mark.parametrize(
+    ("cpu_count", "expected_workers"),
+    [(128, 16), (32, 16), (10, 5), (1, 1)],
+)
+def test_parallel_static_dispatch_worker_count_tracks_affinity_with_cap(
+    cpu_count: int,
+    expected_workers: int,
+    monkeypatch: pytest.MonkeyPatch,
+    spec: DatasetSpec,
+    tmp_path: Path,
+) -> None:
+    """Parallel static dispatch halves affinity CPUs without exceeding 16 workers.
+
+    :param cpu_count: Affinity-visible CPU count.
+    :param expected_workers: Effective local render concurrency.
+    :param monkeypatch: Pins CPU affinity and observes the executor boundary.
+    :param spec: Fixture-provided dataset specification.
+    :param tmp_path: Work directory passed through the dispatcher.
+    """
+    worker_counts: list[int] = []
+
+    def _executor(*, max_workers: int) -> ThreadPoolExecutor:
+        worker_counts.append(max_workers)
+        return ThreadPoolExecutor(max_workers=max_workers)
+
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: cpu_count)
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.ThreadPoolExecutor", _executor)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._render_one_owned_shard",
+        lambda *_args: (True, False, RenderRejectionMetrics()),
+    )
+
+    rendered, skipped, rejections = _dispatch_shards_parallel(
+        spec,
+        range(17),
+        tmp_path,
+        [],
+    )
+
+    assert (rendered, skipped, rejections) == (17, 0, RenderRejectionMetrics())
+    assert worker_counts == [expected_workers]
+
+
+def test_parallel_claim_dispatch_caps_worker_count(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Parallel claim dispatch caps oversized affinity at 16 workers.
+
+    :param monkeypatch: Pins oversized CPU affinity and observes the executor boundary.
+    :param tmp_path: Builds the claims spec and receives dispatcher work.
+    """
+    spec = _claims_spec(tmp_path, n=17)
+    claims = MagicMock()
+    claims.claim.side_effect = [
+        *(SimpleNamespace(shard_id=shard_id, claim_gen=1) for shard_id in range(17)),
+        None,
+    ]
+    worker_counts: list[int] = []
+
+    def _executor(*, max_workers: int) -> ThreadPoolExecutor:
+        worker_counts.append(max_workers)
+        return ThreadPoolExecutor(max_workers=max_workers)
+
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.available_cpus", lambda: 128)
+    monkeypatch.setattr("synth_setter.cli.generate_dataset.ThreadPoolExecutor", _executor)
+    monkeypatch.setattr(
+        "synth_setter.cli.generate_dataset._render_one_owned_shard",
+        lambda *_args: (True, False, RenderRejectionMetrics()),
+    )
+
+    rendered, skipped, rejections = _dispatch_shards_from_claims_parallel(
+        claims,
+        spec,
+        work_dir=tmp_path,
+        loggers=[],
+    )
+
+    assert (rendered, skipped, rejections) == (17, 0, RenderRejectionMetrics())
+    assert claims.complete.call_count == 17
+    assert worker_counts == [16]
 
 
 def test_parallel_dispatch_aggregates_rejections_without_rclone(
@@ -4078,7 +4755,7 @@ def test_render_one_owned_shard_relays_rejection_report_without_rclone(
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "synth_setter.cli.generate_dataset._render_and_upload_shard",
+        "synth_setter.cli.generate_dataset.render_and_upload_shard",
         lambda _spec, _shard, _work_dir, **_kwargs: (123, expected),
     )
 

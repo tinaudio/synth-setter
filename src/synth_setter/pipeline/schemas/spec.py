@@ -11,8 +11,11 @@ when present (worker reconstruction from JSON). ``shards``/``num_shards``/
 
 from __future__ import annotations
 
+import hashlib
+import json
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from functools import cached_property
@@ -22,11 +25,14 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     computed_field,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
+import synth_setter.renderer_backend as renderer_backend_contract
 from synth_setter.param_spec_name import ValidatedParamSpecName
 from synth_setter.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
@@ -41,11 +47,21 @@ from synth_setter.pipeline.schemas.shard_metadata import (
 )
 from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
+    FLUSHING_BACKENDS,
+    PYFDN_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
+    FlushBlocks,
+    PyFDNExcitation,
     RendererBackend,
+    default_flush_blocks,
 )
-from synth_setter.synth_spec import SynthSpec
+from synth_setter.synth_spec import (
+    SYNTHS,
+    SynthName,
+    SynthSpec,
+    validate_faust_registry_reference,
+)
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -59,6 +75,55 @@ __all__ = [
     "Split",
     "StorageDType",
 ]
+
+_PYFDN_SYNTH_NAMES = frozenset(
+    name for name, synth in SYNTHS.items() if synth.plugin_path == PYFDN_PLUGIN_NAME
+)
+_PYFDN_PARAM_SPEC_NAMES = frozenset(
+    synth.param_spec_name for synth in SYNTHS.values() if synth.plugin_path == PYFDN_PLUGIN_NAME
+)
+
+# The v1 snapshot must not follow upgrades to the current Faust source registry.
+_FAUST_V1_BACKEND_VERSION = "0.8.3"
+_FAUST_V1_PROVENANCE_ERROR = (
+    "render_contract_version=1 can represent only the historical Faust source and "
+    "DawDreamer 0.8.3 provenance; use render_contract_version=2"
+)
+_FAUST_V1_SOURCE_IDENTITIES = {
+    "faust_bright_organ": (
+        "1",
+        "a1bf9f6e45ebbf78dd11fc18603cda048a91a778af1ad79683339b1951813465",
+    ),
+    "faust_bubble": (
+        "1",
+        "731727e725ac0336a897c18df4e8b73f1e75c3d8add40a978efb1d95f88db23c",
+    ),
+    "faust_church_organ": (
+        "1",
+        "c753731f4053210d42757acb179010185e91d37fb56a8b45e093222be688b512",
+    ),
+    "faust_filter_osc": (
+        "1",
+        "6ad65d28d787f08a3fa66eb4de7d4091be8d2267ad1e9edc200618effbbe588c",
+    ),
+}
+
+
+def _historical_faust_v1_provenance(
+    param_spec_name: object,
+) -> tuple[str, str, str, str] | None:
+    """Return the complete provenance representable by the legacy Faust projection.
+
+    :param param_spec_name: Candidate checked-in source identity.
+    :returns: Historical backend and source provenance, or ``None`` for another identity.
+    """
+    if not isinstance(param_spec_name, str):
+        return None
+    source = _FAUST_V1_SOURCE_IDENTITIES.get(param_spec_name)
+    if source is None:
+        return None
+    return ("dawdreamer", _FAUST_V1_BACKEND_VERSION, *source)
+
 
 # Flat-form keys promoted into the nested ``r2`` dict by the back-compat shim.
 # Maps the legacy top-level key → the nested ``R2Location`` field. Anchored
@@ -159,6 +224,8 @@ def _current_platform() -> str:
 
 _GuiToggleCadence = Literal["never", "once", "render", "always_on"]
 _PluginReloadCadence = Literal["once", "render"]
+
+
 _ParamSampleCadence = Literal["sample", "shard"]
 type StorageDType = Literal["float16", "float32"]
 
@@ -247,9 +314,27 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     )
     renderer_backend: RendererBackend = Field(
         default="pedalboard",
+        description="Audio host used to render each sample.",
+    )
+    backend_version: str | None = Field(
+        default=None,
+        description="Pinned host runtime version; required for Faust rendering.",
+    )
+    block_size: int | None = Field(
+        default=None,
+        ge=1,
+        description="Offline processing block size; required for FaustWasm and native Faust C++.",
+    )
+    # CliApp.serialize omits literal defaults; a factory preserves v2 during worker transport.
+    render_contract_version: Literal[1, 2] = Field(
+        default_factory=lambda: 2,
+        description="Canonical digest projection version; 1 preserves persisted legacy specs.",
+    )
+    pyfdn_excitation: PyFDNExcitation | None = Field(
+        default=None,
         description=(
-            "Audio host used to render each sample; Faust compiles checked-in source "
-            "through DawDreamer and torchsynth renders in-process."
+            "Input used by pyFDN: its impulse response by default, or the canonical "
+            "chirp when explicitly selected."
         ),
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
@@ -308,10 +393,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     parallel: bool = Field(
         default=False,
         description=(
-            "When True, generate() dispatches shard renders concurrently with "
-            "pool size = min(max(1, available_cpus() // 2), len(my_range)). "
-            "Applies on both local-run and SkyPilot-worker contexts; peak "
-            "local disk scales with pool size."
+            "When True, generate() dispatches shard renders concurrently with half the "
+            "available CPUs, bounded to 1–16 workers. Static dispatch also limits the "
+            "pool to the owned shard count; dynamic dispatch limits active renders to "
+            "available claims. Applies on local and SkyPilot workers; peak local disk "
+            "scales with pool size."
         ),
     )
     retain_local_shards: bool = Field(
@@ -327,6 +413,32 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             'How often to reload the plugin within a shard: ``"once"`` (default, #1999) '
             "loads + applies the preset once per shard and reuses the cached instance; "
             '``"render"`` reloads on every render (historical per-#489 behaviour).'
+        ),
+    )
+    post_load_flush_blocks: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Silent host blocks processed after the preset loads; Pedalboard also resets the "
+            "plugin afterwards. ``None`` keeps the backend default (Pedalboard: "
+            "``PEDALBOARD_FLUSH_SECONDS`` at the render sample rate; DawDreamer: its preset "
+            "settle). Zero skips the step. Only Pedalboard and DawDreamer flush."
+        ),
+    )
+    post_param_flush_blocks: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Silent host blocks processed after parameter writes and before the note; "
+            "``None`` keeps the backend default (Pedalboard flushes, DawDreamer does not)."
+        ),
+    )
+    post_render_flush_blocks: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Silent host blocks processed after the note render to scrub voice state; "
+            "``None`` keeps the backend default (Pedalboard flushes, DawDreamer does not)."
         ),
     )
     gui_toggle_cadence: _GuiToggleCadence = Field(
@@ -345,6 +457,12 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             "its editor call blocks the main thread without a close-event API."
         ),
     )
+    v1_gui_toggle_cadence_omitted: bool = Field(
+        default=False,
+        exclude=True,
+        repr=False,
+        description="Worker-transport provenance for the omitted V1 cadence default.",
+    )
     param_sample_cadence: _ParamSampleCadence = Field(
         default="sample",
         description=(
@@ -359,16 +477,80 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
     @model_validator(mode="before")
     @classmethod
-    def _ignore_removed_renderer_version(cls, data: Any) -> Any:
-        """Discard the removed render-level version without promoting it.
+    def _normalize_legacy_render_contract(cls, data: Any) -> Any:
+        """Promote persisted backend tokens while retaining their digest projection.
 
-        :param data: Raw render input.
-        :returns: A copy without ``renderer_version``, or a non-mapping input unchanged.
+        :param data: Raw render configuration.
+        :returns: Canonical configuration with a historical digest marker when needed.
+        :raises ValueError: A legacy token is malformed or version 1 would omit Faust provenance.
         """
         if not isinstance(data, dict):
             return data
         normalized = data.copy()
         normalized.pop("renderer_version", None)
+        synth = normalized.get("synth")
+        is_explicit_contract = (
+            "render_contract_version" in normalized
+            or isinstance(synth, SynthSpec)
+            or (
+                isinstance(synth, dict)
+                and (
+                    "format" in synth
+                    or (
+                        isinstance(synth.get("plugin_path"), str)
+                        and synth["plugin_path"].casefold().startswith("registry:")
+                    )
+                )
+            )
+        )
+        if not is_explicit_contract:
+            normalized["render_contract_version"] = 1
+        if (
+            normalized.get("render_contract_version") == 1
+            and isinstance(synth, dict)
+            and synth.get("format") == "faust"
+        ):
+            actual_provenance = (
+                normalized.get("renderer_backend"),
+                normalized.get("backend_version"),
+                synth.get("synth_version"),
+                synth.get("source_sha256"),
+            )
+            historical_provenance = _historical_faust_v1_provenance(synth.get("param_spec_name"))
+            if actual_provenance != historical_provenance:
+                raise ValueError(_FAUST_V1_PROVENANCE_ERROR)
+        if normalized.get("renderer_backend") != "dawdreamer_faust":
+            return normalized
+        if (
+            not isinstance(synth, dict)
+            or synth.get("plugin_path") != FAUST_PLUGIN_NAME
+            or "format" in synth
+        ):
+            raise ValueError(
+                'legacy renderer_backend="dawdreamer_faust" requires plugin_path="faust" '
+                "and no explicit synth format"
+            )
+        synth_name = synth.get("name")
+        registered = SYNTHS.get(SynthName(synth_name)) if isinstance(synth_name, str) else None
+        historical_source = (
+            None
+            if registered is None
+            else _FAUST_V1_SOURCE_IDENTITIES.get(registered.param_spec_name)
+        )
+        if registered is None or registered.format != "faust" or historical_source is None:
+            raise ValueError("legacy Faust identity must name a registered Faust source")
+        source_version, source_sha256 = historical_source
+        normalized["renderer_backend"] = "dawdreamer"
+        normalized["backend_version"] = synth.get("synth_version")
+        normalized["render_contract_version"] = 1
+        promoted_synth = synth.copy()
+        promoted_synth.update(
+            format="faust",
+            plugin_path="",
+            synth_version=source_version,
+            source_sha256=source_sha256,
+        )
+        normalized["synth"] = promoted_synth
         return normalized
 
     @classmethod
@@ -457,23 +639,156 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             )
         return self
 
+    def _explicit_flush_blocks(self) -> dict[str, int]:
+        """Return the flush-block fields the config sets, keyed by ``FlushBlocks`` step.
+
+        :returns: Step name to block count for every non-``None`` field.
+        """
+        fields = {
+            "post_load": self.post_load_flush_blocks,
+            "post_param": self.post_param_flush_blocks,
+            "post_render": self.post_render_flush_blocks,
+        }
+        return {step: blocks for step, blocks in fields.items() if blocks is not None}
+
+    @model_validator(mode="after")
+    def _validate_flush_blocks_backend(self) -> RenderConfig:
+        """Reject explicit flush-block counts on backends that never flush.
+
+        :returns: The validated config.
+        :raises ValueError: If a flush-block field is set for a non-flushing backend.
+        """
+        explicit = self._explicit_flush_blocks()
+        if explicit and self.renderer_backend not in FLUSHING_BACKENDS:
+            steps = ", ".join(f"{step}_flush_blocks" for step in explicit)
+            raise ValueError(
+                f"{steps} require renderer_backend in {sorted(FLUSHING_BACKENDS)}; "
+                f"got {self.renderer_backend!r}"
+            )
+        return self
+
+    @property
+    def flush_blocks(self) -> FlushBlocks:
+        """Per-step silent block counts with backend defaults filled in.
+
+        :returns: Resolved counts; a non-flushing backend resolves to all zeros.
+        """
+        defaults = default_flush_blocks(self.renderer_backend, self.sample_rate)
+        return replace(defaults, **self._explicit_flush_blocks())
+
+    @model_validator(mode="after")
+    def _validate_pyfdn_backend(self) -> RenderConfig:
+        """Require canonical pyFDN geometry and fixed compatibility stubs.
+
+        :returns: ``self`` unchanged for other backends or valid pyFDN configuration.
+        :raises ValueError: The pyFDN identity or fixed render contract drifts.
+        """
+        registered_pyfdn = (
+            self.synth.name in _PYFDN_SYNTH_NAMES
+            and SYNTHS[self.synth.name].param_spec_name == self.param_spec_name
+        )
+        pyfdn_identity = (
+            self.synth.name in _PYFDN_SYNTH_NAMES
+            or self.param_spec_name in _PYFDN_PARAM_SPEC_NAMES
+            or self.plugin_path == PYFDN_PLUGIN_NAME
+        )
+        if self.renderer_backend != "pyfdn":
+            if pyfdn_identity:
+                raise ValueError("all pyFDN identities require renderer_backend='pyfdn'")
+            if self.pyfdn_excitation is not None:
+                raise ValueError("pyfdn_excitation requires renderer_backend='pyfdn'")
+            return self
+        if not registered_pyfdn:
+            raise ValueError("pyfdn requires a registered pyfdn synth identity")
+        if self.plugin_path != PYFDN_PLUGIN_NAME or self.plugin_state_path:
+            raise ValueError('pyfdn requires plugin_path="pyfdn" and no plugin_state_path')
+        expected_rate = renderer_backend_contract.PYFDN_SOURCE_SAMPLE_RATE_HZ
+        expected_channels = renderer_backend_contract.pyfdn_output_channels(self.param_spec_name)
+        expected_duration = renderer_backend_contract.PYFDN_SOURCE_TOTAL_FRAMES / expected_rate
+        if (self.sample_rate, self.channels, self.signal_duration_seconds) != (
+            expected_rate,
+            expected_channels,
+            expected_duration,
+        ):
+            raise ValueError(
+                f"pyfdn requires sample_rate={expected_rate}, channels={expected_channels}, "
+                f"and signal_duration_seconds={expected_duration}"
+            )
+        if self.velocity != 0:
+            raise ValueError("pyfdn requires velocity=0")
+        if self.plugin_reload_cadence != "render":
+            raise ValueError('pyfdn requires plugin_reload_cadence="render"')
+        if self.gui_toggle_cadence != "never":
+            raise ValueError('pyfdn requires gui_toggle_cadence="never"')
+        if self.audio_dtype != "float32" or self.mel_spec_dtype != "float32":
+            raise ValueError("pyfdn requires audio_dtype=float32 and mel_spec_dtype=float32")
+        if self.param_sample_cadence != "sample":
+            raise ValueError('pyfdn requires param_sample_cadence="sample"')
+        return self
+
     @model_validator(mode="after")
     def _validate_faust_backend(self) -> RenderConfig:
-        """Require registry-only Faust source resolution without external resources.
+        """Restrict host provenance to checked-in Faust source rendering.
 
-        :return: ``self`` unchanged for other backends or valid Faust configuration.
-        :raises ValueError: Faust uses a path/state/editor or its sentinel selects another backend.
+        :returns: This config when Faust provenance and lifecycle settings are valid.
+        :raises ValueError: Host provenance is set for another format, the backend version is
+            blank, editor use is enabled, or checked-in source differs from the identity digest.
         """
-        if self.plugin_path == FAUST_PLUGIN_NAME and self.renderer_backend != "dawdreamer_faust":
-            raise ValueError('plugin_path="faust" requires renderer_backend="dawdreamer_faust"')
-        if self.renderer_backend != "dawdreamer_faust":
+        if self.synth.format != "faust":
+            if self.backend_version is not None:
+                raise ValueError("backend_version is supported only for format='faust'")
+            if self.block_size is not None:
+                raise ValueError("block_size is supported only for FaustWasm and Faust C++")
             return self
-        if self.plugin_path != FAUST_PLUGIN_NAME:
-            raise ValueError('dawdreamer_faust requires plugin_path="faust"')
-        if self.plugin_state_path:
-            raise ValueError("dawdreamer_faust does not accept plugin_state_path")
+        from synth_setter.data.vst.faust_param_spec import FAUST_NOTE_DURATION_SECONDS
+        from synth_setter.data.vst.faust_sources import resolve_faust_dsp
+
+        source_identity = (
+            self.param_spec_name
+            if not self.plugin_path
+            else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
+        )
+        source = resolve_faust_dsp(source_identity)
+        isolated_backends = {"faustcpp", "faustwasm"}
+        if self.renderer_backend in isolated_backends:
+            if self.render_contract_version == 1:
+                raise ValueError(
+                    f"{self.renderer_backend} rejects render_contract_version=1 legacy digest projection"
+                )
+            if self.block_size is None:
+                raise ValueError(f"{self.renderer_backend} requires an explicit block_size")
+            expected_channels = source.outputs
+            if self.channels != expected_channels:
+                raise ValueError(f"{self.renderer_backend} requires channels={expected_channels}")
+            if self.signal_duration_seconds < FAUST_NOTE_DURATION_SECONDS:
+                raise ValueError(
+                    f"{self.renderer_backend} requires "
+                    f"signal_duration_seconds>={FAUST_NOTE_DURATION_SECONDS}"
+                )
+            if self.plugin_reload_cadence != "render":
+                raise ValueError(
+                    f'{self.renderer_backend} requires plugin_reload_cadence="render": '
+                    "each render uses an isolated DSP instance"
+                )
+        elif self.block_size is not None:
+            raise ValueError("block_size is supported only for FaustWasm and Faust C++")
+        if self.backend_version is None or not self.backend_version.strip():
+            raise ValueError("format='faust' requires a non-blank backend_version")
         if self.gui_toggle_cadence != "never":
-            raise ValueError('dawdreamer_faust requires gui_toggle_cadence="never"')
+            raise ValueError('format="faust" requires gui_toggle_cadence="never"')
+        if self.render_contract_version == 1:
+            actual_provenance = (
+                self.renderer_backend,
+                self.backend_version,
+                self.synth.synth_version,
+                self.synth.source_sha256,
+            )
+            historical_provenance = _historical_faust_v1_provenance(self.param_spec_name)
+            if actual_provenance != historical_provenance:
+                raise ValueError(_FAUST_V1_PROVENANCE_ERROR)
+        actual_digest = hashlib.sha256(source.source.encode()).hexdigest()
+        if actual_digest != self.synth.source_sha256:
+            raise ValueError("registered Faust source does not match synth.source_sha256")
         return self
 
     @model_validator(mode="after")
@@ -523,6 +838,28 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         return self
 
     @model_validator(mode="after")
+    def _validate_format_backend_pair(self) -> RenderConfig:
+        """Reject hosts that cannot consume the selected synth representation.
+
+        :returns: This config when its backend consumes the selected format.
+        :raises ValueError: The backend and synth format are incompatible.
+        """
+        allowed = {
+            "faust": {"dawdreamer", "faustcpp", "faustwasm"},
+            "pyfdn": {"pyfdn"},
+            "surgepy": {"surgepy"},
+            "torchsynth": {"torchsynth"},
+            "vst3": {"dawdreamer", "pedalboard"},
+        }
+        if self.renderer_backend not in allowed[self.synth.format]:
+            expected = ", ".join(repr(value) for value in sorted(allowed[self.synth.format]))
+            raise ValueError(
+                f"format={self.synth.format!r} requires renderer_backend in {{{expected}}}; "
+                f"got {self.renderer_backend!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _gui_toggle_cadence_forbids_render_on_darwin(self) -> RenderConfig:
         """Reject ``gui_toggle_cadence="render"`` on Darwin (SIGTRAP after ~3-4 calls, #714).
 
@@ -560,6 +897,23 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             )
         return self
 
+    @model_serializer(mode="wrap")
+    def _serialize_preserving_v1_defaults(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        """Transport an omitted V1 cadence without discarding its effective value.
+
+        :param handler: Pydantic's standard serializer for this model.
+        :returns: Serialized config carrying V1 omission provenance when needed.
+        """
+        serialized: dict[str, object] = handler(self)
+        cadence_was_omitted = (
+            self.v1_gui_toggle_cadence_omitted or "gui_toggle_cadence" not in self.model_fields_set
+        )
+        if self.render_contract_version == 1 and cadence_was_omitted:
+            serialized["v1_gui_toggle_cadence_omitted"] = True
+        return serialized
+
     def shard_metadata(self) -> ShardMetadata:
         """Project this config onto the per-shard sidecar metadata fields.
 
@@ -568,6 +922,36 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
         :returns: Strict ``ShardMetadata`` with every render-derived field filled.
         """
+        contract = self.model_dump(
+            mode="json",
+            exclude={"base_seed", "retain_local_shards", "sample_offset"},
+            exclude_none=True,
+        )
+        contract.pop("v1_gui_toggle_cadence_omitted", None)
+        if self.render_contract_version == 1:
+            contract.pop("backend_version", None)
+            contract.pop("render_contract_version")
+            cadence_was_omitted = (
+                self.v1_gui_toggle_cadence_omitted
+                or "gui_toggle_cadence" not in self.model_fields_set
+            )
+            if cadence_was_omitted:
+                contract["gui_toggle_cadence"] = "render"
+            synth = contract["synth"]
+            synth.pop("format")
+            synth.pop("source_sha256", None)
+            if self.synth.format == "faust":
+                contract["renderer_backend"] = "dawdreamer_faust"
+                synth["plugin_path"] = FAUST_PLUGIN_NAME
+                synth["synth_version"] = self.backend_version
+        if self.renderer_backend == "pyfdn":
+            excitation = self.pyfdn_excitation or "impulse"
+            contract["pyfdn_excitation"] = excitation
+            if excitation == "chirp":
+                contract["canonical_source_sha256"] = (
+                    renderer_backend_contract.PYFDN_CANONICAL_SOURCE_SHA256
+                )
+        canonical_contract = json.dumps(contract, sort_keys=True, separators=(",", ":"))
         return ShardMetadata(
             velocity=self.velocity,
             signal_duration_seconds=self.signal_duration_seconds,
@@ -577,6 +961,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             base_seed=self.base_seed,
             sample_offset=self.sample_offset,
             attempts_per_sample=self.attempts_per_sample,
+            render_contract_digest=hashlib.sha256(canonical_contract.encode()).hexdigest(),
         )
 
 
@@ -754,6 +1139,10 @@ class DatasetSpec(BaseModel):
         Whether finalize substitutes ``std=1.0`` at zero-variance mel bins
         instead of raising; ``False`` is the strict production default.
 
+    .. attribute :: param_language_dimension
+
+        Optional EmbeddingGemma width; finalize publishes one embedding per logical field.
+
     .. attribute :: use_shard_queue
 
         Whether workers claim shard IDs dynamically from the run's Lance
@@ -824,6 +1213,11 @@ class DatasetSpec(BaseModel):
             "Smoke configs override to ``True`` because tiny renders have constant "
             "attack-time frames and channels below the source's active bandwidth."
         ),
+    )
+
+    param_language_dimension: Literal[128, 256, 512, 768] | None = Field(
+        default=None,
+        description="Optional Matryoshka width for finalized per-field EmbeddingGemma metadata.",
     )
 
     use_shard_queue: bool = Field(

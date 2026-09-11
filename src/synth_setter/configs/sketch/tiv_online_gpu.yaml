@@ -1,0 +1,14 @@
+# @package _global_
+
+# Online TIV uses the 44.1 kHz waveform contract of generated VST datasets.
+model:
+  sketch_controls:
+    profile: tiv
+    source: online
+    tiv_backend: torch
+    sample_rate: 44_100
+    num_frames: 32
+    num_control_tokens: 32
+
+datamodule:
+  sketch: ${model.sketch_controls}

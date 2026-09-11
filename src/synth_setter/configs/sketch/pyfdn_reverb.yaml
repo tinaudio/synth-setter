@@ -1,0 +1,11 @@
+# @package _global_
+
+model:
+  sketch_controls:
+    profile: pyfdn_reverb
+    column: pyfdn_sketch
+    num_frames: 32
+    num_control_tokens: 32
+
+datamodule:
+  sketch: ${model.sketch_controls}

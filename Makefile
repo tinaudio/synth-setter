@@ -42,10 +42,39 @@ PYTEST := ./.venv/bin/pytest
 # (not torch.set_num_threads) so spawned DataLoader children inherit it.
 XDIST_THREAD_CAPS := OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 
+# Explicit paths avoid importing the entire medium suite during the inner loop.
+FAST_TEST_BUDGET_SECONDS := 120
+FAST_TEST_PATHS := \
+	tests/_meta \
+	tests/data/vst/test_core.py \
+	tests/data/vst/test_param_spec.py \
+	tests/data/vst/test_param_spec_registry.py \
+	tests/data/vst/test_renderer_factory.py \
+	tests/data/vst/test_renderers.py \
+	tests/data/vst/test_seeding.py \
+	tests/data/vst/test_shape_helpers.py \
+	tests/evaluation \
+	tests/features \
+	tests/integration/test_parallel_shard_dispatch.py \
+	tests/models/test_audio_distance.py \
+	tests/models/test_cnn.py \
+	tests/models/test_sketch_tokens.py \
+	tests/models/test_spec_encoder.py \
+	tests/models/test_vst_validation_preds_contract.py \
+	tests/pipeline/ci_config \
+	tests/pipeline/configs \
+	tests/pipeline/schemas \
+	tests/schemas
+
 # Wall-clock budgets per lane (enforced by tests/conftest.py, #2274): a run that
-# blows its budget fails even when every test passes, so degraded hosts and
-# slow-test regressions surface in the run itself instead of silently crawling.
-test-fast: ## Inner-loop tests: CPU-only, no slow, no VST. Excludes gpu/mps so the suite is host-portable.
+# blows its budget fails even when every test passes.
+fast-test-budget: ## Print the fast-tier wall-clock budget in seconds.
+	@printf '%s\n' '$(FAST_TEST_BUDGET_SECONDS)'
+
+test-fast: ## Strict inner loop: curated CPU-only tests with a two-minute budget.
+	PATH="$$(pwd)/.venv/bin:$$PATH" PYTEST_SESSION_BUDGET_SECONDS=$(FAST_TEST_BUDGET_SECONDS) $(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst and not infra" $(FAST_TEST_PATHS)
+
+test-medium: ## Complete CPU-only non-slow suite.
 	PATH="$$(pwd)/.venv/bin:$$PATH" PYTEST_SESSION_BUDGET_SECONDS=600 $(XDIST_THREAD_CAPS) $(PYTEST) -n auto -m "not slow and not gpu and not mps and not requires_vst"
 
 # Darwin VST editors share AppKit state, so requires_vst tests stay serial.
@@ -93,8 +122,9 @@ codex-doctor: ## Check Codex CLI, repo skill projection, and tinaudio skill plug
 # `--cov=scripts/ci` is needed alongside `--cov=src`: pytest-cov's `--cov`
 # overrides [tool.coverage.run].source in pyproject.toml.
 CI_COV := --cov=src --cov=scripts/ci --cov-branch --cov-report=xml --cov-report=term
+CI_COV_APPEND := --cov-append $(CI_COV)
 
-test-ci-unit: ## CI fast suite (test.yml): CPU-only, excludes slow/gpu/mps.
+test-ci-unit: ## CI medium suite (test.yml): CPU-only, excludes slow/gpu/mps.
 	PYTEST_SESSION_BUDGET_SECONDS=1500 uv run pytest -n auto -m "not slow and not gpu and not mps" -vv -s $(CI_COV)
 
 test-ci-slow: ## CI slow suite (cpu-slow.yml): slow CPU tests with live R2, excludes gpu/mps/vst.
@@ -102,6 +132,9 @@ test-ci-slow: ## CI slow suite (cpu-slow.yml): slow CPU tests with live R2, excl
 
 test-ci-slow-pr: ## CI slow PR suite (cpu-slow.yml): slow CPU tests without live R2.
 	PYTEST_SESSION_BUDGET_SECONDS=4500 uv run pytest -vv -s -m "slow and not gpu and not mps and not requires_vst and not integration_r2" $(CI_COV)
+
+test-ci-slow-pr-r2-e2e: ## CI trusted-PR growing Lance E2E; append subprocess data to slow coverage.
+	PYTEST_SESSION_BUDGET_SECONDS=1200 uv run pytest -vv -s tests/integration/test_pyfdn_growing_lance_r2_e2e.py $(CI_COV_APPEND)
 
 test-ci-nightly: ## CI nightly suite (nightly.yml): all non-hardware, non-VST (unit + slow).
 	PYTEST_SESSION_BUDGET_SECONDS=4800 uv run pytest -vv -s -m "not gpu and not mps and not requires_vst"
@@ -148,6 +181,8 @@ install: ## End-to-end: install uv, create .venv (Python 3.12), install deps, se
 	@echo "Next: source .venv/bin/activate"
 
 STUDIORACK := uv run synth-setter-plugins
+ULTRAMASTER_KR106_VERSION := v2.5.13
+ULTRAMASTER_KR106_GIT_REF := bc15caee5843ab238a25d0969e68d57db2b1615f
 
 install-studiorack: ## Install the pinned Studiorack CLI and its locked dependencies
 	npm ci
@@ -167,11 +202,53 @@ install-obxf: install-studiorack ## Install pinned OB-Xf through Studiorack
 install-six-sines: install-studiorack ## Install pinned Six Sines through Studiorack
 	$(STUDIORACK) install --plugin baconpaul/six-sines
 
-install-ultramaster-kr106: install-studiorack ## Install pinned Ultramaster KR-106 through Studiorack
-	$(STUDIORACK) install --plugin kayrockscreenprinting/ultramaster-kr106
+install-ultramaster-kr106: SHELL := /bin/bash
+install-ultramaster-kr106: install-studiorack ## Build and install pinned Ultramaster KR-106
+	@set -e; \
+	os="$$(uname -s)"; arch="$$(uname -m)"; \
+	if [[ "$$os" == "Darwin" ]]; then \
+		$(STUDIORACK) install --plugin kayrockscreenprinting/ultramaster-kr106; \
+		exit 0; \
+	fi; \
+	if [[ "$$os" != "Linux" || "$$arch" != "x86_64" ]]; then \
+		echo "ERROR: Ultramaster KR-106 supports macOS or Linux x86_64 (host: $$os/$$arch)." >&2; \
+		exit 1; \
+	fi; \
+	command -v cmake >/dev/null 2>&1 || { echo "ERROR: cmake is required to build Ultramaster KR-106." >&2; exit 1; }; \
+	command -v git >/dev/null 2>&1 || { echo "ERROR: git is required to build Ultramaster KR-106." >&2; exit 1; }; \
+	command -v flock >/dev/null 2>&1 || { echo "ERROR: flock is required to build Ultramaster KR-106." >&2; exit 1; }; \
+	cache="$$HOME/.cache/synth-setter/ultramaster-kr106-$(ULTRAMASTER_KR106_VERSION)"; \
+	mkdir -p "$$cache"; \
+	exec 9>"$$cache/.install.lock"; \
+	flock 9; \
+	src="$$cache/src"; build="$$cache/build"; \
+	if ! git -C "$$src" rev-parse --git-dir >/dev/null 2>&1 || \
+		! git -C "$$src" remote get-url origin >/dev/null 2>&1; then \
+		rm -rf "$$src" "$$build"; \
+		mkdir -p "$$src"; \
+		git -C "$$src" init; \
+		git -C "$$src" remote add origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
+	fi; \
+	git -C "$$src" remote set-url origin https://github.com/kayrockscreenprinting/ultramaster_kr106.git; \
+	git -C "$$src" fetch --depth 1 origin "$(ULTRAMASTER_KR106_GIT_REF)"; \
+	git -C "$$src" checkout --detach FETCH_HEAD; \
+	git -C "$$src" reset --hard FETCH_HEAD; \
+	git -C "$$src" clean -ffd; \
+	git -C "$$src" submodule update --init --recursive --depth 1 --force; \
+	git -C "$$src" submodule foreach --recursive 'git reset --hard && git clean -ffd'; \
+	cmake -S "$$src" -B "$$build" -DCMAKE_BUILD_TYPE=Release -DKR106_COPY_AFTER_BUILD=OFF; \
+	MAKEFLAGS= cmake --build "$$build" --config Release --target KR106_VST3 --parallel; \
+	bundle="$$build/KR106_artefacts/Release/VST3/Ultramaster KR-106.vst3"; \
+	if [[ ! -d "$$bundle" ]]; then \
+		echo "ERROR: $$bundle not found after build." >&2; \
+		exit 1; \
+	fi; \
+	$(STUDIORACK) adopt \
+		--plugin kayrockscreenprinting/ultramaster-kr106 \
+		--bundle-path "$$bundle"; \
+	$(STUDIORACK) link --plugin kayrockscreenprinting/ultramaster-kr106
 
-install-plugins: install-studiorack ## Install every VST3 pinned in studiorack.json
-	$(STUDIORACK) install
+install-plugins: install-surge-xt install-dexed install-obxf install-six-sines install-ultramaster-kr106 ## Install every VST3 pinned in studiorack.json
 
 link-plugins: SHELL := /bin/bash
 link-plugins: ## Link installed Studiorack packages into the checkout's plugins/ namespace

@@ -26,7 +26,7 @@ from synth_setter.data.torchsynth_grad_render import (
     render_torchsynth_grad,
 )
 from synth_setter.data.vst import TorchSynthRenderer, param_specs
-from synth_setter.data.vst.param_spec import decode_model_output
+from synth_setter.data.vst.param_spec import NoteParams, decode_model_output
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_FULL_PARAM_SPEC
 from synth_setter.evaluation.audio_probe import _staged_sample_count
 from synth_setter.param_spec_name import ParamSpecName
@@ -255,7 +255,9 @@ def test_val_audio_probe_staged_rows_are_renderable_torchsynth_rows(
     staged_target = torch.load(predictions / "target-params-0.pt", weights_only=True)
     assert staged_pred.shape == staged_target.shape == (1, spec.encoded_width)
 
-    synth_params, note_params = decode_model_output(staged_pred[0].numpy(), spec)
+    synth_values, note_values = decode_model_output(staged_pred[0].numpy(), spec)
+    synth_params = cast(dict[str, float], synth_values)
+    note_params = cast(NoteParams, note_values)
     assert note_params["pitch"] == 60
     assert note_params["note_start_and_end"] == pytest.approx((0.0, 0.1), abs=1e-6)
     renderer = TorchSynthRenderer(

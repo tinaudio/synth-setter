@@ -42,10 +42,14 @@ def _make_valid_spec(*, output_format: str = "lance", **overrides: object) -> di
                 "name": "surge_simple",
                 "param_spec_name": "surge_simple",
                 "plugin_path": "plugins/Surge XT.vst3",
+                "format": "vst3",
                 "plugin_state_path": "presets/surge-base.vstpreset",
                 "synth_version": "1.3.4",
+                "source_sha256": None,
             },
             "renderer_backend": "pedalboard",
+            "backend_version": "0.9.22",
+            "render_contract_version": 2,
             "sample_rate": 44100,
             "channels": 2,
             "velocity": 100,
@@ -162,16 +166,24 @@ class TestValidateStructure:
         assert any("missing" in e and "r2" in e for e in errors)
 
     def test_required_top_level_fields_match_dataset_spec_model(self) -> None:
-        """Required top-level set is derived from DatasetSpec, not hand-mirrored."""
-        expected = set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields)
+        """Only optional parameter-language metadata may be omitted at the top level."""
+        expected = (set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields)) - {
+            "param_language_dimension"
+        }
         assert set(_REQUIRED_TOP_LEVEL_FIELDS) == expected
 
     def test_required_render_fields_match_render_config_model(self) -> None:
         """Only backward-compatible storage fields may be omitted."""
         assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
             "audio_dtype",
+            "block_size",
             "mel_spec_dtype",
+            "post_load_flush_blocks",
+            "post_param_flush_blocks",
+            "post_render_flush_blocks",
+            "pyfdn_excitation",
             "retain_local_shards",
+            "v1_gui_toggle_cadence_omitted",
             # Checked shape-aware so the nested identity can be validated.
             "synth",
         }

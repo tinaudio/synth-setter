@@ -11,9 +11,11 @@ import logging
 import os
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping
+import time
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
+from typing import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,6 +28,13 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from matplotlib.figure import Figure
 
 from synth_setter.data.vst import param_specs
+from synth_setter.metrics import (
+    categorical_mismatch_metric_families,
+    number_group_optimal_assignment_mse_groups,
+    semantic_parameter_distances,
+    spec_per_param_abs_cosine_distance,
+    spec_quantized_per_param_mse,
+)
 from synth_setter.models.components.transformer import LearntProjection
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
@@ -36,6 +45,7 @@ log = logging.getLogger(__name__)
 # Bound on consecutive failed uploads of one unchanged checkpoint before backing
 # off until the file next changes — caps R2 retries when R2 is down.
 _MAX_UPLOAD_ATTEMPTS = 3
+_PREDICTION_PROGRESS_INTERVAL = 25
 
 # The single mirrored object name; the whole class contract hinges on this basename.
 _LAST_CKPT_NAME = "last.ckpt"
@@ -456,9 +466,7 @@ class PlotLearntProjection(Callback):
         self.after_val = after_val
         self.every_n_steps = every_n_steps
         self.sort_assignments = sort_assignments
-
-    def _get_assignment(self, pl_module):
-        return pl_module.vector_field.projection.assignment
+        self._last_plotted_step = 0
 
     def _sort_assignments(self, assignment):
         assignment = assignment.abs()
@@ -468,8 +476,8 @@ class PlotLearntProjection(Callback):
         assignment = assignment[sorted_idxs]
         return assignment
 
-    def _plot_assignments(self, pl_module):
-        assignment = self._get_assignment(pl_module)
+    def _plot_assignments(self, projection: LearntProjection) -> Figure:
+        assignment = projection.assignment
 
         if self.sort_assignments:
             assignment = self._sort_assignments(assignment)
@@ -478,7 +486,7 @@ class PlotLearntProjection(Callback):
 
         maxval = assignment.abs().max().item()
         img = ax.imshow(
-            assignment.cpu().numpy(),
+            assignment.detach().cpu().float().numpy(),
             aspect="equal",
             vmin=-maxval,
             vmax=maxval,
@@ -495,31 +503,31 @@ class PlotLearntProjection(Callback):
 
         return fig
 
-    def _get_value_similarity(self, pl_module):
-        proj = pl_module.vector_field.projection.in_projection  # num_params x d_embed x d_model
+    def _get_value_similarity(self, projection: LearntProjection) -> torch.Tensor:
+        proj = projection.in_projection  # num_params x d_embed x d_model
 
         sim_proj = torch.nn.functional.cosine_similarity(proj[None], proj[:, None], dim=-1)
 
         return sim_proj
 
-    def _get_output_similarity(self, pl_module):
-        proj = pl_module.vector_field.projection.out_projection.T  # num_params x d_embed x d_model
+    def _get_output_similarity(self, projection: LearntProjection) -> torch.Tensor:
+        proj = projection.out_projection.T  # num_params x d_embed x d_model
 
         sim_proj = torch.nn.functional.cosine_similarity(proj[None], proj[:, None], dim=-1)
 
         return sim_proj
 
-    def _plot_projections(self, pl_module):
+    def _plot_projections(self, projection: LearntProjection) -> Figure:
         fig, ax = plt.subplots(2, 1, figsize=(5, 10))
 
-        val_sim = self._get_value_similarity(pl_module)
-        out_sim = self._get_output_similarity(pl_module)
+        val_sim = self._get_value_similarity(projection)
+        out_sim = self._get_output_similarity(projection)
 
-        val_max = val_sim.abs().max()
-        out_max = out_sim.abs().max()
+        val_max = val_sim.abs().max().item()
+        out_max = out_sim.abs().max().item()
 
         val_im = ax[0].imshow(
-            val_sim.cpu().numpy(),
+            val_sim.detach().cpu().float().numpy(),
             aspect="equal",
             vmin=-val_max,
             vmax=val_max,
@@ -530,7 +538,7 @@ class PlotLearntProjection(Callback):
         ax[0].set_ylabel("params")
 
         out_im = ax[1].imshow(
-            out_sim.cpu().numpy(),
+            out_sim.detach().cpu().float().numpy(),
             aspect="equal",
             vmin=-out_max,
             vmax=out_max,
@@ -548,25 +556,24 @@ class PlotLearntProjection(Callback):
 
         return fig
 
-    def _log_plots(self, fig_ass, fig_value, trainer):
-        _log_figure(trainer, "assignment", fig_ass)
-        _log_figure(trainer, "value", fig_value)
+    def _log_plots(self, fig_ass: Figure, fig_value: Figure, trainer: Trainer) -> None:
+        try:
+            _log_figure(trainer, "assignment", fig_ass)
+            _log_figure(trainer, "value", fig_value)
+        finally:
+            plt.close(fig_ass)
+            plt.close(fig_value)
 
-        plt.close(fig_ass)
-        plt.close(fig_value)
-
-    def _do_plotting(self, trainer, pl_module):
+    def _do_plotting(self, trainer: Trainer, pl_module: LightningModule) -> None:
         if not isinstance(pl_module, VSTFlowMatchingModule):
             return
 
-        if not hasattr(pl_module.vector_field, "projection"):
+        projection = getattr(pl_module.vector_field, "projection", None)
+        if not isinstance(projection, LearntProjection):
             return
 
-        if not isinstance(pl_module.vector_field, LearntProjection):
-            return
-
-        fig_ass = self._plot_assignments(pl_module)
-        fig_value = self._plot_projections(pl_module)
+        fig_ass = self._plot_assignments(projection)
+        fig_value = self._plot_projections(projection)
         self._log_plots(fig_ass, fig_value, trainer)
 
     def on_validation_epoch_end(self, trainer, pl_module) -> None:
@@ -579,11 +586,13 @@ class PlotLearntProjection(Callback):
         if self.every_n_steps is None:
             return
 
-        if trainer.global_step % self.every_n_steps != 0:
+        step = trainer.global_step
+        if step == 0 or step == self._last_plotted_step or step % self.every_n_steps != 0:
             return
 
         with torch.no_grad():
             self._do_plotting(trainer, pl_module)
+        self._last_plotted_step = step
 
 
 def _plain_cpu_tensor(tensor: torch.Tensor) -> torch.Tensor:
@@ -596,38 +605,125 @@ def _plain_cpu_tensor(tensor: torch.Tensor) -> torch.Tensor:
 
 
 class PredictionWriter(BasePredictionWriter):
-    """Save per-batch and per-epoch predictions plus target tensors to disk."""
+    """Save predictions and report durable, rate-limited batch progress."""
 
-    def __init__(self, output_dir, write_interval):
+    def __init__(
+        self,
+        output_dir: str | os.PathLike[str],
+        write_interval: Literal["batch", "epoch", "batch_and_epoch"],
+    ) -> None:
+        """Initialize prediction persistence and progress state.
+
+        :param output_dir: Directory receiving prediction tensors.
+        :param write_interval: Lightning prediction-writer callback interval.
+        """
         super().__init__(write_interval)
         self.output_dir = output_dir
+        self._progress_started_at: dict[int, float] = {}
+        self._samples_written: dict[int, int] = {}
         os.makedirs(self.output_dir, exist_ok=True)
+
+    def on_predict_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Reset progress counters for a prediction pass.
+
+        :param trainer: Ignored; required by Lightning's callback contract.
+        :param pl_module: Ignored; required by Lightning's callback contract.
+        """
+        del trainer, pl_module
+        self._progress_started_at.clear()
+        self._samples_written.clear()
+
+    def on_predict_batch_start(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        batch: object,
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        """Start each dataloader's timer before its first prediction batch.
+
+        :param trainer: Ignored; required by Lightning's callback contract.
+        :param pl_module: Ignored; required by Lightning's callback contract.
+        :param batch: Ignored; required by Lightning's callback contract.
+        :param batch_idx: Zero-based batch index.
+        :param dataloader_idx: Active prediction dataloader index.
+        """
+        del trainer, pl_module, batch
+        if batch_idx == 0:
+            self._progress_started_at[dataloader_idx] = time.monotonic()
+
+    def _log_progress(
+        self,
+        trainer: Trainer,
+        batch: object,
+        batch_idx: int,
+        *,
+        dataloader_idx: int,
+    ) -> None:
+        """Log first, interval, and final completed prediction batches.
+
+        :param trainer: Active trainer exposing total prediction batches.
+        :param batch: Persisted model batch.
+        :param batch_idx: Zero-based batch index.
+        :param dataloader_idx: Active prediction dataloader index.
+        """
+        if not trainer.is_global_zero:
+            return
+        started_at = self._progress_started_at.get(dataloader_idx)
+        if started_at is None:
+            started_at = time.monotonic()
+            self._progress_started_at[dataloader_idx] = started_at
+        samples_written = self._samples_written.get(dataloader_idx, 0) + batch_sample_count(batch)
+        self._samples_written[dataloader_idx] = samples_written
+        totals = trainer.num_predict_batches
+        total = totals if isinstance(totals, int) else totals[dataloader_idx]
+        completed = batch_idx + 1
+        if (
+            completed != 1
+            and completed % _PREDICTION_PROGRESS_INTERVAL != 0
+            and completed != total
+        ):
+            return
+        elapsed = max(time.monotonic() - started_at, 1e-9)
+        percent = 100.0 * completed / total
+        log.info(
+            "Prediction progress: dataloader=%d batches=%d/%d samples=%d "
+            "percent=%.1f batches_per_second=%.2f",
+            dataloader_idx,
+            completed,
+            total,
+            samples_written,
+            percent,
+            completed / elapsed,
+        )
 
     def write_on_batch_end(
         self,
-        trainer,
-        pl_module,
-        prediction,
-        batch_indices,
-        batch,
-        batch_idx,
-        dataloader_idx,
-    ):
-        prediction, batch = prediction
+        trainer: Trainer,
+        pl_module: LightningModule,
+        prediction: tuple[torch.Tensor, Mapping[str, torch.Tensor]],
+        batch_indices: Sequence[int] | None,
+        batch: object,
+        batch_idx: int,
+        dataloader_idx: int,
+    ) -> None:
+        prediction_tensor, persisted_batch = prediction
         torch.save(
-            _plain_cpu_tensor(prediction),
+            _plain_cpu_tensor(prediction_tensor),
             os.path.join(self.output_dir, f"pred-{batch_idx}.pt"),
         )
         torch.save(
-            _plain_cpu_tensor(batch["audio"]),
+            _plain_cpu_tensor(persisted_batch["audio"]),
             os.path.join(self.output_dir, f"target-audio-{batch_idx}.pt"),
         )
 
-        if "params" in batch:
+        if "params" in persisted_batch:
             torch.save(
-                _plain_cpu_tensor(batch["params"]),
+                _plain_cpu_tensor(persisted_batch["params"]),
                 os.path.join(self.output_dir, f"target-params-{batch_idx}.pt"),
             )
+        self._log_progress(trainer, persisted_batch, batch_idx, dataloader_idx=dataloader_idx)
 
     def write_on_epoch_end(self, trainer, pl_module, predictions, batch_indices):
         predictions, batch = predictions
@@ -828,60 +924,188 @@ class ValAudioProbe(Callback):
         self._future_step = step
 
 
+_NUMBER_GROUP_OPTIMAL_ASSIGNMENT_OUTPUT = "per_param_mse_number_group_optimal_assignment"
 _PER_PARAM_MSE_OUTPUTS = (
     "per_param_mse",
     "per_param_mse_best_swap",
-    "per_param_mse_number_group_swap",
+    _NUMBER_GROUP_OPTIMAL_ASSIGNMENT_OUTPUT,
 )
+_SPEC_QUANTIZED_PER_PARAM_MSE = "per_param_mse_spec_quantized"
+
+
+def _distributed_metric_mean(
+    total: np.ndarray,
+    count: int,
+    device: torch.device,
+) -> np.ndarray:
+    """Reduce an accumulated metric sum and count before computing its mean.
+
+    :param total: Rank-local per-column metric sums.
+    :param count: Rank-local number of contributing observations.
+    :param device: Device compatible with the active distributed backend.
+    :returns: Globally weighted per-column mean.
+    """
+    packed = torch.cat(
+        (
+            torch.as_tensor(total, device=device, dtype=torch.float32).flatten(),
+            torch.tensor([count], device=device, dtype=torch.float32),
+        )
+    )
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.all_reduce(packed)
+    return (packed[:-1] / packed[-1]).cpu().numpy().reshape(total.shape)
 
 
 class LogPerParamMSE(Callback):
-    """Log validation-set MSE broken down per parameter dimension of the ParamSpec."""
+    """Log validation/test MSE and array alignment distances by ParamSpec parameter."""
 
-    def __init__(self, param_spec: str):
+    def __init__(self, param_spec: str) -> None:
         """Select the ParamSpec whose dimension names label emitted metrics.
 
-        :param param_spec: Registered ParamSpec name for validation outputs.
+        :param param_spec: Registered ParamSpec name for evaluation outputs.
         """
         super().__init__()
         self.param_spec = param_specs[param_spec]
 
-    def on_validation_epoch_start(
-        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"
-    ) -> None:
+    def _reset(self) -> None:
         self.metric_totals: dict[str, np.ndarray] = {}
         self.metric_counts: dict[str, int] = {}
+        self.categorical_totals: dict[str, dict[str, float]] = {}
+        self.categorical_counts: dict[str, int] = {}
 
-    def on_validation_batch_end(
-        self,
-        trainer,
-        pl_module,
-        outputs,
-        batch,
-        batch_idx,
-        dataloader_idx=0,
-    ) -> None:
+    def _accumulate(self, outputs: object, batch: object) -> None:
+        if not isinstance(outputs, Mapping):
+            return
+        params = batch.get("params") if isinstance(batch, Mapping) else None
+        weight = params.shape[0] if isinstance(params, torch.Tensor) else 1
+        batch_metrics: list[tuple[str, torch.Tensor, int]] = []
         for metric_name in _PER_PARAM_MSE_OUTPUTS:
-            if metric_name not in outputs:
-                continue
-            values = outputs[metric_name].detach().cpu().numpy()
-            total = self.metric_totals.get(metric_name, np.zeros_like(values))
-            self.metric_totals[metric_name] = total + values
-            self.metric_counts[metric_name] = self.metric_counts.get(metric_name, 0) + 1
+            metric = outputs.get(metric_name)
+            if isinstance(metric, torch.Tensor):
+                batch_metrics.append((metric_name, metric, weight))
 
-    def on_validation_epoch_end(
-        self,
-        trainer,
-        pl_module,
-    ) -> None:
+        predictions = outputs.get("preds")
+        if isinstance(predictions, torch.Tensor) and isinstance(params, torch.Tensor):
+            batch_metrics.append(
+                (
+                    _SPEC_QUANTIZED_PER_PARAM_MSE,
+                    spec_quantized_per_param_mse(predictions, params, self.param_spec),
+                    weight,
+                )
+            )
+            batch_metrics.extend(
+                (f"per_param_abs_cosine_distance/{name}", distance, weight)
+                for name, distance in spec_per_param_abs_cosine_distance(
+                    predictions, params, self.param_spec
+                ).items()
+            )
+            semantic_predictions = predictions.detach().cpu()
+            semantic_targets = params.detach().cpu()
+            batch_metrics.extend(
+                (name, value, weight)
+                for name, value in semantic_parameter_distances(
+                    semantic_predictions, semantic_targets, self.param_spec
+                ).items()
+            )
+            categorical_metrics = categorical_mismatch_metric_families(
+                semantic_predictions, semantic_targets, self.param_spec
+            )
+            for namespace, values in categorical_metrics.items():
+                totals = self.categorical_totals.setdefault(namespace, {})
+                for name, value in values.items():
+                    totals[name] = totals.get(name, 0.0) + value.item() * weight
+                self.categorical_counts[namespace] = (
+                    self.categorical_counts.get(namespace, 0) + weight
+                )
+
+        for metric_name, metric, metric_weight in batch_metrics:
+            values = metric.detach().cpu().numpy()
+            total = self.metric_totals.get(metric_name, np.zeros_like(values))
+            self.metric_totals[metric_name] = total + values * metric_weight
+            self.metric_counts[metric_name] = (
+                self.metric_counts.get(metric_name, 0) + metric_weight
+            )
+
+    def _log(self, pl_module: LightningModule, stage: Literal["test", "val"]) -> None:
         metrics = {}
         for metric_name, total in self.metric_totals.items():
-            per_param_mse = total / self.metric_counts[metric_name]
-            # Encoded spans preserve labels across onehot and multi-column parameters.
+            mean = _distributed_metric_mean(
+                total,
+                self.metric_counts[metric_name],
+                pl_module.device,
+            )
+            if "/" in metric_name:
+                metrics[f"{stage}/{metric_name}"] = mean.item()
+                continue
+            if metric_name == _NUMBER_GROUP_OPTIMAL_ASSIGNMENT_OUTPUT:
+                grouped_mse = number_group_optimal_assignment_mse_groups(
+                    torch.as_tensor(mean), self.param_spec
+                )
+                metrics.update(
+                    {
+                        f"{stage}/number_group_optimal_assignment_mse/{name}": value.item()
+                        for name, value in grouped_mse.items()
+                    }
+                )
+                continue
+            metric_namespace = (
+                f"{stage}_{metric_name}"
+                if metric_name == "per_param_mse_best_swap"
+                else f"{stage}/{metric_name}"
+            )
             metrics.update(
                 {
-                    f"{metric_name}/{param.name}": per_param_mse[span].mean()
+                    f"{metric_namespace}/{param.name}": mean[span].mean()
                     for param, span in self.param_spec.encoded_slices()
                 }
             )
+            if metric_name == _SPEC_QUANTIZED_PER_PARAM_MSE:
+                metrics[f"{stage}/param_mse_spec_quantized"] = mean.mean()
+        for namespace, totals in self.categorical_totals.items():
+            count = self.categorical_counts[namespace]
+            for name, total in totals.items():
+                mean = _distributed_metric_mean(np.asarray(total), count, pl_module.device)
+                metrics[f"{stage}/{namespace}/{name}"] = mean.item()
         pl_module.log_dict(metrics)
+
+    def on_validation_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        self._reset()
+
+    def on_validation_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        outputs: object,
+        batch: object,
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        self._accumulate(outputs, batch)
+
+    def on_validation_epoch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+    ) -> None:
+        self._log(pl_module, "val")
+
+    def on_test_epoch_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        self._reset()
+
+    def on_test_batch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+        outputs: object,
+        batch: object,
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ) -> None:
+        self._accumulate(outputs, batch)
+
+    def on_test_epoch_end(
+        self,
+        trainer: Trainer,
+        pl_module: LightningModule,
+    ) -> None:
+        self._log(pl_module, "test")

@@ -36,7 +36,7 @@ from synth_setter.pipeline.data.lance_staging import (
 )
 from synth_setter.pipeline.schemas.lance_attempt import LanceFragmentSidecar
 from synth_setter.pipeline.schemas.r2_location import parse_shard_staging_dir
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
 from tests.helpers.lance_fixtures import with_preview_columns
 
 pytestmark = pytest.mark.usefixtures("fake_r2_remote")
@@ -106,7 +106,12 @@ def shard_arrays(spec: DatasetSpec, shard_id: int, value_offset: int = 0) -> dic
 
 
 def write_local_shard(
-    spec: DatasetSpec, shard_id: int, work_dir: Path, *, value_offset: int = 0
+    spec: DatasetSpec,
+    shard_id: int,
+    work_dir: Path,
+    *,
+    value_offset: int = 0,
+    shard: ShardSpec | None = None,
 ) -> Path:
     """Write one shard's local Lance dataset exactly as the worker's renderer does.
 
@@ -114,9 +119,10 @@ def write_local_shard(
     :param shard_id: Logical shard to materialize.
     :param work_dir: Local scratch directory for the shard dataset.
     :param value_offset: Extra value offset distinguishing duplicate attempts.
+    :param shard: Explicit identity for growing shards outside ``spec.shards``.
     :returns: Path of the written ``shard-NNNNNN.lance`` dataset directory.
     """
-    shard = spec.shards[shard_id]
+    shard = spec.shards[shard_id] if shard is None else shard
     render = spec.render_for_shard(shard)
     metadata = render.shard_metadata()
     schema = lance_schema(dataset_field_shapes(render, spec.num_params), metadata)

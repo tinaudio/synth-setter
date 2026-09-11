@@ -111,6 +111,7 @@ _JOB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$")
 _WORKER_ENV_KEYS: tuple[str, ...] = (
     *RCLONE_ENV_KEYS,
     "WANDB_API_KEY",
+    "WANDB_PROJECT",
     # Pod checks out this launcher-pinned ref before running worker code.
     "WORKER_GIT_REF",
 )
@@ -327,7 +328,7 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     except ValidationError:
         resolved = dict(_RCLONE_STRUCTURAL_CONSTANTS)
 
-    for key in ("WANDB_API_KEY", "WORKER_GIT_REF"):
+    for key in ("WANDB_API_KEY", "WANDB_PROJECT", "WORKER_GIT_REF"):
         # First non-blank wins, .env over process env; a blank candidate is
         # skipped (not preferred-then-dropped), so a quoted-whitespace `.env`
         # value can't mask a real process-env fallback.
@@ -654,8 +655,8 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
     :param sky_cfg: Validated launcher config; see ``SkypilotLaunchConfig`` for
         per-field semantics.
     :raises ValueError: degenerate ``sky_cfg``, conflicting ``cmd``/``run_script``
-        pair, unresolved worker env vars, or ``extra_envs`` keys colliding with
-        ``_WORKER_ENV_KEYS``.
+        pair, unresolved worker env vars, blank ``WANDB_PROJECT`` overrides, or
+        ``extra_envs`` keys colliding with protected ``_WORKER_ENV_KEYS``.
     :raises click.ClickException: SkyPilot client auth is invalid or rejected.
     :raises RuntimeError: one or more ranks did not reach the SUCCEEDED terminal status.
     """
@@ -687,7 +688,12 @@ def dispatch_via_skypilot(sky_cfg: SkypilotLaunchConfig) -> None:
 
     # Reject extra_envs ↔ resolved-worker-env collisions before merge so a caller
     # can't bypass the .env/process-env resolution path for secrets.
-    cred_overlap = sorted(set(sky_cfg.extra_envs) & set(_WORKER_ENV_KEYS))
+    extra_wandb_project = sky_cfg.extra_envs.get("WANDB_PROJECT")
+    if extra_wandb_project is not None and not _env_value_is_set(extra_wandb_project):
+        raise ValueError("extra_envs WANDB_PROJECT must be non-blank when set")
+
+    protected_worker_env_keys = set(_WORKER_ENV_KEYS) - {"WANDB_PROJECT"}
+    cred_overlap = sorted(set(sky_cfg.extra_envs) & protected_worker_env_keys)
     if cred_overlap:
         raise ValueError(
             f"extra_envs keys collide with worker-resolved env: {cred_overlap}. "

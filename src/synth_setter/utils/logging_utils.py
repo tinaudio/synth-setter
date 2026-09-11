@@ -48,7 +48,7 @@ def pin_wandb_run_id(cfg: DictConfig, run_id: str, job_type: str) -> None:
 
     :param cfg: Hydra-composed cfg; ``logger.wandb.{id,job_type}`` are updated in place.
     :param run_id: The W&B run id to pin (see :func:`synth_setter.run_id.make_wandb_run_id`).
-    :param job_type: W&B ``job_type`` (``training`` / ``evaluation`` / ``data-generation``).
+    :param job_type: W&B ``job_type`` (``training`` / ``evaluation`` / ``data-generation`` / ``finalize``).
     """
     wandb_cfg = OmegaConf.select(cfg, "logger.wandb")
     if wandb_cfg is None or "id" not in wandb_cfg or "job_type" not in wandb_cfg:
@@ -185,6 +185,7 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
 
     :param object_dict: A dictionary containing the following objects:
         - `"cfg"`: A DictConfig object containing the main config.
+        - `"datamodule"`: Optional data source exposing run provenance.
         - `"model"`: The Lightning model.
         - `"trainer"`: The Lightning trainer.
     """
@@ -208,6 +209,11 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
             "trainer",
         )
     }
+
+    datamodule = object_dict.get("datamodule")
+    source_provenance = getattr(datamodule, "source_provenance", None)
+    if source_provenance is not None:
+        hparams["source_provenance"] = source_provenance
 
     model = object_dict["model"]
 

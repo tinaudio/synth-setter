@@ -7,7 +7,11 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.data.torchsynth_datamodule import _make_renderer, render_torchsynth
+from synth_setter.data.torchsynth_datamodule import (
+    _make_renderer,
+    _torchsynth_types,
+    render_torchsynth,
+)
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
     render_torchsynth_grad,
@@ -19,6 +23,7 @@ from synth_setter.data.vst.torchsynth_param_spec import (
 from synth_setter.models.components.audio_distance import (
     CosineEmbeddingDistance,
     LatentMseDistance,
+    MultichannelAudioDistance,
 )
 from synth_setter.models.components.audio_feedback import (
     AudioFeedbackLoss,
@@ -120,6 +125,29 @@ def _linear_encoder(scale: float = 1.0) -> torch.nn.Module:
     return encoder
 
 
+class _StereoPolarityRenderer(torch.nn.Module):
+    """Render a fixed antiphase stereo waveform through the differentiable boundary."""
+
+    def validate(self, params: torch.Tensor) -> None:
+        """Accept finite test parameter rows.
+
+        :param params: Model-space rows.
+        :raises ValueError: A row contains a non-finite parameter.
+        """
+        if not torch.isfinite(params).all():
+            raise ValueError("params must be finite")
+
+    def forward(self, params: torch.Tensor) -> torch.Tensor:
+        """Return antiphase stereo while retaining a graph edge to parameters.
+
+        :param params: Model-space rows.
+        :returns: Stereo audio shaped ``(batch, 2, 3000)``.
+        """
+        signal = torch.sin(torch.arange(3_000, device=params.device) * 0.07)
+        stereo = torch.stack((signal, -signal)).expand(params.shape[0], -1, -1)
+        return stereo + params[:, :1, None] * 0.0
+
+
 class _OrdinaryEmbedEncoder(torch.nn.Module):
     """Trainable encoder whose ordinary ``embed`` must not imply a frozen tap."""
 
@@ -143,6 +171,30 @@ class _OrdinaryEmbedEncoder(torch.nn.Module):
         :returns: Flat embedding batch.
         """
         return self.linear(audio)
+
+
+def test_audio_feedback_scores_multichannel_spatial_error_in_distance_once() -> None:
+    """The consumer passes full channel geometry directly to the composite distance."""
+    signal = torch.sin(torch.arange(3_000) * 0.07)
+    target = torch.stack((signal, signal)).expand(2, -1, -1)
+    loss = AudioFeedbackLoss(
+        lambda_audio=1.0,
+        t_min=0.0,
+        sample_rate=1_000,
+        signal_length=3_000,
+        render_batch_size=2,
+        distance=MultichannelAudioDistance(
+            sample_rate=1_000,
+            spectral_weight=0.0,
+            channel_mldr_weight=0.0,
+            pair_mldr_weight=1.0,
+        ),
+        renderer=_StereoPolarityRenderer(),
+    )
+
+    actual = loss(torch.zeros(2, 2), torch.ones(2, 1), target)
+
+    assert actual.item() > 0.0
 
 
 def test_differentiable_decode_matches_the_linear_map_across_the_working_range() -> None:
@@ -330,6 +382,65 @@ def test_grad_render_of_saturated_parameters_still_backprops_nonzero_gradient() 
     assert torch.count_nonzero(gradient[:, saturated]).item() > 0
 
 
+@pytest.fixture
+def clipping_voice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disable torchsynth's per-row peak normalizer so a max-gain row overshoots ``[-1, 1]``.
+
+    ``AudioMixer`` ends in ``normalize_if_clipping``, so a stock voice never clips; the
+    output clamp exists so the audio contract survives without that internal.
+
+    :param monkeypatch: Pytest patcher, restored on teardown.
+    """
+    _torchsynth_types()
+    import torchsynth.util
+
+    monkeypatch.setattr(torchsynth.util, "normalize_if_clipping", lambda signal: signal)
+
+
+def _max_gain_params() -> torch.Tensor:
+    """Encode one row whose mixer, envelopes, and amp modulation all sit at full scale.
+
+    :returns: Encoded row shaped ``(1, encoded_width)`` in ``[0, 1]``.
+    """
+    params = _encoded_rows(1, 0)
+    for index, spec in enumerate(INFERABLE_SPEC):
+        if spec.module == "mixer" or spec.name == "sustain" or spec.name.endswith("_amp"):
+            params[:, index] = 1.0
+        elif spec.name in ("attack", "decay"):
+            params[:, index] = 0.0
+    return params
+
+
+@pytest.mark.usefixtures("clipping_voice")
+def test_grad_render_of_a_clipping_row_matches_the_hard_clamped_production_render() -> None:
+    """A clipping estimate lands on the same ``[-1, 1]`` audio the stored target carries.
+
+    Without the clamp, every clipped sample carries an irreducible distance to its target, which an
+    audio loss or reward reads as error the parameters cannot fix.
+    """
+    params = _max_gain_params()
+
+    assert torch.equal(_render(params, render_batch_size=1), _per_row_targets(params))
+
+
+@pytest.mark.usefixtures("clipping_voice")
+def test_grad_render_of_a_clipping_row_keeps_nonzero_gradient_on_clipped_samples() -> None:
+    """Straight-through output clamp: clipped samples still pull on the parameters."""
+    params = _max_gain_params().requires_grad_()
+
+    audio = render_torchsynth_grad(
+        params,
+        sample_rate=_SAMPLE_RATE,
+        signal_length=_SIGNAL_LENGTH,
+        render_batch_size=1,
+    )
+    clipped = audio.detach().abs() >= 1.0
+    (gradient,) = torch.autograd.grad((audio * clipped).sum(), params)
+
+    assert clipped.any()
+    assert torch.count_nonzero(gradient[:, _SYNTH_COLUMNS]).item() > 0
+
+
 def test_grad_render_note_columns_receive_no_gradient() -> None:
     """Note conditioning is read off the row but never backpropagated into.
 
@@ -358,6 +469,7 @@ def test_grad_render_leaves_the_torchsynth_module_class_unmutated_mid_render() -
 
     Sampled from inside the render, where a monkeypatch would still be installed.
     """
+    _torchsynth_types()
     from torchsynth.module import SynthModule
 
     stock_p = SynthModule.p
@@ -409,12 +521,11 @@ def test_latent_loss_with_all_zero_weights_skips_render_and_preserves_scalar_con
     def fail_render(*args: object, **kwargs: object) -> torch.Tensor:
         raise AssertionError("renderer must not run")
 
-    monkeypatch.setattr(
-        "synth_setter.models.components.audio_feedback.render_torchsynth_grad", fail_render
-    )
+    loss = _loss()
+    monkeypatch.setattr(loss.renderer, "forward", fail_render)
     theta = torch.zeros(_BATCH, _ENCODED_WIDTH, dtype=torch.float64, requires_grad=True)
 
-    value = _loss()(theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH))
+    value = loss(theta, torch.zeros(_BATCH, 1), torch.empty(_BATCH, _SIGNAL_LENGTH))
 
     assert value.shape == torch.Size([])
     assert value.device == theta.device
@@ -436,13 +547,12 @@ def test_latent_loss_with_partially_zero_weights_still_renders(
         render_calls += 1
         return params[:, :1].expand(-1, _SIGNAL_LENGTH)
 
-    monkeypatch.setattr(
-        "synth_setter.models.components.audio_feedback.render_torchsynth_grad", fake_render
-    )
+    loss = _loss()
+    monkeypatch.setattr(loss.renderer, "forward", fake_render)
     theta = torch.zeros(_BATCH, _ENCODED_WIDTH, requires_grad=True)
     keep = torch.tensor([True, False, False, False])
 
-    value = _loss()(
+    value = loss(
         theta,
         torch.full((_BATCH, 1), 0.9),
         torch.zeros(_BATCH, _SIGNAL_LENGTH),
@@ -538,6 +648,20 @@ def test_latent_loss_of_a_perfect_estimate_is_zero() -> None:
     target_audio = _render(params)
 
     value = _loss().forward(params * 2 - 1, torch.full((_BATCH, 1), 0.9), target_audio)
+
+    assert value.item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_latent_loss_accepts_single_channel_dataset_audio() -> None:
+    """Stored mono channel axes are removed before scoring renderer output."""
+    params = _encoded_rows(_BATCH).clamp(0.01, 0.99)
+    target_audio = _render(params).unsqueeze(1)
+
+    value = _loss().forward(
+        params * 2 - 1,
+        torch.full((_BATCH, 1), 0.9),
+        target_audio,
+    )
 
     assert value.item() == pytest.approx(0.0, abs=1e-6)
 

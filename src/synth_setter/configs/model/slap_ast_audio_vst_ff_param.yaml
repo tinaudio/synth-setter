@@ -1,0 +1,61 @@
+defaults:
+  - slap
+  - /model/encoder@audio_encoder.encoder: slap_ast_audio
+  - /model/encoder@param_encoder.encoder: vst_ff_param
+  - _self_
+
+audio_input_key: mel
+
+audio_encoder:
+  _target_: synth_setter.models.components.slap.SiameseArm
+  projector:
+    _target_: torch.nn.Sequential
+    _args_:
+      - _target_: torch.nn.Linear
+        in_features: 512
+        out_features: 512
+      - _target_: torch.nn.ReLU
+      - _target_: torch.nn.Linear
+        in_features: 512
+        out_features: 512
+  transform:
+    _target_: torch.nn.Sequential
+    _args_:
+      - _target_: torch.nn.Linear
+        in_features: 512
+        out_features: 4096
+      - _target_: torch.nn.ReLU
+      - _target_: torch.nn.Dropout
+        p: 0.1
+      - _target_: torch.nn.Linear
+        in_features: 4096
+        out_features: 512
+  normalize_projections: true
+
+param_encoder:
+  _target_: synth_setter.models.components.slap.SiameseArm
+  projector:
+    _target_: torch.nn.Sequential
+    _args_:
+      - _target_: torch.nn.Linear
+        in_features: 512
+        out_features: 512
+      - _target_: torch.nn.BatchNorm1d
+        num_features: 512
+      - _target_: torch.nn.ReLU
+      - _target_: torch.nn.Linear
+        in_features: 512
+        out_features: 512
+  transform:
+    _target_: torch.nn.Sequential
+    _args_:
+      - _target_: torch.nn.Linear
+        in_features: 512
+        out_features: 4096
+      - _target_: torch.nn.ReLU
+      - _target_: torch.nn.Dropout
+        p: 0.1
+      - _target_: torch.nn.Linear
+        in_features: 4096
+        out_features: 512
+  normalize_projections: true

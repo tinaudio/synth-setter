@@ -46,6 +46,10 @@ from tests.plugin_manager_test_support import (
     _platform_binary_environment as _platform_binary_environment,
 )
 
+# Spawn-mode children re-import this module in a fresh interpreter; on a loaded CI
+# runner that takes several seconds, so startup waits get a budget well above it.
+_SPAWN_STARTUP_SECONDS = 60
+
 
 def _same_path_reinstall_worker(
     paths: tuple[Path, Path, Path],
@@ -288,7 +292,7 @@ def test_validated_bundle_lease_blocks_same_path_reinstall_until_consumer_opens_
     def _pause_after_validation(path: Path, **_kwargs: object) -> Iterator[Path]:
         with real_lease(path) as resolved:
             validated.set()
-            if not release_consumer.wait(10):
+            if not release_consumer.wait(_SPAWN_STARTUP_SECONDS):
                 raise RuntimeError("timed out waiting to release consumer")
             yield resolved
 
@@ -330,7 +334,7 @@ def test_validated_bundle_lease_blocks_same_path_reinstall_until_consumer_opens_
         args=((lock_path, managed, executable), (attempting, completed, results)),
     )
     installer.start()
-    assert attempting.wait(10)
+    assert attempting.wait(_SPAWN_STARTUP_SECONDS)
     assert not completed.wait(0.5)
     assert _binary_path(plugin_bundle).read_bytes() == _test_binary_magic() + b"artifact-a"
 
@@ -388,7 +392,7 @@ def test_validated_bundle_lease_waits_for_in_progress_same_path_reinstall(
         args=((manifest_path, lock_path, managed), (removed, release_installer, results)),
     )
     installer.start()
-    assert removed.wait(10)
+    assert removed.wait(_SPAWN_STARTUP_SECONDS)
     assert not plugin_bundle.exists()
 
     opened_payloads: list[bytes | str] = []
@@ -913,7 +917,7 @@ def test_adopt_plugin_bundle_changed_source_recorded_as_alias_completes_without_
         args=((manifest_path, managed_root, source), result),
     )
     process.start()
-    process.join(5)
+    process.join(_SPAWN_STARTUP_SECONDS)
     timed_out = process.is_alive()
     if timed_out:
         process.terminate()

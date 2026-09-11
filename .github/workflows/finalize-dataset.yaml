@@ -43,6 +43,11 @@ on:
         description: "Git ref / SHA the runner should check out (typically the PR head SHA)."
         required: true
         type: string
+      wandb_project:
+        description: "W&B project for the finalized run and dataset artifact."
+        required: false
+        type: string
+        default: "synth-setter-generate-dataset"
   workflow_dispatch:
     inputs:
       provider:
@@ -71,6 +76,11 @@ on:
         required: false
         type: string
         default: ""
+      wandb_project:
+        description: "W&B project for the finalized run and dataset artifact."
+        required: false
+        type: string
+        default: "synth-setter-generate-dataset"
 
 permissions:
   contents: read
@@ -111,14 +121,15 @@ jobs:
       - name: Install project deps (uv sync --frozen, CPU torch)
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
-      # WANDB_API_KEY (inherited secret) lets finalize resume the data-generation
-      # run and log the canonical dataset artifact; absent, finalize degrades to
-      # a best-effort no-op rather than failing.
+      # WANDB_API_KEY (inherited secret) lets finalize open its own
+      # `<run_id>-finalize` run and log the canonical dataset artifact; absent,
+      # finalize degrades to a best-effort no-op rather than failing.
       - name: Run synth-setter-finalize-dataset
         env:
           DATASET_ROOT_URI: ${{ inputs.dataset_root_uri }}
           PROJECT_ROOT: ${{ github.workspace }}
           WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+          WANDB_PROJECT: ${{ inputs.wandb_project }}
         run: |
           set -euo pipefail
           uv run synth-setter-finalize-dataset \

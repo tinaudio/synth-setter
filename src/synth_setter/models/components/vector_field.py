@@ -98,11 +98,19 @@ class VectorField(nn.Module):
     ) -> tuple[Float[Tensor, _BATCH_ANY_SHAPE], Shaped[Tensor, _BATCH_SHAPE]]:
         """Replace a random subset of conditioning rows with the CFG token.
 
-        :param z: Conditioning rows.
+        :param z: Conditioning rows, rank 2.
         :param rate: Per-row drop probability; ``0.0`` disables dropout entirely.
         :returns: The conditioning after dropout, and the keep mask that produced it
             (True = row kept its conditioning; all-True when ``rate`` is zero).
+        :raises ValueError: ``z`` is rank 3; this field has no per-layer conditioning.
         """
+        # Reject here rather than broadcasting: a (batch, 1) mask right-aligns onto
+        # (batch, slots, dim) and silently masks slots whenever batch equals slots.
+        if z.ndim != 2:
+            raise ValueError(
+                f"VectorField takes rank-2 conditioning, got rank {z.ndim}; "
+                "its forward has no per-layer slot indexing"
+            )
         if rate == 0.0:
             return z, torch.ones(z.shape[0], dtype=torch.bool, device=z.device)
 

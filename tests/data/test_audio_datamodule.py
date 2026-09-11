@@ -1,11 +1,14 @@
 """Tests for ``AudioFolderDataset`` file discovery."""
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
+import pytest
 from pedalboard.io import AudioFile
+from torch.utils.data import SequentialSampler
 
-from synth_setter.data.audio_datamodule import AudioFolderDataset
+from synth_setter.data.audio_datamodule import AudioDataModule, AudioFolderDataset
 
 
 def _write_wav(path: Path, seconds: float = 0.5, sample_rate: int = 44100) -> Path:
@@ -37,6 +40,29 @@ def test_default_glob_discovers_only_wav_files(tmp_path: Path) -> None:
     assert dataset.files == [kept]
 
 
+def test_default_glob_orders_audio_files_by_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prediction order is stable regardless of directory enumeration order.
+
+    :param tmp_path: Audio root populated in reverse lexical order.
+    :param monkeypatch: Forces the filesystem glob to return reverse lexical order.
+    """
+    second = _write_wav(tmp_path / "b.wav")
+    first = _write_wav(tmp_path / "a.wav")
+    original_glob = Path.glob
+
+    def _reverse_glob(path: Path, pattern: str) -> Iterator[Path]:
+        return reversed(list(original_glob(path, pattern)))
+
+    monkeypatch.setattr(Path, "glob", _reverse_glob)
+
+    dataset = AudioFolderDataset(root=str(tmp_path))
+
+    assert dataset.files == [first, second]
+
+
 def test_explicit_files_skip_the_root_glob(tmp_path: Path) -> None:
     """An explicit file list is used verbatim, ignoring the root's contents.
 
@@ -59,3 +85,14 @@ def test_empty_root_yields_empty_dataset(tmp_path: Path) -> None:
     dataset = AudioFolderDataset(root=str(tmp_path))
 
     assert len(dataset) == 0
+
+
+def test_predict_dataloader_preserves_dataset_order(tmp_path: Path) -> None:
+    """Audio prediction iterates sequentially so outputs retain source ordering.
+
+    :param tmp_path: Empty audio root used to initialize the prediction dataset.
+    """
+    datamodule = AudioDataModule(root=str(tmp_path))
+    datamodule.setup("predict")
+
+    assert isinstance(datamodule.predict_dataloader().sampler, SequentialSampler)

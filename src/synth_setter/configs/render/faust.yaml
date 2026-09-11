@@ -1,5 +1,6 @@
-# DawDreamer compiles the selected identity's checked-in source string; no source or preset path is accepted.
-renderer_backend: dawdreamer_faust
+# DawDreamer compiles the selected identity's digest-pinned checked-in source.
+renderer_backend: dawdreamer
+backend_version: "0.8.3"
 sample_rate: 44100
 channels: 2
 velocity: 100
