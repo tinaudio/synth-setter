@@ -317,7 +317,7 @@ gh pr checks "${PR}" --watch
 ```
 
 Confirm `Pi Repo Review (Full)` checks out `tinaudio/skills`, posts a review for
-the current head, and completes after any deferred aftercare result is written.
+the current head, and completes after any deferred follow-up result is written.
 
 ### Anthropic (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`)
 

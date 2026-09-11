@@ -116,6 +116,19 @@ def test_consumed_artifact_refs_model_and_dataset_present_returns_model_then_dat
     )
 
 
+def test_consumed_artifact_refs_uses_configured_immutable_model_alias() -> None:
+    """A pinned checkpoint records its matching immutable W&B artifact version."""
+    cfg = OmegaConf.create(
+        {
+            "consumed_train_config_id": "flow-simple",
+            "consumed_train_artifact_alias": "v7",
+            "datamodule": {"dataset_root": None},
+        }
+    )
+
+    assert _consumed_artifact_refs(cfg) == ([("model-flow-simple", "v7")], [])
+
+
 def test_consumed_artifact_refs_missing_dataset_provenance_returns_model_edge_only() -> None:
     """A model ID without a discoverable local dataset keeps its model edge.
 
@@ -172,3 +185,22 @@ def test_consumed_artifact_refs_without_model_or_dataset_returns_empty() -> None
     )
 
     assert _consumed_artifact_refs(cfg) == ([], [])
+
+
+def test_consumed_artifact_refs_corpus_uri_reported_as_unresolved_provenance() -> None:
+    """A third-party corpus with no frozen spec still names itself in the lineage report.
+
+    The corpus datamodule has no ``dataset_root``; without the fallback the run
+    would silently record no dataset provenance at all.
+    """
+    cfg = OmegaConf.create(
+        {
+            "consumed_train_config_id": None,
+            "datamodule": {"dataset_uri": "r2://experiments/third_party/NSynth/test.lance"},
+        }
+    )
+
+    refs, unresolved = _consumed_artifact_refs(cfg)
+
+    assert refs == []
+    assert unresolved == ["r2://experiments/third_party/NSynth/test.lance"]

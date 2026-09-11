@@ -11,20 +11,58 @@ Usage::
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 
+import numpy as np
+
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
     DiscreteLiteralParameter,
     NoteDurationParameter,
     Parameter,
+    ParameterValues,
     ParamSpec,
 )
 from synth_setter.param_spec_name import ParamSpecName
 
 # These conditioning bounds are baked into each identity; changes require a new ParamSpecName.
-_FAUST_MAX_NOTE_DURATION_SECONDS = 4.0
+FAUST_NOTE_DURATION_SECONDS = 4.0
 _FAUST_MIDI_PITCH_MAX = 72
 _FAUST_MIDI_PITCH_MIN = 48
+_SHIMMER_FDN_NOTE_PARAMS: ParameterValues = {
+    "pitch": 60,
+    "note_start_and_end": (0.0, FAUST_NOTE_DURATION_SECONDS),
+}
+
+
+class ShimmerFDNParamSpec(ParamSpec):
+    """Represent only shimmer controls while supplying renderer-compatible note values."""
+
+    def __init__(self, synth_params: list[Parameter]) -> None:
+        """Bind the shimmer control vector without sampled MIDI coordinates.
+
+        :param synth_params: Exact-address controls represented in each encoded row.
+        """
+        super().__init__(synth_params=synth_params, note_params=[])
+
+    def sample(
+        self, rng: np.random.Generator | None = None
+    ) -> tuple[ParameterValues, ParameterValues]:
+        """Sample DSP controls and return the fixed compatibility note.
+
+        :param rng: Optional caller-owned random generator.
+        :returns: Sampled controls and fixed four-second MIDI mapping.
+        """
+        synth_params, _ = super().sample(rng)
+        return synth_params, _SHIMMER_FDN_NOTE_PARAMS.copy()
+
+    def decode(self, params: np.ndarray) -> tuple[ParameterValues, ParameterValues]:
+        """Decode DSP controls and return the fixed compatibility note.
+
+        :param params: Encoded DSP-control row shaped ``(self.encoded_width,)``.
+        :returns: Decoded controls and fixed four-second MIDI mapping.
+        """
+        synth_params, _ = super().decode(params)
+        return synth_params, _SHIMMER_FDN_NOTE_PARAMS.copy()
 
 
 def _note_params() -> list[Parameter]:
@@ -40,7 +78,7 @@ def _note_params() -> list[Parameter]:
         ),
         NoteDurationParameter(
             name="note_start_and_end",
-            max_note_duration_seconds=_FAUST_MAX_NOTE_DURATION_SECONDS,
+            max_note_duration_seconds=FAUST_NOTE_DURATION_SECONDS,
         ),
     ]
 
@@ -140,6 +178,32 @@ def _church_organ_param_spec() -> ParamSpec:
     )
 
 
+def _shimmer_fdn_param_spec() -> ParamSpec:
+    """Build the fixed-impulse shimmer FDN specification.
+
+    :returns: Fresh exact-address shimmer specification without note coordinates.
+    """
+    shifted_lines = [
+        _trigger_parameter(f"/shimmerFDN/Shimmer/shifted_lines/line__{index}")
+        for index in range(8)
+    ]
+    return ShimmerFDNParamSpec(
+        [
+            ContinuousParameter(name="/shimmerFDN/FDN/T60_low", min=0.1, max=20.0),
+            ContinuousParameter(name="/shimmerFDN/FDN/T60_high", min=0.05, max=20.0),
+            ContinuousParameter(name="/shimmerFDN/FDN/crossover", min=200.0, max=16000.0),
+            ContinuousParameter(name="/shimmerFDN/Shimmer/transpose", min=-2400.0, max=2400.0),
+            ContinuousParameter(name="/shimmerFDN/Shimmer/window", min=64.0, max=8192.0),
+            *shifted_lines,
+            ContinuousParameter(name="/shimmerFDN/Shimmer/DC_comp_max", min=0.0, max=12.0),
+            _unit_parameter("/shimmerFDN/Output/dry/wet"),
+            ContinuousParameter(name="/shimmerFDN/Output/level", min=-40.0, max=12.0),
+            ContinuousParameter(name="/shimmerFDN/Safety/loop_ceiling", min=-40.0, max=0.0),
+            _trigger_parameter("/shimmerFDN/Safety/energy_guard_bypass"),
+        ]
+    )
+
+
 def _filter_osc_param_spec() -> ParamSpec:
     """Build the filterOSC specification.
 
@@ -173,6 +237,7 @@ _faust_param_spec_builders: Mapping[ParamSpecName, Callable[[], ParamSpec]] = Ma
         ParamSpecName("faust_bubble"): _bubble_param_spec,
         ParamSpecName("faust_church_organ"): _church_organ_param_spec,
         ParamSpecName("faust_filter_osc"): _filter_osc_param_spec,
+        ParamSpecName("faust_shimmer_fdn"): _shimmer_fdn_param_spec,
     }
 )
 

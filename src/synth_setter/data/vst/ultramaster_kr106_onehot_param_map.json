@@ -1,0 +1,716 @@
+{
+  "plugin": "Ultramaster KR-106",
+  "param_spec_name": "ultramaster_kr106_onehot",
+  "preset_resource": "presets/ultramaster_kr106-base.vstpreset",
+  "preset_sha256": "89b59893b268a4f200e15e496a67f675c02c36f7b79d73691946a7eee0e4cdc0",
+  "pedalboard": {
+    "plugin_version": "2.5.13",
+    "parameter_count": 58
+  },
+  "clap": null,
+  "dawdreamer": {
+    "plugin_version": "2.5.13",
+    "parameter_count": 2138
+  },
+  "surgepy_preset_resource": null,
+  "surgepy_preset_sha256": null,
+  "surgepy": null,
+  "params": {
+    "program": {
+      "pedalboard": {
+        "index": 57,
+        "name": "Program"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 57,
+        "name": "Program"
+      },
+      "surgepy": null
+    },
+    "adsr_mode": {
+      "pedalboard": {
+        "index": 37,
+        "name": "ADSR Mode"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 37,
+        "name": "ADSR Mode"
+      },
+      "surgepy": null
+    },
+    "bender_dco": {
+      "pedalboard": {
+        "index": 0,
+        "name": "Bender DCO"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 0,
+        "name": "Bender DCO"
+      },
+      "surgepy": null
+    },
+    "bender_vcf": {
+      "pedalboard": {
+        "index": 1,
+        "name": "Bender VCF"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 1,
+        "name": "Bender VCF"
+      },
+      "surgepy": null
+    },
+    "bender_lfo": {
+      "pedalboard": {
+        "index": 2,
+        "name": "Bender LFO"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 2,
+        "name": "Bender LFO"
+      },
+      "surgepy": null
+    },
+    "arp_rate": {
+      "pedalboard": {
+        "index": 3,
+        "name": "Arp Rate"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 3,
+        "name": "Arp Rate"
+      },
+      "surgepy": null
+    },
+    "lfo_rate": {
+      "pedalboard": {
+        "index": 4,
+        "name": "LFO Rate"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 4,
+        "name": "LFO Rate"
+      },
+      "surgepy": null
+    },
+    "lfo_delay": {
+      "pedalboard": {
+        "index": 5,
+        "name": "LFO Delay"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 5,
+        "name": "LFO Delay"
+      },
+      "surgepy": null
+    },
+    "dco_lfo": {
+      "pedalboard": {
+        "index": 6,
+        "name": "DCO LFO"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 6,
+        "name": "DCO LFO"
+      },
+      "surgepy": null
+    },
+    "dco_pwm": {
+      "pedalboard": {
+        "index": 7,
+        "name": "DCO PWM"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 7,
+        "name": "DCO PWM"
+      },
+      "surgepy": null
+    },
+    "dco_sub": {
+      "pedalboard": {
+        "index": 8,
+        "name": "DCO Sub"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 8,
+        "name": "DCO Sub"
+      },
+      "surgepy": null
+    },
+    "dco_noise": {
+      "pedalboard": {
+        "index": 9,
+        "name": "DCO Noise"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 9,
+        "name": "DCO Noise"
+      },
+      "surgepy": null
+    },
+    "hpf": {
+      "pedalboard": {
+        "index": 10,
+        "name": "HPF"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 10,
+        "name": "HPF"
+      },
+      "surgepy": null
+    },
+    "vcf_freq": {
+      "pedalboard": {
+        "index": 11,
+        "name": "VCF Freq"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 11,
+        "name": "VCF Freq"
+      },
+      "surgepy": null
+    },
+    "vcf_res": {
+      "pedalboard": {
+        "index": 12,
+        "name": "VCF Res"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 12,
+        "name": "VCF Res"
+      },
+      "surgepy": null
+    },
+    "vcf_env": {
+      "pedalboard": {
+        "index": 13,
+        "name": "VCF Env"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 13,
+        "name": "VCF Env"
+      },
+      "surgepy": null
+    },
+    "vcf_lfo": {
+      "pedalboard": {
+        "index": 14,
+        "name": "VCF LFO"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 14,
+        "name": "VCF LFO"
+      },
+      "surgepy": null
+    },
+    "vcf_kbd": {
+      "pedalboard": {
+        "index": 15,
+        "name": "VCF Kbd"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 15,
+        "name": "VCF Kbd"
+      },
+      "surgepy": null
+    },
+    "volume": {
+      "pedalboard": {
+        "index": 16,
+        "name": "Volume"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 16,
+        "name": "Volume"
+      },
+      "surgepy": null
+    },
+    "attack": {
+      "pedalboard": {
+        "index": 17,
+        "name": "Attack"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 17,
+        "name": "Attack"
+      },
+      "surgepy": null
+    },
+    "decay": {
+      "pedalboard": {
+        "index": 18,
+        "name": "Decay"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 18,
+        "name": "Decay"
+      },
+      "surgepy": null
+    },
+    "sustain": {
+      "pedalboard": {
+        "index": 19,
+        "name": "Sustain"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 19,
+        "name": "Sustain"
+      },
+      "surgepy": null
+    },
+    "release": {
+      "pedalboard": {
+        "index": 20,
+        "name": "Release"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 20,
+        "name": "Release"
+      },
+      "surgepy": null
+    },
+    "transpose": {
+      "pedalboard": {
+        "index": 21,
+        "name": "Transpose"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 21,
+        "name": "Transpose"
+      },
+      "surgepy": null
+    },
+    "hold": {
+      "pedalboard": {
+        "index": 22,
+        "name": "Hold"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 22,
+        "name": "Hold"
+      },
+      "surgepy": null
+    },
+    "arpeggio": {
+      "pedalboard": {
+        "index": 23,
+        "name": "Arpeggio"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 23,
+        "name": "Arpeggio"
+      },
+      "surgepy": null
+    },
+    "pulse": {
+      "pedalboard": {
+        "index": 24,
+        "name": "Pulse"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 24,
+        "name": "Pulse"
+      },
+      "surgepy": null
+    },
+    "saw": {
+      "pedalboard": {
+        "index": 25,
+        "name": "Saw"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 25,
+        "name": "Saw"
+      },
+      "surgepy": null
+    },
+    "sub_sw": {
+      "pedalboard": {
+        "index": 26,
+        "name": "Sub Sw"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 26,
+        "name": "Sub Sw"
+      },
+      "surgepy": null
+    },
+    "chorus_off": {
+      "pedalboard": {
+        "index": 27,
+        "name": "Chorus Off"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 27,
+        "name": "Chorus Off"
+      },
+      "surgepy": null
+    },
+    "chorus_i": {
+      "pedalboard": {
+        "index": 28,
+        "name": "Chorus I"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 28,
+        "name": "Chorus I"
+      },
+      "surgepy": null
+    },
+    "chorus_ii": {
+      "pedalboard": {
+        "index": 29,
+        "name": "Chorus II"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 29,
+        "name": "Chorus II"
+      },
+      "surgepy": null
+    },
+    "octave": {
+      "pedalboard": {
+        "index": 30,
+        "name": "Octave"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 30,
+        "name": "Octave"
+      },
+      "surgepy": null
+    },
+    "arp_mode": {
+      "pedalboard": {
+        "index": 31,
+        "name": "Arp Mode"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 31,
+        "name": "Arp Mode"
+      },
+      "surgepy": null
+    },
+    "arp_range": {
+      "pedalboard": {
+        "index": 32,
+        "name": "Arp Range"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 32,
+        "name": "Arp Range"
+      },
+      "surgepy": null
+    },
+    "lfo_mode": {
+      "pedalboard": {
+        "index": 33,
+        "name": "LFO Mode"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 33,
+        "name": "LFO Mode"
+      },
+      "surgepy": null
+    },
+    "pwm_mode": {
+      "pedalboard": {
+        "index": 34,
+        "name": "PWM Mode"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 34,
+        "name": "PWM Mode"
+      },
+      "surgepy": null
+    },
+    "vcf_env_inv": {
+      "pedalboard": {
+        "index": 35,
+        "name": "VCF Env Inv"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 35,
+        "name": "VCF Env Inv"
+      },
+      "surgepy": null
+    },
+    "vca_mode": {
+      "pedalboard": {
+        "index": 36,
+        "name": "VCA Mode"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 36,
+        "name": "VCA Mode"
+      },
+      "surgepy": null
+    },
+    "bender": {
+      "pedalboard": {
+        "index": 38,
+        "name": "Bender"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 38,
+        "name": "Bender"
+      },
+      "surgepy": null
+    },
+    "tuning": {
+      "pedalboard": {
+        "index": 39,
+        "name": "Tuning"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 39,
+        "name": "Tuning"
+      },
+      "surgepy": null
+    },
+    "power": {
+      "pedalboard": {
+        "index": 40,
+        "name": "Power"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 40,
+        "name": "Power"
+      },
+      "surgepy": null
+    },
+    "porta_mode": {
+      "pedalboard": {
+        "index": 41,
+        "name": "Porta Mode"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 41,
+        "name": "Porta Mode"
+      },
+      "surgepy": null
+    },
+    "porta_rate": {
+      "pedalboard": {
+        "index": 42,
+        "name": "Porta Rate"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 42,
+        "name": "Porta Rate"
+      },
+      "surgepy": null
+    },
+    "transpose_offset": {
+      "pedalboard": {
+        "index": 43,
+        "name": "Transpose Offset"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 43,
+        "name": "Transpose Offset"
+      },
+      "surgepy": null
+    },
+    "master_volume": {
+      "pedalboard": {
+        "index": 44,
+        "name": "Master Volume"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 44,
+        "name": "Master Volume"
+      },
+      "surgepy": null
+    },
+    "voices": {
+      "pedalboard": {
+        "index": 45,
+        "name": "Voices"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 45,
+        "name": "Voices"
+      },
+      "surgepy": null
+    },
+    "vcf_oversample": {
+      "pedalboard": {
+        "index": 46,
+        "name": "VCF Oversample"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 46,
+        "name": "VCF Oversample"
+      },
+      "surgepy": null
+    },
+    "ignore_velocity": {
+      "pedalboard": {
+        "index": 47,
+        "name": "Ignore Velocity"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 47,
+        "name": "Ignore Velocity"
+      },
+      "surgepy": null
+    },
+    "arp_limit_kbd": {
+      "pedalboard": {
+        "index": 48,
+        "name": "Arp Limit Kbd"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 48,
+        "name": "Arp Limit Kbd"
+      },
+      "surgepy": null
+    },
+    "arp_sync_host": {
+      "pedalboard": {
+        "index": 49,
+        "name": "Arp Sync Host"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 49,
+        "name": "Arp Sync Host"
+      },
+      "surgepy": null
+    },
+    "lfo_sync_host": {
+      "pedalboard": {
+        "index": 50,
+        "name": "LFO Sync Host"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 50,
+        "name": "LFO Sync Host"
+      },
+      "surgepy": null
+    },
+    "mono_retrigger": {
+      "pedalboard": {
+        "index": 51,
+        "name": "Mono Retrigger"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 51,
+        "name": "Mono Retrigger"
+      },
+      "surgepy": null
+    },
+    "send_midi_sysex": {
+      "pedalboard": {
+        "index": 52,
+        "name": "Send MIDI SysEx"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 52,
+        "name": "Send MIDI SysEx"
+      },
+      "surgepy": null
+    },
+    "arp_quantize": {
+      "pedalboard": {
+        "index": 53,
+        "name": "Arp Quantize"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 53,
+        "name": "Arp Quantize"
+      },
+      "surgepy": null
+    },
+    "lfo_quantize": {
+      "pedalboard": {
+        "index": 54,
+        "name": "LFO Quantize"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 54,
+        "name": "LFO Quantize"
+      },
+      "surgepy": null
+    },
+    "oscillator_mode": {
+      "pedalboard": {
+        "index": 55,
+        "name": "Oscillator Mode"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 55,
+        "name": "Oscillator Mode"
+      },
+      "surgepy": null
+    },
+    "bypass": {
+      "pedalboard": {
+        "index": 56,
+        "name": "Bypass"
+      },
+      "clap": null,
+      "dawdreamer": {
+        "index": 56,
+        "name": "Bypass"
+      },
+      "surgepy": null
+    }
+  }
+}

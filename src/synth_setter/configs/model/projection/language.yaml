@@ -1,0 +1,15 @@
+# @package _global_
+
+model:
+  vector_field:
+    projection:
+      _target_: synth_setter.models.components.language_projection.LanguageParameterProjection
+      d_model: ${model.vector_field.d_model}
+      param_spec_name: ${synth.param_spec_name}
+      synth_name: ${synth.name}
+      embedding_dim: 128
+      embedding_path: ${datamodule.dataset_root}/param_language.npz
+
+callbacks:
+  parameter_language:
+    _target_: synth_setter.utils.parameter_language.ParameterLanguageInitializer

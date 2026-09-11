@@ -38,6 +38,8 @@ class TestTrainConfigAcceptsLiveCompose:
         assert isinstance(model.train, bool)
         assert isinstance(model.test, bool)
         assert model.ckpt_path is None or isinstance(model.ckpt_path, str)
+        assert isinstance(model.estimate_normalization_stats, bool)
+        assert model.feature_flags == []
         assert model.seed is None or (isinstance(model.seed, int) and model.seed >= 0)
         assert model.optimized_metric is None or isinstance(model.optimized_metric, str)
         assert model.watch_gradients is None or isinstance(model.watch_gradients, bool)
@@ -45,6 +47,11 @@ class TestTrainConfigAcceptsLiveCompose:
 
 class TestTrainConfigRejectsBadInputs:
     """Validators must reject obvious mistakes on the scalar fields."""
+
+    def test_removed_ast_feature_flag_rejected(self) -> None:
+        """The AST padding choice belongs to architecture config, not runtime flags."""
+        with pytest.raises(ValidationError, match="unknown feature flag number: 3160"):
+            TrainConfig.model_validate({"feature_flags": [3160]})
 
     def test_blank_task_name_rejected(self) -> None:
         """A blank ``task_name`` would produce an empty output dir; reject it."""
@@ -55,6 +62,13 @@ class TestTrainConfigRejectsBadInputs:
         """``train`` is ``StrictBool``; ``"yes"`` would otherwise coerce silently."""
         with pytest.raises(ValidationError, match="bool"):
             TrainConfig.model_validate({"task_name": "train", "train": "yes"})
+
+    def test_string_estimate_normalization_stats_rejected(self) -> None:
+        """Calibration is opt-in through a strict boolean."""
+        with pytest.raises(ValidationError, match="bool"):
+            TrainConfig.model_validate(
+                {"task_name": "train", "estimate_normalization_stats": "yes"}
+            )
 
     def test_negative_seed_rejected(self) -> None:
         """Lightning's ``seed_everything`` rejects negative seeds; reject up front."""

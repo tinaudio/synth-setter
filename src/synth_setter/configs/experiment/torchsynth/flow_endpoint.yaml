@@ -1,0 +1,13 @@
+# @package _global_
+
+# The torchsynth flow arm with the field predicting the clean parameter row instead of the
+# velocity; the sampler converts it back. Stage 1 of the category-aware flow work (#3270).
+defaults:
+  - torchsynth/flow
+  - _self_
+
+run_name: flow_endpoint
+tags: [torchsynth, flow, endpoint]
+
+model:
+  parameterization: endpoint

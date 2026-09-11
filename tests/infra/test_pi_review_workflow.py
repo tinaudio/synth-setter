@@ -44,7 +44,7 @@ def _steps(project_root: Path) -> list[dict[str, object]]:
 def test_pi_review_workflow_triggers_for_pr_heads_and_cancels_stale_runs(
     project_root: Path,
 ) -> None:
-    """Each current PR head receives one review while superseded runs stop.
+    """PR updates and trusted mentions share one stale-run concurrency group.
 
     :param project_root: Repository root containing the workflow.
     """
@@ -58,8 +58,12 @@ def test_pi_review_workflow_triggers_for_pr_heads_and_cancels_stale_runs(
         "ready_for_review",
         "reopened",
     ]
+    assert triggers["issue_comment"]["types"] == ["created"]
     assert workflow["concurrency"] == {
-        "group": "pi-repo-review-full-${{ github.event.pull_request.number }}",
+        "group": (
+            "pi-repo-review-full-${{ github.event.pull_request.number || "
+            "github.event.issue.number }}"
+        ),
         "cancel-in-progress": True,
     }
 
@@ -72,13 +76,26 @@ def test_pi_review_workflow_secrets_are_restricted_to_allowlisted_same_repo_prs(
 
     :param project_root: Repository root containing the workflow.
     """
+    workflow = _workflow(project_root)
+    jobs = cast(dict[str, dict[str, object]], workflow["jobs"])
+    authorization_job = jobs["authorize-review"]
     job = _job(project_root)
 
-    assert job["if"] == (
-        "${{ github.event.pull_request.head.repo.full_name == github.repository && "
-        "github.event.pull_request.user.login == 'ktinubu' && github.actor == 'ktinubu' && "
-        "github.triggering_actor == 'ktinubu' }}"
+    assert authorization_job["permissions"] == {
+        "contents": "read",
+        "pull-requests": "read",
+    }
+    assert "@github-actions review" in str(authorization_job["if"])
+    assert "github.event.issue.state == 'open'" in str(authorization_job["if"])
+    assert "github.event.comment.user.login == 'ktinubu'" in str(authorization_job["if"])
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in str(
+        authorization_job["if"]
     )
+    authorization_steps = str(authorization_job["steps"])
+    assert "is_trusted_pi_review_pr.py" in authorization_steps
+    assert "should_run_pi_review.py" in authorization_steps
+    assert job["needs"] == "authorize-review"
+    assert job["if"] == "${{ needs.authorize-review.outputs.should_review == 'true' }}"
     assert job["permissions"] == {
         "actions": "read",
         "checks": "read",
@@ -150,7 +167,9 @@ def test_pi_review_workflow_restores_pi_auth_and_runs_canonical_launcher(
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in workflow_text
     expected_github_token_reference = "${{ github." + "token }}"
     assert review_env["GH_TOKEN"] == expected_github_token_reference
-    assert review_env["PR_NUMBER"] == "${{ github.event.pull_request.number }}"
+    assert review_env["PR_NUMBER"] == (
+        "${{ github.event.pull_request.number || github.event.issue.number }}"
+    )
     assert str(review_env["PI_REVIEW_SKILLS_ROOT"]).endswith(
         "/.review-skills/codex/synth-setter-skills"
     )
@@ -161,10 +180,10 @@ def test_pi_review_workflow_restores_pi_auth_and_runs_canonical_launcher(
 
 
 @pytest.mark.infra
-def test_pi_review_workflow_pins_runtime_and_uploads_aftercare_audit(
+def test_pi_review_workflow_pins_runtime_and_uploads_follow_up_audit(
     project_root: Path,
 ) -> None:
-    """The reproducible runtime retains foreground and synchronous-aftercare evidence.
+    """The reproducible runtime retains foreground and synchronous follow-up evidence.
 
     :param project_root: Repository root containing the workflow.
     """
@@ -174,7 +193,7 @@ def test_pi_review_workflow_pins_runtime_and_uploads_aftercare_audit(
     install_command = str(install_step["run"])
     upload_inputs = cast(dict[str, object], upload_step["with"])
 
-    assert "@earendil-works/pi-coding-agent@0.83.0" in install_command
+    assert "@earendil-works/pi-coding-agent@0.85.1" in install_command
     assert "@tintinweb/pi-subagents@0.14.1" in install_command
     assert "pydantic==2.13.4" in install_command
     assert "sh==2.2.2" in install_command

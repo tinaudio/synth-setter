@@ -29,10 +29,11 @@ def test_synth_group_files_and_registry_are_bijective() -> None:
 
 
 def test_synth_group_files_mirror_registry_identity() -> None:
-    """Each group file carries exactly the registry row's five fields."""
+    """Each group file carries the registry row without irrelevant optional fields."""
     for name, spec in SYNTHS.items():
         content = yaml.safe_load((_SYNTH_CONFIG_DIR / f"{name}.yaml").read_text())
-        assert content == spec.model_dump(), name
+        expected = spec.model_dump(exclude={"format"}, exclude_none=True)
+        assert content == expected, name
 
 
 def test_train_root_selects_synth_group_by_name() -> None:

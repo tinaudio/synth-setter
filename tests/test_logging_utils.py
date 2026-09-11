@@ -13,6 +13,7 @@ from typing import cast
 from unittest.mock import patch
 
 import pytest
+import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
@@ -23,6 +24,7 @@ from omegaconf import OmegaConf
 
 from synth_setter.utils.logging_utils import (
     LINEAGE_INCOMPLETE_TAG,
+    log_hyperparameters,
     log_wandb_provenance,
     mark_lineage_incomplete,
     pin_wandb_run_id,
@@ -30,6 +32,7 @@ from synth_setter.utils.logging_utils import (
     resolve_run_config_id,
     use_input_artifacts,
 )
+from tests.helpers.recording_wandb_logger import RecordingWandbLogger
 
 # Enables the ``pytester`` fixture used by the singleton-isolation regression test
 # to run a controlled, order-pinned sub-session independent of pytest-randomly.
@@ -57,6 +60,55 @@ def make_fake_wandb(*, has_run: bool = True) -> SimpleNamespace:
         config=FakeWandbConfig(),
         __spec__=object(),
     )
+
+
+def test_log_hyperparameters_interpolation_records_resolved_value() -> None:
+    """W&B receives resolved values rather than Hydra interpolation expressions."""
+    cfg = OmegaConf.create(
+        {
+            "model": {"scheduler": {"T_max": "${trainer.max_steps}"}},
+            "datamodule": {},
+            "trainer": {"max_steps": 400},
+        }
+    )
+    logger = RecordingWandbLogger()
+    trainer = SimpleNamespace(logger=logger, loggers=[logger])
+
+    log_hyperparameters({"cfg": cfg, "model": torch.nn.Linear(1, 1), "trainer": trainer})
+
+    assert logger.experiment.config["model"]["scheduler"]["T_max"] == 400
+
+
+def test_log_hyperparameters_missing_logger_skips_config_resolution() -> None:
+    """A disabled logger does not force otherwise-unused config resolution."""
+    cfg = OmegaConf.create(
+        {
+            "model": "${missing_runtime_value}",
+            "datamodule": {},
+            "trainer": {},
+        }
+    )
+    trainer = SimpleNamespace(logger=None, loggers=[])
+
+    log_hyperparameters({"cfg": cfg, "model": torch.nn.Linear(1, 1), "trainer": trainer})
+
+
+def test_log_hyperparameters_unlogged_interpolation_does_not_block_logging() -> None:
+    """Unresolvable Hydra internals outside the logged payload remain untouched."""
+    cfg = OmegaConf.create(
+        {
+            "model": {"scheduler": {"T_max": "${trainer.max_steps}"}},
+            "datamodule": {},
+            "trainer": {"max_steps": 400},
+            "hydra": {"run": {"dir": "${missing_runtime_value}"}},
+        }
+    )
+    logger = RecordingWandbLogger()
+    trainer = SimpleNamespace(logger=logger, loggers=[logger])
+
+    log_hyperparameters({"cfg": cfg, "model": torch.nn.Linear(1, 1), "trainer": trainer})
+
+    assert logger.experiment.config["model"]["scheduler"]["T_max"] == 400
 
 
 # ---------------------------------------------------------------------------

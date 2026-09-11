@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SurgePy flow evaluation</title>
+  </head>
+  <body>
+    <h1>SurgePy flow evaluation</h1>
+    <p>Inference runs here using ONNX Runtime Web (WASM). SurgePy rendering and audio metrics run in the local CLI after inference.</p>
+    <button id="run" type="button">Run flow evaluation</button>
+    <p id="status" role="status">Ready</p>
+    <pre id="prediction"></pre>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>

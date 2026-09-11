@@ -85,6 +85,101 @@ def test_vst_slow_meanaudio_changes_trigger_real_eval_e2e(
 
 
 @pytest.mark.infra
+def test_vst_slow_dispatch_selects_registered_synth(project_root: Path) -> None:
+    """Manual runs can select one registered VST matrix cell.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    """
+    workflow = _load_workflow(project_root)
+    on_key: object = "on" if "on" in workflow else True
+    triggers = cast(dict[str, dict[str, object]], workflow[on_key])
+    dispatch = triggers["workflow_dispatch"]
+    inputs = cast(dict[str, dict[str, object]], dispatch["inputs"])
+
+    assert inputs["synth"]["type"] == "choice"
+    assert inputs["synth"]["options"] == ["all", "obxf", "surge_xt", "ultramaster_kr106"]
+
+
+@pytest.mark.infra
+@pytest.mark.parametrize(
+    "step_name",
+    [
+        "Checkout",
+        "Hydrate gated embedding checkpoints",
+        "Prepare Docker storage capacity",
+        "Pull image",
+        "Run VST slow tests in Docker",
+    ],
+)
+def test_vst_slow_unselected_cells_skip_work(
+    project_root: Path,
+    step_name: str,
+) -> None:
+    """A manual synth selection prevents other matrix cells from doing work.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    :param step_name: Work step that must honor the selection output.
+    """
+    workflow = _load_workflow(project_root)
+    jobs = cast(dict[str, dict[str, object]], workflow["jobs"])
+    steps = cast(list[dict[str, object]], jobs["run_vst_slow_tests"]["steps"])
+    step = next(candidate for candidate in steps if candidate.get("name") == step_name)
+
+    assert "steps.select_synth.outputs.selected == 'true'" in cast(str, step["if"])
+
+
+@pytest.mark.infra
+def test_vst_slow_kr106_cell_runs_dawdreamer_parity_suite(project_root: Path) -> None:
+    """The KR106 matrix cell compares its real Pedalboard and DawDreamer hosts.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    """
+    workflow = _load_workflow(project_root)
+    jobs = cast(dict[str, dict[str, object]], workflow["jobs"])
+    strategy = cast(dict[str, object], jobs["run_vst_slow_tests"]["strategy"])
+    matrix = cast(dict[str, list[dict[str, str]]], strategy["matrix"])
+    kr106 = next(row for row in matrix["include"] if row["synth"] == "ultramaster_kr106")
+
+    assert kr106["plugin_path"] == "/usr/lib/vst3/Ultramaster KR-106.vst3"
+    assert "tests/data/vst/test_dawdreamer_dataset_e2e.py" in kr106["pytest_targets"].split()
+
+
+@pytest.mark.infra
+def test_vst_slow_runs_parallel_queue_real_vst_e2e(project_root: Path) -> None:
+    """The Surge cell proves two queue-owned VST renders overlap.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    """
+    workflow = _load_workflow(project_root)
+    jobs = cast(dict[str, dict[str, object]], workflow["jobs"])
+    strategy = cast(dict[str, object], jobs["run_vst_slow_tests"]["strategy"])
+    matrix = cast(dict[str, list[dict[str, str]]], strategy["matrix"])
+    surge = next(row for row in matrix["include"] if row["synth"] == "surge_xt")
+
+    assert (
+        "tests/test_generate_dataset.py::"
+        "test_from_hydra_claims_mode_parallel_real_vst_writes_consumable_shards"
+        in surge["pytest_targets"].split()
+    )
+
+
+@pytest.mark.infra
+@pytest.mark.parametrize("event_name", ["push", "pull_request"])
+def test_vst_slow_parallel_queue_changes_trigger_real_vst_e2e(
+    project_root: Path, event_name: str
+) -> None:
+    """Queue implementation and E2E changes select the real-VST workflow.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    :param event_name: GitHub event whose path filter is checked.
+    """
+    triggers = _load_triggers(project_root)
+
+    assert "src/synth_setter/cli/generate_dataset.py" in triggers[event_name]["paths"]
+    assert "tests/test_generate_dataset.py" in triggers[event_name]["paths"]
+
+
+@pytest.mark.infra
 def test_vst_slow_publishes_random_patch_diagnostics(project_root: Path) -> None:
     """Pin the JSON handoff and benchmark action required for publication.
 

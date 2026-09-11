@@ -21,6 +21,7 @@ from synth_setter.models.components.transformer import (
 from synth_setter.pupujepa import (
     DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
+    pupujepa_num_time_patches,
 )
 from synth_setter.same import (
     DEFAULT_SAME_L_CHECKPOINT,
@@ -217,6 +218,14 @@ def test_torchsynth_flow_experiment_composes_the_synth_identity_for_the_probe() 
     cfg = _flow_cfg()
     assert cfg.synth.param_spec_name == "torchsynth_full"
     assert cfg.render is not None
+
+
+def test_torchsynth_flow_experiment_logs_grouped_per_param_metrics_by_default() -> None:
+    """Validation publishes grouped assignment errors under TorchSynth parameter names."""
+    cfg = _flow_cfg()
+
+    assert cfg.model.param_spec == "torchsynth_full"
+    assert cfg.callbacks.log_per_param_mse.param_spec == "torchsynth_full"
 
 
 def test_torchsynth_flow_experiment_carries_no_audio_loss() -> None:
@@ -477,7 +486,10 @@ def test_pupujepa_online_conditioning_composes_frozen_teacher_and_temporal_pool(
         == "synth_setter.models.components.embed_pool.EmbeddingPool"
     )
     assert cfg.model.encoder.head.embed_dim == 1536
-    assert cfg.model.encoder.head.max_seq_len == 256
+    # Derived, not frozen: the pool must span exactly the patches a render emits.
+    assert cfg.model.encoder.head.max_seq_len == pupujepa_num_time_patches(
+        4 * cfg.datamodule.sample_rate, cfg.datamodule.sample_rate
+    )
     assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
 
 
@@ -586,15 +598,18 @@ def test_torchsynth_flow_validates_often_enough_to_checkpoint_within_an_epoch() 
     assert cfg.training.val_audio_probe is True
 
 
-def test_mss_audio_loss_measures_in_the_reported_metric_space() -> None:
-    """The default feedback space is the figure evaluation reports, in the same units."""
+def test_mss_audio_loss_composes_the_multichannel_distance_weights() -> None:
+    """The default feedback objective pins conservative initial scale-balancing weights."""
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(config_name="train.yaml", overrides=["experiment=torchsynth/flow_audio"])
 
     assert (
         cfg.model.audio_loss.distance._target_
-        == "synth_setter.models.components.audio_distance.MultiScaleSpectralDistance"
+        == "synth_setter.models.components.audio_distance.MultichannelAudioDistance"
     )
+    assert cfg.model.audio_loss.distance.spectral_weight == 1.0
+    assert cfg.model.audio_loss.distance.channel_mldr_weight == 0.1
+    assert cfg.model.audio_loss.distance.pair_mldr_weight == 0.1
 
 
 def test_conditioning_profile_alone_selects_its_encoder() -> None:

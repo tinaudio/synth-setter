@@ -1,0 +1,18 @@
+{
+  "name": "synth-setter-faustwasm-browser",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@grame/faustwasm": "0.18.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

@@ -1,5 +1,6 @@
 defaults:
   - encoder: ast
+  - projection: learnt
   # Off by default: the render-feedback term is opt-in per experiment (#2585).
   - audio_loss: null
   - _self_
@@ -24,20 +25,11 @@ optimizer:
 
 vector_field:
   _target_: synth_setter.models.components.transformer.ApproxEquivTransformer
-  projection:
-    _target_: synth_setter.models.components.transformer.LearntProjection
-    d_model: ${model.vector_field.d_model}
-    d_token: ${model.vector_field.d_model}
-    num_params: ${model.num_params}
-    num_tokens: 128
-    initial_ffn: true
-    final_ffn: false
   num_layers: 8
   d_model: 512
   conditioning_dim: ${model.encoder.d_model}
   num_heads: 8
   d_ff: 512
-  num_tokens: ${model.vector_field.projection.num_tokens}
   learn_pe: false
   learn_projection: true
   pe_type: none
@@ -58,16 +50,26 @@ cfg_dropout_rate: 0.1
 
 # sketch-control token conditioning; the `sketch=on` group fills the spec
 sketch_controls: null
-sketch_dropout_rate: 0.2
-all_conditioning_dropout_rate: 0.2
+# Match Flash Foley's independent and global CFG dropout policy.
+sketch_dropout_rate: 0.1
+all_conditioning_dropout_rate: 0.1
 
 rectified_sigma_min: 0.0
+# What the field predicts: the velocity x1 - x0, or the clean endpoint x1.
+parameterization: velocity
+# Mixed applies per-parameter CE only to one-hot endpoint spans.
+endpoint_loss: mse
+# FlowMol3 applies clipped odds weighting only to endpoint objective rows.
+endpoint_time_weighting: uniform
 
 # sampling
+seeded_evaluation: false
 validation_sample_steps: 50
 validation_cfg_strength: 2.0
+validation_sketch_cfg_strength: ${model.validation_cfg_strength}
 test_sample_steps: 200
 test_cfg_strength: 2.0
+test_sketch_cfg_strength: ${model.test_cfg_strength}
 
 # compile model for faster training with pytorch 2.0
 compile: true

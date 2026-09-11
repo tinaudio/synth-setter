@@ -1,0 +1,160 @@
+# Deferred Pi review follow-up
+
+Process only the deferred passes in the runtime manifest named by the launch
+prompt. The Python supervisor, not this model, owns the canonical
+`<foreground-manifest>.result.json`. It has already validated any adopted
+foreground outputs and named those rows in the launch prompt. A stopped
+foreground host clears ownership handles from unfinished rows before this
+session starts; otherwise incomplete known owners fail closed. Never repeat a
+pass not present in the runtime manifest.
+
+1. Validate the runtime manifest before using it:
+
+   ```bash
+   ./.venv/bin/python agent/_shared/run_pi_review_follow_up.py <manifest> --dry-run
+   ```
+
+2. Fetch the PR's current `headRefOid`, state, and author login. If the PR is not
+   open or its head differs from `head_sha`, record `stale` in the runtime result
+   and exit without posting.
+
+3. Re-fetch the complete review history so foreground findings and author replies
+   posted after the original manifest are visible to deferred workers. Use the
+   runtime assignment directory and substitute the manifest's repo, PR number,
+   and the author login from Step 2:
+
+   ```bash
+   manifest=<runtime-manifest-path>
+   assignment_dir="${manifest%.json}.assignments"
+   mkdir -p "$assignment_dir"
+   review_comments="$assignment_dir/pr-review-comments.json"
+   review_history="$assignment_dir/pr-review-history.md"
+   pr_author=<PR-author-login-from-Step-2>
+   set -o pipefail
+   history_fetched=false
+   for attempt in 1 2 3; do
+     if gh api --paginate "repos/${repo}/pulls/${pr_number}/comments?per_page=100" \
+       --jq '.[]' | jq -s '.' > "$review_comments"; then
+       history_fetched=true
+       break
+     fi
+     sleep "$((attempt * 2))"
+   done
+   if [[ $history_fetched != true ]]; then
+     printf 'Failed to fetch complete PR review history after 3 attempts.\n' >&2
+     exit 1
+   fi
+   "${PI_REVIEW_PYTHON}" agent/_shared/pi_review_routing.py review-history \
+     --input "$review_comments" --author "$pr_author" --output "$review_history"
+   ```
+
+   For each adopted row named in the launch prompt, extract and validate its
+   existing `output_path`, use that report, and do not launch its pass again.
+   For every other `deferred_passes` row, generate the assignment with
+   `pi_review_routing.py worker-prompt --review-history "$review_history"`,
+   launch one `pr-review-worker` using the row's exact pinned model and thinking,
+   and validate its output with `extract-report` and `validate-report`. Exactly
+   one model call owns a pass; never launch a second owner for the same row.
+   A history-fetch or parse failure fails the follow-up instead of reverting to a
+   history-blind review.
+
+4. If strict validation fails after envelope extraction, generate the
+   diagnostic with `pi_review_routing.py repair-prompt` and resume the same
+   worker once. The correction prompt says `Do not repeat the review`; do not
+   launch a fresh model merely to remove prose, a fence, or another formatting
+   defect. If the resumed result remains invalid, record it and stop that pass.
+
+5. Codex-origin findings need no extra verification. Send every free-pool-only
+   candidate to one Codex verification worker using that row's exact
+   `verification_model`. Keep only findings it reproduces from the diff.
+
+6. Before fingerprinting, compare every retained finding, including adopted
+   foreground reports, against the refreshed review history. Remove findings
+   that are semantically equivalent despite skill, severity, wording, or line
+   drift. Keep one only when new diff evidence invalidates the prior disposition,
+   and include that delta in its description. Then fingerprint each retained
+   finding with `pi_review_routing.py finding-fingerprint`; remove fingerprints
+   listed in `foreground_fingerprints` and duplicates from another deferred pass.
+
+7. Run one final read-only `pr-review-filter` judge over all retained late
+   findings before rendering or delivery. Pin the agent exactly to
+   `openai-codex/gpt-6-astra` with `medium` thinking and at most 8 turns. Worker
+   severity is advisory; the judge may promote or demote it.
+   Skip the call when there are no late findings. Otherwise, write the same
+   immutable top-level shape used by the foreground filter:
+
+   ```json
+   {"target":"PR #123","base_sha":"<40-character base SHA>","head_sha":"<40-character head SHA>","candidates": [{"id":"<finding-fingerprint>","skill":"correctness-review","severity":"warn","path":"agent/example.py","line":42,"description":"<original description>"}]}
+   ```
+
+   Generate the assignment with `pi_review_routing.py filter-prompt`, and launch the judge
+   with only the absolute assignment path. Extract with `extract-filter-report`
+   and run `validate-filter-report` against the original input. The output must
+   contain one unique decision per candidate and preserve every original field,
+   provenance, and ID alongside original severity, final class, and rationale.
+   Keep DROP rows in the audit. If Astra is unavailable or the judge fails or
+   returns a malformed, duplicate, or incomplete partition, fail closed and post
+   no late findings; never fall back to an unadjudicated result.
+
+8. Re-fetch `headRefOid` immediately before delivery. On any head or PR-state
+   drift, record `stale` and post nothing. For `mode: "no-comments"`, retain all
+   late adjudications, including drops, in the runtime result without GitHub writes. For
+   `mode: "full"`, write that identity and the originating skill/model audit
+   rows to a review-body file, then build the payload through
+   `agent/_shared/pi_review_payload.py --follow-up` using the validated
+   adjudication file. Submit that payload through
+   `agent/skills/_shared/post_review.py`. Never approve or request changes from follow-up; each final BLOCK
+   and WARN remains an unresolved inline thread. Final NITs and LOW CONFIDENCE
+   observations are body-only. Mark LOW CONFIDENCE visibly `[low confidence]`
+   and explicitly ignorable with no required reply or gate. DROP is audit-only.
+
+9. Write exactly one strict JSON object atomically to `<manifest>.result.json`.
+   The supervisor validates it with `FollowUpResult`, merges its ownership
+   audit, captures the Pi exit code and bounded log tail, and atomically publishes
+   the canonical result. Use this shape with no additional fields:
+
+   ```json
+   {
+     "status": "complete",
+     "attempts": [
+       {
+         "skill": "correctness-review",
+         "pass_name": "free-pool",
+         "model": "meta/muse-spark-1.3-contributor",
+         "status": "success",
+         "agent_id": "<Tintin agent id or null>",
+         "output_path": "<Tintin transcript path or null>",
+         "detail": "<exact audit detail>"
+       }
+     ],
+     "diagnostics": [],
+     "late_findings": [
+       {
+         "id": "<64-character lowercase hex candidate id>",
+         "skill": "correctness-review",
+         "original_severity": "warn",
+         "path": "agent/example.py",
+         "line": 42,
+         "description": "<validated late finding>",
+         "final_disposition": "warn",
+         "rationale": "<evidence supporting the final disposition>"
+       }
+     ],
+     "posted_review_url": null,
+     "child_exit_code": null,
+     "log_tail": "",
+     "completed_at": "2026-07-24T00:00:00Z"
+   }
+   ```
+
+   Overall `status` is exactly `complete`, `stale`, or `failed`. Attempt status
+   is exactly `success`, `failed`, `stale`, `verified`, `rejected`, or
+   `malformed-report`; supervisor-only rows add `adopted-foreground-result`.
+   Diagnostic category is exactly `capacity`,
+   `child-exit`, `invalid-result`, `missing-result`, `ownership`, or
+   `supervisor-error`. Set `child_exit_code` to `null` and `log_tail` to an empty
+   string; the supervisor replaces both with observed process evidence.
+
+Do not modify the foreground manifest, source checkout, or unrelated GitHub
+metadata. The supervisor always persists child stdout and stderr in the bounded
+`<foreground-manifest>.follow-up.log`; no follow-up output is discarded.
