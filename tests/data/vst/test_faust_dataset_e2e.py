@@ -89,26 +89,46 @@ def test_faust_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_faustwasm_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("identity", "channels", "param_width", "base_seed"),
+    [
+        ("faust_bright_organ", 2, 13, 1808),
+        ("faust_syrinx_bird", 1, 59, 1808),
+        # Syrinx2 onset is sparse, so this draws a production seed whose row passes.
+        ("faust_syrinx2_bird", 1, 77, 3),
+        ("faust_tract3_bird", 1, 103, 1808),
+    ],
+)
+def test_faustwasm_generate_cli_writes_real_lance_row(
+    tmp_path: Path,
+    identity: str,
+    channels: int,
+    param_width: int,
+    base_seed: int,
+) -> None:
     """The production CLI drives Python through Node into a consumable Lance row.
 
     :param tmp_path: Isolated Lance shard destination.
+    :param identity: Registered Faust source identity.
+    :param channels: Native source output channels.
+    :param param_width: Encoded synth-and-note parameter width.
+    :param base_seed: Master seed for the sampled production-path row.
     """
     config = RenderConfig(
-        synth=SYNTHS[SynthName("faust_bright_organ")],
+        synth=SYNTHS[SynthName(identity)],
         renderer_backend="faustwasm",
         backend_version="0.18.3",
         block_size=64,
         render_contract_version=2,
         sample_rate=44100,
-        channels=2,
+        channels=channels,
         velocity=100,
         signal_duration_seconds=4.0,
         min_loudness=-100.0,
         samples_per_render_batch=1,
         samples_per_shard=1,
         attempts_per_sample=5,
-        base_seed=1808,
+        base_seed=base_seed,
         plugin_reload_cadence="render",
         gui_toggle_cadence="never",
     )
@@ -139,17 +159,17 @@ def test_faustwasm_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
         [
             pa.field(
                 "audio",
-                pa.fixed_shape_tensor(pa.float16(), (2, 176_400)),
+                pa.fixed_shape_tensor(pa.float16(), (channels, 176_400)),
                 nullable=False,
             ),
             pa.field(
                 "mel_spec",
-                pa.fixed_shape_tensor(pa.float32(), (2, 128, 401)),
+                pa.fixed_shape_tensor(pa.float32(), (channels, 128, 401)),
                 nullable=False,
             ),
             pa.field(
                 "param_array",
-                pa.fixed_shape_tensor(pa.float32(), (13,)),
+                pa.fixed_shape_tensor(pa.float32(), (param_width,)),
                 nullable=False,
             ),
             pa.field("debug", pa.json_(), nullable=False),
@@ -169,11 +189,11 @@ def test_faustwasm_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
     mel_spec = table.column(MEL_SPEC_FIELD).combine_chunks().to_numpy_ndarray()[0]
     params = table.column(PARAM_ARRAY_FIELD).combine_chunks().to_numpy_ndarray()[0]
     assert table.num_rows == 1
-    assert audio.shape == (2, 176_400)
+    assert audio.shape == (channels, 176_400)
     assert audio.dtype == np.float16
-    assert mel_spec.shape == (2, 128, 401)
+    assert mel_spec.shape == (channels, 128, 401)
     assert mel_spec.dtype == np.float32
-    assert params.shape == (13,)
+    assert params.shape == (param_width,)
     assert params.dtype == np.float32
     assert np.isfinite(audio).all()
     assert np.isfinite(mel_spec).all()

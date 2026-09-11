@@ -33,6 +33,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # inherit ``smoke-shard``'s task_name via ``@_global_`` defaults chaining.
 DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/10-1k-shards": "10-1k-shards",
+    "generate_dataset/faust-syrinx-bird-wasm-200": "faust-syrinx-bird-wasm-200",
+    "generate_dataset/faust-syrinx2-bird-wasm-200": "faust-syrinx2-bird-wasm-200",
+    "generate_dataset/faust-tract3-bird-wasm-200": "faust-tract3-bird-wasm-200",
     "generate_dataset/ci-materialize-test": "ci-materialize-test",
     "generate_dataset/faust-shimmer-fdn-lance-50k": "faust-shimmer-fdn-lance-50k",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
@@ -131,6 +134,35 @@ def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() ->
     assert spec.render.param_spec_name == "surge_xt"
     assert spec.render.samples_per_shard == 1
     assert spec.train_val_test_sizes == (1, 0, 0)
+
+
+@pytest.mark.parametrize(
+    ("experiment", "identity", "num_params"),
+    [
+        ("faust-syrinx-bird-wasm-200", "faust_syrinx_bird", 59),
+        ("faust-syrinx2-bird-wasm-200", "faust_syrinx2_bird", 77),
+        ("faust-tract3-bird-wasm-200", "faust_tract3_bird", 103),
+    ],
+)
+def test_birdsong_wasm_experiment_renders_one_200_row_mono_shard(
+    experiment: str,
+    identity: str,
+    num_params: int,
+) -> None:
+    """Birdsong experiments compose the requested local inspection datasets.
+
+    :param experiment: Dataset experiment file stem.
+    :param identity: Expected synth and parameter-spec identity.
+    :param num_params: Expected encoded parameter width.
+    """
+    spec = _compose_dataset_spec(f"generate_dataset/{experiment}")
+
+    assert spec.render.synth.name == identity
+    assert spec.render.renderer_backend == "faustwasm"
+    assert spec.render.channels == 1
+    assert spec.render.samples_per_shard == 200
+    assert spec.train_val_test_sizes == (200, 0, 0)
+    assert spec.num_params == num_params
 
 
 def test_ultramaster_kr106_single_note_smoke_uses_curated_fresh_identity() -> None:

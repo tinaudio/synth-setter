@@ -30,6 +30,11 @@ _MIDI_VELOCITY = 100
 _NOTE_START_SECONDS = 0.05
 _NOTE_DURATION_SECONDS = 0.25
 _MIN_AUDIBLE_PEAK = 1e-4
+_BIRD_IDENTITIES = {
+    "faust_syrinx_bird": 59,
+    "faust_syrinx2_bird": 77,
+    "faust_tract3_bird": 103,
+}
 _EXPECTED_PARAMETER_ADDRESSES: Mapping[str, list[str]] = {
     "faust_bright_organ": [
         "/Sequencer/DSP1/brightOrgan/Main/volume",
@@ -316,7 +321,7 @@ def _compile_faust(
 
 def test_faust_source_registry_resolves_checked_in_source_strings() -> None:
     """Every v1 registry key resolves to an in-memory Faust program."""
-    assert set(faust_dsps) == set(_EXPECTED_PARAMETER_ADDRESSES)
+    assert set(faust_dsps) == set(_EXPECTED_PARAMETER_ADDRESSES) | set(_BIRD_IDENTITIES)
 
     for name in faust_dsps:
         dsp = resolve_faust_dsp(ParamSpecName(name))
@@ -324,6 +329,19 @@ def test_faust_source_registry_resolves_checked_in_source_strings() -> None:
         assert 'import("stdfaust.lib");' in dsp.source
         assert not hasattr(dsp, "path")
         assert not hasattr(dsp, "uri")
+
+
+@pytest.mark.parametrize("param_spec_name", _BIRD_IDENTITIES)
+def test_birdsong_source_is_autonomous_mono_faust(param_spec_name: str) -> None:
+    """Each bird model embeds its syllable controller and exposes mono output.
+
+    :param param_spec_name: Birdsong source registry identity.
+    """
+    dsp = resolve_faust_dsp(ParamSpecName(param_spec_name))
+
+    assert dsp.num_voices == 0
+    assert dsp.outputs == 1
+    assert 'syl = library("syllable.lib")' not in dsp.source
 
 
 def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
@@ -341,6 +359,7 @@ def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
         ("faust_filter_osc", 6),
         ("faust_kronecker_fdn", 39),
         ("faust_shimmer_fdn", 27),
+        *sorted(_BIRD_IDENTITIES.items()),
     ],
 )
 def test_faust_param_spec_preserves_exact_addresses_and_encoded_width(
@@ -354,7 +373,8 @@ def test_faust_param_spec_preserves_exact_addresses_and_encoded_width(
     """
     spec = resolve_faust_param_spec(ParamSpecName(param_spec_name))
 
-    assert spec.synth_param_names == _EXPECTED_PARAMETER_ADDRESSES[param_spec_name]
+    if param_spec_name in _EXPECTED_PARAMETER_ADDRESSES:
+        assert spec.synth_param_names == _EXPECTED_PARAMETER_ADDRESSES[param_spec_name]
     assert spec.encoded_width == encoded_width
 
 

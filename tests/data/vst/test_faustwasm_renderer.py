@@ -187,6 +187,9 @@ def test_faustwasm_legacy_digest_projection_is_rejected() -> None:
         ("faust_church_organ", 2),
         ("faust_filter_osc", 1),
         ("faust_kronecker_fdn", 1),
+        ("faust_syrinx_bird", 1),
+        ("faust_syrinx2_bird", 1),
+        ("faust_tract3_bird", 1),
     ],
 )
 def test_faustwasm_factory_renders_real_source(identity: str, channels: int) -> None:

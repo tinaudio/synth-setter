@@ -55,6 +55,9 @@ def test_faustwasm_resources_include_pinned_runtime() -> None:
     [
         ("faust_bright_organ", "poly", 2),
         ("faust_filter_osc", "mono", 1),
+        ("faust_syrinx_bird", "mono", 1),
+        ("faust_syrinx2_bird", "mono", 1),
+        ("faust_tract3_bird", "mono", 1),
     ],
 )
 def test_export_cli_persists_hashed_artifact_consumed_by_real_runtime(

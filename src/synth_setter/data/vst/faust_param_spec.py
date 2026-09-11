@@ -13,6 +13,7 @@ from types import MappingProxyType
 
 import numpy as np
 
+from synth_setter.data.vst.faust_birdsong_param_spec import birdsong_synth_parameters
 from synth_setter.data.vst.param_spec import (
     CategoricalParameter,
     ContinuousParameter,
@@ -181,6 +182,18 @@ def _church_organ_param_spec() -> ParamSpec:
     )
 
 
+def _birdsong_param_spec(identity: str) -> ParamSpec:
+    """Build one autonomous birdsong parameter specification.
+
+    :param identity: Registered birdsong source identity.
+    :returns: Fresh exact-address birdsong specification.
+    """
+    return ParamSpec(
+        list(birdsong_synth_parameters(ParamSpecName(identity))),
+        _note_params(),
+    )
+
+
 def _kronecker_fdn_param_spec() -> ParamSpec:
     """Build the Kronecker FDN specification in compiled address order.
 
@@ -280,6 +293,9 @@ _faust_param_spec_builders: Mapping[ParamSpecName, Callable[[], ParamSpec]] = Ma
         ParamSpecName("faust_filter_osc"): _filter_osc_param_spec,
         ParamSpecName("faust_kronecker_fdn"): _kronecker_fdn_param_spec,
         ParamSpecName("faust_shimmer_fdn"): _shimmer_fdn_param_spec,
+        ParamSpecName("faust_syrinx_bird"): lambda: _birdsong_param_spec("faust_syrinx_bird"),
+        ParamSpecName("faust_syrinx2_bird"): lambda: _birdsong_param_spec("faust_syrinx2_bird"),
+        ParamSpecName("faust_tract3_bird"): lambda: _birdsong_param_spec("faust_tract3_bird"),
     }
 )
 

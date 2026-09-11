@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from synth_setter.data.vst.faust_birdsong_param_spec import BIRDSONG_PARAMETER_DOMAINS
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter
 from synth_setter.param_spec_name import ParamSpecName
@@ -58,6 +59,9 @@ _RESERVED_WASM_ADDRESSES = MappingProxyType(
         ParamSpecName("faust_church_organ"): (),
         ParamSpecName("faust_filter_osc"): (),
         ParamSpecName("faust_kronecker_fdn"): (),
+        ParamSpecName("faust_syrinx_bird"): (),
+        ParamSpecName("faust_syrinx2_bird"): (),
+        ParamSpecName("faust_tract3_bird"): (),
     }
 )
 
@@ -137,6 +141,11 @@ _WASM_ADDRESSES = MappingProxyType(
             "/kroneckerFDN/Output_c7",
             "/kroneckerFDN/Output_dry",
         ),
+        # Libfaust 2.88 preserves these monophonic addresses byte-for-byte.
+        **{
+            identity: tuple(name for name, _, _ in domains)
+            for identity, domains in BIRDSONG_PARAMETER_DOMAINS.items()
+        },
     }
 )
 

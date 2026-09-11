@@ -41,6 +41,9 @@ _FAUST_SOURCE_SHA256 = {
     "faust_filter_osc": "6ad65d28d787f08a3fa66eb4de7d4091be8d2267ad1e9edc200618effbbe588c",
     "faust_kronecker_fdn": "bb5fac0999788b73cabb7d583ad728d80aa223cd07605342c07e6551de63822e",
     "faust_shimmer_fdn": "30b485b40002bc721101c9c50ec4d84f1d96740db20df0273835d543f168a4df",
+    "faust_syrinx_bird": "7874d195e11d24d933041751f21e1f30ac7ba89592874d61c3515ad2731fd071",
+    "faust_syrinx2_bird": "cfeb46f99a0264ef851b4a241852c4fa0c9312896fa98d52f8db147f2dad5811",
+    "faust_tract3_bird": "f435a8f84df64c22f007af5909f356e26e65c0263a5bb86fd23834fd0dae88c0",
 }
 
 
@@ -272,6 +275,24 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "registry://faust/faust_shimmer_fdn",
         "",
         "1.0",
+    ),
+    "faust_syrinx_bird": (
+        "faust_syrinx_bird",
+        "registry://faust/faust_syrinx_bird",
+        "",
+        "1",
+    ),
+    "faust_syrinx2_bird": (
+        "faust_syrinx2_bird",
+        "registry://faust/faust_syrinx2_bird",
+        "",
+        "1",
+    ),
+    "faust_tract3_bird": (
+        "faust_tract3_bird",
+        "registry://faust/faust_tract3_bird",
+        "",
+        "1",
     ),
     "surge_xt": ("surge_xt", "plugins/Surge XT.vst3", "presets/surge-base.vstpreset", "1.3.4"),
     "surge_simple": (
