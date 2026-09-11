@@ -11,12 +11,16 @@ import torch
 from hydra.utils import instantiate
 from lightning import Trainer
 
-from synth_setter.cli.sketch_render import _load_settings, _resolve_stats, load_render_config
+from synth_setter.cli.sketch_render import _resolve_stats, load_render_config
 from synth_setter.models.components.transformer import ApproxEquivTransformer, LearntProjection
 from synth_setter.models.flow_onnx import branch_weights
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.renderer_factory import make_audio_renderer
-from synth_setter.tools.export_browser_surge_bundle import export_browser_surge_bundle, main
+from synth_setter.tools.export_browser_surge_bundle import (
+    _load_settings,
+    export_browser_surge_bundle,
+    main,
+)
 
 pytestmark = [
     pytest.mark.slow,
@@ -35,6 +39,18 @@ def _sha256(path: Path) -> str:
     :returns: Hex digest.
     """
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("source_field", ["checkpoint", "stats"])
+def test_cli_defaults_pin_content_addressed_artifacts(source_field: str) -> None:
+    """Browser defaults name the digest, not a mutable training object.
+
+    :param source_field: Artifact whose URI must contain its declared digest.
+    """
+    settings = _load_settings()
+    source = getattr(settings, source_field)
+    digest = getattr(settings, f"{source_field}_sha256")
+    assert source.rsplit("/", 2)[-2] == digest
 
 
 @pytest.fixture(scope="module")

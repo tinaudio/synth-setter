@@ -36,8 +36,10 @@ python3 -m http.server 8765 --bind 127.0.0.1 --directory build/surge-site
 ```
 
 Open <http://127.0.0.1:8765/surge/index.html>. Export destinations must not
-already exist. The exporter uses the digest-pinned real checkpoint and
-statistics in `configs/sketch_render.yaml` by default; explicit
+already exist. The exporter uses the content-addressed real checkpoint and
+statistics in `configs/browser_surge.yaml` by default, avoiding mutable
+training `last.ckpt` objects. Native render settings still come from
+`configs/sketch_render.yaml`; explicit
 `--checkpoint`, `--checkpoint-sha256`, `--stats`, and `--stats-sha256`
 overrides are also supported. Only the `surge_simple` music model contract
 is accepted. Export trusts the selected checkpoint: do not load untrusted

@@ -10,7 +10,6 @@ import torch
 
 from synth_setter.cli.clap_render import resolve_inverse_checkpoint
 from synth_setter.cli.sketch_render import (
-    _load_settings,
     _prepare_inputs,
     _resolve_stats,
     load_render_config,
@@ -26,6 +25,7 @@ from synth_setter.models.music_frontend import (
 )
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.renderer_factory import make_audio_renderer
+from synth_setter.tools.export_browser_surge_bundle import _load_settings
 
 pytestmark = [
     pytest.mark.slow,

@@ -690,6 +690,8 @@ docs:
         covers: "Stereo mel and music-sketch ONNX frontends"
       - pattern: "src/synth_setter/tools/export_browser_surge_bundle.py"
         covers: "Model, preset, and parameter-map export"
+      - pattern: "src/synth_setter/configs/browser_surge.yaml"
+        covers: "Content-addressed browser checkpoint and statistics pins"
       - pattern: "src/synth_setter/web/surge/*"
         covers: "Static page, inference, authored controls, and downloads"
       - pattern: "tests/integration/test_browser_surge_wasm_e2e.py"

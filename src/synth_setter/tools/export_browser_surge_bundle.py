@@ -15,12 +15,14 @@ from typing import Any
 
 import numpy as np
 import torch
+from omegaconf import OmegaConf
 
 from synth_setter.cli.clap_render import resolve_inverse_checkpoint
+from synth_setter.cli.sketch_render import _load_settings as _load_native_settings
 from synth_setter.cli.sketch_render import (
-    _load_settings,
     _producer_revision,
     _resolve_stats,
+    _SketchRenderSettings,
     load_render_config,
 )
 from synth_setter.conditioning import SketchControlSpec, resolve_sketch_controls
@@ -43,7 +45,7 @@ from synth_setter.models.music_frontend import (
 )
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.resources import as_file, param_map
+from synth_setter.resources import as_file, configs_dir, param_map
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,19 @@ _GRAPH_FILES = (
 )
 _NATIVE_REFERENCE_VERSION = "1.3.4"
 _WASM_TARGET_VERSION = "1.4.0"
+
+
+def _load_settings() -> _SketchRenderSettings:
+    """Compose native render defaults with immutable browser artifact pins.
+
+    :returns: Strict settings for reproducible browser exports.
+    :raises TypeError: Browser artifact pins are not a mapping.
+    """
+    with configs_dir().joinpath("browser_surge.yaml").open("r") as source:
+        pins = OmegaConf.to_container(OmegaConf.load(source), resolve=True)
+    if not isinstance(pins, dict):
+        raise TypeError("browser_surge config must resolve to a mapping")
+    return _SketchRenderSettings.model_validate(_load_native_settings().model_dump() | pins)
 
 
 def _sha256(path: Path) -> str:
