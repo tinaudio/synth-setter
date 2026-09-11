@@ -718,6 +718,8 @@ docs:
         covers: "Arbitrary-length power spectrum"
       - pattern: "src/synth_setter/web/fdn/synthetic.mjs"
         covers: "Synthetic-response reconstruction"
+      - pattern: "src/synth_setter/web/fdn/author.mjs"
+        covers: "Authored reverb-sketch generation from physical controls"
       - pattern: "src/synth_setter/web/fdn/*.test.mjs"
         covers: "Golden-fixture and exporter contracts"
       - pattern: "src/synth_setter/web/fdn/fixtures/*.json"
