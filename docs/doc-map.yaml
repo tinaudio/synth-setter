@@ -681,6 +681,22 @@ docs:
       - pattern: "tests/data/vst/test_faust_dataset_e2e.py"
         covers: "Generate-dataset to Lance production-path verification"
 
+  - doc: docs/guides/surge-wasm-sketch-evaluation.md
+    description: Browser-native Surge music-sketch evaluation
+    sources:
+      - pattern: "src/synth_setter/surgewasm/*"
+        covers: "Pinned engine build, host, and renderer lifecycle"
+      - pattern: "src/synth_setter/models/music_frontend.py"
+        covers: "Stereo mel and music-sketch ONNX frontends"
+      - pattern: "src/synth_setter/tools/export_browser_surge_bundle.py"
+        covers: "Model, preset, and parameter-map export"
+      - pattern: "src/synth_setter/web/surge/*"
+        covers: "Static page, inference, authored controls, and downloads"
+      - pattern: "tests/integration/test_browser_surge_wasm_e2e.py"
+        covers: "Real browser/native validation and retained evidence"
+      - pattern: ".github/workflows/browser-surge-wasm-e2e.yml"
+        covers: "Source build and production-path CI"
+
   - doc: docs/guides/surgepy-browser-evaluation.md
     description: Browser-to-SurgePy evaluation playbook
     sources:

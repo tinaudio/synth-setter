@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Surge music-sketch evaluation</title>
+    <style>
+      body {
+        max-width: 960px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        font: 16px system-ui;
+        background: #151923;
+        color: #eee;
+      }
+      fieldset,
+      section {
+        margin: 1rem 0;
+        padding: 1rem;
+        border: 1px solid #737b91;
+      }
+      label {
+        display: block;
+        margin: 0.6rem 0;
+      }
+      input,
+      select,
+      button {
+        font: inherit;
+        padding: 0.3rem;
+      }
+      a {
+        color: #89c9ff;
+      }
+      table {
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        text-align: left;
+        padding: 0.3rem 1rem 0.3rem 0;
+      }
+      audio,
+      canvas {
+        width: 100%;
+      }
+      canvas {
+        height: 160px;
+        image-rendering: pixelated;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Surge music-sketch evaluation</h1>
+    <p>
+      Local browser inference and rendering. Audio stays in this page.
+      Experimental, unchanged Surge 1.4 port; the model was trained with Surge
+      1.3.4. This is not a parity or model-quality claim.
+    </p>
+    <p>
+      Inputs become four-second stereo clips at 44.1 kHz, clipped to [-1, 1]
+      like the native sketch loader.
+    </p>
+    <form id="controls">
+      <fieldset>
+        <legend>Inputs</legend>
+        <label
+          >Content / target audio
+          <input id="contentAudio" type="file" accept="audio/*" required
+        /></label>
+        <label
+          >Music sketch
+          <select id="sketchSource">
+            <option value="extracted">Extract from audio</option>
+            <option value="authored">Author a note contour</option>
+          </select></label
+        >
+        <label id="sketchUpload"
+          >Sketch audio <input id="sketchAudio" type="file" accept="audio/*"
+        /></label>
+        <fieldset id="author" hidden>
+          <legend>Authored controls (not an extracted recording)</legend>
+          <label
+            >MIDI pitch
+            <input id="pitch" type="number" min="0" max="127" value="60"
+          /></label>
+          <label
+            >Start (seconds)
+            <input
+              id="start"
+              type="number"
+              min="0"
+              max="4"
+              step="0.125"
+              value="0"
+          /></label>
+          <label
+            >End (seconds)
+            <input
+              id="end"
+              type="number"
+              min="0"
+              max="4"
+              step="0.125"
+              value="2"
+          /></label>
+          <label
+            >Loudness control [-1,1]
+            <input
+              id="loudness"
+              type="number"
+              min="-1"
+              max="1"
+              step="0.05"
+              value="-0.5"
+          /></label>
+          <label
+            >Centroid control [-1,1]
+            <input
+              id="centroid"
+              type="number"
+              min="-1"
+              max="1"
+              step="0.05"
+              value="0"
+          /></label>
+        </fieldset>
+      </fieldset>
+      <fieldset>
+        <legend>Sampling</legend>
+        <label
+          >Conditioning
+          <select id="mode">
+            <option value="both">Content + sketch</option>
+            <option value="mel_only">Content only</option>
+            <option value="sketch_only">Sketch only</option>
+            <option value="unconditional">Unconditional</option>
+          </select></label
+        >
+        <label
+          >Content CFG
+          <input
+            id="contentCfg"
+            type="number"
+            min="0"
+            max="20"
+            step="0.1"
+            value="2"
+        /></label>
+        <label
+          >Sketch CFG
+          <input
+            id="sketchCfg"
+            type="number"
+            min="0"
+            max="20"
+            step="0.1"
+            value="2"
+        /></label>
+        <label
+          >RK4 steps
+          <input id="steps" type="number" min="1" max="2000" value="50"
+        /></label>
+        <label
+          >Seed
+          <input id="seed" type="number" min="0" max="4294967295" value="17"
+        /></label>
+      </fieldset>
+      <button id="run" disabled>Run evaluation</button>
+    </form>
+    <p id="status" role="status">Loading model and music frontend…</p>
+    <div id="results"></div>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>
