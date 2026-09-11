@@ -43,9 +43,19 @@ def _load_run_slow_tests_job(project_root: Path) -> dict[str, object]:
         ``<project_root>/.github/workflows/cpu-slow.yml``.
     :returns: the job mapping, including ``if``, ``steps``, ``runs-on``, etc.
     """
+    return _load_job(project_root, "run_slow_tests")
+
+
+def _load_job(project_root: Path, job_name: str) -> dict[str, object]:
+    """Return a named job mapping from ``cpu-slow.yml``.
+
+    :param project_root: repo root containing the workflow.
+    :param job_name: key under the workflow's ``jobs`` mapping.
+    :returns: the requested job mapping.
+    """
     workflow = _load_workflow(project_root)
     jobs = cast(dict[str, object], workflow["jobs"])
-    return cast(dict[str, object], jobs["run_slow_tests"])
+    return cast(dict[str, object], jobs[job_name])
 
 
 def _load_workflow_steps(project_root: Path) -> list[dict[str, object]]:
@@ -103,20 +113,38 @@ def _load_pull_request_paths(project_root: Path) -> list[str]:
 
 
 @pytest.mark.infra
+def test_cpu_slow_broad_suite_uses_ubuntu_latest(project_root: Path) -> None:
+    """The broad slow suite follows GitHub's current supported runner image.
+
+    :param project_root: Session fixture rooted at the repository checkout.
+    """
+    assert _load_run_slow_tests_job(project_root)["runs-on"] == "ubuntu-latest"
+
+
+@pytest.mark.infra
 def test_cpu_slow_pins_production_faust_toolchain(project_root: Path) -> None:
     """The native parity lane verifies the worker image's Faust version.
 
     :param project_root: Session fixture rooted at the repository checkout.
     """
-    job = _load_run_slow_tests_job(project_root)
+    job = _load_job(project_root, "faust_host_parity")
+    steps = cast(list[dict[str, object]], job["steps"])
     version_step = next(
-        step
-        for step in _load_workflow_steps(project_root)
-        if step.get("name") == "Verify production Faust version"
+        step for step in steps if step.get("name") == "Verify production Faust toolchain"
+    )
+    parity_step = next(
+        step for step in steps if step.get("name") == "Run four-second Faust host parity"
     )
 
     assert job["runs-on"] == "ubuntu-22.04"
-    assert version_step["run"] == 'faust --version 2>&1 | grep -F "FAUST Version 2.37.3"'
+    assert version_step["run"] == (
+        "set -o pipefail\n"
+        'faust --version 2>&1 | grep -F "FAUST Version 2.37.3"\n'
+        "g++ -dumpversion | grep -E '^12([.]|$)'\n"
+    )
+    assert parity_step["run"] == (
+        "uv run pytest -vv tests/data/vst/test_faustwasm_dawdreamer_parity_e2e.py"
+    )
 
 
 @pytest.mark.infra
