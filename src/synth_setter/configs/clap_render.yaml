@@ -1,0 +1,12 @@
+defaults:
+  - _self_
+  - synth: surge_simple_surgepy
+  - render: surgepy
+
+inverse_checkpoint: r2://intermediate-data/checkpoints/flow_simple_440k_1m_clap/flow_simple_440k_1m_clap-20260730T215504153Z-588c02237a964b0aad982370cf347086-migrated-20260908/last.ckpt
+inverse_checkpoint_sha256: acb626fe26f59f0193f45d32736d94e1b3c2d6dfd1aafb8ee3385db581e4a925
+clap_checkpoint: r2://intermediate-data/models/encoders/clap-htsat-unfused
+output_dir: logs/clap-renders
+upload_prefix: r2://experiments/clap-renders
+device: auto
+seed: 0

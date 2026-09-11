@@ -34,6 +34,19 @@ def _terminate_and_reap(process: BaseProcess) -> None:
         raise RuntimeError(f"worker pid={process.pid} survived SIGKILL")
 
 
+def _failed_processes(processes: Sequence[BaseProcess]) -> list[tuple[int | None, int]]:
+    """Return workers whose process exit status reports failure.
+
+    :param processes: Started workers to inspect.
+    :returns: Process identifiers and non-zero exit codes.
+    """
+    return [
+        (process.pid, process.exitcode)
+        for process in processes
+        if process.exitcode not in (None, 0)
+    ]
+
+
 def _collect_results(
     out: Queue[object],
     processes: Sequence[BaseProcess],
@@ -50,17 +63,16 @@ def _collect_results(
     results = []
     result_deadline = time.monotonic() + timeout_s
     while len(results) < len(processes):
+        failed = _failed_processes(processes)
+        if failed:
+            raise RuntimeError(f"worker processes failed: {failed}")
         remaining_s = result_deadline - time.monotonic()
         if remaining_s <= 0:
             raise RuntimeError("worker result collection timed out")
         try:
             results.append(out.get(timeout=min(_PROCESS_STATUS_POLL_SECONDS, remaining_s)))
         except queue.Empty:
-            failed = [
-                (process.pid, process.exitcode)
-                for process in processes
-                if process.exitcode not in (None, 0)
-            ]
+            failed = _failed_processes(processes)
             if failed:
                 raise RuntimeError(f"worker processes failed: {failed}") from None
             exited = sum(process.exitcode == 0 for process in processes)
@@ -78,11 +90,7 @@ def _join_and_validate(processes: Sequence[BaseProcess], exit_timeout_s: float) 
     """
     for process in processes:
         process.join(timeout=exit_timeout_s)
-    failed = [
-        (process.pid, process.exitcode)
-        for process in processes
-        if not process.is_alive() and process.exitcode != 0
-    ]
+    failed = _failed_processes(processes)
     if failed:
         raise RuntimeError(f"worker processes failed: {failed}")
 

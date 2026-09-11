@@ -690,7 +690,7 @@ class TestDownloadDirNoOverwrite:
         :param fake_r2_remote: Fixture that requires and configures the rclone binary.
         :param tmp_path: Pytest tmp dir holding the source and destination trees.
         """
-        source = tmp_path / "network volume"
+        source = tmp_path / "local source"
         source.mkdir()
         (source / "train.lance").write_text("train")
         dest = tmp_path / "root"
@@ -704,7 +704,7 @@ class TestDownloadDirNoOverwrite:
 
         :param tmp_path: Pytest tmp dir used to form source and destination paths.
         """
-        source = tmp_path / "network volume"
+        source = tmp_path / "local source"
         destination = tmp_path / "root"
 
         with patch.object(r2_io.subprocess, "check_call") as mock_call:
@@ -1604,6 +1604,23 @@ class TestLanceTarget:
 
         assert target == "s3://bucket/run/train.lance"
         assert options is not None and options["endpoint"] == "https://r2.example"
+
+
+def test_delete_file_removes_exact_object(fake_r2_remote: Path) -> None:
+    """The retry-aware storage helper removes only the requested object.
+
+    :param fake_r2_remote: Local rclone remote root.
+    """
+    target = fake_r2_remote / "bucket/pending.json"
+    sibling = fake_r2_remote / "bucket/keep.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("pending", encoding="utf-8")
+    sibling.write_text("keep", encoding="utf-8")
+
+    r2_io.delete_file("r2://bucket/pending.json")
+
+    assert not target.exists()
+    assert sibling.read_text(encoding="utf-8") == "keep"
 
 
 class TestPurgePrefix:

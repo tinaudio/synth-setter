@@ -87,10 +87,6 @@ class ComputeConfig(BaseModel):
 
         Public SkyPilot task-level config overrides.
 
-    .. attribute :: mount_network_volume
-
-        Worker mount path for the selected network volume.
-
     .. attribute :: setup_scripts
 
         Packaged scripts concatenated into ``setup``.
@@ -109,7 +105,6 @@ class ComputeConfig(BaseModel):
     name: str
     resources: list[ComputeResources] = Field(min_length=1)
     config: dict[str, object] | None = None
-    mount_network_volume: str | None = None
     setup_scripts: list[str] = Field(default_factory=lambda: ["worker-ready.sh"])
     run_script: str | None = None
     file_mounts: dict[str, str] | None = None

@@ -17,7 +17,9 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
     EMBEDDING_REGISTRY,
+    SKETCH_ENCODE_MAX_BATCH,
 )
+from synth_setter.pipeline.schemas.spec import RenderConfig
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -42,15 +44,23 @@ class AddEmbeddingsConfig(BaseModel):
 
     .. attribute :: checkpoints
 
-        Per-registry-key checkpoint overrides; unsupported for music2latent.
+        Per-registry-key checkpoint overrides; unsupported for checkpoint-free policies.
 
     .. attribute :: device
 
         Torch device, or ``None`` for automatic selection.
 
-    .. attribute :: batch_size
+    .. attribute :: lance_batch_size
 
         Rows per Lance UDF call.
+
+    .. attribute :: num_workers
+
+        Worker processes for CPU-bound registry encoders; ``1`` keeps them in-process.
+
+    .. attribute :: sketch_encode_batch
+
+        Rows per sketch extractor invocation.
 
     .. attribute :: build_index
 
@@ -83,6 +93,14 @@ class AddEmbeddingsConfig(BaseModel):
     .. attribute :: param_text_normalizer
 
         Strategy rendering param rows as conditioning text.
+
+    .. attribute :: render
+
+        Composed render and synth identity, or ``None`` when nothing re-renders.
+
+    .. attribute :: param_shift_seed
+
+        Master seed for ``param_shift``'s per-row replacement draws.
     """
 
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
@@ -93,11 +111,21 @@ class AddEmbeddingsConfig(BaseModel):
     )
     checkpoints: dict[str, str] = Field(
         default_factory=dict,
-        description="Checkpoint overrides keyed by registry name; m2l is unsupported.",
+        description="Checkpoint overrides keyed by registry name; checkpoint-free entries reject them.",
     )
     device: str | None = Field(default=None, description="Torch device; null auto-selects.")
-    batch_size: int = Field(
+    lance_batch_size: int = Field(
         default=DEFAULT_LANCE_BATCH_SIZE, ge=1, description="Rows per Lance UDF call."
+    )
+    num_workers: int = Field(
+        default=1,
+        ge=1,
+        description="Worker processes for CPU-bound encoders; torch/GPU encoders ignore it.",
+    )
+    sketch_encode_batch: int = Field(
+        default=SKETCH_ENCODE_MAX_BATCH,
+        ge=1,
+        description="Rows per sketch extractor invocation; sizes memory and GPU utilization.",
     )
     build_index: bool = Field(
         default=True, description="Build indexes declared by selected embedding specs."
@@ -119,6 +147,13 @@ class AddEmbeddingsConfig(BaseModel):
     param_text_normalizer: str = Field(
         default=DEFAULT_PARAM_TEXT_NORMALIZER,
         description="Strategy rendering param rows as conditioning text.",
+    )
+    render: RenderConfig | None = Field(
+        default=None,
+        description="Composed render/synth selection; required by re-rendering embeddings.",
+    )
+    param_shift_seed: int = Field(
+        default=0, description="Master seed for param_shift's per-row replacement draws."
     )
 
     @field_validator("embeddings", mode="before")
@@ -158,8 +193,12 @@ class AddEmbeddingsConfig(BaseModel):
             raise ValueError(
                 f"checkpoints keys {unknown} must each be one of {sorted(EMBEDDING_REGISTRY)}"
             )
+        if "cqt" in value:
+            raise ValueError("cqt is checkpoint-free and rejects checkpoint overrides")
         if "m2l" in value:
             raise ValueError("music2latent does not support checkpoint overrides")
+        if "pyfdn_sketch" in value:
+            raise ValueError("pyfdn_sketch is checkpoint-free and rejects checkpoint overrides")
         return value
 
     @field_validator("resume_cache", mode="before")
@@ -218,16 +257,36 @@ class AddEmbeddingsConfig(BaseModel):
     def _param_sourced_embeddings_need_a_param_spec(self) -> Self:
         """Require a param spec whenever a selected embedding reads param rows.
 
+        Re-rendering embeddings are exempt: their spec comes from the render config's synth
+        identity, so a second, independently-set name could only disagree with it.
+
         :returns: Validated config unchanged.
         :raises ValueError: A param-sourced embedding is selected without a param spec.
         """
         param_sourced = sorted(
             name
-            for name in self.embeddings
-            if PARAM_ARRAY_FIELD in EMBEDDING_REGISTRY[name].input_fields
+            for name, spec in ((name, EMBEDDING_REGISTRY[name]) for name in self.embeddings)
+            if PARAM_ARRAY_FIELD in spec.input_fields and not spec.rerenders
         )
         if param_sourced and self.param_spec_name is None:
             raise ValueError(f"embeddings {param_sourced} require param_spec_name")
+        return self
+
+    @model_validator(mode="after")
+    def _rerendering_embeddings_need_a_render_config(self) -> Self:
+        """Require a composed render config whenever a selected embedding re-renders audio.
+
+        :returns: Validated config unchanged.
+        :raises ValueError: A re-rendering embedding is selected without a render config.
+        """
+        rerendering = sorted(
+            name for name in self.embeddings if EMBEDDING_REGISTRY[name].rerenders
+        )
+        if rerendering and self.render is None:
+            raise ValueError(
+                f"embeddings {rerendering} re-render every row and require a composed render "
+                "config; pass `render=<group> synth=<group>`"
+            )
         return self
 
     @model_validator(mode="after")
@@ -258,7 +317,13 @@ class AddEmbeddingsConfig(BaseModel):
         """
         from omegaconf import OmegaConf
 
-        spec_keys = [key for key in cfg if isinstance(key, str) and key in cls.model_fields]
+        # ``render`` composes from two root groups (#2565), so it is masked out here and
+        # rebuilt by ``RenderConfig.from_cfg_nodes`` rather than validated field-wise.
+        spec_keys = [
+            key
+            for key in cfg
+            if isinstance(key, str) and key in cls.model_fields and key != "render"
+        ]
         try:
             masked = OmegaConf.masked_copy(cfg, spec_keys)
         except ValueError as exc:
@@ -266,4 +331,7 @@ class AddEmbeddingsConfig(BaseModel):
         raw = OmegaConf.to_container(masked, resolve=True)
         if not isinstance(raw, dict):
             raise TypeError(f"composed config is not a mapping: {type(raw).__name__}")
-        return cls(**{key: value for key, value in raw.items() if isinstance(key, str)})
+        values = {key: value for key, value in raw.items() if isinstance(key, str)}
+        if cfg.get("render") is not None:
+            values["render"] = RenderConfig.from_cfg_nodes(cfg.render, cfg.get("synth"))
+        return cls(**values)

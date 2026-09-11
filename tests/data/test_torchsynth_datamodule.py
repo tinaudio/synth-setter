@@ -2,15 +2,19 @@
 
 import dataclasses
 import hashlib
+import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from typing import cast
 
 import numpy as np
 import pytest
 import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 
+from synth_setter.data.sample_seed import derive_sample_seed
 from synth_setter.data.torchsynth_datamodule import (
     _PARAM_CLAMP_EPS,
     NUM_PARAMS,
@@ -18,11 +22,16 @@ from synth_setter.data.torchsynth_datamodule import (
     TorchSynthBatch,
     TorchSynthDataModule,
     TorchSynthDataset,
+    TorchSynthItem,
     _make_renderer,
     _verify_voice_matches_spec,
+    collate_audio_dict,
     render_torchsynth,
 )
-from synth_setter.data.sample_seed import derive_sample_seed
+from synth_setter.data.torchsynth_grad_render import (
+    differentiable_decode,
+    render_torchsynth_grad,
+)
 from synth_setter.data.vst.param_spec import (
     DiscreteLiteralParameter,
     NoteDurationParameter,
@@ -45,6 +54,18 @@ _NOTE_WINDOW_PARAM = next(
     if isinstance(param, NoteDurationParameter)
 )
 _BUFFER_SECONDS = _RENDER_KWARGS["signal_length"] / _RENDER_KWARGS["sample_rate"]
+_WORKER_PID_KEY = "worker_pid"
+
+
+def _collate_audio_with_worker_pid(batch: Sequence[TorchSynthItem]) -> TorchSynthBatch:
+    """Add the collating process ID to a real audio batch.
+
+    :param batch: Rendered TorchSynth rows.
+    :returns: Model-ready audio batch carrying the collator PID.
+    """
+    collated = collate_audio_dict(batch)
+    collated[_WORKER_PID_KEY] = torch.tensor(os.getpid())
+    return collated
 
 
 # The live-voice drift test lives with the pinned spec in
@@ -105,7 +126,10 @@ def _decoded_note_params(dataset: TorchSynthDataset, index: int) -> NoteParams:
     :returns: The row's decoded pitch and note window.
     """
     _, params, _ = dataset[index]
-    return TORCHSYNTH_FULL_PARAM_SPEC.decode(params[0].numpy())[1]
+    return cast(
+        NoteParams,
+        TORCHSYNTH_FULL_PARAM_SPEC.decode(params[0].numpy())[1],
+    )
 
 
 def test_dataset_note_columns_vary_across_rows_within_the_spec_ranges() -> None:
@@ -168,11 +192,64 @@ def test_datamodule_setup_num_params_mismatch_raises() -> None:
         datamodule.setup(None)
 
 
+def test_datamodule_audio_conditioning_is_accepted() -> None:
+    """The shared raw-audio profile composes into the online datamodule."""
+    datamodule = TorchSynthDataModule(conditioning="audio")
+
+    assert datamodule.conditioning == "audio"
+
+
+def test_datamodule_positional_collate_fn_keeps_legacy_binding() -> None:
+    """A positional custom collator remains bound to ``collate_fn``."""
+    datamodule = TorchSynthDataModule(
+        44_100,
+        4_410,
+        _ENCODED_WIDTH,
+        (1, 1, 1),
+        (123, 456, 789),
+        1,
+        0,
+        collate_audio_dict,
+    )
+
+    assert datamodule.collate_fn is collate_audio_dict
+
+
+def test_datamodule_non_audio_conditioning_raises() -> None:
+    """TorchSynth rejects conditioning modes its online collator cannot guarantee."""
+    with pytest.raises(ValueError, match="conditioning must be 'audio'"):
+        TorchSynthDataModule(conditioning="mel")
+
+
 def test_datamodule_default_num_params_matches_spec_encoded_width() -> None:
     """The datamodule's default width is the spec's, so model configs need no literal."""
     assert (
         TorchSynthDataModule().num_params == TORCHSYNTH_FULL_PARAM_SPEC.encoded_width
     )
+
+
+def test_datamodule_positive_workers_persist_by_default() -> None:
+    """Worker processes stay alive between epochs unless explicitly disabled."""
+    datamodule = TorchSynthDataModule(num_workers=1)
+    datamodule.train = TorchSynthDataset(1, 123, **_RENDER_KWARGS)
+
+    assert datamodule.train_dataloader().persistent_workers is True
+
+
+def test_datamodule_persistent_workers_false_disables_persistence() -> None:
+    """An explicit false option keeps positive-count workers nonpersistent."""
+    datamodule = TorchSynthDataModule(num_workers=1, persistent_workers=False)
+    datamodule.train = TorchSynthDataset(1, 123, **_RENDER_KWARGS)
+
+    assert datamodule.train_dataloader().persistent_workers is False
+
+
+def test_datamodule_zero_workers_disables_persistence_safely() -> None:
+    """The persistent default remains valid when loading in the main process."""
+    datamodule = TorchSynthDataModule(num_workers=0)
+    datamodule.train = TorchSynthDataset(1, 123, **_RENDER_KWARGS)
+
+    assert datamodule.train_dataloader().persistent_workers is False
 
 
 def test_datamodule_test_dataloader_yields_finite_batch() -> None:
@@ -205,6 +282,48 @@ def test_datamodule_validate_stage_builds_only_validation_split() -> None:
     assert not hasattr(datamodule, "test")
     audio = next(iter(datamodule.val_dataloader()))["audio"]
     assert torch.isfinite(audio).all()
+
+
+def test_datamodule_train_and_validation_loaders_use_independent_worker_counts() -> None:
+    """A nonzero training worker count must not enable validation workers."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(1, 1, 1),
+        num_workers=2,
+        val_num_workers=0,
+    )
+    datamodule.setup("fit")
+
+    assert datamodule.train_dataloader().num_workers == 2
+    assert datamodule.val_dataloader().num_workers == 0
+
+
+def test_datamodule_zero_validation_workers_disable_persistence() -> None:
+    """In-process validation remains compatible with persistent training workers."""
+    datamodule = TorchSynthDataModule(num_workers=2, val_num_workers=0)
+    datamodule.val = TorchSynthDataset(1, 456, **_RENDER_KWARGS)
+
+    assert datamodule.val_dataloader().persistent_workers is False
+
+
+def test_datamodule_positive_validation_workers_persist_by_default() -> None:
+    """Explicit validation workers use the configured persistence behavior."""
+    datamodule = TorchSynthDataModule(num_workers=0, val_num_workers=1)
+    datamodule.val = TorchSynthDataset(1, 456, **_RENDER_KWARGS)
+
+    assert datamodule.val_dataloader().persistent_workers is True
+
+
+def test_datamodule_validation_workers_default_to_zero() -> None:
+    """Validation loads in-process unless workers are explicitly requested."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(1, 1, 1),
+        num_workers=2,
+    )
+    datamodule.setup("fit")
+
+    assert datamodule.val_dataloader().num_workers == 0
 
 
 def test_datamodule_loaders_shuffle_only_training_rows() -> None:
@@ -344,6 +463,27 @@ def test_datamodule_resample_train_per_epoch_keeps_val_rows_fixed() -> None:
     loader = datamodule.val_dataloader()
 
     assert _epoch_param_rows(loader) == _epoch_param_rows(loader)
+
+
+@pytest.mark.dataloader_multiprocess
+@pytest.mark.xdist_group(name="dataloader-multiprocess")
+@pytest.mark.slow
+def test_datamodule_validation_worker_override_renders_finite_batch() -> None:
+    """A positive validation worker override renders through a child process."""
+    datamodule = TorchSynthDataModule(
+        signal_length=4_410,
+        train_val_test_sizes=(1, 2, 1),
+        batch_size=2,
+        num_workers=0,
+        collate_fn=_collate_audio_with_worker_pid,
+        val_num_workers=1,
+    )
+    datamodule.setup("validate")
+
+    batch = next(iter(datamodule.val_dataloader()))
+
+    assert batch[_WORKER_PID_KEY].item() != os.getpid()
+    assert torch.isfinite(batch["audio"]).all()
 
 
 @pytest.mark.dataloader_multiprocess
@@ -548,4 +688,21 @@ def test_render_torchsynth_preserves_gpu_device() -> None:
     params = torch.rand((2, _ENCODED_WIDTH), device="cuda")
     audio = render_torchsynth(params, **_RENDER_KWARGS, render_batch_size=2)
     assert audio.device == params.device
+    assert torch.isfinite(audio).all()
+
+
+def test_renderer_built_under_inference_mode_still_backpropagates_afterwards() -> None:
+    """Lightning validates under inference mode, and the cached voice outlives that scope.
+
+    An inference tensor tracks no version counter, so a voice first built inside a validation loop
+    would break every later gradient render in the process (#2744).
+    """
+    _make_renderer.cache_clear()
+    row = _encoded_row(0, 60, (0.0, _BUFFER_SECONDS))
+    with torch.inference_mode():
+        render_torchsynth(row, **_RENDER_KWARGS)
+    params = differentiable_decode(torch.zeros(1, TORCHSYNTH_FULL_PARAM_SPEC.encoded_width))
+
+    audio = render_torchsynth_grad(params, **_RENDER_KWARGS, render_batch_size=1)
+
     assert torch.isfinite(audio).all()

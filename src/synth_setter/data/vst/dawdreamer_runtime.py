@@ -1,4 +1,4 @@
-"""Execution-time capability checks for the optional DawDreamer backend."""
+"""Runtime contracts for the optional DawDreamer backend."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ import platform
 import sys
 from importlib import import_module
 from importlib.metadata import version as distribution_version
+from typing import Protocol
 
+from synth_setter.renderer_backend import DAWDREAMER_PRESET_SETTLE_BLOCKS
 from synth_setter.renderer_backend import RendererBackend as RendererBackend
 
 _SUPPORTED_PYTHON_MINOR = (3, 12)
@@ -18,9 +20,40 @@ _SUPPORTED_TARGETS = {
 }
 
 
+class DawDreamerEngine(Protocol):
+    """Engine operation needed to settle asynchronous VST preset state."""
+
+    def render(self, duration: float) -> object:
+        """Process audio for a duration.
+
+        :param duration: Processing duration in seconds.
+        :returns: Backend-specific render status.
+        """
+        ...
+
+
+def settle_dawdreamer_preset(
+    engine: DawDreamerEngine,
+    *,
+    sample_rate: float,
+    block_size: int,
+    blocks: int = DAWDREAMER_PRESET_SETTLE_BLOCKS,
+) -> None:
+    """Activate preset-dependent state before inspecting or writing parameters.
+
+    :param engine: DawDreamer engine whose graph contains the preset-loaded plugin.
+    :param sample_rate: Engine sample rate in Hz.
+    :param block_size: Engine processing block size in samples.
+    :param blocks: Number of silent block-length callbacks to process.
+    """
+    block_duration = block_size / sample_rate
+    for _ in range(blocks):
+        engine.render(block_duration)
+
+
 def ensure_dawdreamer_runtime(
     renderer_backend: RendererBackend,
-    renderer_version: str | None = None,
+    backend_version: str | None = None,
 ) -> None:
     """Fail early when a DawDreamer worker cannot load the pinned package.
 
@@ -28,11 +61,11 @@ def ensure_dawdreamer_runtime(
     dispatching to a compatible worker interpreter.
 
     :param renderer_backend: Backend selected for the current render process.
-    :param renderer_version: Optional required DawDreamer distribution version.
+    :param backend_version: Optional required DawDreamer distribution version.
     :raises RuntimeError: DawDreamer is unsupported or unavailable on this worker.
     :raises ValueError: The required renderer version differs from the installed package.
     """
-    if renderer_backend not in ("dawdreamer", "dawdreamer_faust"):
+    if renderer_backend != "dawdreamer":
         return
 
     python_minor = sys.version_info[:2]
@@ -60,10 +93,10 @@ def ensure_dawdreamer_runtime(
             "under CPython 3.12 and verify the worker matches a supported wheel target."
         ) from exc
 
-    if renderer_version is not None:
+    if backend_version is not None:
         installed_version = distribution_version("dawdreamer")
-        if installed_version != renderer_version:
+        if installed_version != backend_version:
             raise ValueError(
-                f"DawDreamer renderer version {renderer_version!r} does not match "
+                f"DawDreamer backend version {backend_version!r} does not match "
                 f"installed version {installed_version!r}"
             )

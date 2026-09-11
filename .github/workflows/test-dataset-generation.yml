@@ -326,6 +326,7 @@ jobs:
             || (inputs.dataset_config || 'generate_dataset/smoke-shard')
         }}
       image_tag: ${{ inputs.docker_image_tag || 'dev-snapshot' }}
+      wandb_project: synth-setter-citest
       cluster_name: synth-setter-smoke-${{ matrix.provider }}-${{ matrix.output_format }}-${{ matrix.scenario }}-${{ github.run_id }}-${{ github.run_attempt }}
       num_workers: ${{ matrix.provider == 'skypilot-local' && '1' || (matrix.scenario == 'queue' && '2' || '') }}
       tail: true

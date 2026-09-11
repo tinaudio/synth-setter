@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 TINYMU_PACKAGE_COMMIT = "fef8564593fceb5625c10f56a46b256216e7173d"
+TINYMU_TIMM_VERSION = "1.0.28"
 MATPAC_PLUS_CHECKPOINT_REVISION = "0735fc50bc8b881d687dedccdd48b742927611b3"
 MATPAC_PLUS_CHECKPOINT_NAME = "matpac_plus_as_48_1_map_enconly.pt"
 MATPAC_PLUS_CHECKPOINT_SHA256 = "e8cec6847b2d918c8f77f82d79d90adf7dd82f99e80fa12eb3444f87f24bb998"
@@ -343,7 +344,10 @@ def matpac_plus_artifact_digest(checkpoint: str) -> str:
     :returns: Package and checkpoint identity for generic policy versioning.
     """
     resolve_matpac_plus_checkpoint(checkpoint)
-    return f"package:{TINYMU_PACKAGE_COMMIT};checkpoint:sha256:{MATPAC_PLUS_CHECKPOINT_SHA256}"
+    return (
+        f"package:{TINYMU_PACKAGE_COMMIT};timm:{TINYMU_TIMM_VERSION};"
+        f"checkpoint:sha256:{MATPAC_PLUS_CHECKPOINT_SHA256}"
+    )
 
 
 def encode_matpac_plus_column(

@@ -3,6 +3,7 @@ import logging
 from collections.abc import Iterable
 from pathlib import Path
 from typing import NamedTuple, TypeAlias
+from zipfile import BadZipFile
 
 import numpy as np
 
@@ -152,6 +153,86 @@ def update(existing, new):
     delta2 = new - mean
     M2 += delta * delta2
     return count, mean, M2
+
+
+def _validate_welford(
+    count: np.ndarray,
+    mean: np.ndarray,
+    m2: np.ndarray,
+    *,
+    expected_shape: tuple[int, ...],
+) -> WelfordState:
+    """Validate canonical cumulative Welford arrays.
+
+    :param count: Scalar observation count.
+    :param mean: Float32 running mean.
+    :param m2: Float32 running second moment.
+    :param expected_shape: Required mean and second-moment shape.
+    :returns: Validated state with a Python count.
+    :raises ValueError: Any array has a noncanonical dtype, shape, or value.
+    """
+    if count.shape != () or count.dtype != np.dtype(np.int64):
+        raise ValueError("count must be a scalar int64")
+    if int(count) < 0:
+        raise ValueError("count must be non-negative")
+    for name, value in (("mean", mean), ("m2", m2)):
+        if value.dtype != np.dtype(np.float32):
+            raise ValueError(f"{name} must have dtype float32")
+        if value.shape != expected_shape:
+            raise ValueError(f"{name} must have shape {expected_shape}, got {value.shape}")
+        if not np.isfinite(value).all():
+            raise ValueError(f"{name} must contain only finite values")
+    if np.any(m2 < 0):
+        raise ValueError("m2 must be non-negative")
+    return int(count), mean, m2
+
+
+def load_welford(path: str | Path, *, expected_shape: tuple[int, ...]) -> WelfordState:
+    """Load one strict cumulative ``welford.npz`` archive.
+
+    :param path: Archive path.
+    :param expected_shape: Required mean and second-moment shape.
+    :returns: Validated ``(count, mean, m2)`` state.
+    :raises ValueError: The archive is unreadable, incomplete, or noncanonical.
+    """
+    try:
+        archive = np.load(path, allow_pickle=False)
+    except (BadZipFile, EOFError, OSError, ValueError) as exc:
+        raise ValueError(f"invalid Welford archive {path}: {exc}") from exc
+    with archive:
+        missing = [name for name in ("count", "mean", "m2") if name not in archive]
+        if missing:
+            raise ValueError(f"Welford archive {path} missing arrays {missing}")
+        return _validate_welford(
+            archive["count"], archive["mean"], archive["m2"], expected_shape=expected_shape
+        )
+
+
+def save_welford(
+    path: str | Path,
+    state: WelfordState,
+    *,
+    expected_shape: tuple[int, ...],
+) -> None:
+    """Persist one canonical cumulative ``welford.npz`` archive.
+
+    :param path: Destination archive path.
+    :param state: Cumulative ``(count, mean, m2)`` state.
+    :param expected_shape: Required mean and second-moment shape.
+    """
+    count, mean, m2 = state
+    canonical = _validate_welford(
+        np.asarray(count, dtype=np.int64),
+        np.asarray(mean),
+        np.asarray(m2),
+        expected_shape=expected_shape,
+    )
+    np.savez(
+        path,
+        count=np.asarray(canonical[0], dtype=np.int64),
+        mean=canonical[1],
+        m2=canonical[2],
+    )
 
 
 def merge_welford(existing: WelfordState, other: WelfordState) -> WelfordState:

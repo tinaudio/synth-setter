@@ -14,6 +14,21 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+# Re-exported for the writers and validator; canonical home is ``conditioning``.
+from synth_setter.conditioning import (
+    NUM_SKETCH_CONTROLS as NUM_SKETCH_CONTROLS,
+    SKETCH_CENTROID_CHILD as SKETCH_CENTROID_CHILD,
+    SKETCH_CENTROID_ROW as SKETCH_CENTROID_ROW,
+    SKETCH_CTRL_FIELD as SKETCH_CTRL_FIELD,
+    SKETCH_LOUDNESS_CHILD as SKETCH_LOUDNESS_CHILD,
+    SKETCH_LOUDNESS_ROW as SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_BINS as SKETCH_PITCH_BINS,
+    SKETCH_PITCH_CHILD as SKETCH_PITCH_CHILD,
+    SKETCH_PITCH_SLICE as SKETCH_PITCH_SLICE,
+    SKETCH_STRUCT_FIELD as SKETCH_STRUCT_FIELD,
+    SKETCH_VEC_CHILD as SKETCH_VEC_CHILD,
+)
+
 if TYPE_CHECKING:
     # Type-only on purpose: a runtime import would risk a cycle (spec.py lazily
     # imports the param-spec registry from data.vst).
@@ -34,18 +49,39 @@ AUDIO_MP3_FIELD_METADATA: dict[bytes, bytes] = {b"mime_type": b"audio/mpeg"}
 # not in DATASET_FIELD_NAMES because the writers never emit them.
 M2L_FIELD: str = "m2l"
 CLAP_FIELD: str = "clap"
+CQT_FIELD: str = "cqt"
 SAME_S_FIELD: str = "same_s"
 SAME_L_FIELD: str = "same_l"
 SSONDO_FIELD: str = "ssondo"
 T5GEMMA_FIELD: str = "t5gemma"
+TINYMU_FIELD: str = "tinymu"
 MATPAC_PLUS_FIELD: str = "matpac_plus"
-SKETCH_CTRL_FIELD: str = "sketch_ctrl"
-# The pitch-row width below is a property of this PESTO checkpoint.
+MEANAUDIO_16K_FIELD: str = "meanaudio_16k"
+PUPUJEPA_TINY_FIELD: str = "pupujepa_tiny"
+PUPUJEPA_LARGE_FIELD: str = "pupujepa_large"
+# Emits the 128-semitone x 3-bin activation width that ``SKETCH_PITCH_BINS`` pins.
 DEFAULT_PESTO_CHECKPOINT: str = "mir-1k_g7"
-# PESTO mir-1k_g7 activation width: 128 semitones x 3 bins.
-SKETCH_PITCH_BINS: int = 384
-# Rows: loudness, centroid, then the pitch-activation block.
-NUM_SKETCH_CONTROLS: int = 2 + SKETCH_PITCH_BINS
+
+# Single-parameter sensitivity struct appended by the ``param_shift`` embedder. One nested
+# column keeps the shift's seven facets together and readable as ``shift.param``,
+# ``shift.audio``, ... rather than seven suffixed siblings of the dataset's own columns.
+SHIFT_FIELD: str = "shift"
+SHIFT_PARAM_SUBFIELD: str = "param"
+SHIFT_AMOUNT_SUBFIELD: str = "amount"
+SHIFT_AUDIO_SUBFIELD: str = "audio"
+SHIFT_RMS_SUBFIELD: str = "rms"
+SHIFT_SOT_SUBFIELD: str = "sot"
+SHIFT_WMFCC_SUBFIELD: str = "wmfcc"
+SHIFT_MSS_SUBFIELD: str = "mss"
+SHIFT_SUBFIELD_NAMES: tuple[str, ...] = (
+    SHIFT_PARAM_SUBFIELD,
+    SHIFT_AMOUNT_SUBFIELD,
+    SHIFT_AUDIO_SUBFIELD,
+    SHIFT_RMS_SUBFIELD,
+    SHIFT_SOT_SUBFIELD,
+    SHIFT_WMFCC_SUBFIELD,
+    SHIFT_MSS_SUBFIELD,
+)
 
 # Backward-compatible storage defaults. ``RenderConfig`` overrides signal
 # storage; parameter arrays retain the default dtype.
@@ -123,7 +159,49 @@ def mel_n_frames_from_samples(num_samples: int, sample_rate: float) -> int:
     :returns: ``1 + num_samples // hop_length`` frames.
     :rtype: int
     """
-    return 1 + num_samples // mel_hop_length(sample_rate)
+    return stft_n_frames_from_samples(num_samples, mel_hop_length(sample_rate))
+
+
+def stft_n_frames_from_samples(num_samples: int, hop_length: int) -> int:
+    """Return the frame count a ``center=True`` short-time transform produces.
+
+    :param num_samples: Waveform length in samples.
+    :param hop_length: Frame stride in samples.
+    :returns: ``1 + num_samples // hop_length`` frames.
+    :rtype: int
+    :raises ValueError: If ``hop_length`` is not positive or ``num_samples`` is negative.
+    """
+    if hop_length <= 0:
+        raise ValueError(f"hop_length must be positive, got {hop_length}")
+    if num_samples < 0:
+        raise ValueError(f"num_samples must be non-negative, got {num_samples}")
+    return 1 + num_samples // hop_length
+
+
+def make_spectrogram(audio: np.ndarray, sample_rate: float) -> np.ndarray:
+    """Per-channel mel-spectrogram in dB; STFT params come from module-level constants.
+
+    Canonical training front-end: every consumer that must match stored
+    ``mel_spec`` values calls this rather than reimplementing the librosa call.
+
+    :param audio: Channel-leading waveform shaped ``(channels, samples)``; a 1-D
+        ``(samples,)`` waveform is also accepted.
+    :param sample_rate: Audio sample rate in Hz.
+    :returns: Decibel-scaled mel spectrogram whose rank follows the input's —
+        ``(channels, MEL_N_MELS, frames)`` for 2-D audio, ``(MEL_N_MELS, frames)`` for 1-D.
+    """
+    import librosa
+
+    spec = librosa.feature.melspectrogram(
+        y=audio,
+        sr=sample_rate,
+        n_mels=MEL_N_MELS,
+        n_fft=mel_n_fft(sample_rate),
+        hop_length=mel_hop_length(sample_rate),
+        window=MEL_WINDOW,
+        center=True,
+    )
+    return librosa.power_to_db(spec, ref=np.max)
 
 
 def audio_dataset_shape(

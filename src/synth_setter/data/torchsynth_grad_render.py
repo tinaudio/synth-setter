@@ -15,7 +15,7 @@ Typical usage:
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from functools import partial
 from typing import TYPE_CHECKING, cast
 
@@ -28,6 +28,7 @@ from synth_setter.data.torchsynth_datamodule import (
     _make_renderer,
     _pad_to_render_size,
 )
+from synth_setter.data.vst.param_spec import require_note_params
 from synth_setter.data.vst.torchsynth_param_spec import (
     INFERABLE_SPEC,
     TORCHSYNTH_FULL_PARAM_SPEC,
@@ -60,6 +61,11 @@ class _VoiceOutputShim(torch.nn.Module):
         """
         # nn.Module.__getattr__ types submodule access as Tensor; Voice.output() is a method.
         return self.voice.output()  # pyright: ignore[reportCallIssue]
+
+
+# TorchSynth's own SynthConfig.eps, whose documented purpose is avoiding divide-by-zero.
+_RAMP_GRAD_EPS: float = 1e-6
+_TORCH_POW: Callable[..., torch.Tensor] = torch.pow
 
 
 def _as_substitute(column: torch.Tensor, original: ModuleParameter) -> ModuleParameter:
@@ -108,8 +114,8 @@ def render_torchsynth_grad(
     :param render_batch_size: Fixed row count of the voice this render runs on; a
         shorter batch is padded up and sliced back, so a trailing partial batch
         neither allocates a second voice nor shifts the render.
-    :returns: Float32 audio shaped ``(batch, signal_length)``, differentiable
-        w.r.t. ``params``' synth columns.
+    :returns: Float32 audio shaped ``(batch, signal_length)`` in ``[-1, 1]``,
+        differentiable w.r.t. ``params``' synth columns.
     :raises ValueError: Wrong row width, a non-finite value, a batch exceeding
         ``render_batch_size``, or a non-finite render.
     """
@@ -117,14 +123,14 @@ def render_torchsynth_grad(
     rows = len(params)
     padded = _pad_to_render_size(params, render_batch_size)
     notes = [
-        TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1]
+        require_note_params(TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1])
         for row in padded.detach().clamp(0, 1).cpu().numpy()
     ]
     column = partial(torch.tensor, dtype=torch.float32, device=params.device)
     synth_params = padded[:, TORCHSYNTH_FULL_PARAM_SPEC.synth_columns]
     renderer = _make_renderer(sample_rate, signal_length, render_batch_size, str(params.device))
     voice = renderer.voice
-    with renderer.lock, _aligned_noise(voice):
+    with renderer.lock, _aligned_noise(voice), finite_tensor_exponent_pow():
         all_parameters = voice.get_parameters()
         keyboard = (
             ("midi_f0", column([note["pitch"] for note in notes])),
@@ -149,7 +155,44 @@ def render_torchsynth_grad(
         # otherwise write NaN into every weight on the next backward pass.
         raise ValueError("TorchSynth rendered non-finite audio")
     starts = column([note["note_start_and_end"][0] for note in notes[:rows]])
+    # Stored targets are hard-clamped by render_torchsynth; a straight-through clamp
+    # matches that contract without zeroing gradient on clipped samples.
+    audio = audio + (audio.clamp(-1.0, 1.0) - audio).detach()
     return _delay_by_note_start(audio, starts, sample_rate)
+
+
+def _finite_grad_pow(base: torch.Tensor, exponent: torch.Tensor | float) -> torch.Tensor:
+    """Evaluate ``pow`` exactly while differentiating a base floored away from zero.
+
+    ``d/dbase base**a`` is ``a * base**(a - 1)``, which is ``inf`` at ``base == 0`` for
+    ``a < 1``. TorchSynth's ADSR reaches exactly that: its forward epsilon guard is
+    destroyed by the ``1 - ramp`` inverse flip once the ramp saturates at one. The forward
+    value is grafted back so stored renders stay bitwise reproducible.
+
+    :param base: Pow base, possibly containing zeros.
+    :param exponent: Pow exponent; only a tensor exponent reaches the singular derivative.
+    :returns: ``base ** exponent`` with a finite gradient w.r.t. ``base``.
+    """
+    exact = _TORCH_POW(base, exponent)
+    if not isinstance(exponent, torch.Tensor) or not base.requires_grad:
+        return exact
+    floored = _TORCH_POW(base.clamp_min(_RAMP_GRAD_EPS), exponent)
+    return floored + (exact - floored).detach()
+
+
+@contextlib.contextmanager
+def finite_tensor_exponent_pow() -> Iterator[None]:
+    """Swap ``torch.pow`` for a variant whose base gradient cannot reach ``inf``.
+
+    Scoped to a single render rather than applied upstream because the defect is in
+    ``torchsynth.module``'s ADSR ramp and its two sibling tensor-exponent pows, which this
+    repo does not own.
+    """
+    torch.pow = _finite_grad_pow  # pyright: ignore[reportAttributeAccessIssue]
+    try:
+        yield
+    finally:
+        torch.pow = _TORCH_POW  # pyright: ignore[reportAttributeAccessIssue]
 
 
 @contextlib.contextmanager

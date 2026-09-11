@@ -6,6 +6,7 @@ audio batch on the training machine without materializing an audio dataset.
 
 from __future__ import annotations
 
+import math
 import sys
 import threading
 import types
@@ -19,7 +20,9 @@ import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset, Sampler
 
+from synth_setter.conditioning import ConditioningMode
 from synth_setter.data.sample_seed import derive_sample_seed
+from synth_setter.data.vst.param_spec import require_note_params
 
 # Re-exported for backward compat: training code imports these names from this module.
 from synth_setter.data.vst.torchsynth_param_spec import (
@@ -59,19 +62,23 @@ def _torchsynth_types() -> tuple[type, type]:
     :returns: TorchSynth's ``SynthConfig`` and ``Voice`` types.
     """
     try:
-        import pytorch_lightning.core.lightning  # noqa: F401
-    except ModuleNotFoundError:
-        import pytorch_lightning
+        try:
+            import pytorch_lightning.core.lightning  # noqa: F401
+        except ModuleNotFoundError:
+            import pytorch_lightning
 
-        shim = types.ModuleType("pytorch_lightning.core.lightning")
-        # setattr (not ``shim.LightningModule = ...``) so pyright doesn't flag the
-        # attribute as unknown on a dynamically created ModuleType.
-        setattr(shim, "LightningModule", pytorch_lightning.LightningModule)
-        sys.modules["pytorch_lightning.core.lightning"] = shim
-    from torchsynth.config import SynthConfig
-    from torchsynth.synth import Voice
+            shim = types.ModuleType("pytorch_lightning.core.lightning")
+            # setattr (not ``shim.LightningModule = ...``) so pyright doesn't flag the
+            # attribute as unknown on a dynamically created ModuleType.
+            setattr(shim, "LightningModule", pytorch_lightning.LightningModule)
+            sys.modules["pytorch_lightning.core.lightning"] = shim
+        from torchsynth.config import SynthConfig
+        from torchsynth.synth import Voice
 
-    return SynthConfig, Voice
+        return SynthConfig, Voice
+    finally:
+        # TorchSynth 1.0.2 replaces this process-global constant with a float32 estimate.
+        torch.pi = math.pi
 
 
 @dataclass
@@ -129,15 +136,19 @@ def _make_renderer(
     :returns: Cached voice and its mutation lock.
     """
     synth_config, voice = _torchsynth_types()
-    instance = voice(
-        synthconfig=synth_config(
-            batch_size=render_batch_size,
-            sample_rate=sample_rate,
-            buffer_size_seconds=signal_length / sample_rate,
-            reproducible=False,
+    # The cache outlives whatever scope first fills it. Built inside a Lightning validation
+    # loop the voice's parameters would be inference tensors, which track no version counter
+    # and so break every later gradient render in the process (#2744).
+    with torch.inference_mode(False):
+        instance = voice(
+            synthconfig=synth_config(
+                batch_size=render_batch_size,
+                sample_rate=sample_rate,
+                buffer_size_seconds=signal_length / sample_rate,
+                reproducible=False,
+            )
         )
-    )
-    return _Renderer(instance.to(torch.device(device)), threading.Lock())
+        return _Renderer(instance.to(torch.device(device)), threading.Lock())
 
 
 def _delay_by_note_start(
@@ -193,7 +204,7 @@ def render_torchsynth(
     # Decode the padded rows, not just the real ones: the voice holds render_batch_size
     # keyboard entries and every one of them must be set from the row it renders.
     notes = [
-        TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1]
+        require_note_params(TORCHSYNTH_FULL_PARAM_SPEC.decode(row)[1])
         for row in padded.detach().clamp(0, 1).cpu().numpy()
     ]
     column = partial(torch.tensor, dtype=torch.float32, device=params.device)
@@ -361,6 +372,10 @@ class TorchSynthDataModule(LightningDataModule):
         collate_fn: TorchSynthCollateFn | None = None,
         resample_train_per_epoch: bool = False,
         drop_last: bool = False,
+        conditioning: ConditioningMode = "audio",
+        persistent_workers: bool = True,
+        *,
+        val_num_workers: int = 0,
     ) -> None:
         """Configure the online TorchSynth train, validation, and test splits.
 
@@ -370,13 +385,20 @@ class TorchSynthDataModule(LightningDataModule):
         :param train_val_test_sizes: Row counts for the train, validation, and test splits.
         :param train_val_test_seeds: Base seeds for the train, validation, and test splits.
         :param batch_size: DataLoader batch size.
-        :param num_workers: DataLoader worker process count.
+        :param num_workers: Worker processes for training and test loaders.
         :param collate_fn: Fully configured row collator; defaults to mel-capable batches.
         :param resample_train_per_epoch: Draw fresh train rows every epoch (truly online
             training) instead of revisiting one fixed split; validation and test stay fixed.
         :param drop_last: Whether training discards a trailing partial batch when the split
             contains at least one full batch.
+        :param conditioning: Model-batch modality; TorchSynth supports raw audio only.
+        :param persistent_workers: Keep worker processes alive between epochs when the
+            selected loader's worker count is positive.
+        :param val_num_workers: Worker processes for the validation loader.
+        :raises ValueError: If conditioning does not select raw audio.
         """
+        if conditioning != "audio":
+            raise ValueError("TorchSynth conditioning must be 'audio'")
         super().__init__()
         self.sample_rate = sample_rate
         self.signal_length = signal_length
@@ -385,6 +407,8 @@ class TorchSynthDataModule(LightningDataModule):
         self.train_val_test_seeds = train_val_test_seeds
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.persistent_workers = persistent_workers
+        self.val_num_workers = val_num_workers
         self.collate_fn = (
             collate_fn
             if collate_fn is not None
@@ -392,6 +416,7 @@ class TorchSynthDataModule(LightningDataModule):
         )
         self.resample_train_per_epoch = resample_train_per_epoch
         self.drop_last = drop_last
+        self.conditioning = conditioning
 
     def setup(self, stage: str | None = None) -> None:
         """Build only the splits required for the requested Lightning stage.
@@ -424,6 +449,7 @@ class TorchSynthDataModule(LightningDataModule):
         self,
         dataset: Dataset[TorchSynthItem],
         *,
+        num_workers: int,
         shuffle: bool = False,
         sampler: Sampler[int] | None = None,
         drop_last: bool = False,
@@ -431,14 +457,13 @@ class TorchSynthDataModule(LightningDataModule):
         """Wrap one online split with the configured collator.
 
         :param dataset: Online split to load.
+        :param num_workers: Worker processes for this split.
         :param shuffle: Whether to shuffle logical row indices; exclusive with ``sampler``.
         :param sampler: Index sampler overriding the default order.
         :param drop_last: Whether to drop a trailing partial batch. Set on training only;
             evaluation keeps its remainder rather than silently losing rows.
         :returns: Batched online data loader.
         """
-        # persistent_workers / pin_memory are unset — per-epoch worker Voice rebuilds
-        # and the host→GPU copy are tunable throughput wins, deferred to #1820.
         # The cast re-types the loader by its collate output; DataLoader's generic only
         # tracks the dataset's item type.
         return cast(
@@ -448,7 +473,8 @@ class TorchSynthDataModule(LightningDataModule):
                 batch_size=self.batch_size,
                 shuffle=shuffle,
                 sampler=sampler,
-                num_workers=self.num_workers,
+                num_workers=num_workers,
+                persistent_workers=self.persistent_workers and num_workers > 0,
                 drop_last=drop_last,
                 collate_fn=self.collate_fn,
             ),
@@ -463,20 +489,28 @@ class TorchSynthDataModule(LightningDataModule):
         drop_last = self.drop_last and len(self.train) >= self.batch_size
         if self.resample_train_per_epoch:
             return self._loader(
-                self.train, sampler=_FreshEpochSampler(len(self.train)), drop_last=drop_last
+                self.train,
+                num_workers=self.num_workers,
+                sampler=_FreshEpochSampler(len(self.train)),
+                drop_last=drop_last,
             )
-        return self._loader(self.train, shuffle=True, drop_last=drop_last)
+        return self._loader(
+            self.train,
+            num_workers=self.num_workers,
+            shuffle=True,
+            drop_last=drop_last,
+        )
 
     def val_dataloader(self) -> DataLoader[TorchSynthBatch]:
         """Return the deterministic online validation loader.
 
         :returns: Batched online validation data.
         """
-        return self._loader(self.val)
+        return self._loader(self.val, num_workers=self.val_num_workers)
 
     def test_dataloader(self) -> DataLoader[TorchSynthBatch]:
         """Return the deterministic online test loader.
 
         :returns: Batched online test data.
         """
-        return self._loader(self.test)
+        return self._loader(self.test, num_workers=self.num_workers)

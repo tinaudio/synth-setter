@@ -8,9 +8,26 @@ from typing import TypedDict, cast
 
 import pytest
 
-from synth_setter.pipeline.data.matpac_plus import TINYMU_PACKAGE_COMMIT
+from synth_setter.pipeline.data.cqt import CQT_PACKAGE_COMMIT
+from synth_setter.pipeline.data.matpac_plus import TINYMU_PACKAGE_COMMIT, TINYMU_TIMM_VERSION
+from synth_setter.pipeline.data.meanaudio import MEANAUDIO_PACKAGE_COMMIT
+from synth_setter.pupujepa import PUPUJEPA_TIMM_VERSION
 
+_CQT_REQUIREMENT = (
+    f"cqt-nsgt-pytorch @ git+https://github.com/eloimoliner/CQT_pytorch@{CQT_PACKAGE_COMMIT}"
+)
 _TINYMU_REQUIREMENT = f"tinymu @ git+https://github.com/ktinubu/TinyMU@{TINYMU_PACKAGE_COMMIT}"
+_MEANAUDIO_REQUIREMENT = (
+    f"meanaudio @ git+https://github.com/xiquan-li/MeanAudio.git@{MEANAUDIO_PACKAGE_COMMIT}"
+)
+_MEANAUDIO_REQUIRES_DIST = [
+    "einops>=0.6",
+    "huggingface-hub>=0.26",
+    "librosa>=0.8.1",
+    "numpy>=1.21",
+    "omegaconf",
+    "torch>=2.5.1",
+]
 _SA3_REQUIREMENT = (
     "stable-audio-3 @ "
     "git+https://github.com/Stability-AI/stable-audio-3@"
@@ -24,6 +41,13 @@ _DependencyMetadata = TypedDict(
 
 
 class _NamedPackage(TypedDict):
+    """Lockfile package identity used for membership checks.
+
+    .. attribute :: name
+
+        Distribution name recorded in the lockfile.
+    """
+
     name: str
 
 
@@ -31,6 +55,13 @@ _UvTable = TypedDict("_UvTable", {"dependency-metadata": list[_DependencyMetadat
 
 
 class _ToolTable(TypedDict):
+    """Resolver-specific metadata in the project's tool table.
+
+    .. attribute :: uv
+
+        UV resolver metadata overrides.
+    """
+
     uv: _UvTable
 
 
@@ -50,6 +81,17 @@ _Manifest = TypedDict("_Manifest", {"dependency-metadata": list[_DependencyMetad
 
 
 class _Lock(TypedDict):
+    """Lockfile metadata and package inventory under test.
+
+    .. attribute :: manifest
+
+        Declared dependency metadata overrides.
+
+    .. attribute :: package
+
+        Resolved distribution inventory.
+    """
+
     manifest: _Manifest
     package: list[_NamedPackage]
 
@@ -65,6 +107,28 @@ def pyproject(project_root: Path) -> _Pyproject:
         return cast("_Pyproject", tomllib.load(file))
 
 
+def test_cqt_package_is_pinned_in_normal_torch_runtime(
+    project_root: Path, pyproject: _Pyproject
+) -> None:
+    """CQT installs from one immutable source commit in the standard runtime.
+
+    :param project_root: Repository root containing ``uv.lock``.
+    :param pyproject: Parsed project metadata.
+    """
+    assert _CQT_REQUIREMENT in pyproject["dependency-groups"]["torch"]
+    assert _CQT_REQUIREMENT not in pyproject["project"]["dependencies"]
+    assert all(
+        _CQT_REQUIREMENT not in requirements
+        for requirements in pyproject["project"]["optional-dependencies"].values()
+    )
+    lock_text = (project_root / "uv.lock").read_text()
+    assert (
+        'source = { git = "https://github.com/eloimoliner/CQT_pytorch?rev='
+        f"{CQT_PACKAGE_COMMIT}#{CQT_PACKAGE_COMMIT}"
+        '" }'
+    ) in lock_text
+
+
 def test_sa3_requirement_is_in_torch_group_not_project_or_extras(
     pyproject: _Pyproject,
 ) -> None:
@@ -74,7 +138,10 @@ def test_sa3_requirement_is_in_torch_group_not_project_or_extras(
     """
     assert _SA3_REQUIREMENT in pyproject["dependency-groups"]["torch"]
     assert _SA3_REQUIREMENT not in pyproject["project"]["dependencies"]
-    assert set(pyproject["project"]["optional-dependencies"]) == {"cpu", "cu128"}
+    assert all(
+        _SA3_REQUIREMENT not in requirements
+        for requirements in pyproject["project"]["optional-dependencies"].values()
+    )
 
 
 def test_tinymu_package_is_pinned_in_normal_torch_runtime(
@@ -85,13 +152,65 @@ def test_tinymu_package_is_pinned_in_normal_torch_runtime(
     :param project_root: Repository root containing ``uv.lock``.
     :param pyproject: Parsed project metadata.
     """
-    assert _TINYMU_REQUIREMENT in pyproject["dependency-groups"]["torch"]
+    torch_dependencies = pyproject["dependency-groups"]["torch"]
+    assert _TINYMU_REQUIREMENT in torch_dependencies
+    assert f"timm=={PUPUJEPA_TIMM_VERSION}" in torch_dependencies
     lock_text = (project_root / "uv.lock").read_text()
     assert (
         'source = { git = "https://github.com/ktinubu/TinyMU?rev='
         f"{TINYMU_PACKAGE_COMMIT}#{TINYMU_PACKAGE_COMMIT}"
         '" }'
     ) in lock_text
+
+
+def test_meanaudio_package_and_metadata_override_match_lock(
+    project_root: Path, pyproject: _Pyproject
+) -> None:
+    """MeanAudio is direct, immutable, and limited to the VAE import closure.
+
+    :param project_root: Repository root containing ``uv.lock``.
+    :param pyproject: Parsed project metadata.
+    """
+    assert _MEANAUDIO_REQUIREMENT in pyproject["dependency-groups"]["torch"]
+    assert _MEANAUDIO_REQUIREMENT not in pyproject["project"]["dependencies"]
+    metadata = next(
+        item
+        for item in pyproject["tool"]["uv"]["dependency-metadata"]
+        if item["name"] == "meanaudio"
+    )
+    assert metadata == {
+        "name": "meanaudio",
+        "version": "1.0.0",
+        "requires-dist": _MEANAUDIO_REQUIRES_DIST,
+    }
+
+    lock_text = (project_root / "uv.lock").read_text()
+    lock = cast("_Lock", tomllib.loads(lock_text))
+    lock_metadata = next(
+        item for item in lock["manifest"]["dependency-metadata"] if item["name"] == "meanaudio"
+    )
+    assert lock_metadata == metadata
+    assert any(package["name"] == "meanaudio" for package in lock["package"])
+    assert (
+        'source = { git = "https://github.com/xiquan-li/MeanAudio.git?rev='
+        f"{MEANAUDIO_PACKAGE_COMMIT}#{MEANAUDIO_PACKAGE_COMMIT}"
+        '" }'
+    ) in lock_text
+
+
+def test_tinymu_metadata_uses_the_pupujepa_compatible_timm(
+    pyproject: _Pyproject,
+) -> None:
+    """TinyMU and PupuJEPA share the tested modern timm runtime.
+
+    :param pyproject: Parsed project metadata.
+    """
+    metadata = next(
+        item for item in pyproject["tool"]["uv"]["dependency-metadata"] if item["name"] == "tinymu"
+    )
+
+    assert TINYMU_TIMM_VERSION == PUPUJEPA_TIMM_VERSION
+    assert f"timm=={TINYMU_TIMM_VERSION}" in metadata["requires-dist"]
 
 
 def test_legacy_same_runtime_is_absent_from_metadata_and_lock(

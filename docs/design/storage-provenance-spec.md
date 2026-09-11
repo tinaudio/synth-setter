@@ -36,10 +36,12 @@ intermediate-data/
 ├── data/{dataset_config_id}/{dataset_wandb_run_id}/
 ├── train/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/
 ├── eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
-└── probes/{train_config_id}/{recovery_namespace}/step-{global_step}/
+└── probes/
+    ├── {train_config_id}/{recovery_namespace}/step-{global_step}/
+    └── dataset-oracle/{dataset_config_id}/{dataset_wandb_run_id}/{eval_launch_id}/{split}/
 ```
 
-The `data/`, `train/`, and `eval/` prefixes are the canonical per-run dataset footprint. `probes/` holds the opt-in validation audio probe's qualitative snapshots — `audio/` and `metrics/` per step, staged prediction tensors excluded (see `cli/train.py::_derive_probe_uri` and `evaluation/audio_probe.py::run_audio_probe`). `{recovery_namespace}` is the per-launch identifier (`{run_id}-{uuid}`, `cli/train.py::_make_recovery_namespace`) shared with mid-run recovery checkpoints, so concurrent runs of one config cannot interleave snapshots and a launch's probes correlate with its checkpoints by name.
+The `data/`, `train/`, and `eval/` prefixes are the canonical per-run dataset footprint. `probes/` holds bounded diagnostic snapshots outside the immutable dataset prefix. Training validation probes archive `audio/` and `metrics/` per step under a recovery namespace shared with checkpoints (see `cli/train.py::_derive_probe_uri` and `evaluation/audio_probe.py::run_audio_probe`). Inline dataset-oracle probes require `oracle_eval.upload=true` (disabled by default) and archive `.hydra/config.yaml`, `audio/`, `metrics/`, and strict `provenance.json`; predictions and process logs remain local. Consumers treat a split prefix as complete only when `provenance.json` exists because the payload uploads before that commit record. Failed attempts may retain partial uncommitted payload, and retries mint a new `{eval_launch_id}` rather than resuming a snapshot. The launch ID is minted once per inline invocation, so all three independently published splits share an identity while retries and concurrent launches cannot collide. Generation and finalization retain their existing resume behavior. Probe uploads intentionally bypass `evaluation.upload_output_dir_uri` and therefore do not create W&B `eval-results` lineage.
 
 ______________________________________________________________________
 
@@ -133,11 +135,11 @@ ______________________________________________________________________
 | `model`        | `model-{train_config_id}`  | `src/synth_setter/cli/train.py`            | `model-flow-simple` |
 | `eval-results` | `eval-{eval_config_id}`    | eval script                                | `eval-nsynth-v1`    |
 
-> **Note:** `finalize_dataset.py` logs the `dataset` artifact (`build_dataset_artifact` / `_log_dataset_artifact`), resuming the data-generation run pinned to `spec.run_id` so the artifact lands on the producer node of the lineage DAG. It composes a `WandbLogger` from `configs/finalize_dataset.yaml`'s `logger: wandb` default and degrades to a best-effort no-op without `WANDB_API_KEY`. In Docker the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)).
+> **Note:** `finalize_dataset.py` logs the `dataset` artifact (`build_dataset_artifact` / `_log_dataset_artifact`) from a dedicated `{spec.run_id}-finalize` run (`job_type=finalize`); consumers still resolve it by name + `:{run_id}` alias, so the lineage edge is unchanged. It composes a `WandbLogger` from `configs/finalize_dataset.yaml`'s `logger: wandb` default and degrades to a best-effort no-op without `WANDB_API_KEY`. In Docker the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)).
 
-> **Note:** `train.py` logs the `model` artifact (`build_model_artifact` / `_log_model_artifact`) at train end. On global-zero it first uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived location `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` (`_derive_checkpoint_uri`; bucket defaults to `intermediate-data`), then references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference, not the file ([#92](https://github.com/tinaudio/synth-setter/issues/92) is implemented by this). Because that reference renders with no size or content in the UI, `artifact.metadata` also carries `ckpt_uri`, `ckpt_bytes`, `epoch`, `global_step`, `monitor`, and `monitor_score`, so the referenced checkpoint is identifiable without leaving W&B ([#2424](https://github.com/tinaudio/synth-setter/issues/2424)). `training.upload_checkpoints_uri` is an optional override of the target (null = auto-derive). The artifact degrades to lineage-only (no reference) when R2 is unreachable (local CPU / CI) or no checkpoint was written (e.g. `fast_dev_run`); training is never aborted by checkpoint persistence. Logging is best-effort and a no-op without a `WandbLogger`. Each upload also writes an architecture-fingerprint sidecar (`model.ckpt.fingerprint.json`: model/encoder/vector-field `_target_`s, conditioning, param-spec name); before overwriting an existing slot the sidecar is fetched and a fingerprint mismatch (or unparsable sidecar) refuses the upload — loudly, degrading to lineage-only — unless `training.force_checkpoint_overwrite=true`, so two runs sharing a `config_id` cannot clobber each other's canonical checkpoint with an incompatible architecture ([#2588](https://github.com/tinaudio/synth-setter/issues/2588)). A sidecar-less (pre-guard) slot warns and is overwritten, arming the guard.
+> **Note:** `train.py` logs the `model` artifact (`build_model_artifact` / `_log_model_artifact`) at train end. On global-zero it first uploads the best checkpoint to R2 (`_upload_best_checkpoint`) at the auto-derived location `r2://{r2.bucket}/checkpoints/{training_config_id}/{training_run_id}/{launch_uuid}/model.ckpt` (`_derive_checkpoint_uri`; bucket defaults to `intermediate-data`), then references that object as an `s3://` URI (`checksum=False`) — so W&B stores only a ~0-byte reference, not the file ([#92](https://github.com/tinaudio/synth-setter/issues/92) is implemented by this). Because that reference renders with no size or content in the UI, `artifact.metadata` also carries `ckpt_uri`, `ckpt_bytes`, `epoch`, `global_step`, `monitor`, and `monitor_score`, so the referenced checkpoint is identifiable without leaving W&B ([#2424](https://github.com/tinaudio/synth-setter/issues/2424)). `training.upload_checkpoints_uri` is an optional override of the target (null = auto-derive). The artifact degrades to lineage-only (no reference) when R2 is unreachable (local CPU / CI), no checkpoint was written (e.g. `fast_dev_run`), or the fingerprint guard refuses an architecture-incompatible overwrite; training is never aborted by checkpoint persistence. Logging is best-effort and a no-op without a `WandbLogger`. Each upload also writes an architecture-fingerprint sidecar (`model.ckpt.fingerprint.json`: model/encoder/vector-field `_target_`s, conditioning, param-spec name). Before overwriting an existing destination, including a shared `training.upload_checkpoints_uri` override, a fingerprint mismatch or unparsable sidecar refuses the upload unless `training.force_checkpoint_overwrite=true` ([#2588](https://github.com/tinaudio/synth-setter/issues/2588)). A sidecar-less existing destination warns and is overwritten, arming the guard.
 >
-> **Known limitation (mutable per-`config_id` storage):** the R2 object lives at a per-`config_id` path and is overwritten each run, so an older artifact version (`:vN` for N < latest) resolves to the *current* object. Reference-only model storage is mutable per `config_id`. (If per-version immutability is ever needed, the run id would be folded into the path — deferred, YAGNI.)
+> **Launch-scoped storage:** the R2 object includes the canonical training `run_id` plus a launch UUID, so concurrent launches and resumed runs cannot overwrite checkpoints referenced by older artifact versions.
 
 - W&B auto-versions artifacts (`:v0`, `:v1`, `:v2`). Each new run of the same config produces the next version.
 - The `*_wandb_run_id` is stored in `artifact.metadata`, not the artifact name
@@ -156,7 +158,7 @@ ______________________________________________________________________
 
 ```
 dataset config
-  → [data-generation run] → dataset artifact
+  → [data-generation run] → [finalize run] → dataset artifact
                                ├→ [training run] → model artifact
                                │                      │
 eval dataset artifact ─────────┴→ [evaluation run] ←───┘
@@ -188,11 +190,12 @@ ______________________________________________________________________
 
 ## 7. `job_type` Values
 
-| `job_type`        | Stage         | Script                            |
-| ----------------- | ------------- | --------------------------------- |
-| `data-generation` | Data pipeline | `pipeline.cli finalize` (planned) |
-| `training`        | Training      | `src/synth_setter/cli/train.py`   |
-| `evaluation`      | Evaluation    | `src/synth_setter/cli/eval.py`    |
+| `job_type`        | Stage         | Script                                     |
+| ----------------- | ------------- | ------------------------------------------ |
+| `data-generation` | Data pipeline | `src/synth_setter/cli/generate_dataset.py` |
+| `finalize`        | Data pipeline | `src/synth_setter/cli/finalize_dataset.py` |
+| `training`        | Training      | `src/synth_setter/cli/train.py`            |
+| `evaluation`      | Evaluation    | `src/synth_setter/cli/eval.py`             |
 
 > **Note:** `pipeline.cli finalize` is the target CLI (Phase 5). In Docker, the finalize step runs as `MODE=finalize-shards` (scoped, validated on experiment branch — [#408](https://github.com/tinaudio/synth-setter/issues/408)). Current entrypoint: `pipeline.entrypoints.generate_dataset`.
 
@@ -202,20 +205,20 @@ ______________________________________________________________________
 
 ## 8. GitHub Actions Workflows
 
-| Workflow        | File                           | Trigger                              | Runner                          | Secrets             | Key Inputs                                                       |
-| --------------- | ------------------------------ | ------------------------------------ | ------------------------------- | ------------------- | ---------------------------------------------------------------- |
-| Tests           | `test.yml`                     | push, PR, dispatch                   | `ubuntu-latest`, `macos-latest` | —                   | —                                                                |
-| GPU Tests       | `test-gpu.yml`                 | schedule, dispatch                   | `ubuntu-latest` → RunPod GPU    | R2, RunPod, W&B     | —                                                                |
-| CPU Slow Tests  | `cpu-slow.yml`                 | push (main), qualifying PR, dispatch | `ubuntu-latest`                 | R2 (push/dispatch)  | `test-ci-slow` (full); `test-ci-slow-pr` (R2-excluded)           |
-| Data Generation | `generate-dataset-shards.yaml` | `workflow_call`, `workflow_dispatch` | `ubuntu-latest`                 | R2, RunPod          | see `workflow_call.inputs` in `generate-dataset-shards.yaml`     |
-| Data Validation | `validate-dataset-shards.yaml` | `workflow_call`, `workflow_dispatch` | `ubuntu-latest`                 | R2                  | `image_tag`, `spec_uri`                                          |
-| Training        | `train.yml`                    | `workflow_dispatch`                  | `ubuntu-latest`                 | R2, W&B, RunPod     | `experiment` (required), `launch_config` (expert override)       |
-| Evaluation      | `eval.yml`                     | `workflow_dispatch`                  | `ubuntu-latest`                 | R2, W&B, RunPod     | `launch_config`                                                  |
-| Model Promotion | `promote.yml` (planned)        | `workflow_dispatch`                  | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, `dry_run` |
+| Workflow        | File                           | Trigger                              | Runner                          | Secrets             | Key Inputs                                                            |
+| --------------- | ------------------------------ | ------------------------------------ | ------------------------------- | ------------------- | --------------------------------------------------------------------- |
+| Tests           | `test.yml`                     | push, PR, dispatch                   | `ubuntu-latest`, `macos-latest` | —                   | —                                                                     |
+| GPU Tests       | `test-gpu.yml`                 | schedule, dispatch                   | `ubuntu-latest` → RunPod GPU    | R2, RunPod, W&B     | —                                                                     |
+| CPU Slow Tests  | `cpu-slow.yml`                 | push (main), qualifying PR, dispatch | `ubuntu-latest`                 | R2 (push/dispatch)  | `test-ci-slow` (full); `test-ci-slow-pr` (R2-excluded)                |
+| Data Generation | `generate-dataset-shards.yaml` | `workflow_call`, `workflow_dispatch` | `ubuntu-latest`                 | R2, RunPod          | see `workflow_call.inputs` in `generate-dataset-shards.yaml`          |
+| Data Validation | `validate-dataset-shards.yaml` | `workflow_call`, `workflow_dispatch` | `ubuntu-latest`                 | R2                  | `image_tag`, `spec_uri`                                               |
+| Training        | `train.yml`                    | `workflow_dispatch`                  | `ubuntu-latest`                 | R2, W&B, RunPod     | `experiment` (required), `compute` (expert override), `tail`          |
+| Evaluation      | `eval.yml`                     | `workflow_dispatch`                  | `ubuntu-latest`                 | R2, W&B, RunPod     | `experiment`, `checkpoint_ref`, `dataset_root_uri`, `compute`, `tail` |
+| Model Promotion | `promote.yml` (planned)        | `workflow_dispatch`                  | `ubuntu-latest`                 | W&B, `GITHUB_TOKEN` | `train_wandb_run_id`, `eval_wandb_run_id`, `registry`, `dry_run`      |
 
 - All workflows that create W&B runs must guarantee the §12 `github_sha` provenance: runner-local runs export `GITHUB_SHA` into the run environment; SkyPilot-dispatched runs instead pin the worker checkout via `WORKER_GIT_REF` (the worker records its synced `HEAD`).
-- Training and evaluation dispatch SkyPilot managed jobs via `synth-setter-skypilot-launch <launch_config>`; the launch config (`src/synth_setter/configs/launch/*.yaml`) bakes the compute template, worker image tag, and worker `cmd`. Training resolves its launch config from the required `experiment` input (hardcoded mapping in `train.yml`, #2196) and forwards the experiment through a repeatable `synth-setter-skypilot-launch --extra-env EXPERIMENT <name>` option; the experiment itself owns its dataset pin. The workflows forward `WORKER_GIT_REF=<dispatched SHA>`, and the launcher injects `IMAGE_TAG` into every rank's env, so both §12 provenance fields match the dispatched commit and image.
-- Evaluation sources its checkpoint inside the launch config's `cmd`: `experiment=surge/<id>` selects the model and data while an explicit `ckpt_path='${wandb:tinaudio/synth-setter/model-<train_config_id>:latest}'` override selects the published model artifact.
+- Training and evaluation dispatch through the Hydra-native `synth-setter-skypilot-launch`: `skypilot_launch/compute=<option>` selects reusable infrastructure and `skypilot_launch.cmd=<command>` supplies the generic worker shell command. Training's required `experiment` owns its dataset pin; the workflow maps only exceptional experiments to larger compute and always tails `surge/ffn_simple_smoke` so worker failure reaches the workflow result. Both workflows forward `WORKER_GIT_REF=<dispatched SHA>`, and the launcher injects `IMAGE_TAG` into every rank's env, so both §12 provenance fields match the dispatched commit and image.
+- Evaluation supplies `experiment=surge/<id>` in the generic worker command and requires an explicit `ckpt_path='${wandb:tinaudio/synth-setter/model-<train_config_id>:vN}'` artifact version rather than a moving W&B alias. Reference artifacts retain the checkpoint object's R2 mutability constraints from §3b.
 - Promotion requires both `train_wandb_run_id` and `eval_wandb_run_id`. It pulls the model artifact from the training run and eval metrics from the eval run.
 
 **GitHub Release body schema** (produced by promote workflow):

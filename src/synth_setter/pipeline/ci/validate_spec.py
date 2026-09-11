@@ -19,13 +19,26 @@ from synth_setter.pipeline.schemas.spec import (
 from synth_setter.pipeline.spec_io import read_spec_text
 from synth_setter.synth_spec import SynthSpec
 
-# Required keys are derived from the model so adding a field to ``DatasetSpec``
-# (including computed_fields, which serialize on dump) automatically tightens
-# the structural check on the next CI run — no parallel list to update.
+# Optional language metadata may be absent in otherwise complete materialized specs.
 _REQUIRED_TOP_LEVEL_FIELDS: tuple[str, ...] = tuple(
-    sorted(set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields))
+    sorted(
+        (set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields))
+        - {"param_language_dimension"}
+    )
 )
-_BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS = frozenset({"audio_dtype", "mel_spec_dtype"})
+_BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS = frozenset(
+    {
+        "audio_dtype",
+        "block_size",
+        "mel_spec_dtype",
+        "post_load_flush_blocks",
+        "post_param_flush_blocks",
+        "post_render_flush_blocks",
+        "pyfdn_excitation",
+        "retain_local_shards",
+        "v1_gui_toggle_cadence_omitted",
+    }
+)
 # ``synth`` is checked shape-aware below so its required version is validated too.
 _REQUIRED_RENDER_FIELDS: tuple[str, ...] = tuple(
     sorted(

@@ -57,6 +57,29 @@ def _column_to_tensor(array: pa.Array | pa.ChunkedArray, name: str) -> torch.Ten
     return torch.from_numpy(values if values.flags.writeable else values.copy())
 
 
+def _expand_column(
+    array: pa.Array | pa.ChunkedArray, name: str, out: dict[str, torch.Tensor]
+) -> None:
+    """Convert one column into ``out``, flattening struct children to dotted keys.
+
+    Normalizes Lance's projection asymmetry: ``take`` returns a (pruned) struct
+    while a scanner's dotted projection returns flat ``parent.child`` columns —
+    both land under identical ``parent.child`` keys.
+
+    :param array: Column values for one batch.
+    :param name: Column name; struct children append ``.child``.
+    :param out: Destination mapping receiving one tensor per leaf column.
+    """
+    if isinstance(array, pa.ChunkedArray):
+        array = array.combine_chunks()
+    if pa.types.is_struct(array.type):
+        struct = cast(pa.StructArray, array)
+        for index, field in enumerate(struct.type):
+            _expand_column(struct.field(index), f"{name}.{field.name}", out)
+        return
+    out[name] = _column_to_tensor(array, name)
+
+
 def batch_to_shaped_tensors(
     batch: pa.RecordBatch | dict[str, Any],
     *,
@@ -77,7 +100,10 @@ def batch_to_shaped_tensors(
     del hf_converter, use_blob_api, kwargs
     if isinstance(batch, dict):
         raise TypeError("blob columns are not supported by the lance_torch dataloaders")
-    return {name: _column_to_tensor(batch[name], name) for name in batch.column_names}
+    tensors: dict[str, torch.Tensor] = {}
+    for name in batch.column_names:
+        _expand_column(batch[name], name, tensors)
+    return tensors
 
 
 def _dataset_options(storage_options: dict[str, str] | None) -> dict[str, dict[str, str]] | None:
@@ -103,15 +129,29 @@ class LanceMapDataset(SafeLanceDataset):
         *,
         columns: Sequence[str] | None = None,
         storage_options: dict[str, str] | None = None,
-    ):
+        version: int | None = None,
+        include_sample_id: bool = False,
+    ) -> None:
         """Open the dataset lazily for map-style access.
 
         :param uri: Dataset directory (local path or ``s3://`` URI).
         :param columns: Columns each item carries; ``None`` reads all.
         :param storage_options: Object-store config for a cloud ``uri`` (see
             :func:`synth_setter.pipeline.r2_io.r2_storage_options`); ``None`` local.
+        :param version: Exact local Lance version retained across worker reopens.
+        :param include_sample_id: Add int64 row offsets scoped to this pinned split version.
+        :raises ValueError: If the source already contains the reserved ``sample_id`` column.
         """
-        super().__init__(str(uri), dataset_options=_dataset_options(storage_options))
+        options: dict[str, Any] = _dataset_options(storage_options) or {}
+        if version is not None:
+            options["version"] = version
+        if include_sample_id:
+            snapshot = lance.dataset(str(uri), **options)
+            if "sample_id" in snapshot.schema.names:
+                raise ValueError("sample_id is reserved for transient source row identities")
+            options["version"] = snapshot.version
+        super().__init__(str(uri), dataset_options=options)
+        self._include_sample_id = include_sample_id
         self._columns = list(columns) if columns is not None else None
         self._opening_pid: int | None = None
 
@@ -132,7 +172,12 @@ class LanceMapDataset(SafeLanceDataset):
             self._ds = lance.dataset(self.uri, **self.dataset_options)
             self._opening_pid = current_pid
         table = self._ds.take(list(indices), columns=self._columns)
-        return {name: _column_to_tensor(table[name], name) for name in table.column_names}
+        tensors: dict[str, torch.Tensor] = {}
+        for name in table.column_names:
+            _expand_column(table[name], name, tensors)
+        if self._include_sample_id:
+            tensors["sample_id"] = torch.tensor(indices, dtype=torch.int64)
+        return tensors
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         """Fetch one row as a dict of per-row tensors.

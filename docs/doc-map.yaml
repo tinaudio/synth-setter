@@ -16,7 +16,7 @@ docs:
     description: uv sync command surface, relock cadence, Linux resync flip
     sources:
       - pattern: "pyproject.toml"
-        covers: "MATPAC++ runtime dependency."
+        covers: "Pinned embedding-model runtime dependencies."
       - pattern: "uv.lock"
         covers: "Committed universal lockfile (macOS + Linux + Windows resolution); regenerate with `uv lock` after pyproject edits and review the diff in PRs"
       - pattern: ".github/workflows/uv-lock-check.yml"
@@ -25,6 +25,28 @@ docs:
         covers: "uv-lock hook (astral-sh/uv-pre-commit) relocking uv.lock on every commit; the local lock-sync gate that complements uv-lock-check.yml"
       - pattern: "docker/ubuntu22_04/Dockerfile"
         covers: "Container install via `uv sync --frozen --extra ${TORCH_BACKEND} --no-install-project` against the committed lock; dev-base stage installs the package editable on top"
+
+  - doc: docs/design/conditioning-rank-parity.md
+    description: Cached-encoder conditioning-slot contract
+    sources:
+      - pattern: "src/synth_setter/models/components/embed_pool.py"
+        covers: "Learned-query pooling at one query per conditioning slot"
+      - pattern: "src/synth_setter/models/components/vector_projection.py"
+        covers: "Fixed-width projection at one output block per conditioning slot"
+      - pattern: "src/synth_setter/models/components/transformer.py"
+        covers: "Per-layer slot indexing and the shared CFG null it broadcasts"
+
+  - doc: docs/design/conditioning-column-statistics.md
+    description: Measured cached-conditioning scales and normalization recommendations
+    sources:
+      - pattern: "scripts/dev/characterise_conditioning_columns.py"
+        covers: "Streaming Lance statistics and markdown report generation"
+      - pattern: "src/synth_setter/configs/conditioning/*.yaml"
+        covers: "Materialized conditioning-column names and channel-first shapes"
+      - pattern: "src/synth_setter/models/components/pretrained_encoder.py"
+        covers: "CLAP get_audio_features output path"
+      - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
+        covers: "T5Gemma float32 reproducibility rationale"
 
   - doc: docs/reference/matpac-plus-embeddings.md
     description: MATPAC encoder interface
@@ -35,6 +57,24 @@ docs:
         covers: "Four-second MATPAC++ generic conditioning profile"
       - pattern: "pyproject.toml"
         covers: "The commit-pinned `tinymu` runtime dependency"
+
+  - doc: docs/reference/pupujepa-embeddings.md
+    description: PupuJEPA Tiny and Large encoder interface
+    sources:
+      - pattern: "src/synth_setter/pupujepa.py"
+        covers: "Pinned artifact identity and frame geometry"
+      - pattern: "src/synth_setter/models/components/pupujepa_encoder.py"
+        covers: "Shared Torch frontend and frozen teacher"
+      - pattern: "src/synth_setter/pipeline/data/pupujepa.py"
+        covers: "Bounded offline Lance adapter"
+      - pattern: "src/synth_setter/configs/conditioning/pupujepa_*.yaml"
+        covers: "PupuJEPA conditioning profiles"
+      - pattern: "src/synth_setter/configs/model/encoder/pupujepa_online.yaml"
+        covers: "Online head sizing (max_seq_len) and backbone wiring"
+      - pattern: "src/synth_setter/configs/model/encoder/pupujepa_scratch.yaml"
+        covers: "From-scratch trainable backbone and head wiring"
+      - pattern: "pyproject.toml"
+        covers: "Exact timm runtime pin"
 
   - doc: docs/reference/docker.md
     description: Docker build, run, debug reference
@@ -58,8 +98,16 @@ docs:
         covers: "CI steps, required secrets, tag scheme, smoke test flow, devcontainer-tools + devcontainer-tools-dev-user publish, GHCR mirror tags (ghcr.io/tinaudio/synth-setter), packages: write permission"
       - pattern: "studiorack.json"
         covers: "Exact image VST3 package versions and bundle names"
+      - pattern: "studiorack.lock.json"
+        covers: "Trusted image VST3 artifact identities"
       - pattern: "package*.json"
         covers: "Locked Studiorack CLI and core dependency graph"
+      - pattern: "src/synth_setter/plugin_integrity.py"
+        covers: "Managed bundle content seals"
+      - pattern: "src/synth_setter/plugin_runtime.py"
+        covers: "Managed alias ownership records"
+      - pattern: "src/synth_setter/plugin_runtime.py"
+        covers: "Managed bundle runtime leases and package identity"
       - pattern: "src/synth_setter/plugin_manager.py"
         covers: "Managed bundle resolution and stable alias creation"
       - pattern: "src/synth_setter/cli/plugins.py"
@@ -73,6 +121,8 @@ docs:
         covers: "Entity, project, log_model setting, offline mode, console capture (`wrap` + `console_multipart`)"
       - pattern: "src/synth_setter/configs/logger/many_loggers.yaml"
         covers: "Default logger compose — which loggers are enabled out of the box"
+      - pattern: "src/synth_setter/tools/wandb_parameter_workspace.py"
+        covers: "Synth-neutral regex panels and unfiltered run-set provisioning"
       - pattern: "src/synth_setter/cli/train.py"
         covers: "WandbLogger instantiation, trainer integration, run lifecycle, model-{config_id} artifact logged at train end with opt-in s3:// checkpoint reference"
       - pattern: "src/synth_setter/cli/eval.py"
@@ -154,7 +204,7 @@ docs:
       - pattern: "src/synth_setter/data/vst/writers.py"
         covers: "Lance dataset writer entrypoint and shard metadata wiring"
       - pattern: "src/synth_setter/data/vst/shapes.py"
-        covers: "Shared shape primitives consumed by the writers, the shard validator, and the test shard seeders — DATASET_FIELD_NAMES / DATASET_FIELD_DTYPES, mel-front-end constants, per-field shape helpers, and dataset_field_shapes (the single field→shape contract)."
+        covers: "Shared Lance field and tensor-shape contract, including the canonical mel front-end."
       - pattern: "src/synth_setter/pipeline/data/lance_shard.py"
         covers: "Lance dataset-shard codec — lance_schema / tensor_array / record_batch_from_arrays / write_lance_dataset / lance_fragment / commit_lance_dataset on the encode side, read_shard_metadata / iter_lance_column_rows on the decode side; shared by the Lance writer, validator, and finalize."
       - pattern: "src/synth_setter/pipeline/data/lance_staging.py"
@@ -164,19 +214,31 @@ docs:
       - pattern: "src/synth_setter/pipeline/schemas/lance_attempt.py"
         covers: "Strict Lance staging and audit schemas"
       - pattern: "src/synth_setter/model_cache.py"
-        covers: "XDG-aware shared cache paths for embedding model artifacts."
+        covers: "XDG-aware shared cache paths for embedding model artifacts, and the deterministic checkpoint-tree hash their versioned identities derive from."
+      - pattern: "src/synth_setter/same.py"
+        covers: "Shared SAME checkpoint resolution, autoencoder loading, and latent-frame geometry used by both add-embeddings and the training-time audio loss."
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
         covers: "Registry-driven Lance embedding augmentation with resumable artifact and index identity."
+      - pattern: "src/synth_setter/pipeline/data/cqt.py"
+        covers: "Commit-pinned GPU CQT extraction, storage geometry, and policy identity."
+      - pattern: "src/synth_setter/configs/conditioning/cqt.yaml"
+        covers: "Four-second CQT EmbeddingPool conditioning profile."
       - pattern: "src/synth_setter/pipeline/data/ssondo.py"
         covers: "Pinned S-SONDO checkpoint resolution and audio encoding."
+      - pattern: "src/synth_setter/pipeline/data/meanaudio.py"
+        covers: "Checkpoint verification and deterministic 16 kHz latent encoding."
+      - pattern: "src/synth_setter/configs/conditioning/meanaudio_16k.yaml"
+        covers: "Four-second MeanAudio EmbeddingPool conditioning profile."
       - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
         covers: "Stable Audio 3 T5Gemma prompt conditioning at float32 with learned checkpoint padding."
       - pattern: "src/synth_setter/features/**"
         covers: "Sketch-control tracks on the mel frame grid."
+      - pattern: "src/synth_setter/conditioning.py"
+        covers: "Sketch-control storage constants and conditioning specifications."
       - pattern: "tests/pipeline/data/test_same_encoder_e2e.py"
         covers: "SAME-S and SAME-L production-loader parity against legacy references at immutable HF revisions."
       - pattern: "tests/helpers/same_reference.py"
-        covers: "Immutable SAME checkpoint identities and deterministic parity input provenance."
+        covers: "Immutable SAME checkpoint identities, deterministic parity input provenance, and the CPU-sized SAME checkpoint fixture the model-level unit tests build."
       - pattern: "tests/fixtures/same/**"
         covers: "Legacy SAME parity tensors with embedded generation provenance."
       - pattern: ".github/workflows/test-same-encoder.yml"
@@ -222,7 +284,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/skypilot_launch.py"
         covers: "Generic `dispatch_via_skypilot(sky_cfg)` entrypoint: managed-jobs SDK via `sky.jobs.launch`, two-phase validate-then-side-effect, tail/detach split keyed on `sky_cfg.tail`, and preflight-verified worker commit pinning. Callers thread domain envs through `sky_cfg.extra_envs` (merged after `resolve_worker_env`; rejected on collision with `_WORKER_ENV_KEYS`). Job-name fallback is domain-neutral (`synth-setter-<uuid8>`). RunPod balance preflight gate (`_check_runpod_balance`) aborts before job submission on a sub-floor balance; skipped under a remote API server; fail-open when unverifiable."
       - pattern: "src/synth_setter/pipeline/compute_task.py"
-        covers: "Native SkyPilot task-document assembly, packaged script loading, network-volume resolution, Hydra compute-option loading, and GPU tier narrowing (`apply_tier_filter`)."
+        covers: "Native SkyPilot task-document assembly, packaged script loading, Hydra compute-option loading, and GPU tier narrowing (`apply_tier_filter`)."
       - pattern: "src/synth_setter/pipeline/schemas/gpu_tier.py"
         covers: "`GpuTier` enum, per-SKU minimum-tier classification, and `allowed_gpu_skus`/`filter_gpu_skus` (cumulative narrowing with unclassified-SKU and empty-intersection ValueErrors)."
       - pattern: "src/synth_setter/pipeline/schemas/compute.py"
@@ -307,6 +369,10 @@ docs:
         covers: "Map-only VST datamodule implementation."
       - pattern: "src/synth_setter/data/lance_torch.py"
         covers: "Native Lance map and iterable dataloader factories."
+      - pattern: "src/synth_setter/data/third_party_datamodule.py"
+        covers: "Predict-only loader for published third-party audio corpora."
+      - pattern: "src/synth_setter/configs/datamodule/third_party/**"
+        covers: "Per-corpus snapshot pins and the checkpoint mel-statistics contract."
       - pattern: "src/synth_setter/configs/train.yaml"
         covers: "Top-level training config, Hydra defaults list, config groups"
       - pattern: "src/synth_setter/configs/trainer/**"
@@ -340,6 +406,20 @@ docs:
       - pattern: "src/synth_setter/data/vst/surge_xt_clap_*.json"
         covers: "Committed raw dump + packaged pyname->CLAP map the CLI loads by default"
 
+  - doc: docs/reference/reverb-metrics.md
+    description: pyFDN response-loss and joint transport evaluation semantics
+    sources:
+      - pattern: "src/synth_setter/evaluation/response_losses.py"
+        covers: "Matching losses and target/prediction diagnostics"
+      - pattern: "src/synth_setter/evaluation/joint_transport.py"
+        covers: "Globally normalized transport grid"
+      - pattern: "src/synth_setter/evaluation/joint_transport.py"
+        covers: "Joint transport ground cost"
+      - pattern: "src/synth_setter/evaluation/compute_audio_metrics.py"
+        covers: "pyFDN metric columns and aggregation"
+      - pattern: "src/synth_setter/cli/eval.py"
+        covers: "Renderer-backend forwarding and persisted evaluation metrics"
+
   - doc: docs/design/eval-pipeline.md
     description: Evaluation pipeline design — predict, render, metrics, R2 integration
     sources:
@@ -352,11 +432,11 @@ docs:
       - pattern: "src/synth_setter/renderer_factory.py"
         covers: "Shared `RenderConfig` backend dispatch used for predicted and target audio"
       - pattern: "src/synth_setter/evaluation/compute_audio_metrics.py"
-        covers: "Audio metric computation, MSS/wMFCC/SOT/RMS distance metrics, parallel workers, automatic render-order probe (auto-shuffles when params are uniform, writes aggregated_metrics_shuffled.csv + shuffle_permutation.csv)"
-      - pattern: "src/synth_setter/evaluation/shuffle_pred_audio.py"
-        covers: "Render-order probe (#489) — builds a symlink view permuting pred.wav across sample dirs; auto-invoked by compute_audio_metrics.main() when params_are_uniform returns True. params_are_uniform is also the gating predicate imported by compute_audio_metrics."
+        covers: "Generic audio metrics plus pyFDN octave-band RT60, energy-decay, T30/C50 error and Pearson rows, and opt-in CLAP FAD, with parallel workers"
+      - pattern: "src/synth_setter/evaluation/acoustic_parameters.py"
+        covers: "Octave-band T30/C50 estimation, Pearson correlation, and Fréchet distance helpers"
       - pattern: "src/synth_setter/evaluation/audio_probe.py"
-        covers: "Training validation-audio probe render, score, and R2-archive chain (run_audio_probe / ProbeRenderSettings)"
+        covers: "Training validation-audio probe render, backend-aware score, and R2-archive chain"
       - pattern: "renderscript.sh"
         covers: "Cross-platform rendering script, Xvfb auto-detection"
       - pattern: "src/synth_setter/configs/eval.yaml"
@@ -390,6 +470,9 @@ docs:
         scope: "local-dev"
       - pattern: "studiorack.json"
         covers: "Local VST3 package and bundle pins"
+        scope: "local-dev"
+      - pattern: "studiorack.lock.json"
+        covers: "Local VST3 artifact identities"
         scope: "local-dev"
       - pattern: "package*.json"
         covers: "Pinned Studiorack CLI installation"
@@ -483,7 +566,7 @@ docs:
       - pattern: "tests/helpers/run_if.py"
         covers: "RunIf decorator (min_gpus, etc.)"
       - pattern: ".github/workflows/test.yml"
-        covers: "Default PR CI — runs make test-ci-unit (marker filter centralized in the Makefile, #1353)"
+        covers: "Curated fast tier before the complete CI coverage suite"
       - pattern: ".github/workflows/cpu-slow.yml"
         covers: "Slow CPU lanes: full test-ci-slow with R2 after merge/dispatch; R2-excluded test-ci-slow-pr on qualifying PRs"
       - pattern: ".github/workflows/test-mps.yml"
@@ -582,6 +665,48 @@ docs:
         covers: "Packer provisioning for the developer environment"
         scope: "tart"
 
+  - doc: docs/reference/faustcpp-backend.md
+    description: Native Faust compilation, rendering, and benchmark contract
+    sources:
+      - pattern: "src/synth_setter/data/vst/faustcpp_architecture.txt"
+        covers: "Native request parsing, DSP isolation, note events, and audio output"
+      - pattern: "src/synth_setter/data/vst/faustcpp_renderer.py"
+        covers: "Source verification, compilation, parameter dispatch, and render validation"
+      - pattern: "src/synth_setter/tools/benchmark_faust_backends.py"
+        covers: "Three-backend production dataset benchmark and JSON report"
+      - pattern: "src/synth_setter/configs/render/faustcpp*.yaml"
+        covers: "Native backend defaults and channel geometry"
+      - pattern: "tests/data/vst/test_faustcpp_renderer.py"
+        covers: "Real compiler coverage for every registered Faust identity"
+      - pattern: "tests/data/vst/test_faustwasm_dawdreamer_parity_e2e.py"
+        covers: "Native C++, FaustWasm, and DawDreamer production host parity"
+      - pattern: "tests/data/vst/test_faust_dataset_e2e.py"
+        covers: "Generate-dataset to Lance production-path verification"
+
+  - doc: docs/guides/surgepy-browser-evaluation.md
+    description: Browser-to-SurgePy evaluation playbook
+    sources:
+      - pattern: "src/synth_setter/cli/sketch_render.py"
+        covers: "Browser runtime selection and evaluation artifacts"
+      - pattern: "src/synth_setter/evaluation/browser_flow.py"
+        covers: "Loopback serving and prediction validation"
+      - pattern: "src/synth_setter/models/flow_onnx.py"
+        covers: "Supported checkpoint and export contracts"
+      - pattern: "src/synth_setter/web/*"
+        covers: "Browser runtime, dependency installation, and RK4 sampling"
+      - pattern: "tests/integration/test_browser_surgepy_e2e.py"
+        covers: "Real checkpoint, browser, and audio-consumer verification"
+      - pattern: ".github/workflows/browser-flow-e2e.yml"
+        covers: "Trusted CI execution and retained evidence"
+
+  - doc: docs/reference/browser-fdn-ports.md
+    description: JavaScript ports of the pyFDN sketch, decode, and IR metrics with golden fixtures
+    sources:
+      - pattern: "src/synth_setter/web/fdn/**"
+        covers: "Browser-side sketch extraction, householder decode, impulse-response metrics, and synthetic-response reconstruction"
+      - pattern: "src/synth_setter/tools/browser_fdn_fixtures.py"
+        covers: "Golden fixture generation and the synthetic-response recipe"
+
   - doc: docs/guides/vst-interactive.md
     description: Interactive VST prediction audition and patch-recording guide
     sources:
@@ -591,13 +716,13 @@ docs:
         covers: "load_plugin warm-up timing (_EDITOR_INIT_DELAY_SECONDS, non-Darwin only — macOS skips per #714), set_params, render_params per-sample reload rationale (silent-render workaround)"
         scope: "interactive"
       - pattern: "src/synth_setter/data/vst/generate_vst_dataset.py"
-        covers: "generate_sample / VSTDataSample / make_spectrogram — per-sample render and feature-extraction primitives invoked by the writers in writers.py"
+        covers: "generate_sample / VSTDataSample — per-sample render and feature-extraction primitives invoked by the writers in writers.py"
         scope: "interactive"
       - pattern: "src/synth_setter/data/vst/writers.py"
         covers: "Render captured patches into a Lance train split"
         scope: "interactive"
       - pattern: "src/synth_setter/data/vst/shapes.py"
-        covers: "Mel and audio tensor-shape contract for Lance writers"
+        covers: "Mel and audio tensor-shape contract for Lance writers, plus make_spectrogram"
         scope: "interactive"
 
   - doc: docs/guides/adding-a-new-synth.md
@@ -607,6 +732,14 @@ docs:
         covers: "Managed and explicit-path plugin registration"
       - pattern: "studiorack.json"
         covers: "Package identity used by managed registration"
+      - pattern: "studiorack.lock.json"
+        covers: "Artifact identity required by managed installation"
+      - pattern: "src/synth_setter/plugin_integrity.py"
+        covers: "Managed artifact-lock validation"
+      - pattern: "src/synth_setter/plugin_integrity.py"
+        covers: "Managed bundle content seals"
+      - pattern: "src/synth_setter/plugin_runtime.py"
+        covers: "Managed bundle runtime leases and package identity"
       - pattern: "src/synth_setter/plugin_manager.py"
         covers: "Managed package resolution and checkout alias creation"
       - pattern: "src/synth_setter/data/vst/introspect.py"
@@ -706,30 +839,39 @@ docs:
     description: Workflow catalog, secrets table, concurrency gotchas
     sources:
       - pattern: ".github/workflows/claude-repo-review-full.yml"
-        covers: "Catalog row (repo-owned /repo-review-full on every PR incl. drafts, posts inline comments), CLAUDE_CODE_OAUTH_TOKEN secrets row, PR-number-keyed concurrency gotcha"
+        covers: "Pi review triggers, automatic-review limit, trust boundary, secrets, and concurrency"
       - pattern: ".github/workflows/claude.yml"
         covers: "Catalog row (@claude mention runs) and CLAUDE_CODE_OAUTH_TOKEN secrets row"
 
-  # ── RunPod dataset network volume ───────────────────────────────
-  - doc: docs/operations/runpod-network-volume.md
-    description: Persistent RunPod dataset cache operations
+  # ── Growing Lance runbook ────────────────────────────────────────
+  - doc: docs/operations/growing-lance-runbook.md
+    description: Operator commands and failure behavior for bounded Lance train growth
     sources:
-      - pattern: "scripts/stage_runpod_network_volume.sh"
-        covers: "Restartable checksum copy from R2 and post-copy completion marker"
-      - pattern: "src/synth_setter/configs/volumes/runpod-datasets-*.yaml"
-        covers: "Per-data-center 750 GB RunPod network-volume definitions (US-CA-2, AP-JP-1)"
-      - pattern: "src/synth_setter/configs/skypilot_launch/compute/runpod/network-volume/*.yaml"
-        covers: "Explicit /workspace/network-volume mount via mount_network_volume"
-      - pattern: "src/synth_setter/configs/launch/*-volume.yaml"
-        covers: "Dataset staging and volume-backed training launches"
-      - pattern: "src/synth_setter/configs/launch/stage-runpod-*-volume.yaml"
-        covers: "Dataset-specific staging launch commands"
+      - pattern: "src/synth_setter/cli/growing_lance.py"
+        covers: "init/grow/generate/materialize command surface, poll semantics, capacity exit"
+      - pattern: "src/synth_setter/pipeline/data/growing_lance.py"
+        covers: "Append/activation invariants the failure-behavior section documents"
+
+  # ── RIR corpus publication runbook ───────────────────────────────
+  - doc: docs/operations/rir-corpora-publication.md
+    description: Third-party RIR corpus publication procedure and invariants
+    sources:
+      - pattern: "scripts/data_publication/rir_corpora/rirpub.py"
+        covers: "extract / build / upload / verify stages and the completion-marker-last invariant"
+      - pattern: "scripts/data_publication/rir_corpora/fetch_sources.py"
+        covers: "Acquisition families and the aria2 requirement for Zenodo"
+      - pattern: "scripts/data_publication/rir_corpora/specs.py"
+        covers: "Per-corpus Spec descriptors registered before publication"
+      - pattern: "scripts/data_publication/rir_corpora/drive.sh"
+        covers: "Ordered stage driver with post-verification disk reclaim"
+      - pattern: "scripts/data_publication/rir_corpora/post_evidence.sh"
+        covers: "Issue evidence posting"
 
   # ── Credential rotation guide ────────────────────────────────────
   - doc: docs/operations/credential-rotation-guide.md
     description: Credential inventory + rotation/verification procedures
     sources:
       - pattern: ".github/workflows/claude-repo-review-full.yml"
-        covers: "CLAUDE_CODE_OAUTH_TOKEN inventory row with its rotation/verification procedure"
+        covers: "Pi review credential rotation procedures"
       - pattern: ".github/workflows/claude.yml"
         covers: "CLAUDE_CODE_OAUTH_TOKEN consumption by the @claude workflow"

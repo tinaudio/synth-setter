@@ -1,6 +1,6 @@
 # W&B Integration Reference
 
-> **Code version**: `5b785f1` (2026-07-15, `feat/val-audio-probe`)
+> **Code version**: `3949374` (2026-09-09, `internal-feat/endpoint-parameterization`)
 > **PyTorch**: see `pyproject.toml` (`[dependency-groups].torch`) · **Lightning**: see `pyproject.toml` (`[dependency-groups].torch`)
 > **Tracking**: #252, #263
 
@@ -32,7 +32,17 @@ ______________________________________________________________________
 | Console capture   | `wandb.Settings(console="wrap", console_multipart=True)` — `redirect` captures into a local `output.log` that wandb 0.26.x never uploads (#1465); `wrap` reaches the server but sees only this process's Python-level writes. Subprocess tee + multipart semantics: see the note below this table | `src/synth_setter/configs/logger/wandb.yaml` § `wandb.settings`   |
 | Run teardown      | `wandb.finish()` in `task_wrapper` finally block                                                                                                                                                                                                                                                  | `src/synth_setter/utils/utils.py` § `task_wrapper`                |
 
-**Subprocess console capture.** `generate_dataset` tees the children it spawns — the renderer, the per-shard rclone upload, and the inline oracle eval — through `sys.stderr` via `check_call_streamed` (`src/synth_setter/pipeline/subprocess_stream.py`, exit-keyed so a pipe-holding descendant can't stall it). Other rclone call sites (spec upload, `finalize_from_spec`'s `r2_io` transfers) still write to the inherited fd and bypass capture. `console_multipart=True` gives each resumed session (generate → finalize → oracle eval) its own `logs/output_*.log` instead of overwriting one `output.log`.
+**Display names and tags.** The shared logger uses `<experiment_name>-<run_name>`
+(e.g. `pyfdn-flow-ast-online` or `torchsynth-flow_audio_same`), falling back to
+`task_name` and `default` when those fields are absent. Surge retains its
+`<experiment_name>_<run_name>` convention. Dataset generation uses
+`generate-dataset-<task_name>`. Top-level `tags` are forwarded to W&B; Surge tags
+include its dataset family and variant, and dataset-generation tags identify the
+task. Override these with `logger.wandb.name=custom-name` and
+`tags=[custom-tag]` (or `logger.wandb.tags=[custom-tag]`). Display metadata does
+not change canonical run IDs, checkpoint paths, or artifact names.
+
+**Subprocess console capture.** `generate_dataset` tees the children it spawns — the renderer, the per-shard rclone upload, and the inline oracle eval — through `sys.stderr` via `check_call_streamed` (`src/synth_setter/pipeline/subprocess_stream.py`, exit-keyed so a pipe-holding descendant can't stall it). Other rclone call sites (spec upload, `finalize_from_spec`'s `r2_io` transfers) still write to the inherited fd and bypass capture. `console_multipart=True` gives each resumed session (generate → oracle eval) its own `logs/output_*.log` instead of overwriting one `output.log`; finalize logs to its own `<run_id>-finalize` run.
 
 **No direct `wandb.init()` calls exist in runtime code.** One `wandb.config.update()` call exists: `log_wandb_provenance()` in `src/synth_setter/utils/logging_utils.py:91` writes provenance metadata (see [2g](#2g-provenance-metadata-logged-once-at-run-start)).
 
@@ -64,29 +74,76 @@ to all loggers via `logger.log_hyperparams()`:
 
 Logged via `self.log()` in each LightningModule:
 
-| Module                  | Metric                                              | Step | Epoch |
-| ----------------------- | --------------------------------------------------- | ---- | ----- |
-| `VSTFlowMatchingModule` | `train/loss`                                        | yes  | yes   |
-|                         | `train/audio_loss` (when `model/audio_loss` is set) | yes  | yes   |
-|                         | `train/audio_grad_ratio` (audio/flow gradient norm) | yes  | —     |
-|                         | `train/audio_grad_cosine` (gradient alignment)      | yes  | —     |
-|                         | `train/penalty`                                     | yes  | yes   |
-|                         | `val/param_mse`                                     | —    | yes   |
-|                         | `test/param_mse`                                    | —    | yes   |
-|                         | `vector_field/*_norm`                               | yes  | —     |
-|                         | `encoder/*_norm`                                    | yes  | —     |
-| `VSTFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std` | yes  | yes   |
-|                         | `train/{reconstruction,latent,param}_loss`          | yes  | yes   |
-|                         | `train/beta`                                        | yes  | —     |
-|                         | `val/{reconstruction,latent,param}_loss`            | —    | yes   |
-|                         | `val/param_mean`, `val/param_std`                   | —    | yes   |
-|                         | `test/{reconstruction,latent,param}_loss`           | —    | yes   |
-|                         | `net/*` gradient norms                              | yes  | —     |
-| `VSTFeedForwardModule`  | `train/loss`                                        | yes  | yes   |
-|                         | `val/param_mse`, `test/param_mse`                   | —    | yes   |
+| Module                  | Metric                                                            | Step | Epoch |
+| ----------------------- | ----------------------------------------------------------------- | ---- | ----- |
+| `VSTFlowMatchingModule` | `train/loss`                                                      | yes  | yes   |
+|                         | `train/audio_loss` (when `model/audio_loss` is set)               | yes  | yes   |
+|                         | `train/audio_grad_ratio` (audio/flow gradient norm)               | yes  | —     |
+|                         | `train/audio_grad_cosine` (gradient alignment)                    | yes  | —     |
+|                         | `train/slot_cosine` (layerwise conditioning only)                 | yes  | —     |
+|                         | `train/penalty`                                                   | yes  | yes   |
+|                         | `train/weighted_{velocity,endpoint}_mse`                          | —    | yes   |
+|                         | `train/{velocity_endpoint,endpoint}_mse`                          | —    | yes   |
+|                         | `train/per_param_weighted_{velocity,endpoint}_mse/{name}`         | —    | yes   |
+|                         | `train/per_param_{velocity_endpoint,endpoint}_mse/{name}`         | —    | yes   |
+|                         | `{val,test}/{velocity_endpoint,endpoint}_mse/t_{05..95}`          | —    | yes   |
+|                         | `{val,test}/{velocity_endpoint,endpoint}_mse/equal_bin_mean`      | —    | yes   |
+|                         | `val/param_mse`                                                   | —    | yes   |
+|                         | `test/param_mse`                                                  | —    | yes   |
+|                         | `val/param_mse_best_swap`                                         | —    | yes   |
+|                         | `test/param_mse_best_swap`                                        | —    | yes   |
+|                         | `val/param_mse_number_group_optimal_assignment` (with ParamSpec)  | —    | yes   |
+|                         | `test/param_mse_number_group_optimal_assignment` (with ParamSpec) | —    | yes   |
+|                         | `vector_field/*_norm`                                             | yes  | —     |
+|                         | `encoder/*_norm`                                                  | yes  | —     |
+| `VSTFlowVAEModule`      | `train/loss`, `train/param_mean`, `train/param_std`               | yes  | yes   |
+|                         | `train/{reconstruction,latent,param}_loss`                        | yes  | yes   |
+|                         | `train/beta`                                                      | yes  | —     |
+|                         | `val/{reconstruction,latent,param}_loss`                          | —    | yes   |
+|                         | `val/param_mean`, `val/param_std`                                 | —    | yes   |
+|                         | `test/{reconstruction,latent,param}_loss`                         | —    | yes   |
+|                         | `net/*` gradient norms                                            | yes  | —     |
+| `VSTFeedForwardModule`  | `train/loss`                                                      | yes  | yes   |
+|                         | `val/param_mse`, `test/param_mse`                                 | —    | yes   |
 
 The two audio-gradient diagnostics are emitted only when audio feedback is enabled, once per
-`trainer.log_every_n_steps` cadence. They are step-only metrics and have no epoch aggregate.
+`trainer.log_every_n_steps` cadence. `train/slot_cosine` rides the same cadence but is emitted only
+when the encoder returns more than one conditioning slot; it is the mean off-diagonal cosine
+similarity between those slots, so a value approaching one means they have collapsed to one read.
+All three are step-only metrics and have no epoch aggregate.
+The former `train/per_param_flow_mse/{name}` and ambiguous weighted
+`train/per_param_endpoint_mse/{name}` keys are retired. Their replacements are
+`train/per_param_weighted_velocity_mse/{name}` and
+`train/per_param_weighted_endpoint_mse/{name}`. Unweighted one-step endpoint diagnostics use
+`train/per_param_velocity_endpoint_mse/{name}` for velocity-derived estimates and
+`train/per_param_endpoint_mse/{name}` for direct endpoint predictions. The weighted MSE family is
+a model-space diagnostic; with `endpoint_loss=mixed`, `train/loss` remains the optimized mixed
+CE/MSE objective. These training diagnostics remain distinct from `{val,test}/per_param_mse/{name}`,
+the primary final sampled parameter-space comparison.
+
+### Seeded flow evaluation
+
+Set `model.seeded_evaluation=true seed=<integer>` for standalone evaluation or training to derive
+validation and test noise from the seed, stage, loader batch index, and distributed rank without
+advancing the global RNG stream. Standalone evaluation accepts explicit seeds from 0 through
+4294967295 and seeds model and datamodule construction only in this mode. Enabling the flag without
+a seed is a configuration error; the `seed: null` eval slot allows Hydra CLI `seed=...` overrides
+without supplying an arbitrary default. The default `false` preserves fresh `torch.randn_like`
+sampling and does not require, validate, or use the evaluation seed.
+
+The ten fixed-time diagnostics reuse the sampling noise at centers 0.05 through 0.95, run fully
+conditional (no CFG dropout), report unweighted endpoint-space MSE per bin, and average the bins
+equally. Direct endpoint predictions use the `endpoint_mse` namespace; one-step estimates from
+velocity use `velocity_endpoint_mse`. In the default mode these diagnostics vary with the fresh
+sampling noise; enabling seeded evaluation makes them repeatable under the same topology.
+
+A comparison must record the dataset artifact/version, seed, loader batch size and worker count,
+rank/world-size topology, sampler steps, and content/sketch CFG strengths. Repeatability requires
+the same ordered dataset and loader topology; changing batching, world size, model, checkpoint,
+device kernels, or dependency versions may change results. `val/param_mse` and
+`test/param_mse` remain the primary sampled-output parameter metrics, and rendered `audio/*`
+metrics remain available in predict mode. Fixed diagnostics establish comparability, not model
+quality; quality claims still require matched checkpoints, compute, seeds, and representative data.
 
 ### 2c. Callbacks — Visualization (via Lightning logger dispatch)
 
@@ -97,16 +154,76 @@ Under the default `many_loggers` composition (W&B + CSV + TB), plots land in
 both W&B and TensorBoard; with `logger=tensorboard` they go to TensorBoard
 only; with `logger=wandb` they go to W&B only.
 
-| Callback                 | Logged key                                                                     | Trigger                                                                                                                                                           | Symbol                                                                                                               |
-| ------------------------ | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `PlotLossPerTimestep`    | `plot` (image)                                                                 | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`                                                 |
-| `PlotLearntProjection`   | `assignment`, `value` (images)                                                 | `on_validation_epoch_end` or every N steps                                                                                                                        | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`                                               |
-| `LogPerParamMSE`         | `per_param_mse/{name}` and optional `per_param_mse_best_swap/{name}` per param | `on_validation_epoch_end` (via `self.log_dict`)                                                                                                                   | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
-| `ValAudioProbe` (opt-in) | `val_audio/<metric>_<stat>` + `val_audio/probe_step`                           | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
+| Callback                 | Logged key                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Trigger                                                                                                                                                           | Symbol                                                                                                               |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `PlotLossPerTimestep`    | `plot` (image)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `on_validation_epoch_end`                                                                                                                                         | `src/synth_setter/utils/callbacks.py::PlotLossPerTimestep._log_plot`                                                 |
+| `PlotLearntProjection`   | `assignment`, `value` (images)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `on_validation_epoch_end` or every N steps                                                                                                                        | `src/synth_setter/utils/callbacks.py::PlotLearntProjection._log_plots`                                               |
+| `LogPerParamMSE`         | `{val,test}/per_param_mse/{name}`, `{val,test}_per_param_mse_best_swap/{name}`, `{val,test}/number_group_optimal_assignment_mse/{collapsed-name}`, `{val,test}/per_param_mse_spec_quantized/{name}`, `{val,test}/param_mse_spec_quantized`, `{val,test}/per_param_abs_cosine_distance/{name}`, `{val,test}/categorical_mismatch_rate/{name}`, `{val,test}/number_group_optimal_assignment_categorical_mismatch_rate/{collapsed-name}`, `{val,test}/angular_mae_radians/{name}`, `{val,test}/axis_angular_error_radians/{name}`, `{val,test}/discrete_{mae,mismatch_rate}/{name}`, and `{val,test}/note_timing_mae_seconds/{name}` | `on_{validation,test}_epoch_end` (via `pl_module.log_dict`)                                                                                                       | `src/synth_setter/utils/callbacks.py::LogPerParamMSE`                                                                |
+| `ValAudioProbe` (opt-in) | `val_audio/<metric>_<stat>` + `val_audio/probe_step`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `on_validation_epoch_end`, one validation late (metrics harvested from the previous epoch's off-loop render; probe failures are logged and skipped, never raised) | `src/synth_setter/utils/callbacks.py::ValAudioProbe` → `src/synth_setter/evaluation/audio_probe.py::run_audio_probe` |
 
-`ValAudioProbe`'s keys mirror §2i's `audio/*` metric set under the `val_audio/` prefix; the wav/spectrogram snapshot goes to R2, not W&B (free-tier storage budget).
+Number-group optimal-assignment metrics match complete encoded fields only within
+number-collapsed, compatible name families. Each per-group key replaces digit
+runs in the representative name with `N` (for example, `a_filter_1_type` becomes
+`a_filter_N_type`); singleton labels are unchanged. MSE families require equal
+encoded width and average every assigned coordinate. Categorical families require
+matching encodings and category domains, then minimize one decoded mismatch
+vote per logical field rather than reusing the MSE-optimal assignment.
 
-### 2d. Callbacks — Non-W&B
+`{val,test}/param_mse_spec_quantized` clips predictions to the ParamSpec domain
+and snaps categorical and integral fields to the values used for rendering
+before scoring them against the targets. `ValAudioProbe`'s keys mirror §2i's `audio/*`
+metric set under the `val_audio/` prefix. pyFDN probes additionally log
+`val_audio/octave_rt60_log_rmse_{mean,std}`,
+`val_audio/octave_edc_rmse_db_{mean,std}`, `val_audio/t30_mape_{mean,std}`,
+`val_audio/c50_mae_db_{mean,std}` and the per-band
+`val_audio/<param>_pcc_<fc>hz_{mean,std}` rows (std is NaN: Pearson is
+dataset-level) from their impulse responses. Joint time–frequency transport and
+all public pyFDN response losses use the same prefix convention; see
+[reverb metric columns and semantics](reverb-metrics.md). Standalone flatness
+and energy objectives have separate `_target` and `_pred` columns. Predict-mode
+evaluation exposes these under `audio/`. The wav/spectrogram snapshot goes to
+R2, not W&B (free-tier storage budget).
+
+`{val,test}/per_param_abs_cosine_distance/{name}` adds `1 - |cosine_similarity|`
+for continuous/discrete arrays and direction parameters in model space. Angle arrays
+compare each `(cos, sin)` pair separately, then average `1 - |cos(Δθ)|` across angles.
+Values range from 0 (aligned or opposite) to 1 (perpendicular); magnitude and sign
+are ignored. Zero vectors score 1, with norms stabilized at `1e-8`. Epoch means
+are sample-weighted across batches and distributed ranks. These keys appear when
+`LogPerParamMSE` receives predictions, including during validation; test logging
+also requires the model's `test_step` to return `preds`. Scalar parameters get no
+cosine key. Existing MSE and training losses are unchanged.
+
+Specialized semantic metrics decode model outputs exactly as the renderer does.
+Angle arrays report shortest-arc MAE in radians (`[0, π]`) per native angle;
+Householder direction arrays report sign-invariant axis angle in radians
+(`[0, π/2]`). Discrete literals and arrays report native-integer MAE and one
+mismatch vote per scalar field or native array element. Note durations report
+start/end MAE in seconds. Projection, clipping, rounding, and deterministic zero
+handling therefore match rendering. These epoch means are also sample-weighted
+across batches and distributed ranks.
+
+This is the finite ParamSpec metric inventory: ordinary `ContinuousParameter`
+already has range-normalized per-parameter MSE; `ContinuousArrayParameter` has
+that MSE plus the existing shape/alignment diagnostic; `CategoricalParameter`
+has decoded mismatch metrics; and the remaining specialized classes use the
+semantic metrics above. No additional native-unit metric is defined for ordinary
+continuous scalar or array parameters.
+
+### 2d. Shared parameter workspace
+
+`synth-setter-create-wandb-parameter-workspace` creates a saved W&B view with a blank run query
+and regex-backed line plots for every training and validation per-parameter metric family. The
+regexes select metric prefixes rather than Surge leaf names, so pyFDN keys such as `delays` and
+`input_matrix` appear alongside the corresponding names from every other synth. The command
+prints the new view's URL and creates a distinct view on each invocation.
+
+Runs created before a metric family was logged remain empty for that family; workspace changes
+cannot reconstruct history that was never sent to W&B.
+
+Source: `src/synth_setter/tools/wandb_parameter_workspace.py`.
+
+### 2e. Callbacks — Non-W&B
 
 | Callback              | What it does                                           | Config                                                      |
 | --------------------- | ------------------------------------------------------ | ----------------------------------------------------------- |
@@ -116,7 +233,7 @@ only; with `logger=wandb` they go to W&B only.
 | `ModelSummary`        | Prints param summary to console                        | `src/synth_setter/configs/callbacks/model_summary.yaml`     |
 | `PredictionWriter`    | Saves predictions to `.pt` files locally               | `src/synth_setter/utils/callbacks.py::PredictionWriter`     |
 
-### 2e. Gradient Watching
+### 2f. Gradient Watching
 
 If `cfg.watch_gradients` is set, `watch_gradients()` calls
 `WandbLogger.watch(model, log="gradients")` — logs gradient histograms per
@@ -158,13 +275,17 @@ When `synth-setter-eval mode=predict evaluation.compute_metrics=true` runs and a
 | `audio/mss_std`            | Same, standard deviation                                                                                                    |
 | `audio/wmfcc_mean`         | DTW-aligned MFCC distance, mean                                                                                             |
 | `audio/wmfcc_std`          | Same, standard deviation                                                                                                    |
+| `audio/mldr_mean`          | Multi-scale loudness dynamic range distance ([DiffVox](https://arxiv.org/abs/2504.14735) eq. 15), mean                      |
+| `audio/mldr_std`           | Same, standard deviation                                                                                                    |
+| `audio/mldr_mid_side_mean` | Stereo-only MLDR after the energy-preserving mid/side transform, mean over applicable samples                               |
+| `audio/mldr_mid_side_std`  | Same, standard deviation; omitted when the collection contains no stereo pairs                                              |
 | `audio/sot_mean`           | Spectral optimal-transport distance, mean                                                                                   |
 | `audio/sot_std`            | Same, standard deviation                                                                                                    |
 | `audio/rms_mean`           | RMS envelope cosine similarity, mean                                                                                        |
 | `audio/rms_std`            | Same, standard deviation                                                                                                    |
 | `audio/per_sample_metrics` | Per-sample metrics from `metrics.csv` as a `wandb.Table`; columns match `compute_audio_metrics` output (one row per sample) |
 
-When the auto-shuffle probe ran (uniform params, ≥ 2 sample dirs), a parallel set of `shuffled_audio/<metric>_{mean,std}` keys is also logged from `aggregated_metrics_shuffled.csv`, and the drawn permutation is logged as a `shuffle/permutation` `wandb.Table` from `shuffle_permutation.csv` via `_log_shuffle_permutation_to_wandb` (`src/synth_setter/cli/eval.py`) — skipped when `shuffle_permutation.csv` is absent or `wandb.run` is unset, with wandb errors swallowed. `_log_metrics_csv_to_wandb` (`src/synth_setter/cli/eval.py`) is a no-op when `metrics.csv` is absent or `wandb.run` is unset; wandb errors are swallowed so a logging failure never aborts the run.
+`_log_metrics_csv_to_wandb` (`src/synth_setter/cli/eval.py`) is a no-op when `metrics.csv` is absent or `wandb.run` is unset; wandb errors are swallowed so a logging failure never aborts the run.
 
 The aggregated scalar metrics dict is also merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`; the `audio/per_sample_metrics` Table is W&B-only and is not included in that dict. See [eval-pipeline.md §5.1](../design/eval-pipeline.md) for the surrounding subprocess chain.
 
@@ -172,14 +293,14 @@ ______________________________________________________________________
 
 ## 3. Artifacts
 
-| Artifact                 | Source                                                                                           | When                                                                                                                                                                                                                                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Model checkpoints        | `ModelCheckpoint` (best ckpt → R2; `log_model: False`)                                           | Best + last + every-5000-step `.ckpt` written locally; only the best is uploaded to R2 at train end (no checkpoint files go to W&B)                                                                                                                                                             |
-| Source code              | `wandb.Settings(code_dir=".")`                                                                   | Run start                                                                                                                                                                                                                                                                                       |
-| `<task_name>-input-spec` | `_log_spec_artifact` in `src/synth_setter/cli/generate_dataset.py`                               | Dataset-generation run start; artifact type `dataset-spec`, payload = `DatasetSpec.model_dump_json`                                                                                                                                                                                             |
-| `data-{task_name}`       | `build_dataset_artifact` / `_log_dataset_artifact` in `src/synth_setter/cli/finalize_dataset.py` | Finalize, after the R2 outputs land; type `dataset`, `s3://` R2 references (`checksum=False`), metadata `shard_count` / `n_samples` / `git_sha`                                                                                                                                                 |
-| `model-{config_id}`      | `build_model_artifact` / `_log_model_artifact` in `src/synth_setter/cli/train.py`                | Train end, after fit/test (global-zero); type `model`, metadata `git_sha`; the best ckpt is uploaded to `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt` and referenced as an `s3://` URI (`checksum=False`); degrades to lineage-only when R2 is unreachable or no ckpt was written (#92) |
-| `eval-{config_id}`       | `build_eval_results_artifact` / `_log_eval_results_artifact` in `src/synth_setter/cli/eval.py`   | After the eval output dir is mirrored to R2 (global-zero only); type `eval-results`, `s3://` R2 reference (`checksum=False`), metadata = scalar summary metrics + `git_sha`                                                                                                                     |
+| Artifact                 | Source                                                                                           | When                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Model checkpoints        | `ModelCheckpoint` (best ckpt → R2; `log_model: False`)                                           | Best + last + every-5000-step `.ckpt` written locally; only the best is uploaded to R2 at train end (no checkpoint files go to W&B)                                                                                                                                                                                                      |
+| Source code              | `wandb.Settings(code_dir=".")`                                                                   | Run start                                                                                                                                                                                                                                                                                                                                |
+| `<task_name>-input-spec` | `_log_spec_artifact` in `src/synth_setter/cli/generate_dataset.py`                               | Dataset-generation run start; artifact type `dataset-spec`, payload = `DatasetSpec.model_dump_json`                                                                                                                                                                                                                                      |
+| `data-{task_name}`       | `build_dataset_artifact` / `_log_dataset_artifact` in `src/synth_setter/cli/finalize_dataset.py` | Finalize, after the R2 outputs land; type `dataset`, `s3://` R2 references (`checksum=False`), metadata `shard_count` / `n_samples` / `git_sha`                                                                                                                                                                                          |
+| `model-{config_id}`      | `build_model_artifact` / `_log_model_artifact` in `src/synth_setter/cli/train.py`                | Train end, after fit/test (global-zero); type `model`, metadata `git_sha`; the best ckpt is uploaded to `r2://{r2.bucket}/checkpoints/{training_config_id}/{training_run_id}/{launch_uuid}/model.ckpt` and referenced as an `s3://` URI (`checksum=False`); degrades to lineage-only when R2 is unreachable or no ckpt was written (#92) |
+| `eval-{config_id}`       | `build_eval_results_artifact` / `_log_eval_results_artifact` in `src/synth_setter/cli/eval.py`   | After the eval output dir is mirrored to R2 (global-zero only); type `eval-results`, `s3://` R2 reference (`checksum=False`), metadata = scalar summary metrics + `git_sha`                                                                                                                                                              |
 
 ______________________________________________________________________
 
@@ -190,7 +311,7 @@ ______________________________________________________________________
 | `src/synth_setter/cli/train.py`            | Full: logger init → hparams → provenance → dataset `use_artifact` lineage discovered from the configured remote or local `input_spec.json` → train metrics → test metrics → `model-{config_id}` `model` artifact → teardown                                                                                                                                                                                                                                                                            | `src/synth_setter/cli/train.py`            |
 | `src/synth_setter/cli/eval.py`             | Full: logger init → hparams → provenance → model+dataset `use_artifact` lineage (`consumed_train_config_id` plus configured remote or local dataset discovery) → test/val metrics (+ optional predictions) → predict-mode `audio/<metric>_{mean,std}` keys from `_log_audio_metrics_to_wandb` + `audio/per_sample_metrics` Table from `_log_metrics_csv_to_wandb` → (global-zero, when `upload_output_dir_uri` is set) `eval-{config_id}` `eval-results` artifact with `s3://` R2 reference → teardown | `src/synth_setter/cli/eval.py`             |
 | `src/synth_setter/cli/generate_dataset.py` | Dataset-generation: logger init pinned to `spec.run_id` → spec hparams → provenance → `<task_name>-input-spec` artifact → per-shard metrics → run summary → `finalize(status)` + `wandb.finish()`                                                                                                                                                                                                                                                                                                      | `src/synth_setter/cli/generate_dataset.py` |
-| `src/synth_setter/cli/finalize_dataset.py` | Dataset-finalize: resumes the data-generation run (`id=spec.run_id`, `job_type=data-generation`, `resume=allow`) → logs the `data-{config_id}` `dataset` artifact with `s3://` R2 references and a `:{run_id}` alias → `close_loggers`. Best-effort: a finalize without `WANDB_API_KEY` / logger group degrades to a no-op                                                                                                                                                                             | `src/synth_setter/cli/finalize_dataset.py` |
+| `src/synth_setter/cli/finalize_dataset.py` | Dataset-finalize: opens a dedicated run (`id={spec.run_id}-finalize`, `job_type=finalize`, `resume=allow`) → `finalize/*` progress rows → logs the `data-{config_id}` `dataset` artifact with `s3://` R2 references and a `:{run_id}` alias → `close_loggers`. Both the standalone CLI and `generate_dataset`'s `finalize_inline=true` path go through `finalize_tracked`. Best-effort: a finalize without `WANDB_API_KEY` / logger group degrades to a no-op                                          | `src/synth_setter/cli/finalize_dataset.py` |
 
 Both training and eval use `@task_wrapper` which ensures `wandb.finish()` runs even on exception.
 `generate_dataset` brackets `generate(...)` in its own `try/finally` that calls `close_loggers` (now in `synth_setter.utils.instantiators`, shared with finalize) — see §5 for the metric / run-id contract.
@@ -200,11 +321,25 @@ ______________________________________________________________________
 ## 5. Dataset Generation Runs
 
 `src/synth_setter/cli/generate_dataset.py` instantiates a `WandbLogger` via Hydra
-(`configs/dataset.yaml` includes `- logger: wandb` in its defaults list) and pins
+(`configs/dataset.yaml` includes `- logger: wandb_dataset` in its defaults list) and pins
 `logger.wandb.id` to `spec.run_id` — derived deterministically by
 `make_dataset_wandb_run_id` (`src/synth_setter/pipeline/schemas/prefix.py`) — so
 the W&B run ID matches the R2 prefix under `data/<task_name>/<run_id>/`. This is
 the single binding point: re-running with the same `spec` resumes the same W&B run.
+
+Generation, spec-URI repair, finalization, inline oracle evaluation, and
+add-embeddings runs default to the `synth-setter-generate-dataset` project.
+`WANDB_PROJECT` or `logger.wandb.project` overrides the Hydra default; repair
+runs accept `WANDB_PROJECT`. Training and standalone evaluation retain the
+`synth-setter` default. Reusable dataset workflows and generation sweeps use
+the dataset project too; CI callers explicitly select `synth-setter-citest`.
+
+To resume a legacy generation run or finalize its dataset, set
+`WANDB_PROJECT=synth-setter` (or the original custom project). Run IDs are
+project-scoped; inline oracle evaluation requires the original run to exist.
+Cross-project dataset artifact lineage in training/evaluation is not yet
+resolved automatically; data loading is unaffected, but W&B can report a missing
+input artifact edge ([#3205](https://github.com/tinaudio/synth-setter/issues/3205)).
 
 ### 5a. Hyperparameters and artifact (logged once at run start)
 
@@ -215,12 +350,13 @@ the single binding point: re-running with the same `spec` resumes the same W&B r
 
 ### 5b. Per-shard metrics (one history row per shard, `step=shard_id`)
 
-| Key                              | What                                                                           |
-| -------------------------------- | ------------------------------------------------------------------------------ |
-| `shard/bytes`                    | Local shard file size in bytes (stable; shards retained at `work_dir`)         |
-| `shard/render_seconds`           | Wall-clock seconds from subprocess invoke through upload-end; `0.0` on R2-skip |
-| `shard/samples_rejected_clipped` | Sampled renders rejected for exceeding `[-1, 1]`; `0` on R2-skip               |
-| `shard/samples_rejected_silent`  | Sampled renders rejected below `render.min_loudness`; `0` on R2-skip           |
+| Key                                 | What                                                                           |
+| ----------------------------------- | ------------------------------------------------------------------------------ |
+| `shard/bytes`                       | Local shard file size in bytes (stable; shards retained at `work_dir`)         |
+| `shard/render_seconds`              | Wall-clock seconds from subprocess invoke through upload-end; `0.0` on R2-skip |
+| `shard/samples_rejected_clipped`    | Sampled renders rejected for exceeding `[-1, 1]`; `0` on R2-skip               |
+| `shard/samples_rejected_non_finite` | Sampled renders rejected for NaN or infinity; `0` on R2-skip                   |
+| `shard/samples_rejected_silent`     | Sampled renders rejected below `render.min_loudness`; `0` on R2-skip           |
 
 Emitted by `_log_shard_metrics` from `_render_one_owned_shard` in both the
 serial and parallel dispatchers. A renderer that exits successfully without a
@@ -228,16 +364,17 @@ valid metrics sidecar fails the shard with a shard-qualified `RuntimeError`.
 
 ### 5c. Per-worker summary (one terminal row per worker invocation)
 
-| Key                                   | What                                                         |
-| ------------------------------------- | ------------------------------------------------------------ |
-| `shards/rendered`                     | Shards this rank actually rendered                           |
-| `shards/skipped`                      | Shards short-circuited by the R2-skip probe                  |
-| `shards/total`                        | `len(my_range)` — owned shard count for this rank            |
-| `generation/elapsed_seconds`          | Wall-clock dispatcher duration (mirrors #1304)               |
-| `generation/samples`                  | `rendered * spec.render.samples_per_shard`                   |
-| `generation/samples_per_second`       | `samples / elapsed_s` (0.0 when `elapsed_s == 0`)            |
-| `generation/samples_rejected_clipped` | Clipped sampled renders rejected across this worker's shards |
-| `generation/samples_rejected_silent`  | Silent sampled renders rejected across this worker's shards  |
+| Key                                      | What                                                            |
+| ---------------------------------------- | --------------------------------------------------------------- |
+| `shards/rendered`                        | Shards this rank actually rendered                              |
+| `shards/skipped`                         | Shards short-circuited by the R2-skip probe                     |
+| `shards/total`                           | `len(my_range)` — owned shard count for this rank               |
+| `generation/elapsed_seconds`             | Wall-clock dispatcher duration (mirrors #1304)                  |
+| `generation/samples`                     | `rendered * spec.render.samples_per_shard`                      |
+| `generation/samples_per_second`          | `samples / elapsed_s` (0.0 when `elapsed_s == 0`)               |
+| `generation/samples_rejected_clipped`    | Clipped sampled renders rejected across this worker's shards    |
+| `generation/samples_rejected_non_finite` | Non-finite sampled renders rejected across this worker's shards |
+| `generation/samples_rejected_silent`     | Silent sampled renders rejected across this worker's shards     |
 
 Generation rejection totals are worker-local, not distributed-run totals. They
 sum only shards rendered by this invocation; in claims mode, those are claims
@@ -257,6 +394,7 @@ in the `finally`.
 | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | [#1318](https://github.com/tinaudio/synth-setter/issues/1318) | v2: per-sample loudness telemetry relay (stdout protocol, worker → launcher) — deferred non-goal from the design doc Q5 |
 | [#2032](https://github.com/tinaudio/synth-setter/issues/2032) | Separate per-shard counts for silent and clipped sampled-render rejections                                              |
+| [#3092](https://github.com/tinaudio/synth-setter/issues/3092) | Retry and report non-finite sampled renders instead of aborting the shard                                               |
 
 ### 5e. Sweeps
 
@@ -290,9 +428,8 @@ all three splits resume the **same** run, the metric keys are namespaced per
 split so they don't overwrite each other's run summary: `test` keeps the bare
 `audio/*` key, while `train`/`val` are logged under `train/audio/*` and
 `val/audio/*` (via `+evaluation.metric_prefix=<split>/`). The prefix applies to
-every metric key, so the `shuffled_audio/*` keys (§2) become `train/shuffled_audio/*`
-and the `shuffle/permutation` Table becomes `train/shuffle/permutation`, etc. too. The eval subprocess
-inherits `WANDB_MODE` from the launcher, so its offline/online posture follows
+every audio metric key. The eval subprocess inherits `WANDB_MODE` from the
+launcher, so its offline/online posture follows
 the parent's. Console logs survive the split-by-split resumes via
 `console_multipart=True`: each session uploads its own `logs/output_*.log`
 rather than overwriting a single server-side `output.log`.

@@ -32,10 +32,14 @@ vector_field:
 cfg_dropout_rate: 0.1
 
 num_params: ${param_spec_width:${synth.param_spec_name}}
+param_spec: ${synth.param_spec_name}
 
 rectified_sigma_min: 0.0
+# What the field predicts: the velocity x1 - x0, or the clean endpoint x1.
+parameterization: velocity
 
 # sampling
+seeded_evaluation: false
 validation_sample_steps: 50
 validation_cfg_strength: 2.0
 test_sample_steps: 200

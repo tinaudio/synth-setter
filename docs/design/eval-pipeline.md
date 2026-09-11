@@ -42,7 +42,7 @@ Topline goal: Run the full evaluation pipeline — predict, render, metrics — 
 **synth-setter** trains models that predict synthesizer parameters from audio. Evaluating these models is a three-stage pipeline:
 
 1. **Predict** — load a trained checkpoint, run inference on a test dataset, output predicted parameter tensors
-2. **Render** — feed predicted parameters into the VST plugin (Surge XT), render audio waveforms for both predictions and ground-truth targets
+2. **Render** — feed predicted parameters into the configured renderer and synth identity, then render predicted and ground-truth audio
 3. **Metrics** — compare predicted and target audio using spectral, envelope, and transport-based distance metrics
 
 This pipeline works end-to-end today but is tightly coupled to a university HPC cluster:
@@ -63,7 +63,7 @@ Separately, the data pipeline (#74) already uses R2 as the source of truth for g
 
 | Layer         | Technology                                                        | Role                                      |
 | ------------- | ----------------------------------------------------------------- | ----------------------------------------- |
-| **Rendering** | [Surge XT](https://surge-synthesizer.github.io/) via pedalboard   | Audio synthesis from predicted parameters |
+| **Rendering** | Registered synth identity through its configured backend          | Audio synthesis from predicted parameters |
 | **Display**   | Xvfb (Linux headless) / native (macOS)                            | VST plugins require a display server      |
 | **Storage**   | [Cloudflare R2](https://developers.cloudflare.com/r2/) via rclone | Datasets, eval artifacts                  |
 | **Tracking**  | [Weights & Biases](https://wandb.ai/)                             | Experiment tracking, metric dashboards    |
@@ -166,7 +166,7 @@ portable `make` targets instead. No new code references SGE.
 ### Non-Goals
 
 - **Training pipeline changes.** This doc covers eval and R2 integration only. Training orchestration is a separate concern.
-- **Custom metric development.** Existing metrics (MSS, wMFCC, SOT, RMS) are fixed. Adding new metrics is future work.
+- **Metric-framework redesign.** Backend-specific metrics may extend the existing CSV contract without replacing its parallel computation or aggregation model.
 
 ## 4. System Overview
 
@@ -248,14 +248,33 @@ When `cfg.mode == "predict"`, `cli/eval.py` invokes `_run_predict_postprocessing
 | `evaluation.render_vst`      | `false` | Subprocess-renders `${paths.output_dir}/audio/sample_*/{pred.wav, target.wav, spec.png, params.csv}` from the `cfg.render` backend knobs joined with the root `cfg.synth` identity via `RenderConfig.from_cfg_nodes` (#2565) |
 | `evaluation.compute_metrics` | `false` | Subprocess-computes `${paths.output_dir}/metrics/{metrics, aggregated_metrics}.csv` against the rendered pairs                                                                                                               |
 | `evaluation.rerender_target` | `true`  | Forwards `--rerender-target True` to `predict_vst_audio` so `target.wav` is re-synthesized from stored target params (comparable to the rendered `pred.wav`) instead of replayed from `target-audio-*.pt`                    |
+| `evaluation.no_params`       | `false` | With `render_vst=true`, forwards `--no-params True` so the renderer skips `target-params-*.pt` and requires `rerender_target=false`; it has no rendering effect when `render_vst=false`                                      |
 | `evaluation.num_workers`     | `1`     | Forwarded as `-w` to `compute_audio_metrics`                                                                                                                                                                                 |
-| `evaluation.shuffle_seed`    | `0`     | Always forwarded to `compute_audio_metrics`. Non-zero implies the render-order probe is intended — raises if `params.csv` files are non-uniform; `0` runs the auto-probe silently when params are uniform (#489)             |
+
+### Third-party corpora
+
+`datamodule=third_party/{nsynth_test,esc50}` scores a mel-conditioned checkpoint against
+published Lance corpora under `r2:experiments/third_party`; the NSynth URI resolves through
+the configured R2 storage options to `s3://experiments/third_party/NSynth/test.lance`. The
+dedicated `datamodule=third_party/nsynth_sketch sketch=on` composition also extracts PESTO sketch
+controls from each target-audio batch and pools them onto the checkpoint's canonical 32-frame
+grid. Each corpus config pins an immutable `datamodule.dataset_version`, so the resolved Hydra
+config replays the same Lance snapshot after later corpus commits. Source WAV blobs are read in
+place through native batched reads and mapped onto the checkpoint's render contract per batch:
+decode, resample, mono to stereo, pad or trim, amplitude scale, canonical mel computation, and
+optional normalization with the checkpoint's pinned `datamodule.mel_stats_uri`. That URI is
+mandatory because corpus statistics cannot replace the checkpoint's training statistics; it
+can name either a finalized training dataset's `stats.npz` or an artifact generated by
+`python -m synth_setter.pipeline.data.stats` from non-test data. A checkpoint trained without
+normalization must explicitly set both `datamodule.use_saved_mean_and_variance=false` and
+`datamodule.mel_stats_uri=null`. These corpora carry no ground-truth patch, so runs pair
+`evaluation.no_params=true` with `evaluation.rerender_target=false`.
 
 On Linux the render subprocess is prefixed with the headless wrapper materialised via `synth_setter.resources.vst_headless_wrapper()` so the VST3 plugin sees an Xvfb display before pedalboard imports it; the metrics subprocess is CPU-only and runs unwrapped. Both default-off so `mode: test` and `mode: validate` paths are unchanged.
 
 `predict_vst_audio` also accepts a staging layout with **no** `target-audio-*.pt` files when `--rerender_target` is on and target params are staged (the training val-audio probe's layout — training batches carry no raw audio); with no target-audio file and rerendering off, it raises a directed `ValueError` rather than rendering without a target source. When dataset audio is absent the spectrogram falls back to the re-rendered target.
 
-When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are surfaced to the active wandb run (as `audio/<name>_{mean,std}` scalars) and, when the auto-shuffle probe ran, `shuffled_audio/<name>_{mean,std}` from `aggregated_metrics_shuffled.csv` — and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`. Separately, `metrics.csv` is uploaded as `audio/per_sample_metrics` (a `wandb.Table`) — logged to W&B only, not included in the returned dict — so the same wandb run that holds `test/param_mse` can carry the aggregated, shuffled, and per-sample audio metrics too. When the auto-shuffle probe ran, the drawn permutation is also logged as a `shuffle/permutation` `wandb.Table` (from `shuffle_permutation.csv`) — W&B-only, not in the returned dict — so the render-order mapping behind the shuffled metrics is reproducible.
+When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_metrics.csv` are surfaced to the active wandb run as `audio/<name>_{mean,std}` scalars and merged into the dict returned by `evaluate()` alongside Lightning's `trainer.callback_metrics`. Separately, `metrics.csv` is uploaded as `audio/per_sample_metrics` (a `wandb.Table`) — logged to W&B only, not included in the returned dict — so the same wandb run that holds `test/param_mse` can carry the aggregated and per-sample audio metrics too.
 
 ### 5.2 Render
 
@@ -267,20 +286,18 @@ When `evaluation.compute_metrics` runs, the aggregated values from `aggregated_m
 | **Compute**  | CPU — selected by `make_audio_renderer` from the dataset's renderer configuration                       |
 | **Requires** | Display server (Xvfb on headless Linux, native on macOS) — pedalboard backend only                      |
 
-The render stage loads each predicted parameter tensor, decodes it via
-`decode_model_output` (`src/synth_setter/data/vst/param_spec.py`), and uses
-`make_audio_renderer` for both predicted and target audio. Pedalboard and
-DawDreamer VST load a plugin; `torchsynth` renders in-process; and
-`dawdreamer_faust` compiles the checked-in source registered by
+The render stage loads each predicted parameter tensor, canonicalizes it through the ParamSpec, and uses `make_audio_renderer` for both predicted and target audio. The `params.csv` `pred_effective` column records those clipped and quantized values, including the final note window. Pedalboard and
+DawDreamer VST load a plugin; `torchsynth` renders in-process; and the
+`dawdreamer` + `format: faust` tuple compiles the checked-in source registered by
 `param_spec_name`, then sets renderer-native values under exact compiled
-addresses. Faust accepts no source path or preset path. The render process
+addresses. Faust accepts no plugin or preset path. The render process
 is isolated and receives the complete `RenderConfig` for every backend.
 
 **Key behaviors:**
 
 - When `plugin_path` is the `torchsynth` sentinel, rendering happens in-process via `TorchSynthRenderer`; no plugin bundle is loaded
 
-- When `plugin_path` is the Faust sentinel, `DawDreamerFaustRenderer` resolves only checked-in source/spec identities, validates the compiled address sequence, and applies a complete native-value patch by exact address
+- When `synth.format` is `faust`, `DawDreamerFaustRenderer` verifies the registered source digest, validates the compiled address sequence, and applies a complete native-value patch by exact address
 
 - `renderscript.sh` wraps `predict_vst_audio.py` with display server management
 
@@ -296,21 +313,39 @@ is isolated and receives the complete `RenderConfig` for every backend.
 
 ### 5.3 Metrics
 
-| Property    | Value                                                                                                                                                                                                                                                                   |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Command** | `python -m synth_setter.evaluation.compute_audio_metrics {audio_dir} {output_dir}`                                                                                                                                                                                      |
-| **Input**   | Directory of `sample_{N}/` subdirectories, each containing `pred.wav` and `target.wav`                                                                                                                                                                                  |
-| **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std), `aggregated_metrics_shuffled.csv` (mean/std of shuffled pass — present when auto-shuffle probe ran), `shuffle_permutation.csv` (`dest_idx`→`src_idx` permutation, written alongside the shuffled pass) |
-| **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`)                                                                                                                                                                               |
+| Property    | Value                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------- |
+| **Command** | `python -m synth_setter.evaluation.compute_audio_metrics {audio_dir} {output_dir}`          |
+| **Input**   | Directory of `sample_{N}/` subdirectories, each containing `pred.wav` and `target.wav`      |
+| **Output**  | `metrics.csv` (per-sample), `aggregated_metrics.csv` (mean/std; dataset-level rows NaN std) |
+| **Compute** | CPU — spectral analysis, DTW, optimal transport (parallelized with `ProcessPoolExecutor`)   |
 
-Four metrics are computed for each (predicted, target) audio pair:
+Five metrics are computed for every (predicted, target) audio pair. Stereo pairs
+also receive `mldr_mid_side`; mono rows omit that optional column rather than
+substituting zero. Passing `--renderer-backend pyfdn` adds impulse-response
+metrics plus the octave-band room-acoustic metrics of Götz et al.
+(arXiv:2510.23158), implemented in
+`src/synth_setter/evaluation/acoustic_parameters.py`. `--fad` adds a
+dataset-level Fréchet Audio Distance on CLAP embeddings. pyFDN evaluation also
+includes joint time–frequency transport and all ten public pyFDN `ResponseLoss`
+implementations; see [reverb metric semantics](../reference/reverb-metrics.md)
+for the matching losses, separate target/prediction diagnostics, and transport
+normalization. Predict-mode eval forwards the renderer backend automatically.
 
-| Metric    | Full Name                  | Method                                       | Range     |
-| --------- | -------------------------- | -------------------------------------------- | --------- |
-| **MSS**   | Multi-Scale Spectrogram    | L1 on mel spectrograms at 3 time scales      | \[0, ∞) ↓ |
-| **wMFCC** | Weighted MFCC              | DTW cost between MFCC sequences              | \[0, ∞) ↓ |
-| **SOT**   | Spectral Optimal Transport | Wasserstein distance on normalized STFT bins | \[0, ∞) ↓ |
-| **RMS**   | RMS Amplitude Envelope     | Cosine similarity of RMS envelopes           | [-1, 1] ↑ |
+| Metric                   | Full Name                          | Method                                                                                                | Range     |
+| ------------------------ | ---------------------------------- | ----------------------------------------------------------------------------------------------------- | --------- |
+| **MSS**                  | Multi-Scale Spectrogram            | L1 on mel spectrograms at 3 time scales                                                               | \[0, ∞) ↓ |
+| **wMFCC**                | Weighted MFCC                      | DTW cost between MFCC sequences                                                                       | \[0, ∞) ↓ |
+| **SOT**                  | Spectral Optimal Transport         | Wasserstein distance on normalized STFT bins                                                          | \[0, ∞) ↓ |
+| **RMS**                  | RMS Amplitude Envelope             | Cosine similarity of RMS envelopes                                                                    | [-1, 1] ↑ |
+| **MLDR**                 | Multi-scale Loudness Dynamic Range | L1 of log short/long energy-envelope ratios at 2 scales ([DiffVox](https://arxiv.org/abs/2504.14735)) | \[0, ∞) ↓ |
+| **MLDR mid/side**        | Stereo Mid/Side MLDR               | MLDR on energy-preserving `(L+R)/√2` and `(L-R)/√2` channels; stereo only                             | \[0, ∞) ↓ |
+| **octave_rt60_log_rmse** | Octave-band RT60 log-RMSE          | RMSE of valid paired natural-log RT60 estimates                                                       | \[0, ∞) ↓ |
+| **octave_edc_rmse_db**   | Octave-band energy-decay RMSE      | pyFDN `MatchEnergyDecay` over target-valid EDC bins                                                   | \[0, ∞) ↓ |
+| **t30_mape**             | Octave-band T30 % error            | pyFDN 30 dB Schroeder fit, 125 Hz–8 kHz, % error                                                      | \[0, ∞) ↓ |
+| **c50_mae_db**           | Octave-band C50 MAE                | flareverb clarity on band-passed responses, dB                                                        | \[0, ∞) ↓ |
+| **`<param>_pcc_<fc>hz`** | Per-band Pearson correlation       | Dataset-level, from `acoustic_param/` columns                                                         | [-1, 1] ↑ |
+| **fad_clap** (`--fad`)   | Fréchet Audio Distance             | Dataset-level, Gaussian fit of CLAP embeddings                                                        | \[0, ∞) ↓ |
 
 **Key behaviors:**
 
@@ -318,6 +353,10 @@ Four metrics are computed for each (predicted, target) audio pair:
 - Audio loaded via `pedalboard.io.AudioFile` at native sample rate
 - MSS uses three windows: 10ms, 25ms, 100ms (hops: 5ms, 10ms, 50ms)
 - Output CSV: per-sample metrics indexed by directory name, aggregated means/stds
+- pyFDN RT60 excludes bands where either estimate is zero or non-finite; no valid
+  paired bands fail the probe rather than logging a non-finite value
+- pyFDN response losses run under `torch.no_grad()` as evaluation metrics, not
+  training objectives; `octave_edc_rmse_db` aliases `pyfdn_match_energy_decay`
 
 ## 6. R2 Integration
 
@@ -331,8 +370,9 @@ _target_: synth_setter.data.lance_datamodule.LanceVSTDataModule
 dataset_root: ${paths.output_dir}/data
 download_dataset_root_uri: null  # null → local-only; opt in explicitly
 batch_size: 128
-num_workers: 4  # per dataloader — validation doubles the live worker count
-persistent_workers: true  # automatically disabled when num_workers=0
+num_workers: 4  # train, test, and predict loaders
+val_num_workers: 0  # validation stays in-process by default
+persistent_workers: true  # effective per loader only when its worker count is positive
 ```
 
 The surge datamodule variants (`surge.yaml`, `surge_simple.yaml`, ...) are thin overlays of `vst.yaml` and carry no identity of their own; the synth spec is selected at the config root (e.g. `- override /synth: surge_simple` in `experiment/surge/base.yaml`) and reaches the datamodule through `${synth.param_spec_name}`.
@@ -359,7 +399,7 @@ Behavior:
 
 The best checkpoint is stored in **R2** and referenced by a W&B artifact — `log_model: False` keeps checkpoint files out of W&B (5 GB total budget). See [§10](#10-alternatives-considered) for the full analysis.
 
-**Upload** (training): at train end `train.py` uploads the best checkpoint to `r2://{r2.bucket}/checkpoints/{config_id}/model.ckpt`, then the `model-{config_id}` artifact references it as an `s3://` URI (`checksum=False`).
+**Upload** (training): at train end `train.py` uploads the best checkpoint to `r2://{r2.bucket}/checkpoints/{training_config_id}/{training_run_id}/{launch_uuid}/model.ckpt`, then the `model-{config_id}` artifact references it as an `s3://` URI (`checksum=False`).
 
 **Download** (eval): Checkpoints are resolved lazily via a custom OmegaConf resolver. Evaluation
 call sites pass the W&B artifact reference separately from the shared `surge/<id>` experiment, so
@@ -619,11 +659,11 @@ hands Lightning a resolved local path transparently.
 
 Each system handles what it's best at:
 
-| System                                 | What it stores                                                                                                                                                                                                               | Why                                                       |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| **W&B**                                | Training metrics, model artifacts (an `s3://` reference to the best checkpoint in R2 — `log_model: False`, no checkpoint files), eval summary metrics, per-sample eval Tables (`audio/per_sample_metrics`), artifact lineage | UI for browsing/comparing, lineage graphs, model registry |
-| **R2**                                 | Datasets (generated shards, train/val/test splits), the best checkpoint (`checkpoints/{config_id}/model.ckpt`), eval bulk artifacts (predictions, audio, spectrograms, per-sample metrics CSV file)                          | Too large for W&B, cheaper per GB, fast rclone egress     |
-| **Hydra config** (`config.yaml` in R2) | Full frozen config at eval time — every parameter, override, and version                                                                                                                                                     | Exact reproducibility without querying W&B                |
+| System                                 | What it stores                                                                                                                                                                                                                               | Why                                                       |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| **W&B**                                | Training metrics, model artifacts (an `s3://` reference to the best checkpoint in R2 — `log_model: False`, no checkpoint files), eval summary metrics, per-sample eval Tables (`audio/per_sample_metrics`), artifact lineage                 | UI for browsing/comparing, lineage graphs, model registry |
+| **R2**                                 | Datasets (generated shards, train/val/test splits), the best checkpoint (`checkpoints/{training_config_id}/{training_run_id}/{launch_uuid}/model.ckpt`), eval bulk artifacts (predictions, audio, spectrograms, per-sample metrics CSV file) | Too large for W&B, cheaper per GB, fast rclone egress     |
+| **Hydra config** (`config.yaml` in R2) | Full frozen config at eval time — every parameter, override, and version                                                                                                                                                                     | Exact reproducibility without querying W&B                |
 
 **Provenance is recorded in three places:**
 

@@ -1,0 +1,18 @@
+# @package _global_
+
+# PupuJEPA Large conditioning from a four-second cached teacher sequence.
+defaults:
+  - override /model/encoder: embedpool
+
+model:
+  conditioning:
+    column: pupujepa_large
+    input_shape: [8192, 100]
+  encoder:
+    embed_dim: ${model.conditioning.input_shape.0}
+    max_seq_len: ${model.conditioning.input_shape.1}
+
+datamodule:
+  conditioning:
+    column: pupujepa_large
+    input_shape: ${model.conditioning.input_shape}

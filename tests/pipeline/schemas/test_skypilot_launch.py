@@ -28,6 +28,15 @@ class TestDefaults:
         """Cmd defaults to None — populated by the Hydra entrypoint at dispatch time."""
         assert SkypilotLaunchConfig().cmd is None
 
+    @pytest.mark.parametrize("blank", ["", " ", "\t"])
+    def test_blank_cmd_raises(self, blank: str) -> None:
+        """A configured worker command must contain a shell command.
+
+        :param blank: Empty or whitespace-only candidate command.
+        """
+        with pytest.raises(ValueError, match="cmd must be a non-empty command"):
+            SkypilotLaunchConfig(cmd=blank)
+
     def test_default_num_workers_is_one(self) -> None:
         """Single worker is the default; >1 fans out parallel ranks."""
         assert SkypilotLaunchConfig().num_workers == 1
@@ -36,6 +45,21 @@ class TestDefaults:
         """Worker image tag defaults to the tooling image so pods are debuggable."""
         assert SkypilotLaunchConfig().worker_image_tag == "devcontainer-tools"
 
+    def test_default_worker_checkout_dir_matches_container_workspace(self) -> None:
+        """The checkout default matches the worker image workspace."""
+        assert SkypilotLaunchConfig().worker_checkout_dir == "/home/build/synth-setter"
+
+    def test_worker_checkout_dir_strips_surrounding_whitespace(self) -> None:
+        """The checkout directory is normalized before shell quoting."""
+        cfg = SkypilotLaunchConfig(worker_checkout_dir=" /workspace/repo ")
+
+        assert cfg.worker_checkout_dir == "/workspace/repo"
+
+    def test_blank_worker_checkout_dir_raises(self) -> None:
+        """A configured checkout directory must contain a path."""
+        with pytest.raises(ValueError, match="worker_checkout_dir must be non-empty"):
+            SkypilotLaunchConfig(worker_checkout_dir="   ")
+
     def test_default_tail_is_false(self) -> None:
         """Detach by default; ``tail`` is opt-in."""
         assert SkypilotLaunchConfig().tail is False
@@ -43,10 +67,6 @@ class TestDefaults:
     def test_default_local_is_false(self) -> None:
         """No dispatch-mode preference by default; honor inherited env."""
         assert SkypilotLaunchConfig().local is False
-
-    def test_default_network_volume_is_none(self) -> None:
-        """Network volume defaults to None — templates without the sentinel need no value."""
-        assert SkypilotLaunchConfig().network_volume is None
 
     def test_default_tier_is_any(self) -> None:
         """GPU filtering defaults to passthrough for existing launches."""
@@ -83,24 +103,15 @@ class TestValidation:
         cfg = SkypilotLaunchConfig(api_server="  https://api.example.com  ")
         assert cfg.api_server == "https://api.example.com"
 
-    @pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
-    def test_blank_network_volume_rejected(self, blank: str) -> None:
-        """Empty or whitespace-only network_volume is rejected to surface typos loudly.
-
-        :param blank: Parametrized blank/whitespace-only network_volume value.
-        """
-        with pytest.raises(ValidationError, match="network_volume must be a non-empty name"):
-            SkypilotLaunchConfig(network_volume=blank)
-
-    def test_network_volume_is_stripped(self) -> None:
-        """Surrounding whitespace is trimmed so the substituted volume name matches exactly."""
-        cfg = SkypilotLaunchConfig(network_volume="  ss-datasets-us-ca-2  ")
-        assert cfg.network_volume == "ss-datasets-us-ca-2"
-
     def test_extra_fields_rejected_naming_the_offender(self) -> None:
         """``extra='forbid'`` catches misspelled Hydra overrides loudly and names the bad field."""
         with pytest.raises(ValidationError, match="compute_templat"):
             SkypilotLaunchConfig(compute_templat="typo.yaml")  # type: ignore[call-arg]
+
+    def test_network_volume_field_is_rejected(self) -> None:
+        """Unsupported launch fields fail at the strict config boundary."""
+        with pytest.raises(ValidationError, match="network_volume"):
+            SkypilotLaunchConfig(network_volume="obsolete")  # type: ignore[call-arg]
 
     def test_frozen_after_construction(self) -> None:
         """Trust-boundary models are frozen so dispatch can't mutate the config mid-launch."""

@@ -53,7 +53,7 @@ ______________________________________________________________________
 | `model`        | `git_sha`, plus `_checkpoint_metadata` keys when a checkpoint uploaded |
 | `eval-results` | scalar summary metrics (`_eval_summary_metrics`) + `git_sha`           |
 
-The `model` artifact always carries `git_sha`; when the best checkpoint uploads, `_checkpoint_metadata` merges in the keys that identify it (§4), since the `s3://` reference itself renders as a 0-byte entry. At train end (rank-zero, with a `WandbLogger`) the best checkpoint uploads to a derived `r2://{r2.bucket}/checkpoints/{train_config_id}/model.ckpt` URI — overridable via `training.upload_checkpoints_uri` — and attaches to the artifact as an `s3://` reference ([#1572](https://github.com/tinaudio/synth-setter/pull/1572), closing [#92](https://github.com/tinaudio/synth-setter/issues/92)). It degrades to a **lineage-only** artifact (no reference) when no checkpoint was written (`fast_dev_run`), R2 is unreachable (local / CI), the upload fails, or the fingerprint guard refuses an architecture-incompatible overwrite of the slot (`checkpoint_fingerprint.py`, [#2588](https://github.com/tinaudio/synth-setter/issues/2588)), so a completed run is never aborted by checkpoint persistence. The fixed `model.ckpt` basename lets the `${wandb:…}` resolver (§5) select the checkpoint unambiguously.
+The `model` artifact always carries `git_sha`; when the best checkpoint uploads, `_checkpoint_metadata` merges in the keys that identify it (§4), since the `s3://` reference itself renders as a 0-byte entry. At train end (rank-zero, with a `WandbLogger`) the best checkpoint uploads to a derived `r2://{r2.bucket}/checkpoints/{train_config_id}/{train_run_id}/{launch_uuid}/model.ckpt` URI — overridable via `training.upload_checkpoints_uri` — and attaches to the artifact as an `s3://` reference ([#1572](https://github.com/tinaudio/synth-setter/pull/1572), closing [#92](https://github.com/tinaudio/synth-setter/issues/92)). It degrades to a **lineage-only** artifact (no reference) when no checkpoint was written (`fast_dev_run`), R2 is unreachable (local / CI), the upload fails, or the fingerprint guard refuses an architecture-incompatible overwrite of an existing destination (`checkpoint_fingerprint.py`, [#2588](https://github.com/tinaudio/synth-setter/issues/2588)), so a completed run is never aborted by checkpoint persistence. Every uploaded checkpoint gets a fingerprint sidecar; the guard is particularly relevant when `training.upload_checkpoints_uri` selects a shared destination. The fixed `model.ckpt` basename lets the `${wandb:…}` resolver (§5) select the checkpoint unambiguously.
 
 ______________________________________________________________________
 
@@ -61,7 +61,7 @@ ______________________________________________________________________
 
 ```
 dataset config
-  → [data-generation run] → dataset artifact
+  → [data-generation run] → [finalize run] → dataset artifact
                                ├→ [training run] → model artifact
                                │                      │
 eval dataset artifact ─────────┴→ [evaluation run] ←──┘

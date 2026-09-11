@@ -13,7 +13,11 @@ from synth_setter.pipeline.schemas.render_metrics import (
 
 def test_render_rejection_metrics_defaults_to_zero_counts() -> None:
     """An empty report represents a render with no rejected draws."""
-    assert RenderRejectionMetrics() == RenderRejectionMetrics(clipped=0, silent=0)
+    assert RenderRejectionMetrics() == RenderRejectionMetrics(
+        clipped=0,
+        non_finite=0,
+        silent=0,
+    )
 
 
 @pytest.mark.parametrize(

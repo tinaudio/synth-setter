@@ -1,0 +1,18 @@
+# @package _global_
+
+# Frozen MeanAudio 16 kHz VAE posterior means for four-second Lance audio.
+defaults:
+  - override /model/encoder: embedpool
+
+model:
+  conditioning:
+    column: meanaudio_16k
+    input_shape: [20, 125]
+  encoder:
+    embed_dim: ${model.conditioning.input_shape.0}
+    max_seq_len: ${model.conditioning.input_shape.1}
+
+datamodule:
+  conditioning:
+    column: meanaudio_16k
+    input_shape: ${model.conditioning.input_shape}

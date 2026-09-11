@@ -34,15 +34,26 @@ on:
     branches: [main]
   pull_request:
     paths:
+      - ".github/actions/setup-surge-xt/**"
+      - ".github/workflows/docker-build-validation.yml"
       - "docker/**"
+      - "package-lock.json"
+      - "package.json"
+      - "pyproject.toml"
+      - "scripts/studiorack/**"
       - "src/synth_setter/configs/image/**"
-      - "src/synth_setter/pipeline/schemas/image_config.py"
       - "src/synth_setter/pipeline/ci/load_image_config.py"
+      - "src/synth_setter/pipeline/schemas/image_config.py"
+      - "src/synth_setter/plugin_manager.py"
       - "src/synth_setter/scripts/load_vst3_check.py"
       - "src/synth_setter/scripts/run-linux-vst-headless.sh"
-      - ".github/workflows/docker-build-validation.yml"
-      - "pyproject.toml"
+      - "studiorack-cardinal.json"
+      - "studiorack-cardinal.lock.json"
+      - "studiorack.json"
+      - "studiorack.lock.json"
       - "tests/docker/**"
+      - "tests/test_plugin_manager.py"
+      - "uv.lock"
 
 # Force-push cancels the PR's stale build (30-60 min each, would otherwise queue);
 # push/dispatch runs get a unique run_id group so main builds are never cancelled.

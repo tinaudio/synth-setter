@@ -19,28 +19,38 @@ defaults:
   # embedding-conditioning profiles pairing a stored Lance column with its
   # encoder settings on both the datamodule and the model (e.g. `conditioning=same_s`)
   - conditioning: null
+  # sketch controls must compose identically for checkpoint train and eval.
+  - sketch: null
   - experiment: null
 
 task_name: "eval"
 
 tags: ["dev"]
+# Integer IDs resolved through the runtime feature-flag registry.
+feature_flags: []
 mode: test
+# Required explicitly when model.seeded_evaluation=true; ignored otherwise.
+seed: null
 
 # Predict-mode post-processing; gated off so `mode: test`/`validate` stay unchanged.
 evaluation:
   render_vst: false
   compute_metrics: false
   rerender_target: true
+  # Third-party corpora carry no ground-truth patch; set with rerender_target=false
+  # so target audio comes from the dataset instead of a re-render.
+  no_params: false
   num_workers: 1
-  # Render-order probe (#489): probe runs automatically when params are uniform;
-  # non-zero seed raises if params are non-uniform rather than silently skipping.
-  shuffle_seed: 0
   # Opt-in: an `r2://bucket/prefix` mirror of the whole run dir, copied after eval.
   upload_output_dir_uri: null
 
-# passing checkpoint path is necessary for evaluation
+# Local path or R2-backed r2:// / s3:// object URI.
 ckpt_path: ???
+# Optional SHA-256 pin for the checkpoint bytes.
+ckpt_sha256: null
 
 # W&B model lineage (storage-provenance-spec §5): the train config ID this eval consumes.
-# Dataset lineage is discovered from ``datamodule.dataset_root/input_spec.json``.
+# Pin an immutable artifact version when the checkpoint itself is immutable.
+consumed_train_artifact_alias: latest
 consumed_train_config_id: null
+# Dataset lineage is discovered from ``datamodule.dataset_root/input_spec.json``.

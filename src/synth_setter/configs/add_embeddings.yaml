@@ -2,6 +2,11 @@
 defaults:
   - paths: default
   - hydra: default
+  - logger: wandb_dataset
+  # Unselected by default — only re-rendering embeddings need a renderer. Select the
+  # pair together, e.g. `render=torchsynth synth=torchsynth_adsr` (#2565).
+  - render: null
+  - synth: null
   - _self_
 
 # Lance dataset to augment.
@@ -14,7 +19,13 @@ checkpoints: {}
 # Torch device for the selected encoders; null auto-selects cuda, MPS, then cpu.
 device: null
 # Rows per Lance UDF call (ignored for legacy v1 datasets).
-batch_size: 128
+lance_batch_size: 128
+# Worker processes for CPU-bound encoders (pyfdn_sketch); 1 keeps encoding in-process.
+num_workers: 1
+# Rows per sketch extractor invocation. 32 caps CPU RSS (#2707); a data-center GPU
+# is likely underfed at 32 — benchmark upward per #3131 before a large backfill.
+# Values differ across batch sizes only within float32 kernel jitter (~1e-6).
+sketch_encode_batch: 32
 # Build IVF_PQ indexes on selected global vectors and pooled sequence companions.
 build_index: true
 # IVF partition count; null uses round(sqrt(rows)).
@@ -31,6 +42,8 @@ debug: false
 param_spec_name: null
 # Strategy rendering param rows as conditioning text for param-sourced embeddings.
 param_text_normalizer: param_names
+# Master seed for param_shift's per-row replacement draws; row seeds derive from it.
+param_shift_seed: 0
 # hydra/default interpolates ${task_name}; run.dir is overridden below since
 # its group default also references ${run_name}, absent here.
 task_name: add_embeddings

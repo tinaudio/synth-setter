@@ -27,6 +27,7 @@ def _valid_kwargs(**overrides: Any) -> dict[str, Any]:
         "min_loudness": -55.0,
         "base_seed": 42,
         "attempts_per_sample": 100,
+        "render_contract_digest": "a" * 64,
     }
     kwargs.update(overrides)
     return kwargs
@@ -44,6 +45,15 @@ class TestShardMetadataConstruction:
         assert meta.channels == 2
         assert meta.min_loudness == -55.0
         assert meta.attempts_per_sample == 100
+
+    def test_legacy_payload_without_render_contract_digest_parses_as_unknown(self) -> None:
+        """Legacy metadata remains parseable for a precise validation error."""
+        kwargs = _valid_kwargs()
+        del kwargs["render_contract_digest"]
+
+        metadata = ShardMetadata(**kwargs)
+
+        assert metadata.render_contract_digest is None
 
     def test_legacy_payload_defaults_attempts_per_sample(self) -> None:
         """Sidecars written before retry provenance existed still validate."""
@@ -86,6 +96,15 @@ class TestShardMetadataStrictness:
         payload = json.dumps({"velocity": 100, "channels": 2})  # incomplete
         with pytest.raises(ValidationError):
             ShardMetadata.model_validate_json(payload)
+
+    @pytest.mark.parametrize("digest", ["A" * 64, "a" * 63, "not-a-digest"])
+    def test_invalid_render_contract_digest_raises(self, digest: str) -> None:
+        """Only canonical lowercase SHA-256 strings identify render contracts.
+
+        :param digest: Malformed candidate digest.
+        """
+        with pytest.raises(ValidationError, match="render_contract_digest"):
+            ShardMetadata(**_valid_kwargs(render_contract_digest=digest))
 
 
 class TestShardMetadataRangeValidators:

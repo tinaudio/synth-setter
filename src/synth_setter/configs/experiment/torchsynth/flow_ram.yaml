@@ -1,0 +1,21 @@
+# @package _global_
+
+# Reinforce Adjoint Matching post-training (arXiv 2605.10759) of a pretrained torchsynth
+# flow toward the multi-scale spectral reward. Requires a single device (#2585) and
+# model.base_checkpoint=<path> naming the pretrained flow to post-train.
+defaults:
+  - torchsynth/flow
+  - override /model: vst_flow_ram
+  - _self_
+
+run_name: flow_ram
+tags: [torchsynth, flow, post_train, ram]
+
+# Each row fans out into num_samples_per_row renders, so the row batch stays small.
+datamodule:
+  batch_size: 8
+
+# The step budget lives here so `experiment=` alone reproduces the run; the paper reaches
+# its peak reward within a few hundred RAM steps.
+trainer:
+  max_steps: 2000

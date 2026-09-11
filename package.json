@@ -2,9 +2,11 @@
   "name": "synth-setter-plugin-management",
   "private": true,
   "scripts": {
-    "postinstall": "node scripts/studiorack/patch-core.mjs"
+    "postinstall": "node scripts/studiorack/patch-core.mjs",
+    "test": "node --test scripts/studiorack/test-artifact-lock.mjs scripts/faustwasm/test-offline.mjs"
   },
   "devDependencies": {
+    "@grame/faustwasm": "0.18.3",
     "@studiorack/cli": "3.0.6"
   },
   "overrides": {

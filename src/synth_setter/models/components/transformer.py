@@ -5,8 +5,12 @@ from typing import Literal
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float, Shaped
+from beartype import beartype
+from jaxtyping import Bool, Float, Shaped, jaxtyped
 from torch import Tensor
+
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+from synth_setter.param_spec_name import ParamSpecName
 
 _BATCH_ANY_SHAPE = "batch ..."
 _BATCH_SHAPE = "batch"
@@ -51,6 +55,7 @@ class LearntProjection(nn.Module):
         assignment = torch.full((num_tokens, num_params), 1.0 / math.sqrt(num_tokens * num_params))
         assignment = assignment + 1e-4 * torch.randn_like(assignment)
         self._assignment = nn.Parameter(assignment)
+        self.num_tokens = num_tokens
 
         proj = torch.randn(1, d_token) / math.sqrt(d_token)
         proj = proj.repeat(num_params, 1)
@@ -114,6 +119,121 @@ class LearntProjection(nn.Module):
         penalty = self.assignment.abs().mean()
 
         return penalty
+
+    @jaxtyped(typechecker=beartype)
+    def freeze_decoder(self) -> None:
+        """Freeze weights used only by token-to-parameter decoding."""
+        self.out_projection.requires_grad_(False)
+        if self.final_ffn is not None:
+            self.final_ffn.requires_grad_(False)
+
+
+class GroupedParameterProjection(nn.Module):
+    """Project each logical parameter field to one token and back."""
+
+    @jaxtyped(typechecker=beartype)
+    def __init__(self, d_model: int, param_spec_name: str) -> None:
+        """Build field-specific projections in encoded-spec order.
+
+        :param d_model: Width of every parameter token.
+        :param param_spec_name: Registry key selecting field spans and widths.
+        :raises ValueError: If the selected spec has no fields.
+        """
+        super().__init__()
+        spec = resolve_param_spec(ParamSpecName(param_spec_name))
+        fields = list(spec.encoded_slices())
+        if not fields:
+            raise ValueError("grouped projection requires at least one field")
+        self._encoded_slices = tuple(span for _, span in fields)
+        self._num_params = spec.encoded_width
+        self.encoders = nn.ModuleList(
+            nn.Linear(span.stop - span.start, d_model) for span in self._encoded_slices
+        )
+        self.decoders = nn.ModuleList(
+            nn.Linear(d_model, span.stop - span.start) for span in self._encoded_slices
+        )
+        self.num_tokens = len(self._encoded_slices)
+
+    # Beartype's jaxtyping wrapper desynchronizes under Dynamo, so type-check at graph breaks.
+    @torch.compiler.disable()
+    @jaxtyped(typechecker=beartype)
+    def param_to_token(
+        self, params: Float[Tensor, "batch num_params"]
+    ) -> Float[Tensor, "batch num_tokens d_model"]:
+        """Encode each field span as its own token.
+
+        :param params: Flat encoded parameter rows.
+        :returns: Tokens ordered like the parameter spec's fields.
+        :raises ValueError: If the rows do not match the spec's encoded width.
+        """
+        if params.shape[-1] != self._num_params:
+            raise ValueError(
+                f"expected parameter width {self._num_params}, got {params.shape[-1]}"
+            )
+        field_tokens = [
+            encoder(params[:, span])
+            for span, encoder in zip(self._encoded_slices, self.encoders, strict=True)
+        ]
+        return torch.stack(field_tokens, dim=1)
+
+    @torch.compiler.disable()
+    @jaxtyped(typechecker=beartype)
+    def token_to_param(
+        self, tokens: Float[Tensor, "batch num_tokens d_model"]
+    ) -> Float[Tensor, "batch num_params"]:
+        """Decode ordered field tokens and concatenate their encoded spans.
+
+        :param tokens: One token per logical parameter field.
+        :returns: Flat parameter rows in encoded-spec order.
+        :raises ValueError: If the sequence does not contain one token per field.
+        """
+        if tokens.shape[1] != self.num_tokens:
+            raise ValueError(f"expected token count {self.num_tokens}, got {tokens.shape[1]}")
+        fields = [decoder(tokens[:, index]) for index, decoder in enumerate(self.decoders)]
+        return torch.cat(fields, dim=-1)
+
+    @jaxtyped(typechecker=beartype)
+    def penalty(self) -> Float[Tensor, ""]:
+        """Return scalar zero because grouped projection has no assignment matrix.
+
+        :returns: Scalar zero on the projection's device and dtype.
+        """
+        return self.encoders[0].weight.new_zeros(())
+
+    @jaxtyped(typechecker=beartype)
+    def freeze_decoder(self) -> None:
+        """Freeze every field-specific token-to-parameter head."""
+        self.decoders.requires_grad_(False)
+
+
+class ParamTokenEmbed(nn.Module):
+    """Expose a parameter projection's encoder half as a token-embed module.
+
+    Decoder-side weights are frozen so an encoder built on this embed carries no dead trainable
+    parameters.
+    """
+
+    @jaxtyped(typechecker=beartype)
+    def __init__(self, projection: LearntProjection | GroupedParameterProjection) -> None:
+        """Wrap the projection and freeze its unused token-to-parameter half.
+
+        :param projection: Learnt or field-grouped parameter-token projection.
+        """
+        super().__init__()
+        self.projection = projection
+        self.projection.freeze_decoder()
+        self.num_tokens = projection.num_tokens
+
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self, params: Float[Tensor, "batch num_params"]
+    ) -> Float[Tensor, "batch num_tokens d_model"]:
+        """Return one token sequence per flat parameter vector.
+
+        :param params: Batch of flat parameter vectors.
+        :returns: Tokens shaped ``(batch, num_tokens, d_model)``.
+        """
+        return self.projection.param_to_token(params)
 
 
 class AdaptiveLayerNorm(nn.LayerNorm):
@@ -284,9 +404,10 @@ class MutualAttentionProjection(nn.Module):
     ffn to 1d
     """
 
-    def __init__(self, d_model: int, num_params: int, num_tokens: int):
+    def __init__(self, d_model: int, num_params: int, num_tokens: int) -> None:
         super().__init__()
 
+        self.num_tokens = num_tokens
         scale = 1 / math.sqrt(d_model)
         self.token_queries = nn.Parameter(torch.randn(1, num_tokens, d_model) * scale)
         self.param_queries = nn.Parameter(torch.randn(1, num_params, d_model) * scale)
@@ -336,10 +457,10 @@ class ApproxEquivTransformer(nn.Module):
         conditioning_dim: int = 128,
         num_heads: int = 8,
         d_ff: int = 1024,
-        num_tokens: int = 32,
+        num_tokens: int | None = None,
         learn_pe: bool = False,
         learn_projection: bool = False,
-        pe_type: Literal["initial", "layerwise"] = "initial",
+        pe_type: Literal["initial", "layerwise", "none"] = "initial",
         pe_penalty: float = 0.0,
         time_encoding: Literal["sinusoidal", "scalar"] = "scalar",
         d_enc: int = 256,
@@ -349,9 +470,41 @@ class ApproxEquivTransformer(nn.Module):
         adaln_mode: Literal["basic", "zero"] = "basic",
         zero_init: bool = True,
         outer_residual: bool = False,
-    ):
+    ) -> None:
+        """Build the projected transformer vector field.
+
+        :param projection: Bidirectional parameter-token projection exposing ``num_tokens``.
+        :param num_layers: Number of conditioned transformer blocks.
+        :param d_model: Transformer token width.
+        :param conditioning_dim: Input conditioning width.
+        :param num_heads: Attention heads per transformer block.
+        :param d_ff: Feed-forward width per transformer block.
+        :param num_tokens: Legacy token-count check; ``None`` derives it from ``projection``.
+        :param learn_pe: Whether positional encodings receive gradients.
+        :param learn_projection: Whether projection weights receive gradients.
+        :param pe_type: Positional encoding placement or ``"none"``.
+        :param pe_penalty: Positional-encoding penalty multiplier.
+        :param time_encoding: Scalar or sinusoidal time representation.
+        :param d_enc: Sinusoidal time-encoding width.
+        :param projection_penalty: Projection penalty multiplier.
+        :param norm: Transformer normalization type.
+        :param skip_first_norm: Whether the first block omits its first normalization.
+        :param adaln_mode: Adaptive normalization residual mode.
+        :param zero_init: Whether block output projections start at zero.
+        :param outer_residual: Whether predictions include the input parameter state.
+        :raises ValueError: If token counts disagree or an encoding mode is invalid.
+        """
         super().__init__()
 
+        projection_num_tokens = projection.num_tokens
+        if num_tokens is not None and num_tokens != projection_num_tokens:
+            raise ValueError(
+                f"num_tokens={num_tokens} does not match projection.num_tokens="
+                f"{projection_num_tokens}"
+            )
+
+        # Exposed so control-token producers can size their projections.
+        self.d_model = d_model
         self.cfg_dropout_token = nn.Parameter(torch.randn(1, conditioning_dim))
 
         conditioning_dim = (
@@ -388,13 +541,13 @@ class ApproxEquivTransformer(nn.Module):
             raise ValueError("time_encoding must be 'sinusoidal' or 'scalar'")
 
         if pe_type == "initial":
-            self.pe = PositionalEncoding(d_model, num_tokens)
+            self.pe = PositionalEncoding(d_model, projection_num_tokens)
             if not learn_pe:
                 self.pe.pe.requires_grad = False
 
         elif pe_type == "layerwise":
             self.pe = nn.ModuleList(
-                [PositionalEncoding(d_model, num_tokens) for _ in range(num_layers)]
+                [PositionalEncoding(d_model, projection_num_tokens) for _ in range(num_layers)]
             )
             if not learn_pe:
                 for pe in self.pe:
@@ -407,7 +560,7 @@ class ApproxEquivTransformer(nn.Module):
         self.projection = projection
 
         if not learn_projection:
-            self.projection.proj.requires_grad = False
+            self.projection.requires_grad_(False)
 
         self.pe_penalty = pe_penalty
         self.projection_penalty = projection_penalty
@@ -417,18 +570,23 @@ class ApproxEquivTransformer(nn.Module):
         self,
         z: Float[Tensor, _BATCH_ANY_SHAPE],
         rate: float = 0.1,
+        keep_mask: Bool[Tensor, _BATCH_SHAPE] | None = None,
     ) -> tuple[Float[Tensor, _BATCH_ANY_SHAPE], Shaped[Tensor, _BATCH_SHAPE]]:
         """Replace a random subset of conditioning rows with the CFG token.
 
         :param z: Conditioning rows, rank 2 or rank 3.
         :param rate: Per-row drop probability; ``0.0`` disables dropout entirely.
+        :param keep_mask: Optional positive row keep state supplied when the caller
+            coordinates content dropout with other conditioning streams; overrides ``rate``.
         :returns: The conditioning after dropout, and the keep mask that produced it
             (True = row kept its conditioning; all-True when ``rate`` is zero).
         """
-        if rate == 0.0:
-            return z, torch.ones(z.shape[0], dtype=torch.bool, device=z.device)
-
-        keep = torch.rand(z.shape[0], device=z.device) > rate
+        if keep_mask is None:
+            if rate == 0.0:
+                return z, torch.ones(z.shape[0], dtype=torch.bool, device=z.device)
+            keep = torch.rand(z.shape[0], device=z.device) > rate
+        else:
+            keep = keep_mask
         broadcast_keep = keep.unsqueeze(-1)
         if z.ndim == 3:
             broadcast_keep = broadcast_keep.unsqueeze(-1)
@@ -458,13 +616,27 @@ class ApproxEquivTransformer(nn.Module):
         x: torch.Tensor,
         t: torch.Tensor,
         conditioning: torch.Tensor | None = None,
+        *,
+        control_tokens: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        """Predict parameters with optional control-token context.
+
+        :param x: ``(batch, num_params)`` parameter state.
+        :param t: Scalar time for each batch row.
+        :param conditioning: Shared rank-2 or per-layer rank-3 conditioning;
+            ``None`` uses the CFG token.
+        :param control_tokens: Optional ``(batch, num_control_tokens, d_model)`` context
+            appended to the parameter-token sequence.
+        :returns: ``(batch, num_params)`` predictions projected only from
+            parameter tokens; control-token states are excluded.
+        """
         if conditioning is None:
             conditioning = self.cfg_dropout_token.expand(x.shape[0], -1)
 
         outer_residual = x if self.outer_residual else None
 
         x = self.projection.param_to_token(x)
+        num_param_tokens = x.shape[1]
 
         t = self.time_encoding(t)
 
@@ -479,9 +651,18 @@ class ApproxEquivTransformer(nn.Module):
         if self.pe_type == "initial":
             x = self.pe(x)
 
+        # Control tokens join after the parameter-token PE so the (frozen,
+        # zero-default) parameter positions never leak onto them (#2612).
+        if control_tokens is not None:
+            x = torch.cat((x, control_tokens), dim=1)
+
         for i, layer in enumerate(self.layers):
             if self.pe_type == "layerwise":
-                x = self.pe[i](x)
+                if control_tokens is None:
+                    x = self.pe[i](x)
+                else:
+                    params_with_pe = self.pe[i](x[:, :num_param_tokens])
+                    x = torch.cat((params_with_pe, x[:, num_param_tokens:]), dim=1)
 
             if layerwise_conditioning:
                 z_ = z[:, i, :]
@@ -490,7 +671,7 @@ class ApproxEquivTransformer(nn.Module):
 
             x = layer(x, z_)
 
-        x = self.projection.token_to_param(x)
+        x = self.projection.token_to_param(x[:, :num_param_tokens])
 
         if outer_residual is not None:
             x = x + outer_residual
@@ -510,8 +691,20 @@ class PatchEmbed(nn.Module):
         stride: int,
         in_channels: int,
         d_model: int,
-        spec_shape: tuple[int] = (128, 401),
+        spec_shape: tuple[int, int] = (128, 401),
+        use_fixed_ast_padding: bool = True,
     ):
+        """Build overlapping patches over a mel-by-time input grid.
+
+        :param patch_size: Square patch edge length.
+        :param stride: Patch step along both axes; must be smaller than ``patch_size``.
+        :param in_channels: Spectrogram channel count.
+        :param d_model: Output width of each patch token.
+        :param spec_shape: Mel-bin and time-frame counts.
+        :param use_fixed_ast_padding: Checkpoint-architecture pin, not a quality toggle:
+            true pads each axis by its own remainder (corrected); false preserves the
+            legacy swapped-axis token geometry existing checkpoints were trained with.
+        """
         super().__init__()
         assert stride < patch_size, "Overlap must be less than patch size"
 
@@ -520,7 +713,14 @@ class PatchEmbed(nn.Module):
         mel_padding = (stride - (spec_shape[0] - patch_size)) % stride
         time_padding = (stride - (spec_shape[1] - patch_size)) % stride
 
-        self.pad = nn.ZeroPad2d((0, mel_padding, 0, time_padding))
+        # ZeroPad2d takes (left, right, top, bottom): the mel axis is vertical,
+        # the time axis horizontal. Legacy checkpoints trained with these swapped.
+        padding = (
+            (0, time_padding, 0, mel_padding)
+            if use_fixed_ast_padding
+            else (0, mel_padding, 0, time_padding)
+        )
+        self.pad = nn.ZeroPad2d(padding)
         self.projection = nn.Conv2d(
             in_channels=in_channels,
             out_channels=d_model,
@@ -551,6 +751,11 @@ class AudioSpectrogramTransformer(nn.Module):
         3. class (embedding) token
         4. transformer encoder
         5. output linear projection
+
+    An injected ``token_embed`` — any module exposing ``num_tokens`` and mapping inputs
+    to ``(batch, tokens, d_model)`` — replaces the spectrogram patch embed (whose
+    ``patch_*``/``spec_shape`` arguments are then ignored), turning this into a generic
+    token-sequence encoder.
     """
 
     def __init__(
@@ -562,16 +767,39 @@ class AudioSpectrogramTransformer(nn.Module):
         patch_size: int = 16,
         patch_stride: int = 10,
         input_channels: int = 2,
-        spec_shape: tuple[int] = (128, 401),
+        spec_shape: tuple[int, int] = (128, 401),
+        token_embed: nn.Module | None = None,
+        use_fixed_ast_padding: bool = True,
     ):
+        """Build the token embed, positional encoding, class tokens, and encoder stack.
+
+        :param d_model: Transformer width shared by tokens and outputs.
+        :param n_heads: Attention heads per encoder layer.
+        :param n_layers: Encoder layer count.
+        :param n_conditioning_outputs: Class tokens returned as the encoded output.
+        :param patch_size: Square spectrogram patch edge, ignored with ``token_embed``.
+        :param patch_stride: Overlapping patch stride, ignored with ``token_embed``.
+        :param input_channels: Spectrogram channels, ignored with ``token_embed``.
+        :param spec_shape: Mel-by-frames input shape, ignored with ``token_embed``.
+        :param token_embed: Replacement input tokenizer exposing ``num_tokens`` and
+            mapping inputs to ``(batch, tokens, d_model)``.
+        :param use_fixed_ast_padding: Checkpoint-architecture pin forwarded to the patch
+            embed; true selects corrected matching-axis padding.
+        """
         super().__init__()
 
-        self.patch_embed = PatchEmbed(
-            patch_size=patch_size,
-            stride=patch_stride,
-            in_channels=input_channels,
-            d_model=d_model,
-            spec_shape=spec_shape,
+        # Attribute stays "patch_embed" so existing AST checkpoint state dicts keep loading.
+        self.patch_embed = (
+            token_embed
+            if token_embed is not None
+            else PatchEmbed(
+                patch_size=patch_size,
+                stride=patch_stride,
+                in_channels=input_channels,
+                d_model=d_model,
+                spec_shape=spec_shape,
+                use_fixed_ast_padding=use_fixed_ast_padding,
+            )
         )
 
         self.positional_encoding = PositionalEncoding(
@@ -639,8 +867,25 @@ class ASTWithProjectionHead(AudioSpectrogramTransformer):
         patch_size: int = 16,
         patch_stride: int = 10,
         input_channels: int = 2,
-        spec_shape: tuple[int] = (128, 401),
-    ):
+        spec_shape: tuple[int, int] = (128, 401),
+        token_embed: nn.Module | None = None,
+        use_fixed_ast_padding: bool = True,
+    ) -> None:
+        """Encode inputs into one vector through the residual projection head.
+
+        :param d_model: Transformer and hidden projection width.
+        :param d_out: Final embedding or prediction width.
+        :param n_heads: Attention heads per layer.
+        :param n_layers: Transformer depth.
+        :param patch_size: Spectrogram patch edge, ignored with ``token_embed``.
+        :param patch_stride: Spectrogram patch stride, ignored with ``token_embed``.
+        :param input_channels: Spectrogram channels, ignored with ``token_embed``.
+        :param spec_shape: Mel-by-frame shape, ignored with ``token_embed``.
+        :param token_embed: Optional tokenizer exposing ``num_tokens`` and producing
+            ``(batch, tokens, d_model)`` sequences.
+        :param use_fixed_ast_padding: Checkpoint-architecture pin forwarded to the patch
+            embed; true selects corrected matching-axis padding.
+        """
         super().__init__(
             d_model=d_model,
             n_heads=n_heads,
@@ -650,6 +895,8 @@ class ASTWithProjectionHead(AudioSpectrogramTransformer):
             patch_stride=patch_stride,
             input_channels=input_channels,
             spec_shape=spec_shape,
+            token_embed=token_embed,
+            use_fixed_ast_padding=use_fixed_ast_padding,
         )
 
         self.prediction_head = nn.Sequential(

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.vst.renderers import (
     DawDreamerRenderer,
     PedalboardRenderer,
@@ -12,6 +13,7 @@ from synth_setter.data.vst.renderers import (
     TorchSynthRenderer,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.renderer_backend import FlushBlocks
 from synth_setter.renderer_factory import make_audio_renderer
 
 
@@ -40,6 +42,35 @@ def _render_config(**overrides: object) -> RenderConfig:
     }
     values.update(overrides)
     return RenderConfig(**values)  # type: ignore[arg-type]
+
+
+def test_make_audio_renderer_pyfdn_returns_common_renderer() -> None:
+    """The common factory constructs pyFDN with fixed MIDI stubs."""
+    renderer = make_audio_renderer(
+        _render_config(
+            renderer_backend="pyfdn",
+            pyfdn_excitation="impulse",
+            synth={
+                "name": "pyfdn_n8_mono_householder",
+                "param_spec_name": "pyfdn_n8_mono_householder",
+                "plugin_path": "pyfdn",
+                "plugin_state_path": "",
+                "synth_version": "0.4.2",
+            },
+            sample_rate=44_100,
+            channels=1,
+            velocity=0,
+            signal_duration_seconds=4.0,
+            audio_dtype="float32",
+            mel_spec_dtype="float32",
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+    )
+
+    assert isinstance(renderer, PyFDNRenderer)
+    assert renderer.sample_rate == 44_100
+    assert renderer.channels == 1
 
 
 def test_make_audio_renderer_torchsynth_returns_configured_renderer() -> None:
@@ -193,3 +224,66 @@ def test_make_audio_renderer_dawdreamer_real_maps_reload_cadence(
 
     assert isinstance(renderer, DawDreamerRenderer)
     assert renderer.reload_plugin_each_render is reload_each_render
+
+
+def test_make_audio_renderer_pedalboard_forwards_flush_blocks() -> None:
+    """Pedalboard renderers carry the resolved per-step flush-block counts."""
+    renderer = make_audio_renderer(
+        _render_config(plugin_reload_cadence="render", post_param_flush_blocks=0)
+    )
+
+    assert isinstance(renderer, PedalboardRenderer)
+    assert renderer.flush_blocks == FlushBlocks(post_load=690, post_param=0, post_render=690)
+
+
+def test_make_audio_renderer_dawdreamer_rejects_bypassed_format_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A copied config cannot route an unsupported representation into DawDreamer.
+
+    :param monkeypatch: Replaces the host availability probe before dispatch.
+    """
+    config = _render_config(renderer_backend="dawdreamer")
+    invalid_synth = config.synth.model_copy(update={"format": "pyfdn"})
+    bypassed = config.model_copy(update={"synth": invalid_synth})
+    monkeypatch.setattr(
+        "synth_setter.data.vst.dawdreamer_runtime.ensure_dawdreamer_runtime",
+        lambda _backend: None,
+    )
+
+    with pytest.raises(AssertionError, match="unsupported DawDreamer synth format 'pyfdn'"):
+        make_audio_renderer(bypassed)
+
+
+def test_make_audio_renderer_dawdreamer_forwards_flush_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DawDreamer renderers carry the resolved per-step flush-block counts.
+
+    :param tmp_path: Provides a concrete packaged-map stand-in path.
+    :param monkeypatch: Replaces native host construction for the CPU unit lane.
+    """
+    map_path = tmp_path / "map.json"
+    map_path.write_text("{}")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "synth_setter.data.vst.dawdreamer_runtime.ensure_dawdreamer_runtime",
+        lambda _backend: None,
+    )
+    monkeypatch.setattr("synth_setter.resources.param_map", lambda _name: map_path)
+    monkeypatch.setattr(
+        "synth_setter.data.vst.param_map.load_param_map", lambda _path: MagicMock(name="map")
+    )
+    monkeypatch.setattr(
+        "synth_setter.renderer_factory.DawDreamerRenderer",
+        lambda **kwargs: captured.update(kwargs) or MagicMock(),
+    )
+    config = _render_config(
+        renderer_backend="dawdreamer",
+        gui_toggle_cadence="never",
+        post_render_flush_blocks=4,
+    )
+
+    make_audio_renderer(config)
+
+    assert captured["flush_blocks"] == FlushBlocks(post_load=8, post_param=0, post_render=4)

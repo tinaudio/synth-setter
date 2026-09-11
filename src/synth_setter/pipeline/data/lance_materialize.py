@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -46,6 +47,14 @@ _DIRNAME_PREFIX_CHARS = 8
 _MAX_LANCE_READ_ATTEMPTS = 3
 _LANCE_READ_BACKOFF_INITIAL_SECONDS = 0.25
 _LANCE_READ_BACKOFF_MAX_SECONDS = 2.0
+_SAFE_MATERIALIZE_BATCH_SIZE = 512
+_SAFE_MATERIALIZE_MAX_ROWS_PER_GROUP = 1024
+_HIGH_MEMORY_MATERIALIZE_BATCH_SIZE = 8192
+_HIGH_MEMORY_MATERIALIZE_IO_BUFFER_SIZE = 32 * 1024**3
+_HIGH_MEMORY_MATERIALIZE_FRAGMENT_READAHEAD = 128
+_HIGH_MEMORY_MATERIALIZE_BATCH_READAHEAD = 2
+_HIGH_MEMORY_MATERIALIZE_MAX_ROWS_PER_GROUP = 4096
+_HIGH_MEMORY_MATERIALIZE_MAX_BYTES_PER_FILE = 256 * 1024**3
 _RETRYABLE_LANCE_IO_MARKERS = (
     "408 request timeout",
     "429 too many requests",
@@ -78,10 +87,10 @@ def _is_retryable_lance_read_error(error: BaseException) -> bool:
     )
 
 
-def _retry_lance_read[ReadResult](
+def retry_lance_read[ReadResult](
     operation_name: str, read: Callable[[], ReadResult]
 ) -> ReadResult:
-    """Run one idempotent Lance metadata read under the bounded retry policy.
+    """Run one idempotent Lance read under the bounded retry policy.
 
     :param operation_name: Secret-free operation label included in retry logs.
     :param read: Zero-argument Lance read operation.
@@ -261,10 +270,10 @@ def resolve_txid_version(ds: lance.LanceDataset, txid: str) -> int:
     :raises LookupError: No live version's transaction matches ``txid`` — the
         pin was cleaned up by ``cleanup_old_versions()`` or never existed.
     """
-    versions = _retry_lance_read("version_list", ds.versions)
+    versions = retry_lance_read("version_list", ds.versions)
     for entry in versions:
         version = entry["version"]
-        transaction = _retry_lance_read(
+        transaction = retry_lance_read(
             "transaction_read", lambda: ds.read_transaction(version)
         )
         if transaction is not None and transaction.uuid == txid:
@@ -287,7 +296,7 @@ def _open_source(source_uri: str) -> lance.LanceDataset:
         open_uri, storage_options = file_uri_to_path(source_uri).as_uri(), None
     else:
         open_uri, storage_options = source_uri, None
-    return _retry_lance_read(
+    return retry_lance_read(
         "source_open", lambda: lance.dataset(open_uri, storage_options=storage_options)
     )
 
@@ -300,7 +309,7 @@ def _transaction_uuid(ds: lance.LanceDataset, version: int) -> str:
     :returns: Transaction uuid for ``version``.
     :raises ValueError: The source version has no transaction record.
     """
-    transaction = _retry_lance_read(
+    transaction = retry_lance_read(
         "transaction_read", lambda: ds.read_transaction(version)
     )
     if transaction is None:
@@ -369,14 +378,14 @@ def _validate_materialized_destination(
             "delete the dataset and re-materialize"
         )
     try:
-        destination = _retry_lance_read(
+        destination = retry_lance_read(
             "destination_open", lambda: lance.dataset(str(dest_path))
         )
-        transaction = _retry_lance_read(
+        transaction = retry_lance_read(
             "destination_transaction_read",
             lambda: destination.read_transaction(destination.version),
         )
-        _retry_lance_read("destination_validate", destination.validate)
+        retry_lance_read("destination_validate", destination.validate)
     except (OSError, ValueError) as exc:
         raise ValueError(
             f"materialized dataset {dest_path} failed Lance validation; "
@@ -442,7 +451,44 @@ def _reuse_or_raise(
         txid=txid,
         resolved_version=manifest.resolved_version,
     )
+    _evict_lance_data_cache(dest_path)
     return dest_path
+
+
+def _evict_lance_data_cache(dataset_path: Path) -> None:
+    """Release clean pages for a completed local Lance dataset.
+
+    :param dataset_path: Published dataset whose data-file pages should be evicted.
+    """
+    advise = getattr(os, "posix_fadvise", None)
+    dontneed = getattr(os, "POSIX_FADV_DONTNEED", None)
+    if advise is None or dontneed is None:
+        return
+    for data_path in (dataset_path / "data").rglob("*"):
+        if not data_path.is_file():
+            continue
+        try:
+            fd = os.open(data_path, os.O_RDWR)
+        except OSError as error:
+            logger.warning(
+                "lance_materialize.cache_flush_open_failed",
+                path=str(data_path),
+                errno=error.errno,
+            )
+        else:
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        try:
+            with data_path.open("rb", buffering=0) as stream:
+                advise(stream.fileno(), 0, 0, dontneed)
+        except OSError as error:
+            logger.warning(
+                "lance_materialize.cache_evict_failed",
+                path=str(data_path),
+                errno=error.errno,
+            )
 
 
 def _write_materialized_snapshot(
@@ -450,20 +496,41 @@ def _write_materialized_snapshot(
     *,
     dest_path: Path,
     manifest: MaterializeManifest,
-    batch_size: int,
+    batch_size: int | None,
+    high_memory_materialization: bool,
 ) -> Path:
     """Write one selected source snapshot and its cache manifest.
 
     :param snapshot: Selected source dataset snapshot.
     :param dest_path: Local destination dataset directory.
     :param manifest: Validated request and source identity to persist.
-    :param batch_size: Scan batch size in rows.
+    :param batch_size: Optional scan batch-size override in rows.
+    :param high_memory_materialization: Whether to use high-memory Lance tuning.
     :returns: ``dest_path``.
     :raises OSError: Manifest writing or atomic publication fails without a winner.
     :raises ValueError: The written dataset has no transaction identity.
     """
+    if high_memory_materialization:
+        default_batch_size = _HIGH_MEMORY_MATERIALIZE_BATCH_SIZE
+        io_buffer_size = _HIGH_MEMORY_MATERIALIZE_IO_BUFFER_SIZE
+        fragment_readahead = _HIGH_MEMORY_MATERIALIZE_FRAGMENT_READAHEAD
+        batch_readahead = _HIGH_MEMORY_MATERIALIZE_BATCH_READAHEAD
+        max_rows_per_group = _HIGH_MEMORY_MATERIALIZE_MAX_ROWS_PER_GROUP
+        max_bytes_per_file = _HIGH_MEMORY_MATERIALIZE_MAX_BYTES_PER_FILE
+    else:
+        default_batch_size = _SAFE_MATERIALIZE_BATCH_SIZE
+        io_buffer_size = None
+        fragment_readahead = None
+        batch_readahead = None
+        max_rows_per_group = _SAFE_MATERIALIZE_MAX_ROWS_PER_GROUP
+        max_bytes_per_file = LANCE_MAX_BYTES_PER_FILE
     scanner = snapshot.scanner(
-        columns=list(manifest.columns), limit=manifest.limit, batch_size=batch_size
+        columns=list(manifest.columns),
+        limit=manifest.limit,
+        batch_size=default_batch_size if batch_size is None else batch_size,
+        io_buffer_size=io_buffer_size,
+        fragment_readahead=fragment_readahead,
+        batch_readahead=batch_readahead,
     )
     logger.info(
         "lance_materialize.start",
@@ -487,7 +554,8 @@ def _write_materialized_snapshot(
         schema=scanner.projected_schema,
         transaction_properties=transaction_properties,
         data_storage_version=LANCE_DATA_STORAGE_VERSION,
-        max_bytes_per_file=LANCE_MAX_BYTES_PER_FILE,
+        max_rows_per_group=max_rows_per_group,
+        max_bytes_per_file=max_bytes_per_file,
     )
     row_count = written.count_rows()
     transaction = written.read_transaction(written.version)
@@ -517,6 +585,7 @@ def _write_materialized_snapshot(
             ),
             resolved_txid=manifest.resolved_txid,
         )
+    _evict_lance_data_cache(dest_path)
     logger.info(
         "lance_materialize.done",
         dest_path=str(dest_path),
@@ -527,20 +596,25 @@ def _write_materialized_snapshot(
 
 # DOC502: the documented LookupError/ValueError propagate from
 # resolve_txid_version, _reuse_or_raise, and _transaction_uuid.
-def materialize_lance_subset(  # noqa: DOC502
+def materialize_lance_subset(  # noqa: DOC502, DOC503
     source_uri: str,
     dest_path: Path,
     *,
     txid: str | None,
     columns: Sequence[str],
+    version: int | None = None,
+    branch: str | None = None,
+    source_base_uri: str | None = None,
     limit: int | None = None,
-    batch_size: int = 512,
+    batch_size: int | None = None,
+    high_memory_materialization: bool = False,
 ) -> Path:
     """Stream a projected source snapshot scan into ``dest_path``.
 
-    Peak memory is ~one batch; transferred bytes scale with the subset, not
-    the source. A txid pins the source snapshot when supplied; otherwise the
-    latest version at hydration time is used.
+    Memory use depends on the selected tuning and projected row width;
+    transferred bytes scale with the subset, not the source. A txid pins the
+    source snapshot when supplied; otherwise the latest version at hydration
+    time is used.
 
     :param source_uri: Source dataset — ``r2://`` URI (resolved via
         :func:`synth_setter.pipeline.r2_io.lance_target`) or local path.
@@ -548,14 +622,24 @@ def materialize_lance_subset(  # noqa: DOC502
         unrelated dataset.
     :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
     :param columns: Columns to project, in scan order.
+    :param version: Explicit source version, used for native branch snapshots whose
+        transaction reader is unavailable in Lance 9. Mutually exclusive with ``txid``.
+    :param branch: Native branch selected from ``source_base_uri`` at ``version``.
+    :param source_base_uri: Parent dataset URI used to resolve inherited branch fragments.
     :param limit: First-N row cap, or ``None`` for all rows.
-    :param batch_size: Scan batch size in rows — the streaming memory unit.
+    :param batch_size: Optional scan batch-size override in rows.
+    :param high_memory_materialization: Whether to opt into high-memory scanner and
+        writer tuning. Cache reuse is unaffected because contents are identical.
     :returns: ``dest_path``.
     :raises LookupError: ``txid`` matches no live source version.
     :raises RuntimeError: A transient source read exhausts the retry budget.
     :raises ValueError: ``dest_path`` exists with a missing/unparsable
         sidecar or a sidecar whose request hash differs from this request.
     """
+    if txid is not None and version is not None:
+        raise ValueError("txid and version are mutually exclusive snapshot pins")
+    if branch is not None and (version is None or source_base_uri is None):
+        raise ValueError("branch materialization requires version and source_base_uri")
     dest_path = Path(dest_path)
     requested_columns = tuple(columns)
     if dest_path.exists() and txid is not None:
@@ -566,9 +650,15 @@ def materialize_lance_subset(  # noqa: DOC502
             columns=requested_columns,
             limit=limit,
         )
-    ds = _open_source(source_uri)
-    resolved_version = ds.version if txid is None else resolve_txid_version(ds, txid)
-    resolved_txid = _transaction_uuid(ds, resolved_version)
+    ds = _open_source(source_base_uri or source_uri)
+    if branch is not None:
+        ds = ds.checkout_version((branch, version))
+    resolved_version = (
+        version
+        if version is not None
+        else ds.version if txid is None else resolve_txid_version(ds, txid)
+    )
+    resolved_txid = None if version is not None else _transaction_uuid(ds, resolved_version)
     if dest_path.exists():
         return _reuse_or_raise(
             dest_path,
@@ -594,6 +684,7 @@ def materialize_lance_subset(  # noqa: DOC502
         dest_path=dest_path,
         manifest=manifest,
         batch_size=batch_size,
+        high_memory_materialization=high_memory_materialization,
     )
 
 
@@ -629,6 +720,7 @@ def materialize_splits(
     projection: Mapping[str, Sequence[str]],
     row_limit: int | None,
     shard_suffix: str,
+    high_memory_materialization: bool = False,
 ) -> None:
     """Materialize each split under a root, then rclone non-Lance sidecars.
 
@@ -640,6 +732,7 @@ def materialize_splits(
     :param projection: Columns to materialize per split.
     :param row_limit: First-N row cap per split, or ``None`` for all rows.
     :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
+    :param high_memory_materialization: Whether to use high-memory Lance tuning.
     """
     _require_dataset_complete(source_root_uri)
     for split, columns in projection.items():
@@ -650,6 +743,7 @@ def materialize_splits(
             txid=txids[split] if txids is not None else None,
             columns=columns,
             limit=row_limit,
+            high_memory_materialization=high_memory_materialization,
         )
     # Non-Lance sidecars (stats.npz, dataset.json) still hydrate via rclone;
     # split datasets and pipeline-internal metadata/ never feed the loaders.

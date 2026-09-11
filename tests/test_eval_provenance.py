@@ -1,12 +1,10 @@
 """Provenance-wiring tests for the ``synth-setter-eval`` entrypoint.
 
 Pins the storage-provenance-spec.md run-id, job_type, and W&B-provenance
-invariants at the ``evaluate`` entrypoint seam: the run id is pinned in the
-``{config_id}-{timestamp}`` convention with ``job_type=evaluation``, and
-``log_wandb_provenance`` is invoked
-once a logger exists. Heavy collaborators (datamodule / model / trainer
-instantiation, hyperparameter logging, test loop) are stubbed at their seams so
-the test isolates the wiring rather than running a real evaluation. Sibling to
+invariants at the ``evaluate`` entrypoint seam: an explicit run id is preserved,
+an absent or empty id falls back to ``{config_id}-{timestamp}``, and
+``job_type=evaluation`` is pinned before ``log_wandb_provenance`` runs. Heavy
+collaborators are stubbed so these tests isolate the wiring. Sibling to
 ``test_eval.py`` per the ``tests/_meta`` entrypoint-only rule.
 """
 
@@ -87,6 +85,22 @@ def stubbed_eval_entrypoint() -> Iterator[MagicMock]:
 class TestEvalProvenanceWiring:
     """The eval entrypoint pins the run identity and stamps provenance."""
 
+    def test_preserves_explicit_run_id_and_resume_mode(
+        self, stubbed_eval_entrypoint: MagicMock
+    ) -> None:
+        """An explicit W&B run identity survives eval provenance pinning.
+
+        :param stubbed_eval_entrypoint: Collaborator-stub fixture.
+        """
+        cfg = _wandb_logger_cfg()
+        cfg.logger.wandb.id = "shared-generation-run"
+        cfg.logger.wandb.resume = "must"
+
+        evaluate(cfg)
+
+        assert cfg.logger.wandb.id == "shared-generation-run"
+        assert cfg.logger.wandb.resume == "must"
+
     def test_pins_run_id_in_config_id_timestamp_convention(
         self, stubbed_eval_entrypoint: MagicMock
     ) -> None:
@@ -95,6 +109,20 @@ class TestEvalProvenanceWiring:
         :param stubbed_eval_entrypoint: Collaborator-stub fixture.
         """
         cfg = _wandb_logger_cfg()
+
+        evaluate(cfg)
+
+        assert re.fullmatch(_RUN_ID_PATTERN.format(config_id="flow_simple"), cfg.logger.wandb.id)
+
+    def test_empty_run_id_uses_config_id_timestamp_fallback(
+        self, stubbed_eval_entrypoint: MagicMock
+    ) -> None:
+        """An empty W&B run id receives the generated eval identity.
+
+        :param stubbed_eval_entrypoint: Collaborator-stub fixture.
+        """
+        cfg = _wandb_logger_cfg()
+        cfg.logger.wandb.id = ""
 
         evaluate(cfg)
 

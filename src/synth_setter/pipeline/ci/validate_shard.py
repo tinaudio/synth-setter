@@ -47,8 +47,11 @@ from synth_setter.data.vst.shapes import (
     dataset_field_shapes,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
-from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
+from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat, ShardSpec
 from synth_setter.pipeline.spec_io import read_spec_text
+
+# Bound scan buffers before NumPy checks and preview decoding amplify batch memory.
+LANCE_VALIDATION_BATCH_SIZE_BYTES = 64 * 1024 * 1024
 
 
 def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
@@ -63,7 +66,9 @@ def _expected_dataset_shapes(spec: DatasetSpec) -> dict[str, tuple[int, ...]]:
     return dataset_field_shapes(spec.render, spec.num_params)
 
 
-def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
+def validate_shard(
+    shard_path: Path, spec: DatasetSpec, *, expected_shard: ShardSpec | None = None
+) -> list[str]:
     """Validate one shard against a DatasetSpec, dispatching by filename suffix.
 
     Suffix dispatch via ``OutputFormat.from_extension``: ``.lance`` -> Lance
@@ -72,6 +77,7 @@ def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
 
     :param shard_path: Local filesystem path to the shard to validate.
     :param spec: Dataset spec the shard is expected to conform to.
+    :param expected_shard: Explicit identity for growing shards outside ``spec.shards``.
     :returns: List of error strings (empty = valid).
     :rtype: list[str]
     """
@@ -80,7 +86,7 @@ def validate_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
 
     fmt = OutputFormat.from_extension(shard_path.suffix)
     if fmt is OutputFormat.LANCE:
-        return _validate_lance_shard(shard_path, spec)
+        return _validate_lance_shard(shard_path, spec, expected_shard=expected_shard)
     return [
         f"unsupported shard suffix {shard_path.suffix!r} "
         f"(expected one of: {sorted(f.extension for f in OutputFormat)})"
@@ -102,7 +108,14 @@ def _metadata_mismatch_errors(
     :returns: One error per mismatched field.
     """
     errors: list[str] = []
-    for field in ("base_seed", "sample_offset", "attempts_per_sample"):
+    if "render_contract_digest" not in present_fields:
+        errors.append(f"{source}: render_contract_digest is missing")
+    for field in (
+        "base_seed",
+        "sample_offset",
+        "attempts_per_sample",
+        "render_contract_digest",
+    ):
         if field not in present_fields:
             continue
         observed = getattr(metadata, field)
@@ -139,23 +152,25 @@ def _expected_shard_metadata(
         config.
     :returns: Strict shard metadata expected for rendered shards.
     """
-    return ShardMetadata(
-        velocity=spec.render.velocity,
-        signal_duration_seconds=spec.render.signal_duration_seconds,
-        sample_rate=spec.render.sample_rate,
-        channels=spec.render.channels,
-        min_loudness=spec.render.min_loudness,
-        base_seed=spec.render.base_seed if base_seed is None else base_seed,
-        sample_offset=spec.render.sample_offset if sample_offset is None else sample_offset,
-        attempts_per_sample=spec.render.attempts_per_sample,
+    render = spec.render.model_copy(
+        update={
+            "base_seed": spec.render.base_seed if base_seed is None else base_seed,
+            "sample_offset": (
+                spec.render.sample_offset if sample_offset is None else sample_offset
+            ),
+        }
     )
+    return render.shard_metadata()
 
 
-def _validate_lance_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
+def _validate_lance_shard(
+    shard_path: Path, spec: DatasetSpec, *, expected_shard: ShardSpec | None = None
+) -> list[str]:
     """Validate a Lance shard dataset's schema, metadata, and row count.
 
     :param shard_path: Local filesystem path to the Lance shard dataset directory.
     :param spec: Dataset spec the shard is expected to conform to.
+    :param expected_shard: Explicit identity for growing shards outside ``spec.shards``.
     :returns: List of error strings (empty = valid).
     """
     import lance
@@ -164,7 +179,11 @@ def _validate_lance_shard(shard_path: Path, spec: DatasetSpec) -> list[str]:
         dataset = lance.dataset(str(shard_path))
     except (OSError, ValueError, RuntimeError) as exc:
         return [f"path is not a valid Lance dataset: {shard_path}: {exc}"]
-    base_seed, sample_offset = _expected_seed_position(shard_path, spec)
+    base_seed, sample_offset = (
+        (expected_shard.seed, expected_shard.sample_offset)
+        if expected_shard is not None
+        else _expected_seed_position(shard_path, spec)
+    )
     return _validate_lance_dataset(
         dataset,
         spec,
@@ -255,7 +274,10 @@ def _validate_lance_values(dataset: lance.LanceDataset, spec: DatasetSpec) -> li
     errors: set[str] = set()
     row_offset = 0
     columns = [*DATASET_FIELD_NAMES, *PREVIEW_FIELD_NAMES]
-    for batch in dataset.to_batches(columns=columns):
+    for batch in dataset.to_batches(
+        columns=columns,
+        batch_size_bytes=LANCE_VALIDATION_BATCH_SIZE_BYTES,
+    ):
         errors.update(_validate_tensor_batch_values(batch))
         errors.update(_validate_preview_batch_values(batch, spec, row_offset))
         row_offset += batch.num_rows

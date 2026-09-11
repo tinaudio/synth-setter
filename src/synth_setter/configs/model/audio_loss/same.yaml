@@ -1,0 +1,17 @@
+# Magnitude-normalized squared error in frozen SAME-S latents — the space the stored `same_s`
+# conditioning column is written in, re-encoded online so a render can be scored in it.
+# `lambda_audio` carries over from the cosine arm and needs a gradient-ratio probe before a
+# long run. Requires model.compile=false and a single device (#2585).
+_target_: synth_setter.models.components.audio_feedback.AudioFeedbackLoss
+lambda_audio: 0.03
+t_min: 0.8
+sample_rate: ${datamodule.sample_rate}
+signal_length: ${datamodule.signal_length}
+# The renderer's voice is allocated once at this size; shorter batches pad up to it.
+render_batch_size: ${datamodule.batch_size}
+distance:
+  _target_: synth_setter.models.components.audio_distance.LatentMseDistance
+  encoder:
+    _target_: synth_setter.models.components.same_encoder.SameAudioEncoder.from_pretrained
+    sample_rate: ${datamodule.sample_rate}
+    checkpoint: r2://intermediate-data/models/same-s

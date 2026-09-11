@@ -11,7 +11,7 @@ defaults:
 
 experiment_name: torchsynth
 run_name: ffn
-tags: [torchsynth]
+tags: [torchsynth, ffn]
 
 # Param loss has a high irreducible floor for near-inaudible params (PR #1810); the
 # val-audio probe supplies audio-quality metrics off-loop. Checkpointing uses

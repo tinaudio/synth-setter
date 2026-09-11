@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from synth_setter.data.vst.shapes import mel_hop_length
+from synth_setter.features import sketch_controls
 from synth_setter.features.sketch_controls import (
     NUM_SKETCH_CONTROLS,
     SKETCH_CENTROID_ROW,
@@ -13,11 +14,14 @@ from synth_setter.features.sketch_controls import (
     SKETCH_PITCH_SLICE,
     extract_sketch_controls,
     extract_sketch_controls_batch,
+    load_pesto_model,
     loudness_track,
     pitch_track,
     sketch_num_frames,
     spectral_centroid_track,
 )
+from synth_setter.sketch import pool_sketch_controls
+from tests.helpers.run_if import RunIf
 
 _SAMPLE_RATE = 44100
 _DURATION_S = 1.0
@@ -50,6 +54,71 @@ def test_sketch_num_frames_one_second_matches_mel_grid() -> None:
     """Frame counts agree with the mel hop grid."""
     samples = int(_SAMPLE_RATE * _DURATION_S)
     assert sketch_num_frames(samples, _SAMPLE_RATE) == samples // mel_hop_length(_SAMPLE_RATE) + 1
+
+
+def test_pool_sketch_controls_uses_track_means_and_pitch_maxima() -> None:
+    """Canonical storage pooling preserves the declared reduction per control group."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 64)
+    controls[:, SKETCH_LOUDNESS_ROW, 1::2] = 1.0
+    controls[:, SKETCH_CENTROID_ROW, ::2] = 1.0
+    controls[:, SKETCH_PITCH_SLICE.start, 1::2] = 1.0
+
+    pooled = pool_sketch_controls(controls)
+
+    assert pooled.shape == (1, NUM_SKETCH_CONTROLS, 32)
+    torch.testing.assert_close(
+        pooled[0, SKETCH_LOUDNESS_ROW], torch.full((32,), 0.5), rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        pooled[0, SKETCH_CENTROID_ROW], torch.full((32,), 0.5), rtol=0, atol=0
+    )
+    torch.testing.assert_close(pooled[0, SKETCH_PITCH_SLICE.start], torch.ones(32), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("input_frames,output_frames", [(0, 0), (0, 32), (32, 0), (32, -1)])
+def test_pool_sketch_controls_invalid_temporal_grid_rejected(
+    input_frames: int, output_frames: int
+) -> None:
+    """Reject empty inputs and nonpositive output grids before pooling.
+
+    :param input_frames: Source grid length, including an empty grid.
+    :param output_frames: Requested grid length, including nonpositive lengths.
+    """
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, input_frames)
+    with pytest.raises(ValueError, match="nonempty input and positive output frames"):
+        pool_sketch_controls(controls, output_frames=output_frames)
+
+
+def test_pool_sketch_controls_equal_frames_preserves_exact_tensor() -> None:
+    """An unchanged grid preserves values, shape, and dtype exactly."""
+    controls = torch.randn(2, NUM_SKETCH_CONTROLS, 32, dtype=torch.float64)
+    pooled = pool_sketch_controls(controls)
+    torch.testing.assert_close(pooled, controls, rtol=0, atol=0)
+
+
+def test_pool_sketch_controls_equal_frames_keeps_input_storage_independent() -> None:
+    """Editing pooled controls must not overwrite the source controls."""
+    controls = torch.ones(1, NUM_SKETCH_CONTROLS, 32)
+    pooled = pool_sketch_controls(controls)
+    pooled.zero_()
+    torch.testing.assert_close(controls, torch.ones_like(controls), rtol=0, atol=0)
+
+
+def test_pool_sketch_controls_nondivisible_windows_overlap_at_boundaries() -> None:
+    """Adaptive pooling covers every source frame when windows do not divide evenly."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 5)
+    values = torch.tensor((0.0, 1.0, 2.0, 3.0, 4.0))
+    controls[:, SKETCH_LOUDNESS_ROW] = values
+    controls[:, SKETCH_PITCH_SLICE.start] = values
+
+    pooled = pool_sketch_controls(controls, output_frames=2)
+
+    torch.testing.assert_close(
+        pooled[0, SKETCH_LOUDNESS_ROW], torch.tensor((1.0, 3.0)), rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        pooled[0, SKETCH_PITCH_SLICE.start], torch.tensor((2.0, 4.0)), rtol=0, atol=0
+    )
 
 
 @pytest.mark.parametrize("sample_rate", [22050, 44100])
@@ -179,3 +248,59 @@ def test_extract_sketch_controls_repeat_calls_are_deterministic() -> None:
     first = extract_sketch_controls(audio, _SAMPLE_RATE)
     second = extract_sketch_controls(audio, _SAMPLE_RATE)
     assert torch.equal(first, second)
+
+
+def test_extract_sketch_controls_batch_defaults_to_the_input_device() -> None:
+    """Without an explicit device the controls come back where the audio lives."""
+    clips = torch.stack([_sine(440.0)])
+    controls = extract_sketch_controls_batch(clips, _SAMPLE_RATE)
+    assert controls.device == clips.device
+
+
+@RunIf(min_gpus=1)
+def test_load_pesto_model_on_cuda_places_parameters_on_cuda() -> None:
+    """The cached PESTO model moves to the requested device."""
+    model = load_pesto_model(device="cuda")
+    assert next(model.parameters()).device.type == "cuda"
+
+
+@RunIf(min_gpus=1)
+def test_extract_sketch_controls_batch_on_cuda_returns_controls_on_cuda() -> None:
+    """A CUDA request keeps extraction on the GPU end to end."""
+    clips = torch.stack([_sine(440.0)])
+    controls = extract_sketch_controls_batch(clips, _SAMPLE_RATE, device="cuda")
+    assert controls.device.type == "cuda"
+
+
+@RunIf(min_gpus=1)
+def test_extract_sketch_controls_batch_on_cuda_matches_cpu_affine_tracks() -> None:
+    """CUDA reproduces the loudness and centroid tracks to float32 kernel jitter."""
+    clips = torch.stack([_sine(440.0), _sine(880.0, amplitude=0.25)])
+    on_cpu = extract_sketch_controls_batch(clips, _SAMPLE_RATE, device="cpu")
+    on_cuda = extract_sketch_controls_batch(clips, _SAMPLE_RATE, device="cuda").cpu()
+    affine = [SKETCH_LOUDNESS_ROW, SKETCH_CENTROID_ROW]
+    assert torch.allclose(on_cpu[:, affine], on_cuda[:, affine], atol=1e-5)
+
+
+@RunIf(min_gpus=1)
+def test_extract_sketch_controls_batch_on_cuda_predicts_the_same_pitch_bins() -> None:
+    """CUDA picks the same PESTO bins; only conv-kernel jitter moves activations."""
+    clips = torch.stack([_sine(440.0), _sine(880.0, amplitude=0.25)])
+    on_cpu = extract_sketch_controls_batch(clips, _SAMPLE_RATE, device="cpu")
+    on_cuda = extract_sketch_controls_batch(clips, _SAMPLE_RATE, device="cuda").cpu()
+    cpu_pitch, cuda_pitch = on_cpu[:, SKETCH_PITCH_SLICE], on_cuda[:, SKETCH_PITCH_SLICE]
+    assert torch.equal(cpu_pitch.argmax(dim=1), cuda_pitch.argmax(dim=1))
+    # Isolated frames drift ~3e-3 through PESTO's convolutions; the mean is ~1e-7.
+    assert torch.allclose(cpu_pitch, cuda_pitch, atol=5e-3)
+
+
+def test_load_pesto_model_without_a_device_defaults_to_cpu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A first load that names no device holds its weights on CPU.
+
+    :param monkeypatch: Clears the cached device so this is a first load.
+    """
+    monkeypatch.setattr(sketch_controls, "_pesto_device", None)
+    model = load_pesto_model()
+    assert next(model.parameters()).device.type == "cpu"

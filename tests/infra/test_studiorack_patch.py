@@ -10,6 +10,9 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PATCH_SCRIPT = PROJECT_ROOT / "scripts/studiorack/patch-core.mjs"
+MANAGER_SOURCE_FIXTURE = (
+    PROJECT_ROOT / "tests/fixtures/studiorack/ManagerLocal.patch-preconditions.txt"
+)
 
 pytestmark = pytest.mark.infra
 
@@ -39,17 +42,11 @@ def _helper_source(path: Path) -> None:
 
 
 def _manager_source(path: Path) -> None:
-    """Write the upstream manager fragment patched by the postinstall script.
+    """Copy the canonical upstream ManagerLocal patch-precondition fixture.
 
     :param path: Destination for the JavaScript fixture.
     """
-    path.write_text(
-        "const files = packageCompatibleFiles(pkgVersion, systems);\n"
-        "if (!files.length) throw new Error('none');\n"
-        "if (!isAdmin() && !isTests()) {\n"
-        "    await runCliAsAdmin({ operation: 'install' });\n"
-        "}\n"
-    )
+    shutil.copyfile(MANAGER_SOURCE_FIXTURE, path)
 
 
 def _run_patch(helper: Path, manager: Path) -> int:
@@ -102,6 +99,28 @@ def test_patch_core_repeated_run_is_idempotent(tmp_path: Path) -> None:
     assert _run_patch(helper, manager) == 0
 
     assert (helper.read_text(), manager.read_text()) == once
+
+
+def test_patch_core_unknown_partial_manager_fails_closed(tmp_path: Path) -> None:
+    """A partial upstream change cannot pass without every patch marker.
+
+    :param tmp_path: Scratch root for the incompatible manager fixture.
+    """
+    helper = tmp_path / "file.js"
+    manager = tmp_path / "ManagerLocal.js"
+    _helper_source(helper)
+    _manager_source(manager)
+    manager.write_text(
+        manager.read_text().replace(
+            "        if (!isAdmin() && !isTests()) {\n",
+            "        if (files.some(file => file.type === FileType.Archive)) "
+            "files = files.filter(file => file.type === FileType.Archive);\n"
+            "        if (!isAdmin() && !isTests() && "
+            "!files.every(file => file.type === FileType.Archive)) {\n",
+        )
+    )
+
+    assert _run_patch(helper, manager) != 0
 
 
 def test_patch_core_unknown_source_fails_closed(tmp_path: Path) -> None:

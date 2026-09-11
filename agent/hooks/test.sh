@@ -2186,6 +2186,70 @@ MAKE_STUB
 }
 it "worktree-post-setup: valid path → links assets and installs git hooks" T_wt_post_setup_runs_make_in_new_worktree
 
+#######################################
+# Verify a fresh worktree shares the primary VST fixture without Git dirtiness.
+# Outputs:
+#   Failure diagnostics to stdout.
+# Returns:
+#   0 when the fixture is shared cleanly, non-zero otherwise.
+#######################################
+T_link_plugins_reuses_primary_fixture_in_fresh_worktree() {
+  local primary target
+  primary="$TEST_DIR/plugin-primary-$$"
+  target="$TEST_DIR/plugin-worktree-$$"
+  git init -q "$primary"
+  git -C "$primary" config user.email test@test
+  git -C "$primary" config user.name test
+  cp "$REPO_ROOT/.gitignore" "$primary/.gitignore"
+  git -C "$primary" add .gitignore
+  git -C "$primary" commit -q -m init
+  mkdir -p "$primary/plugins/Surge XT.vst3"
+  git -C "$primary" worktree add --detach "$target" >/dev/null 2>&1
+
+  (cd "$target" && make -f "$REPO_ROOT/Makefile" link-plugins STUDIORACK=false) || {
+    echo "make link-plugins did not reuse the primary fixture"; return 1
+  }
+  [[ "$(readlink "$target/plugins")" == "$primary/plugins" ]] || {
+    echo "plugins symlink does not target the primary checkout"; return 1
+  }
+  [[ -d "$target/plugins/Surge XT.vst3" ]] || {
+    echo "Surge XT fixture is not visible in linked worktree"; return 1
+  }
+  [[ -z "$(git -C "$target" status --porcelain)" ]] || {
+    echo "plugins symlink dirtied the linked worktree"; return 1
+  }
+}
+it "link-plugins: fresh worktree → exposes primary VST fixture cleanly" T_link_plugins_reuses_primary_fixture_in_fresh_worktree
+
+#######################################
+# Verify a shared plugins link fails clearly after its primary target disappears.
+# Outputs:
+#   Failure diagnostics to stdout.
+# Returns:
+#   0 for the expected actionable failure, non-zero otherwise.
+#######################################
+T_link_plugins_dangling_primary_link_fails_loudly() {
+  local out primary target
+  primary="$TEST_DIR/plugin-missing-primary-$$"
+  target="$TEST_DIR/plugin-missing-worktree-$$"
+  git init -q "$primary"
+  git -C "$primary" config user.email test@test
+  git -C "$primary" config user.name test
+  git -C "$primary" commit -q --allow-empty -m init
+  mkdir -p "$primary/plugins/Surge XT.vst3"
+  git -C "$primary" worktree add --detach "$target" >/dev/null 2>&1
+  ln -s "$primary/plugins" "$target/plugins"
+  rm -rf "$primary/plugins"
+
+  if out=$(cd "$target" && make -f "$REPO_ROOT/Makefile" link-plugins STUDIORACK=true 2>&1); then
+    echo "dangling primary plugins link unexpectedly succeeded: $out"; return 1
+  fi
+  echo "$out" | grep -q "primary plugins directory is unavailable" || {
+    echo "missing actionable dangling-link error: $out"; return 1
+  }
+}
+it "link-plugins: dangling primary link → fails with actionable error" T_link_plugins_dangling_primary_link_fails_loudly
+
 T_wt_post_setup_exits_0_on_missing_path() {
   local out
   reset_sandbox
