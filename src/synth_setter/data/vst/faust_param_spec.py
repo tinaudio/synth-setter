@@ -28,6 +28,9 @@ from synth_setter.param_spec_name import ParamSpecName
 FAUST_NOTE_DURATION_SECONDS = 4.0
 _FAUST_MIDI_PITCH_MAX = 72
 _FAUST_MIDI_PITCH_MIN = 48
+# Faust serializes UI bounds at six significant digits, so the kernel angle
+# contract pins the serialized value rather than floating-point pi.
+_KRONECKER_KERNEL_ANGLE_BOUND = 3.14159
 _SHIMMER_FDN_NOTE_PARAMS: ParameterValues = {
     "pitch": 60,
     "note_start_and_end": (0.0, FAUST_NOTE_DURATION_SECONDS),
@@ -178,6 +181,41 @@ def _church_organ_param_spec() -> ParamSpec:
     )
 
 
+def _kronecker_fdn_param_spec() -> ParamSpec:
+    """Build the Kronecker FDN specification in compiled address order.
+
+    :returns: Fresh exact-address Kronecker FDN specification.
+    """
+    return ParamSpec(
+        [
+            ContinuousParameter(name="/kroneckerFDN/Decay/t60", min=0.1, max=4.0),
+            *(
+                ContinuousParameter(name=f"/kroneckerFDN/Delays/d{i}", min=400.0, max=1200.0)
+                for i in range(8)
+            ),
+            *(
+                ContinuousParameter(name=f"/kroneckerFDN/Input/b{i}", min=-1.0, max=1.0)
+                for i in range(8)
+            ),
+            *(
+                ContinuousParameter(
+                    name=f"/kroneckerFDN/Kernel/a{i}",
+                    min=-_KRONECKER_KERNEL_ANGLE_BOUND,
+                    max=_KRONECKER_KERNEL_ANGLE_BOUND,
+                )
+                for i in range(3)
+            ),
+            *(_trigger_parameter(f"/kroneckerFDN/Kernel/r{i}") for i in range(3)),
+            *(
+                ContinuousParameter(name=f"/kroneckerFDN/Output/c{i}", min=-1.0, max=1.0)
+                for i in range(8)
+            ),
+            ContinuousParameter(name="/kroneckerFDN/Output/dry", min=-1.0, max=1.0),
+        ],
+        _note_params(),
+    )
+
+
 def _shimmer_fdn_param_spec() -> ParamSpec:
     """Build the fixed-impulse shimmer FDN specification.
 
@@ -237,6 +275,7 @@ _faust_param_spec_builders: Mapping[ParamSpecName, Callable[[], ParamSpec]] = Ma
         ParamSpecName("faust_bubble"): _bubble_param_spec,
         ParamSpecName("faust_church_organ"): _church_organ_param_spec,
         ParamSpecName("faust_filter_osc"): _filter_osc_param_spec,
+        ParamSpecName("faust_kronecker_fdn"): _kronecker_fdn_param_spec,
         ParamSpecName("faust_shimmer_fdn"): _shimmer_fdn_param_spec,
     }
 )
