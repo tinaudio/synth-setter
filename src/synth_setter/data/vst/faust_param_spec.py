@@ -181,6 +181,30 @@ def _church_organ_param_spec() -> ParamSpec:
     )
 
 
+def _augmentor_param_spec() -> ParamSpec:
+    """Build the augmentor specification in compiled address order.
+
+    :returns: Fresh exact-address augmentor specification.
+    """
+    return ParamSpec(
+        [
+            _unit_parameter("/augmentor/envelope/depth"),
+            ContinuousParameter(name="/augmentor/envelope/rate", min=0.1, max=30.0),
+            ContinuousParameter(name="/augmentor/filter/cutoff", min=100.0, max=8000.0),
+            _unit_parameter("/augmentor/filter/mix"),
+            _unit_parameter("/augmentor/filter/resonance"),
+            _trigger_parameter("/augmentor/gate"),
+            _unit_parameter("/augmentor/noise/amount"),
+            _unit_parameter("/augmentor/pitch/mix"),
+            ContinuousParameter(name="/augmentor/pitch/shift", min=-12.0, max=12.0),
+            _unit_parameter("/augmentor/reverse/mix"),
+            ContinuousParameter(name="/augmentor/source/freq", min=50.0, max=1000.0),
+            _unit_parameter("/augmentor/source/gain"),
+        ],
+        _note_params(),
+    )
+
+
 def _kronecker_fdn_param_spec() -> ParamSpec:
     """Build the Kronecker FDN specification in compiled address order.
 
@@ -271,6 +295,7 @@ def _filter_osc_param_spec() -> ParamSpec:
 
 _faust_param_spec_builders: Mapping[ParamSpecName, Callable[[], ParamSpec]] = MappingProxyType(
     {
+        ParamSpecName("faust_augmentor"): _augmentor_param_spec,
         ParamSpecName("faust_bright_organ"): _bright_organ_param_spec,
         ParamSpecName("faust_bubble"): _bubble_param_spec,
         ParamSpecName("faust_church_organ"): _church_organ_param_spec,

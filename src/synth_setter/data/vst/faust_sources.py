@@ -298,7 +298,60 @@ bubble(f0,trig) = os.osc(f) * (exp(-damp*time) : si.smooth(0.99))
 process = button("drop") : bubble(hslider("v:bubble/freq", 600, 150, 2000, 1)) <: dm.freeverb_demo;
 """
 
+_AUGMENTOR_SOURCE = r'''import("stdfaust.lib");
+
+declare name "augmentor";
+declare author "synth-setter";
+declare description "Augmentation voice: random envelope, pitch shift, resonant filter, noise, and block reverse around a gated oscillator.";
+declare license "MIT";
+
+TRANSPOSE_WINDOW = 1024;
+TRANSPOSE_XFADE = 64;
+MIN_Q = 0.5;
+Q_RANGE = 7.5;
+NOISE_GAIN = 0.25;
+REVERSE_WINDOW = 22050;
+REVERSE_MAX_DELAY = 48000;
+OUTPUT_GAIN = 0.8;
+
+freq = hslider("v:augmentor/source/freq[unit:Hz]", 220, 50, 1000, 0.1);
+srcGain = hslider("v:augmentor/source/gain", 0.5, 0, 1, 0.01);
+gate = button("v:augmentor/gate");
+voice = os.osc(freq) * srcGain * en.asr(0.01, 1, 0.1, gate);
+
+// Wandering amplitude from rectified, smoothed noise.
+envRate = hslider("v:augmentor/envelope/rate[unit:Hz]", 4, 0.1, 30, 0.1);
+envDepth = hslider("v:augmentor/envelope/depth", 0.4, 0, 1, 0.01);
+randMod = abs(no.noise) : fi.lowpass(1, envRate);
+enveloped = voice * ((1 - envDepth) + envDepth * randMod);
+
+// Stock faustlibraries pitch shifter (misceffects.lib).
+shift = hslider("v:augmentor/pitch/shift[unit:semitones]", 0, -12, 12, 0.1);
+pitchMix = hslider("v:augmentor/pitch/mix", 0, 0, 1, 0.01);
+shifted = enveloped : ef.transpose(TRANSPOSE_WINDOW, TRANSPOSE_XFADE, shift);
+pitched = enveloped * (1 - pitchMix) + shifted * pitchMix;
+
+// Resonant lowpass; Q stays above zero so the 1/Q pole never blows up.
+cutoff = hslider("v:augmentor/filter/cutoff[unit:Hz]", 4000, 100, 8000, 1);
+reso = hslider("v:augmentor/filter/resonance", 0.3, 0, 1, 0.01);
+filtMix = hslider("v:augmentor/filter/mix", 0, 0, 1, 0.01);
+filtered = pitched : fi.resonlp(cutoff, MIN_Q + reso * Q_RANGE, 1);
+filtOut = pitched * (1 - filtMix) + filtered * filtMix;
+
+noiseAmt = hslider("v:augmentor/noise/amount", 0, 0, 1, 0.01);
+noised = filtOut + no.noise * noiseAmt * NOISE_GAIN;
+
+// Block reverser with one-window latency: output(t) = input(t - 2p - 1).
+revMix = hslider("v:augmentor/reverse/mix", 0, 0, 1, 0.01);
+pos = (+(1)) ~ _ : %(REVERSE_WINDOW);
+reversed = noised : de.delay(REVERSE_MAX_DELAY, int(2 * pos + 1));
+outMix = noised * (1 - revMix) + reversed * revMix;
+
+process = outMix * OUTPUT_GAIN <: _,_;
+'''
+
 _faust_dsps: dict[ParamSpecName, FaustDsp] = {
+    ParamSpecName("faust_augmentor"): FaustDsp(_AUGMENTOR_SOURCE, num_voices=0, outputs=2),
     ParamSpecName("faust_bright_organ"): FaustDsp(_BRIGHT_ORGAN_SOURCE, num_voices=1, outputs=2),
     ParamSpecName("faust_bubble"): FaustDsp(_BUBBLE_SOURCE, num_voices=0, outputs=2),
     ParamSpecName("faust_church_organ"): FaustDsp(_CHURCH_ORGAN_SOURCE, num_voices=0, outputs=2),

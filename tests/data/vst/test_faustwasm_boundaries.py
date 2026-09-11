@@ -258,6 +258,7 @@ def test_faustwasm_real_render_clamps_fractional_duration_boundary() -> None:
 @pytest.mark.parametrize(
     ("identity", "address", "channels"),
     [
+        ("faust_augmentor", "/augmentor/gate", 2),
         ("faust_bubble", "/bubble/drop", 2),
         ("faust_church_organ", "/churchOrgan/gate", 2),
         ("faust_kronecker_fdn", "/kroneckerFDN/Kernel/r0", 1),

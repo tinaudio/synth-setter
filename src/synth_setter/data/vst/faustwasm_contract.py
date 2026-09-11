@@ -50,6 +50,7 @@ class FaustWasmParameter:
 
 _RESERVED_WASM_ADDRESSES = MappingProxyType(
     {
+        ParamSpecName("faust_augmentor"): (),
         ParamSpecName("faust_bright_organ"): (
             "/brightOrgan/Main/freq",
             "/brightOrgan/Main/gate",
@@ -63,6 +64,20 @@ _RESERVED_WASM_ADDRESSES = MappingProxyType(
 
 _WASM_ADDRESSES = MappingProxyType(
     {
+        ParamSpecName("faust_augmentor"): (
+            "/augmentor/envelope_depth",
+            "/augmentor/envelope_rate",
+            "/augmentor/filter_cutoff",
+            "/augmentor/filter_mix",
+            "/augmentor/filter_resonance",
+            "/augmentor/gate",
+            "/augmentor/noise_amount",
+            "/augmentor/pitch_mix",
+            "/augmentor/pitch_shift",
+            "/augmentor/reverse_mix",
+            "/augmentor/source_freq",
+            "/augmentor/source_gain",
+        ),
         ParamSpecName("faust_bright_organ"): (
             "/brightOrgan/Main/volume",
             "/brightOrgan/Reverb/Amount",
