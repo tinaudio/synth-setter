@@ -3,7 +3,9 @@
 import json
 import os
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 import numpy as np
 import pytest
@@ -94,6 +96,10 @@ def test_browser_surge_wasm_real_checkpoint_renders_predicted_patch(tmp_path: Pa
         _timeout=600,
     )
     record = json.loads((tmp_path / "record.json").read_text())
+    manifest = json.loads((tmp_path / "model" / "manifest.json").read_text())
+    assert record["gitRevision"] == manifest["gitRevision"]
+    assert UUID(record["runId"]).version == 4
+    assert datetime.fromisoformat(record["completedAt"]).utcoffset() == timedelta(0)
     predicted = np.asarray(record["audio"], dtype=np.float32)
     assert predicted.shape == content.shape
     downloaded, downloaded_rate = sf.read(tmp_path / "record.json.wav", dtype="float32")
@@ -163,3 +169,48 @@ def test_browser_surge_wasm_real_checkpoint_renders_predicted_patch(tmp_path: Pa
         "native_peak": float(np.abs(reference).max()),
     }
     (tmp_path / "comparison.json").write_text(json.dumps(comparison, indent=2))
+
+    authored = json.loads((tmp_path / "record.json.authored.json").read_text())
+    assert authored["mode"] == "sketch_only"
+    assert authored["sketchSource"] == "authored"
+    assert authored["gitRevision"] == manifest["gitRevision"]
+    assert authored["checkpointSha256"] == settings.checkpoint_sha256
+    assert authored["statsSha256"] == settings.stats_sha256
+    assert authored["engineCommit"] == record["engineCommit"]
+    assert UUID(authored["runId"]).version == 4
+    assert authored["runId"] != record["runId"]
+    assert datetime.fromisoformat(authored["completedAt"]).utcoffset() == timedelta(0)
+    expected_controls = np.zeros((386, 32), dtype=np.float32)
+    expected_controls[:2] = -1
+    expected_controls[0, 4:12] = -0.25
+    expected_controls[1, 4:12] = 0.5
+    expected_controls[194, 4:12] = 1
+    np.testing.assert_array_equal(
+        np.asarray(authored["sketch"]).reshape(386, 32), expected_controls
+    )
+    with torch.no_grad():
+        expected_authored = model.sample_batch(
+            {**batch, "sketch_ctrl": torch.from_numpy(expected_controls).unsqueeze(0)},
+            noise=torch.tensor([authored["noise"]], dtype=torch.float32),
+            # Native combined guidance at content=0 is the sketch-only branch.
+            content_cfg_strength=0.0,
+            sketch_cfg_strength=3.0,
+            sample_steps=8,
+        ).numpy()[0]
+    np.testing.assert_allclose(authored["params"], expected_authored, rtol=2e-3, atol=2e-3)
+    authored_synth, authored_note = decode_model_output(
+        np.asarray(authored["params"]), param_specs[render.param_spec_name]
+    )
+    assert authored["patch"]["synth"] == pytest.approx(authored_synth)
+    assert authored["patch"]["note"]["pitch"] == authored_note["pitch"]
+    assert authored["patch"]["note"]["note_start_and_end"] == pytest.approx(
+        authored_note["note_start_and_end"]
+    )
+    authored_wav, authored_rate = sf.read(
+        tmp_path / "record.json.authored.json.wav", dtype="float32"
+    )
+    assert authored_rate == render.sample_rate
+    assert authored_wav.T.shape == content.shape
+    np.testing.assert_array_equal(authored_wav.T, np.asarray(authored["audio"], dtype=np.float32))
+    assert np.isfinite(authored_wav).all()
+    assert float(np.abs(authored_wav).max()) > 1e-5

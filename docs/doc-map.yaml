@@ -681,6 +681,16 @@ docs:
       - pattern: "tests/data/vst/test_faust_dataset_e2e.py"
         covers: "Generate-dataset to Lance production-path verification"
 
+  - doc: docs/reference/audio-similarity-benchmarks.md
+    description: Surge host comparison workloads and diagnostics
+    sources:
+      - pattern: "tests/data/vst/test_surgepy_host_parity_e2e.py"
+        covers: "Native host corpora, metrics, and paired artifacts"
+      - pattern: "tests/data/vst/test_surgepy_wasm_host_parity_e2e.py"
+        covers: "Native/WASM cross-version comparisons"
+      - pattern: "src/synth_setter/surgewasm/render.mjs"
+        covers: "Real WASM rendering for the comparison suite"
+
   - doc: docs/guides/surge-wasm-sketch-evaluation.md
     description: Browser-native Surge music-sketch evaluation
     sources:

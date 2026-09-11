@@ -11,7 +11,6 @@ import shutil
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import torch
@@ -224,17 +223,17 @@ def export_browser_surge_bundle(
     staging = Path(tempfile.mkdtemp(dir=output.parent, prefix=f".{output.name}."))
     try:
         manifest = _write_bundle(
-            model,
-            mel_frontend,
-            sketch_frontend,
-            sketch,
-            resolve_param_spec(ParamSpecName(_PARAM_SPEC_NAME)),
-            parameter_map,
-            preset,
-            stats_path,
-            staging,
-            checkpoint_sha256,
-            git_revision,
+            model=model,
+            mel_frontend=mel_frontend,
+            sketch_frontend=sketch_frontend,
+            sketch=sketch,
+            spec=resolve_param_spec(ParamSpecName(_PARAM_SPEC_NAME)),
+            parameter_map=parameter_map,
+            preset=preset,
+            stats_path=stats_path,
+            staging=staging,
+            checkpoint_sha256=checkpoint_sha256,
+            git_revision=git_revision,
         )
         os.rename(staging, output)
     finally:
@@ -247,6 +246,7 @@ def export_browser_surge_bundle(
 
 
 def _write_bundle(
+    *,
     model: VSTFlowMatchingModule,
     mel_frontend: StereoMelFrontend,
     sketch_frontend: MusicSketchFrontend,
@@ -284,7 +284,7 @@ def _write_bundle(
     export_stereo_mel_onnx(mel_frontend, staging / "frontend.onnx")
     export_music_sketch_onnx(sketch_frontend, staging / "sketch.onnx")
     shutil.copyfile(preset, staging / "preset.fxp")
-    manifest: dict[str, Any] = {
+    manifest: dict[str, object] = {
         "schemaVersion": _SCHEMA_VERSION,
         "paramSpecName": _PARAM_SPEC_NAME,
         "encodedWidth": _ENCODED_WIDTH,

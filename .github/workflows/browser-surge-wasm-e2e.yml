@@ -9,7 +9,15 @@ on:
       - "src/synth_setter/models/music_frontend.py"
       - "src/synth_setter/models/flow_onnx.py"
       - "src/synth_setter/tools/export_browser_surge_bundle.py"
+      - "src/synth_setter/configs/browser_surge.yaml"
+      - "tests/infra/test_browser_surge_wasm_workflow.py"
       - "tests/integration/test_browser_surge_wasm_e2e.py"
+      - "tests/data/vst/test_surgepy_host_parity_e2e.py"
+      - "tests/data/vst/test_surgepy_wasm_host_parity_e2e.py"
+      - "tests/data/vst/test_generate_vst_dataset.py"
+      - "src/synth_setter/data/vst/renderers.py"
+      - "src/synth_setter/data/vst/surge_xt_param_map.json"
+      - "presets/surge-base.fxp"
       - "tests/models/test_music_frontend.py"
       - "tests/tools/test_export_browser_surge_bundle.py"
       - "pyproject.toml"
@@ -21,6 +29,14 @@ on:
       - "src/synth_setter/web/**"
       - "src/synth_setter/models/music_frontend.py"
       - "src/synth_setter/tools/export_browser_surge_bundle.py"
+      - "src/synth_setter/configs/browser_surge.yaml"
+      - "tests/infra/test_browser_surge_wasm_workflow.py"
+      - "tests/data/vst/test_surgepy_host_parity_e2e.py"
+      - "tests/data/vst/test_surgepy_wasm_host_parity_e2e.py"
+      - "tests/data/vst/test_generate_vst_dataset.py"
+      - "src/synth_setter/data/vst/renderers.py"
+      - "src/synth_setter/data/vst/surge_xt_param_map.json"
+      - "presets/surge-base.fxp"
       - ".github/workflows/browser-surge-wasm-e2e.yml"
 
 permissions:
@@ -33,13 +49,17 @@ concurrency:
 jobs:
   browser-surge-wasm:
     name: Unchanged Surge WASM and real sketch evaluation
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]')
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     env:
       OMP_NUM_THREADS: "2"
       MKL_NUM_THREADS: "2"
       HYDRA_FULL_ERROR: "1"
+      SURGE_PARITY_OUTPUT_DIR: ${{ github.workspace }}/logs/surge-host-parity
       SYNTH_SETTER_SURGE_WASM_BUNDLE: ${{ github.workspace }}/build/surge-engine
     steps:
       - name: Checkout
@@ -90,14 +110,16 @@ jobs:
           uv run --extra cpu python -c "import surgepy; import onnxruntime"
       - name: Run real engine and browser contracts
         run: |
-          SURGE_WASM_BUNDLE="$SYNTH_SETTER_SURGE_WASM_BUNDLE" node --test src/synth_setter/surgewasm/test-runtime.mjs
+          SURGE_WASM_BUNDLE="$SYNTH_SETTER_SURGE_WASM_BUNDLE" node --test src/synth_setter/surgewasm/test-runtime.mjs src/synth_setter/surgewasm/test-render.mjs
           node --test src/synth_setter/web/surge/*.test.mjs
       - name: Run real browser production path
         run: |
           mkdir -p logs
-          uv run --extra cpu pytest tests/models/test_music_frontend.py \
+          uv run --extra cpu pytest tests/infra/test_browser_surge_wasm_workflow.py \
+            tests/models/test_music_frontend.py \
             tests/tools/test_export_browser_surge_bundle.py \
-            tests/integration/test_browser_surge_wasm_e2e.py -v \
+            tests/integration/test_browser_surge_wasm_e2e.py \
+            tests/data/vst/test_surgepy_wasm_host_parity_e2e.py -v \
             --basetemp=logs/browser-surge-wasm --junitxml=logs/browser-surge-wasm.xml \
             --cov=synth_setter.models.music_frontend \
             --cov=synth_setter.tools.export_browser_surge_bundle \
@@ -107,10 +129,14 @@ jobs:
           uv run --extra cpu python - <<'PY'
           import xml.etree.ElementTree as ET
 
-          cases = [case for case in ET.parse("logs/browser-surge-wasm.xml").findall(".//testcase")
-                   if case.get("name") == "test_browser_surge_wasm_real_checkpoint_renders_predicted_patch"]
-          assert len(cases) == 1, "Expected the real WASM browser E2E"
-          assert cases[0].find("skipped") is None, "WASM E2E must execute"
+          cases = ET.parse("logs/browser-surge-wasm.xml").findall(".//testcase")
+          assert not any(case.find("skipped") is not None for case in cases), "All selected tests must execute"
+          browser = [case for case in cases
+                     if case.get("name") == "test_browser_surge_wasm_real_checkpoint_renders_predicted_patch"]
+          parity = [case for case in cases
+                    if case.get("name", "").startswith("test_surgepy_wasm_full_corpus_records_cross_version_diagnostics[")]
+          assert len(browser) == 1, "Expected the real WASM browser E2E"
+          assert len(parity) == 3, "Expected all three complete host-comparison workloads"
           PY
       - name: Upload browser coverage
         if: always() && hashFiles('coverage.xml') != ''
@@ -128,7 +154,8 @@ jobs:
             logs/browser-surge-wasm.xml
             logs/browser-surge-wasm/**/*.wav
             logs/browser-surge-wasm/**/*.png
-            logs/browser-surge-wasm/**/record.json
+            logs/browser-surge-wasm/**/record*.json
             logs/browser-surge-wasm/**/comparison.json
             logs/browser-surge-wasm/**/model/manifest.json
             build/surge-engine/manifest.json
+            logs/surge-host-parity/

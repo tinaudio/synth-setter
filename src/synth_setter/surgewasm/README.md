@@ -47,21 +47,34 @@ const result = await renderSurge({
 `preset` is a caller-digest-verified `Uint8Array` containing an FXP chunk.
 Parameter IDs are Surge synth-side IDs, values are normalized to `[0, 1]`, and
 note start/end values are seconds. Only supplied parameters are checked against
-the live host. Their names must
-match the WASM wrapper's `getParameterNameExtendedByFXGroup` names; these are
-native extended names, not the hashed IDs exposed by the regular CLAP wrapper.
+the live host. Names may match the wrapper's `getParameterNameExtendedByFXGroup`
+names or SurgePy's unextended FX names: the adapter removes only the CLAP-added
+FX group decoration before comparison. IDs, FX slots, and parameter names still
+must match. These are synth-side IDs, not the hashed IDs of the regular CLAP wrapper.
 The result is `{left, right, version, engineCommit, parameterCount}` with two
 trimmed `Float32Array` channels.
 
-The runtime first applies the native renderer's floor-start/ceil-end conversion,
-then expands the note window to 32-frame process boundaries because the upstream
-demo host queues events at the start of a process call. Equal endpoints remain a
-zero-duration on/off pair rather than being expanded. This follows the existing
-renderer as closely as that host surface allows; it does not claim sample-level
-parity. Node integration
+The runtime floors note-on and rounds note-off upward to 32-frame process
+boundaries because the upstream demo host queues events at the start of a
+process call. Equal endpoints remain an on/off pair in one block. Native SurgePy
+additionally shifts the rendered attack to the requested sample; this adapter
+does not, so sample-level timing parity is not claimed. Node integration
 tests may pass the optional `loader` Emscripten factory because Node cannot
 dynamically import an HTTP module URL. Browser callers omit it, and the runtime
 imports `${root}/surge-host.mjs` directly.
+
+## Batch rendering for host comparisons
+
+```sh
+node src/synth_setter/surgewasm/render.mjs \
+  /path/to/bundle presets/surge-base.fxp requests.json /path/to/absent/output
+```
+
+`requests.json` is a nonempty array of runtime request objects, without `root` or
+`preset`. Every row uses the supplied FXP. The CLI verifies a private bundle
+snapshot before loading its host, renders real stereo float WAVs, and publishes the output
+directory atomically. `report.json` records engine/preset provenance and requested
+parameter descriptors—not parameter readback—beside `sample_00.wav`, etc.
 
 Run the real-WASM test against a completed bundle:
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import math
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import librosa
 import numpy as np
@@ -13,6 +13,9 @@ import pesto
 import torch
 from beartype import beartype
 from jaxtyping import Float, jaxtyped
+from pesto.data import Preprocessor
+from pesto.model import PESTO, Resnet1d
+from pesto.utils.hcqt import HarmonicCQT, RegularCQT
 from torch import nn
 from torch.nn import functional as F  # noqa: N812 — torch convention
 from torchaudio.transforms import Resample
@@ -149,22 +152,28 @@ class MusicSketchFrontend(nn.Module):
             raise ValueError("music sketch export requires 44.1 kHz and 32 output frames")
         if not 0.0 <= pitch_zero_threshold <= 1.0:
             raise ValueError("pitch zero threshold must be within [0, 1]")
-        model = cast(Any, pesto.load_model(pesto_checkpoint, step_size=10.0).eval())
-        model.preprocessor.hcqt(torch.zeros(1, _SAMPLE_FRAMES), sr=sample_rate)
-        cqt = model.preprocessor.hcqt_kernels.cqt_kernels[0]
-        shift_bins = round(model.shift.item() * model.bins_per_semitone)
+        model = cast(PESTO, pesto.load_model(pesto_checkpoint, step_size=10.0).eval())
+        preprocessor = cast(Preprocessor, model.preprocessor)
+        preprocessor.hcqt(torch.zeros(1, _SAMPLE_FRAMES), sr=sample_rate)
+        hcqt = cast(HarmonicCQT, preprocessor.hcqt_kernels)
+        cqt = cast(RegularCQT, hcqt.cqt_kernels[0])
+        encoder = cast(Resnet1d, model.encoder)
+        shift = cast(Float[torch.Tensor, ""], model.shift)
+        shift_bins = round(shift.item() * model.bins_per_semitone)
         if (
             cqt.kernel_width != 8192
-            or model.encoder.hparams["output_dim"] != _PITCH_BINS
+            or encoder.hparams["output_dim"] != _PITCH_BINS
             or shift_bins != _PESTO_SHIFT_BINS
         ):
             raise ValueError("PESTO checkpoint does not match the mir-1k_g7 browser graph")
-        self.encoder = copy.deepcopy(model.encoder).eval()
+        self.encoder = copy.deepcopy(encoder).eval()
         self.register_buffer("cqt_kernels", cqt.conv.weight.detach().clone())
-        self.register_buffer("cqt_lengths", cqt.sqrt_lengths.detach().clone())
+        lengths = cast(Float[torch.Tensor, "bins 1"], cqt.sqrt_lengths)
+        self.register_buffer("cqt_lengths", lengths.detach().clone())
 
-        resampler = cast(Any, Resample)(sample_rate, _LOUDNESS_SAMPLE_RATE)
-        self.register_buffer("resample_kernel", resampler.kernel.detach().clone())
+        resampler = Resample(sample_rate, _LOUDNESS_SAMPLE_RATE)
+        kernel = cast(Float[torch.Tensor, "phases 1 taps"], resampler.kernel)
+        self.register_buffer("resample_kernel", kernel.detach().clone())
         self.resample_width = resampler.width
         self.resample_stride = sample_rate // math.gcd(sample_rate, _LOUDNESS_SAMPLE_RATE)
         self.resample_channels = _LOUDNESS_SAMPLE_RATE // math.gcd(

@@ -171,6 +171,9 @@ async function evaluate(input) {
     sampleRate: manifest.sampleRate,
     checkpointSha256: manifest.checkpointSha256,
     statsSha256: manifest.statsSha256,
+    gitRevision: manifest.gitRevision,
+    runId: crypto.randomUUID(),
+    completedAt: new Date().toISOString(),
   };
 }
 

@@ -21,9 +21,8 @@ const validateRequest = (request) => {
     requireInteger(request.note, 'note', [0, 127]);
     requireInteger(request.velocity, 'velocity', [0, 127]);
     requireInteger(request.frames, 'frames', [1, Number.MAX_SAFE_INTEGER]);
-    if (!Number.isFinite(request.sampleRate) || request.sampleRate <= 0) {
-        throw new Error('sampleRate must be finite and positive');
-    }
+    // Stereo float WAV byte rates must fit an unsigned 32-bit header field.
+    requireInteger(request.sampleRate, 'sampleRate', [1, Math.floor(0xffffffff / (2 * FLOAT_BYTES))]);
     const duration = request.frames / request.sampleRate;
     if (
         !Number.isFinite(request.noteStart)
@@ -110,7 +109,9 @@ const verifyParameters = (host, parameters, parameterCount) => {
     for (const parameter of parameters) {
         const liveName = live.get(parameter.id);
         if (liveName === undefined) throw new Error(`unknown native Surge parameter id: ${parameter.id}`);
-        if (liveName !== parameter.name) {
+        // CLAP adds an FX group label that SurgePy's unextended parameter names omit.
+        const nativeName = liveName.replace(/^(FX [ABSG][1-4] ).+? - /, '$1');
+        if (liveName !== parameter.name && nativeName !== parameter.name) {
             throw new Error(`Surge parameter ${parameter.id} is named "${liveName}", not "${parameter.name}"`);
         }
     }

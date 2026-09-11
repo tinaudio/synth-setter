@@ -7,6 +7,7 @@ import math
 import os
 import shutil
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import combinations, product
 from pathlib import Path
@@ -633,9 +634,9 @@ def _diagnostic_benchmark_entries(
     return entries
 
 
-def _write_audio_artifacts(
+def _write_audio_artifacts[BackendName: str](
     output_dir: Path,
-    results: dict[ParityBackend, _BackendResult],
+    results: Mapping[BackendName, _BackendResult],
 ) -> None:
     """Write one backend-named WAV per workload row.
 
@@ -655,9 +656,9 @@ def _write_audio_artifacts(
             )
 
 
-def _write_mel_artifacts(
+def _write_mel_artifacts[BackendName: str](
     output_dir: Path,
-    results: dict[ParityBackend, _BackendResult],
+    results: Mapping[BackendName, _BackendResult],
 ) -> None:
     """Write persisted mel arrays and viewable previews.
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "@playwright/test";
 
@@ -91,20 +91,33 @@ try {
   await page.locator("#sketchCfg").fill("3");
   await page.locator("#steps").fill("8");
   await page.locator("#seed").fill("17");
-  await page.getByRole("button", { name: "Run evaluation" }).click();
-  await page.waitForFunction(
-    () => ["complete", "error"].includes(window.surgeEval?.state),
-    null,
-    { timeout: 480000 },
-  );
-  await page.screenshot({ path: `${output}.png`, fullPage: true });
-  const record = await page.evaluate(() => window.surgeEval);
-  if (record.state !== "complete" || errors.length)
-    throw new Error(`${record.message ?? ""}; ${errors.join("; ")}`);
-  const downloadEvent = page.waitForEvent("download");
-  await page.getByRole("link", { name: "Download pred.wav" }).click();
-  await (await downloadEvent).saveAs(`${output}.wav`);
-  await writeFile(output, JSON.stringify(record));
+  const runAndDownload = async (destination) => {
+    await page.getByRole("button", { name: "Run evaluation" }).click();
+    await page.waitForFunction(
+      () => ["complete", "error"].includes(window.surgeEval?.state),
+      null,
+      { timeout: 480000 },
+    );
+    await page.screenshot({ path: `${destination}.png`, fullPage: true });
+    if (await page.evaluate(() => window.surgeEval?.state !== "complete") || errors.length)
+      throw new Error(`${await page.locator("#status").textContent()}; ${errors.join("; ")}`);
+    const wav = page.waitForEvent("download");
+    await page.getByRole("link", { name: "Download pred.wav" }).click();
+    await (await wav).saveAs(`${destination}.wav`);
+    const record = page.waitForEvent("download");
+    await page.getByRole("link", { name: "Download evaluation record" }).click();
+    await (await record).saveAs(destination);
+  };
+  await runAndDownload(output);
+  await page.locator("#sketchAudio").setInputFiles([]);
+  await page.locator("#sketchSource").selectOption("authored");
+  await page.locator("#mode").selectOption("sketch_only");
+  await page.locator("#pitch").fill("64");
+  await page.locator("#start").fill("0.5");
+  await page.locator("#end").fill("1.5");
+  await page.locator("#loudness").fill("-0.25");
+  await page.locator("#centroid").fill("0.5");
+  await runAndDownload(`${output}.authored.json`);
   console.log("BROWSER_SURGE_WASM_E2E_COMPLETE");
 } finally {
   await browser?.close();

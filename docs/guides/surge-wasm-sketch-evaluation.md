@@ -70,8 +70,29 @@ from a recorded sound.
 The page reports training-statistics-normalized mel MAE, waveform RMSE, RMS
 levels, and predicted peak. Waveform error is phase-sensitive. These are not
 FDN reverb metrics, the complete native sketch metric suite, or perceptual
-quality scores. The downloaded JSON retains model provenance, noise,
-features, predictions, decoded patch, renderer version, audio, and metrics.
+quality scores. The downloaded JSON retains model provenance and source
+revision, a unique run ID and UTC completion time, noise, features,
+predictions, decoded patch, renderer version, audio, and metrics.
+
+## Tailnet preview
+
+Serve only the exported site directory, not the repository or checkpoint cache.
+Run the HTTP server in a persistent terminal, then add an unused HTTPS port with
+Tailscale Serve:
+
+```bash
+python3 -m http.server 8766 --bind 127.0.0.1 --directory build/surge-site
+```
+
+```bash
+tailscale serve status
+tailscale serve --bg --https=10000 http://127.0.0.1:8766
+```
+
+Open the printed Tailnet URL with `/surge/index.html` appended. HTTPS supplies
+the secure context used for artifact checksums. Preserve existing FDN routes;
+do not use Funnel. The preview remains available while the host and HTTP server
+are running.
 
 ## Real verification
 
@@ -87,7 +108,9 @@ The test uses real SurgePy input audio, the configured trained checkpoint,
 real Chromium/ONNX Runtime Web, and the compiled Surge WASM engine. It checks
 browser features and predictions against native computations, consumes the
 predicted patch, and retains browser/native audio and a cross-version
-comparison. R2 access, native SurgePy, the engine bundle, and Chromium are
+comparison. A second run clears the sketch upload, authors a note contour,
+and checks sketch-only predictions and both downloaded artifacts.
+R2 access, native SurgePy, the engine bundle, and Chromium are
 required; the production-path CI lane rejects a skipped E2E.
 
 The workflow is `.github/workflows/browser-surge-wasm-e2e.yml`. Tracking:
