@@ -35,6 +35,7 @@ _FAUST_SOURCE_SHA256 = {
     "faust_filter_osc": "6ad65d28d787f08a3fa66eb4de7d4091be8d2267ad1e9edc200618effbbe588c",
     "faust_kronecker_fdn": "d20b32ecfe66b075c4c7908864a6332290376d7fafa789839a728e60d01e6a96",
     "faust_shimmer_fdn": "30b485b40002bc721101c9c50ec4d84f1d96740db20df0273835d543f168a4df",
+    "faust_super_shimmer_fdn": "b6a6636e07c7d94f132c9a4e25302594d78ff3d4227b1c16195331d3355b6894",
 }
 
 
@@ -247,6 +248,12 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
     "faust_shimmer_fdn": (
         "faust_shimmer_fdn",
         "registry://faust/faust_shimmer_fdn",
+        "",
+        "1.0",
+    ),
+    "faust_super_shimmer_fdn": (
+        "faust_super_shimmer_fdn",
+        "registry://faust/faust_super_shimmer_fdn",
         "",
         "1.0",
     ),

@@ -20,6 +20,7 @@ from types import MappingProxyType
 from typing import cast
 
 from synth_setter.data.vst.faust_shimmer_fdn_source import SHIMMER_FDN_SOURCE
+from synth_setter.data.vst.faust_super_shimmer_fdn_source import SUPER_SHIMMER_FDN_SOURCE
 from synth_setter.param_spec_name import ParamSpecName
 
 
@@ -307,6 +308,9 @@ _faust_dsps: dict[ParamSpecName, FaustDsp] = {
         _KRONECKER_FDN_SOURCE, num_voices=0, outputs=1
     ),
     ParamSpecName("faust_shimmer_fdn"): FaustDsp(SHIMMER_FDN_SOURCE, num_voices=0, outputs=2),
+    ParamSpecName("faust_super_shimmer_fdn"): FaustDsp(
+        SUPER_SHIMMER_FDN_SOURCE, num_voices=0, outputs=2
+    ),
 }
 faust_dsps = cast(Mapping[str, FaustDsp], MappingProxyType(_faust_dsps))
 

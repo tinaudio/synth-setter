@@ -124,6 +124,31 @@ _EXPECTED_PARAMETER_ADDRESSES: Mapping[str, list[str]] = {
         "/shimmerFDN/Safety/loop_ceiling",
         "/shimmerFDN/Safety/energy_guard_bypass",
     ],
+    "faust_super_shimmer_fdn": [
+        "/superShimmerFDN/FDN/T60_low",
+        "/superShimmerFDN/FDN/T60_high",
+        "/superShimmerFDN/FDN/crossover",
+        "/superShimmerFDN/Modulation/rate",
+        "/superShimmerFDN/Modulation/depth",
+        "/superShimmerFDN/Shimmer/transpose",
+        "/superShimmerFDN/Shimmer/window",
+        "/superShimmerFDN/Shimmer/shifted_lines/line__0",
+        "/superShimmerFDN/Shimmer/shifted_lines/line__1",
+        "/superShimmerFDN/Shimmer/shifted_lines/line__2",
+        "/superShimmerFDN/Shimmer/shifted_lines/line__3",
+        "/superShimmerFDN/Shimmer/shifted_lines/line__4",
+        "/superShimmerFDN/Shimmer/shifted_lines/line__5",
+        "/superShimmerFDN/Shimmer/shifted_lines/line__6",
+        "/superShimmerFDN/Shimmer/shifted_lines/line__7",
+        "/superShimmerFDN/Shimmer/DC_comp_max",
+        "/superShimmerFDN/Granular/duration",
+        "/superShimmerFDN/Granular/position",
+        "/superShimmerFDN/Granular/jitter",
+        "/superShimmerFDN/Output/dry/wet",
+        "/superShimmerFDN/Output/level",
+        "/superShimmerFDN/Safety/loop_ceiling",
+        "/superShimmerFDN/Safety/energy_guard_bypass",
+    ],
 }
 _EXPECTED_OUTPUT_CHANNELS = {
     "faust_bright_organ": 2,
@@ -132,6 +157,7 @@ _EXPECTED_OUTPUT_CHANNELS = {
     "faust_filter_osc": 1,
     "faust_kronecker_fdn": 1,
     "faust_shimmer_fdn": 2,
+    "faust_super_shimmer_fdn": 2,
 }
 _RENDER_PARAMETER_OVERRIDES: Mapping[str, Mapping[str, float]] = {
     "faust_bright_organ": {},
@@ -143,6 +169,7 @@ _RENDER_PARAMETER_OVERRIDES: Mapping[str, Mapping[str, float]] = {
     "faust_filter_osc": {},
     "faust_kronecker_fdn": {},
     "faust_shimmer_fdn": {},
+    "faust_super_shimmer_fdn": {},
 }
 
 
@@ -340,6 +367,7 @@ def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
         ("faust_filter_osc", 6),
         ("faust_kronecker_fdn", 38),
         ("faust_shimmer_fdn", 27),
+        ("faust_super_shimmer_fdn", 32),
     ],
 )
 def test_faust_param_spec_preserves_exact_addresses_and_encoded_width(
