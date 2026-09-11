@@ -5,9 +5,10 @@ Select `render=faustcpp` for the stereo Faust identities or
 matching `synth=faust_*` group.
 
 The backend requires the `faust` CLI and `g++` on `PATH`. `RenderConfig.backend_version` must
-match `faust --version`; the Ubuntu 22.04 container installs the distro Faust package and the
-committed render group pins that package's upstream version. `block_size` controls native offline
-processing and participates in the v2 render-contract digest.
+match `faust --version`; the Ubuntu 22.04 production and parity environments use Faust 2.37.3
+with g++ 12. The renderer resolves canonical parameter addresses across the space-versus-underscore
+MapUI formatting used by supported Faust versions. `block_size` controls native offline processing
+and participates in the v2 render-contract digest.
 
 `FaustCppRenderer` verifies the registered source digest, generates C++ with the packaged
 architecture, and compiles one executable per shard renderer. Each row invokes that executable,
@@ -26,7 +27,7 @@ existing `AudioRenderer` contract.
 ```bash
 uv run pytest \
   tests/data/vst/test_faustcpp_renderer.py \
-  tests/data/vst/test_faust_dataset_e2e.py::test_faustcpp_generate_cli_writes_real_lance_row -v
+  tests/test_generate_dataset.py::test_generate_dataset_faustcpp_writes_real_lance_row -v
 ```
 
 The E2E test drives `build_generate_args()` through the real generate-dataset subprocess, Faust

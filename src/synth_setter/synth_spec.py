@@ -34,6 +34,7 @@ _FAUST_SOURCE_SHA256 = {
     "faust_bubble": "731727e725ac0336a897c18df4e8b73f1e75c3d8add40a978efb1d95f88db23c",
     "faust_church_organ": "c753731f4053210d42757acb179010185e91d37fb56a8b45e093222be688b512",
     "faust_filter_osc": "6ad65d28d787f08a3fa66eb4de7d4091be8d2267ad1e9edc200618effbbe588c",
+    "faust_shimmer_fdn": "30b485b40002bc721101c9c50ec4d84f1d96740db20df0273835d543f168a4df",
 }
 
 
@@ -242,6 +243,12 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "registry://faust/faust_filter_osc",
         "",
         "1",
+    ),
+    "faust_shimmer_fdn": (
+        "faust_shimmer_fdn",
+        "registry://faust/faust_shimmer_fdn",
+        "",
+        "1.0",
     ),
     "surge_xt": ("surge_xt", "plugins/Surge XT.vst3", "presets/surge-base.vstpreset", "1.3.4"),
     "surge_simple": (
