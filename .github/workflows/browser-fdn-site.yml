@@ -6,9 +6,10 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/browser-fdn-site.yml"
-      - "src/synth_setter/web/fdn/**"
+      - "src/synth_setter/web/**"
       - "src/synth_setter/faustwasm/**"
       - "src/synth_setter/data/vst/faust_sources.py"
+      - "src/synth_setter/data/vst/faustwasm_*.py"
 
 permissions:
   contents: read
@@ -16,10 +17,6 @@ permissions:
 concurrency:
   group: browser-fdn-site-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  # Same content-addressed bundle the e2e workflow validates.
-  BUNDLE_SHA256: "b86aa3474cb86311615c5c01ede0a35e6445982052979dbe11649f6717f98f2d"
 
 jobs:
   build-site:
@@ -51,8 +48,10 @@ jobs:
           secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
           endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           install-rclone: "true"
+      # The pinned digest lives in one checked-in file shared by every browser FDN workflow.
       - name: Fetch the exported model bundle
         run: |
+          BUNDLE_SHA256=$(tr -d "[:space:]" < src/synth_setter/web/fdn/BUNDLE_SHA256)
           mkdir -p build
           rclone copy --checksum "r2:experiments/browser-fdn/${BUNDLE_SHA256}" build/fdn-bundle
           echo "${BUNDLE_SHA256}  build/fdn-bundle/manifest.json" | sha256sum --check
@@ -60,9 +59,13 @@ jobs:
         run: uv run --extra cpu python -m synth_setter.tools.export_faustwasm --synth faust_fdn_n8_mono_householder --output build/fdn-faust
       - name: Assemble the site
         run: node src/synth_setter/web/fdn/export-site.mjs --model build/fdn-bundle --faust build/fdn-faust --output build/fdn-site
-      - name: Upload the site
+      # The model graphs are a full export of a private checkpoint, so they never enter an
+      # Actions artifact of this public repository; deployers add build/fdn-bundle as model/.
+      - name: Upload the site without the model graphs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: browser-fdn-site
           retention-days: 30
-          path: build/fdn-site
+          path: |
+            build/fdn-site
+            !build/fdn-site/model/**
