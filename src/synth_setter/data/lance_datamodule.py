@@ -46,7 +46,11 @@ from synth_setter.data.vst_datamodule import (
     ranked_generator_seed,
 )
 from synth_setter.features.tiv import extract_tiv_batch
-from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.param_spec_name import (
+    LEGACY_NOTE_TIMING,
+    NoteTimingParameterization,
+    ParamSpecName,
+)
 from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot, GrowingSnapshot
 
 logger = logging.getLogger(__name__)
@@ -557,6 +561,7 @@ class LanceVSTDataModule(VSTDataModule):
         pin_memory: bool = True,
         include_audio: bool = False,
         param_spec_name: ParamSpecName,
+        note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING,
         persistent_workers: bool = False,
         prefetch_factor: int | None = None,
         download_dataset_txids: dict[str, str] | None = None,
@@ -583,6 +588,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param include_audio: Whether all splits include target audio for render-feedback loss.
         :param param_spec_name: Registry key selecting parameter width.
+        :param note_timing_parameterization: Timing coordinates stored in parameter rows.
         :param persistent_workers: Whether positive worker counts persist between iterators.
         :param prefetch_factor: Batches prefetched per worker; ``None`` keeps
             PyTorch's default, and in-process loading ignores it.
@@ -614,6 +620,7 @@ class LanceVSTDataModule(VSTDataModule):
             pin_memory=pin_memory,
             include_audio=include_audio,
             param_spec_name=param_spec_name,
+            note_timing_parameterization=note_timing_parameterization,
             download_dataset_txids=download_dataset_txids,
             download_dataset_row_limit=download_dataset_row_limit,
             high_memory_materialization=high_memory_materialization,
@@ -1011,7 +1018,10 @@ class LanceVSTDataModule(VSTDataModule):
             if stage is None
             else self._STAGE_SPLITS.get(stage, self._ALL_SPLITS)
         )
-        num_params = resolve_param_spec(self.param_spec_name).encoded_width
+        num_params = resolve_param_spec(
+            self.param_spec_name,
+            self.note_timing_parameterization,
+        ).encoded_width
         if self.fake:
             self._splits = {
                 name: self._build_fake_split(

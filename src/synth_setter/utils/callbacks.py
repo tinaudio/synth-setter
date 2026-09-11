@@ -27,7 +27,7 @@ from lightning.pytorch.trainer.states import TrainerFn
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 from matplotlib.figure import Figure
 
-from synth_setter.data.vst import param_specs
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.metrics import (
     categorical_mismatch_metric_families,
     number_group_optimal_assignment_mse_groups,
@@ -37,6 +37,11 @@ from synth_setter.metrics import (
 )
 from synth_setter.models.components.transformer import LearntProjection
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.param_spec_name import (
+    LEGACY_NOTE_TIMING,
+    NoteTimingParameterization,
+    ParamSpecName,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.subprocess_stream import STDERR_TAIL_CHARS
 
@@ -959,13 +964,20 @@ def _distributed_metric_mean(
 class LogPerParamMSE(Callback):
     """Log validation/test MSE and array alignment distances by ParamSpec parameter."""
 
-    def __init__(self, param_spec: str) -> None:
+    def __init__(
+        self,
+        param_spec: str,
+        note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING,
+    ) -> None:
         """Select the ParamSpec whose dimension names label emitted metrics.
 
         :param param_spec: Registered ParamSpec name for evaluation outputs.
+        :param note_timing_parameterization: Timing coordinates stored with the rows.
         """
         super().__init__()
-        self.param_spec = param_specs[param_spec]
+        self.param_spec = resolve_param_spec(
+            ParamSpecName(param_spec), note_timing_parameterization
+        )
 
     def _reset(self) -> None:
         self.metric_totals: dict[str, np.ndarray] = {}

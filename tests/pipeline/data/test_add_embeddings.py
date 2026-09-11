@@ -86,6 +86,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_m2l_spec_encoder,
     _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
+    _lineage_dataset_root,
     _matching_index_exists,
     _missing_embedding_specs,
     _prepare_resume_cache,
@@ -559,6 +560,24 @@ def test_add_embeddings_config_composition_surfaces_registry_defaults() -> None:
         assert AddEmbeddingsConfig.from_hydra_cfg(cfg) == AddEmbeddingsConfig(lance_uri=_LANCE_URI)
     finally:
         GlobalHydra.instance().clear()
+
+
+@pytest.mark.parametrize(
+    ("lance_uri", "expected"),
+    [
+        ("train.lance", "."),
+        ("data/train.lance", "data"),
+        ("/data/root/train.lance", "/data/root"),
+        ("r2://bucket/run/train.lance", "r2://bucket/run"),
+    ],
+)
+def test_lineage_dataset_root_resolves_split_parent(lance_uri: str, expected: str) -> None:
+    """Sibling metadata reads target the split's parent directory.
+
+    :param lance_uri: Split dataset URI under test.
+    :param expected: Dataset-root URI for metadata reads.
+    """
+    assert _lineage_dataset_root(lance_uri) == expected
 
 
 def test_add_embeddings_config_from_hydra_coerces_embedding_list_to_tuple() -> None:

@@ -19,6 +19,7 @@ import pytest
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, render_params
 from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.renderers import PedalboardRenderer
 from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.data.vst.writers import make_lance_dataset
@@ -381,6 +382,21 @@ def _assert_lance_structure_is_valid(
     assert (peak > _AUDIO_PEAK_SILENCE_FLOOR).all(), f"silent clips: peaks={peak.tolist()}"
 
     return audio_arr, mel_arr, params_arr
+
+
+def _writer_spec(render_cfg: RenderConfig) -> ParamSpec:
+    """Resolve the exact spec object ``make_lance_dataset`` renders with.
+
+    The writer selects coordinates from the render config's timing discriminator, so sample-
+    patching and verbatim checks must use the same resolution rather than the registry's canonical
+    entry.
+
+    :param render_cfg: Render config driving the writer.
+    :returns: Registry spec for the config's timing parameterization.
+    """
+    return resolve_param_spec(
+        ParamSpecName(_SPEC_NAME), render_cfg.note_timing_parameterization
+    )
 
 
 @contextmanager
@@ -803,8 +819,8 @@ def test_datasets_from_hardcoded_params_are_identical(
     The hardcoded values are a known-good loudness-passing capture from a prior
     surge_xt run; if the spec changes, they must be regenerated.
     """
-    spec = param_specs[_SPEC_NAME]
     num_samples = 6
+    spec = _writer_spec(_render_cfg(num_samples))
     replay = [(_HARDCODED_SYNTH_PARAMS, _HARDCODED_NOTE_PARAMS)] * num_samples
 
     expected_dataset = tmp_path / "expected.lance"
@@ -893,12 +909,13 @@ def test_datasets_from_sampled_params_are_identical(tmp_path: Path) -> None:
       same waveform.
     - Mel spec matches within mean absolute log-power error.
     """
-    spec = param_specs[_SPEC_NAME]
+    render_cfg = _render_cfg(_NUM_SAMPLES)
+    spec = _writer_spec(render_cfg)
 
     # Stage 1: random-sampled "candidates" dataset (loudness-filtered).
     expected_dataset = tmp_path / "candidates.lance"
     t0 = time.perf_counter()
-    make_lance_dataset(expected_dataset, render_cfg=_render_cfg(_NUM_SAMPLES))
+    make_lance_dataset(expected_dataset, render_cfg=render_cfg)
     stage1_seconds = time.perf_counter() - t0
 
     expected_audio, expected_mel, expected_params = _assert_lance_structure_is_valid(
@@ -1575,12 +1592,13 @@ def test_make_dataset_uses_fixed_params_lists_when_provided(
     tmp_path: Path,
 ) -> None:
     """Write the supplied fixed params to a Lance shard verbatim, bypassing param_spec.sample()."""
-    spec = param_specs[_SPEC_NAME]
-    out = tmp_path / "fixed.lance"
     num_samples = 3
+    render_cfg = _render_cfg(num_samples)
+    spec = _writer_spec(render_cfg)
+    out = tmp_path / "fixed.lance"
     make_lance_dataset(
         out,
-        render_cfg=_render_cfg(num_samples),
+        render_cfg=render_cfg,
         fixed_synth_params_list=[_HARDCODED_SYNTH_PARAMS] * num_samples,
         fixed_note_params_list=[_HARDCODED_NOTE_PARAMS] * num_samples,
     )

@@ -188,6 +188,7 @@ def flow_checkpoint(tmp_path_factory: pytest.TempPathFactory) -> Path:
         num_params=_SURGE_XT_PRED_WIDTH,
         test_sample_steps=2,
         test_cfg_strength=1.0,
+        note_timing_parameterization="onset_duration",
     )
     return _save_real_checkpoint(model, tmp_path_factory.mktemp("ckpt") / "flow.ckpt")
 

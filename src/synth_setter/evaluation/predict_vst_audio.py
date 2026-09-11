@@ -13,7 +13,6 @@ from pedalboard.io import AudioFile
 from pydantic_settings import BaseSettings, CliApp, CliPositionalArg, SettingsConfigDict
 from tqdm import tqdm, trange
 
-from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import run_with_editor_held_open
 from synth_setter.data.vst.param_spec import (
     NoteParams,
@@ -23,6 +22,7 @@ from synth_setter.data.vst.param_spec import (
     require_note_params,
     spec_quantize_model_output,
 )
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.renderers import AudioRenderer, PedalboardRenderer
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
@@ -414,7 +414,10 @@ def render_prediction_audio(args: _PredictAudioCliArgs) -> None:
     :param args: Validated render configuration and artifact paths.
     :raises RuntimeError: An always-on GUI config lacks a cached Pedalboard plugin.
     """
-    spec = param_specs[args.param_spec_name]
+    spec = resolve_param_spec(
+        args.param_spec_name,
+        args.note_timing_parameterization,
+    )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     renderer = make_audio_renderer(args)
     render = _make_render_fn(args, renderer)

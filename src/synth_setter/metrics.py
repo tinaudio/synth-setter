@@ -333,6 +333,7 @@ def semantic_parameter_distances(
         DirectionArrayParameter,
         DiscreteArrayParameter,
         DiscreteLiteralParameter,
+        LegacyEndpointNoteDurationParameter,
         NoteDurationParameter,
     )
 
@@ -347,6 +348,7 @@ def semantic_parameter_distances(
                 DirectionArrayParameter,
                 DiscreteArrayParameter,
                 DiscreteLiteralParameter,
+                LegacyEndpointNoteDurationParameter,
                 NoteDurationParameter,
             ),
         ):
@@ -369,6 +371,13 @@ def semantic_parameter_distances(
             namespaces = {
                 "discrete_mae": np.abs(difference).mean(),
                 "discrete_mismatch_rate": np.not_equal(predicted_native, target_native).mean(),
+            }
+        elif isinstance(parameter, NoteDurationParameter):
+            predicted_duration = predicted_native[:, 1] - predicted_native[:, 0]
+            target_duration = target_native[:, 1] - target_native[:, 0]
+            namespaces = {
+                "note_duration_mae_seconds": np.abs(predicted_duration - target_duration).mean(),
+                "note_onset_mae_seconds": np.abs(difference[:, 0]).mean(),
             }
         else:
             namespaces = {"note_timing_mae_seconds": np.abs(difference).mean()}

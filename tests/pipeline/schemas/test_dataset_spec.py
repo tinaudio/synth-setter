@@ -448,6 +448,7 @@ class TestRenderConfig:
         """Existing explicit v2 pathless specs retain their serialized identity."""
         synth = SYNTHS[SynthName("faust_bright_organ")].model_dump()
         synth["plugin_path"] = ""
+        synth.pop("note_timing_parameterization")
         cfg = RenderConfig.model_validate(
             {
                 "synth": synth,
@@ -471,6 +472,34 @@ class TestRenderConfig:
         assert (
             restored.shard_metadata().render_contract_digest
             == "301df39954fe95e9a1661a54fe8e03c62afc6ccd5caeffd3574023070ac52aa8"
+        )
+
+    def test_missing_timing_metadata_defaults_legacy_while_registered_synth_is_new(
+        self,
+    ) -> None:
+        """Old render JSON stays legacy and fresh synth composition selects onset-duration."""
+        synth = SYNTHS[SynthName("surge_4")].model_dump()
+        synth.pop("note_timing_parameterization")
+
+        legacy = RenderConfig.model_validate(
+            {
+                "synth": synth,
+                "sample_rate": 44100,
+                "channels": 2,
+                "velocity": 100,
+                "signal_duration_seconds": 4.0,
+                "min_loudness": -55.0,
+                "samples_per_shard": 1,
+            }
+        )
+
+        current = legacy.model_copy(update={"synth": SYNTHS[SynthName("surge_4")]})
+
+        assert legacy.synth.note_timing_parameterization == "legacy_endpoints"
+        assert current.note_timing_parameterization == "onset_duration"
+        assert (
+            legacy.shard_metadata().render_contract_digest
+            != current.shard_metadata().render_contract_digest
         )
 
     def test_explicit_synth_object_and_dict_use_same_render_contract(self) -> None:

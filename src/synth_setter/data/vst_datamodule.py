@@ -22,7 +22,11 @@ from synth_setter.conditioning import (
     resolve_sketch_controls,
 )
 from synth_setter.data.ot import _hungarian_match
-from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.param_spec_name import (
+    LEGACY_NOTE_TIMING,
+    NoteTimingParameterization,
+    ParamSpecName,
+)
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import materialize_splits, subset_dirname
 
@@ -351,6 +355,7 @@ class VSTDataModule(LightningDataModule):
         include_audio: bool = False,
         *,
         param_spec_name: ParamSpecName,
+        note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING,
         download_dataset_txids: dict[str, str] | None = None,
         download_dataset_row_limit: int | None = None,
         high_memory_materialization: bool = False,
@@ -375,6 +380,7 @@ class VSTDataModule(LightningDataModule):
         :param pin_memory: Whether dataloaders pin returned tensors.
         :param include_audio: Whether all splits include target audio for render-feedback loss.
         :param param_spec_name: Registry key selecting parameter width.
+        :param note_timing_parameterization: Timing coordinates stored in parameter rows.
         :param download_dataset_txids: Per-split transaction uuids pinning the
             source snapshots. Each split has independent transaction history.
         :param download_dataset_row_limit: First-N rows per split at materialization
@@ -410,6 +416,9 @@ class VSTDataModule(LightningDataModule):
         self.pin_memory = pin_memory
         self.include_audio = include_audio
         self.param_spec_name = param_spec_name
+        self.note_timing_parameterization: NoteTimingParameterization = (
+            note_timing_parameterization
+        )
         self.download_dataset_txids = materialize_config.download_dataset_txids
         self.download_dataset_row_limit = materialize_config.download_dataset_row_limit
         self.high_memory_materialization = (

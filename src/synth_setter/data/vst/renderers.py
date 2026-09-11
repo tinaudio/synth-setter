@@ -26,7 +26,11 @@ import numpy as np
 
 from synth_setter.data.vst.dawdreamer_runtime import settle_dawdreamer_preset
 from synth_setter.data.vst.param_map import SynthParamMap
-from synth_setter.data.vst.param_spec import ParameterValue, require_scalar_synth_params
+from synth_setter.data.vst.param_spec import (
+    NoteDurationParameter,
+    ParameterValue,
+    require_scalar_synth_params,
+)
 from synth_setter.data.vst.surgepy_runtime import (
     SurgePyModule,
     SurgePyNamedParam,
@@ -708,9 +712,20 @@ class TorchSynthRenderer(AudioRenderer):
         unknown = sorted(params.keys() - DEFAULT_NORMALIZED_PATCH.keys())
         if unknown:
             raise KeyError(f"unknown torchsynth parameter key(s): {', '.join(unknown)}")
+        start, end = note_start_and_end
+        horizon = next(
+            parameter.max_note_duration_seconds
+            for parameter in TORCHSYNTH_FULL_PARAM_SPEC.note_params
+            if isinstance(parameter, NoteDurationParameter)
+        )
+        start = min(max(start, 0.0), horizon)
+        end = min(max(end, 0.0), horizon)
+        if end - start < 0.001:
+            end = min(horizon, start + 0.001)
+            start = end - 0.001
         row = TORCHSYNTH_FULL_PARAM_SPEC.encode(
             {**DEFAULT_NORMALIZED_PATCH, **params},
-            {"pitch": midi_note, "note_start_and_end": note_start_and_end},
+            {"pitch": midi_note, "note_start_and_end": (start, end)},
         )
         samples = self._signal_length()
         audio = render_torchsynth(

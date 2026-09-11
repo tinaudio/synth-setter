@@ -892,9 +892,11 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         values = [value for key, value in metric_dict.items() if key.startswith(prefix)]
         assert values, f"no {prefix} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
-    assert torch.isfinite(
-        metric_dict["val/number_group_optimal_assignment_mse/adsr_1.attack"]
-    ).all()
+    assignment_metric = "val/number_group_optimal_assignment_mse/adsr_N.attack"
+    assert assignment_metric in metric_dict, sorted(
+        key for key in metric_dict if "assignment" in key
+    )
+    assert torch.isfinite(metric_dict[assignment_metric]).all()
 
     checkpoint = tmp_path / "checkpoints" / "last.ckpt"
     assert checkpoint.is_file()
@@ -1281,19 +1283,18 @@ def test_cfg_surge_xt_global_wires_param_spec(param_spec_name: str) -> None:
 
 
 @pytest.mark.slow
-def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: Path) -> None:
-    """Fake-mode train through the entrypoint sizes batches from a non-default ``param_spec_name``.
+def test_train_fake_mode_onset_duration_sizes_batches_from_registry(tmp_path: Path) -> None:
+    """Fake-mode training consumes onset-duration rows under the base spec identity.
 
-    Drives the real ``train(cfg)`` entrypoint with ``datamodule.fake=true`` and the
-    non-default ``surge_simple`` spec: no dataset on disk, so the run exercises the
-    registry-derived fake width end-to-end. The width-agnostic ``surge/fake_oracle``
-    experiment (oracle returns ``batch["params"]``) tolerates the registry-width batches,
-    and the datamodule the entrypoint built carries that registry-derived width.
+    Drives the real ``train(cfg)`` entrypoint with ``datamodule.fake=true``. The
+    width-agnostic ``surge/fake_oracle`` experiment tolerates registry-width batches,
+    and the datamodule and model receive the same persisted timing discriminator.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``; no dataset is read.
     """
-    expected_width = len(param_specs["surge_simple"])
-    cfg = build_fake_train_cfg(tmp_path, param_spec_name="surge_simple")
+    identity = "surge_simple"
+    expected_width = len(param_specs[identity])
+    cfg = build_fake_train_cfg(tmp_path, param_spec_name=identity)
 
     HydraConfig().set_config(cfg)
     _, object_dict = train(cfg)
@@ -1301,9 +1302,10 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
     trainer = object_dict["trainer"]
     assert trainer.global_step >= 1, f"trainer did not advance: global_step={trainer.global_step}"
 
-    assert_log_per_param_mse_wired(trainer, "surge_simple")
+    assert_log_per_param_mse_wired(trainer, identity)
 
     datamodule = object_dict["datamodule"]
+    assert datamodule.note_timing_parameterization == "onset_duration"
     datamodule.setup("fit")
     batch = next(iter(datamodule.train_dataloader()))
     assert batch["params"].shape == (2, expected_width)
@@ -2404,6 +2406,24 @@ def test_train_wandb_config_resolves_scheduler_max_steps(
     assert logger.recorded_config["model"]["scheduler"]["T_max"] == 1
 
 
+def test_train_lance_rejects_legacy_dataset_for_onset_duration_config(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """Training rejects equal-width dataset rows with legacy timing semantics.
+
+    :param cfg_train_lance: Composed onset-duration Lance configuration.
+    """
+    dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
+    input_spec_path = dataset_root / "input_spec.json"
+    input_spec_path.write_text(
+        json.dumps({"render": {"synth": {"name": "surge_simple"}}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="note_timing_parameterization"):
+        train(cfg_train_lance)
+
+
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_lance_records_dataset_lineage_from_legacy_local_spec(
@@ -2420,6 +2440,9 @@ def test_train_lance_records_dataset_lineage_from_legacy_local_spec(
     }
     dataset_root = Path(cfg_train_lance.datamodule.dataset_root)
     (dataset_root / "input_spec.json").write_text(json.dumps(legacy_spec), encoding="utf-8")
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.synth.note_timing_parameterization = "legacy_endpoints"
+        cfg_train_lance.datamodule.note_timing_parameterization = "legacy_endpoints"
     HydraConfig().set_config(cfg_train_lance)
     logger = _RecordingWandbLogger()
     with patch("synth_setter.cli.train.instantiate_loggers", return_value=[logger]):
