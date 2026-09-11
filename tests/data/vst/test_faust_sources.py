@@ -70,12 +70,27 @@ _EXPECTED_PARAMETER_ADDRESSES: Mapping[str, list[str]] = {
         "/SINE_WAVE_OSCILLATOR_oscrs/Frequency",
         "/SINE_WAVE_OSCILLATOR_oscrs/Portamento",
     ],
+    "faust_augmentor": [
+        "/augmentor/envelope/depth",
+        "/augmentor/envelope/rate",
+        "/augmentor/filter/cutoff",
+        "/augmentor/filter/mix",
+        "/augmentor/filter/resonance",
+        "/augmentor/gate",
+        "/augmentor/noise/amount",
+        "/augmentor/pitch/mix",
+        "/augmentor/pitch/shift",
+        "/augmentor/reverse/mix",
+        "/augmentor/source/freq",
+        "/augmentor/source/gain",
+    ],
 }
 _EXPECTED_OUTPUT_CHANNELS = {
     "faust_bright_organ": 2,
     "faust_bubble": 2,
     "faust_church_organ": 2,
     "faust_filter_osc": 1,
+    "faust_augmentor": 2,
 }
 _RENDER_PARAMETER_OVERRIDES: Mapping[str, Mapping[str, float]] = {
     "faust_bright_organ": {},
@@ -85,6 +100,7 @@ _RENDER_PARAMETER_OVERRIDES: Mapping[str, Mapping[str, float]] = {
         "/churchOrgan/gate": 1.0,
     },
     "faust_filter_osc": {},
+    "faust_augmentor": {"/augmentor/gate": 1.0},
 }
 
 
@@ -280,6 +296,7 @@ def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
         ("faust_bubble", 10),
         ("faust_church_organ", 16),
         ("faust_filter_osc", 6),
+        ("faust_augmentor", 16),
     ],
 )
 def test_faust_param_spec_preserves_exact_addresses_and_encoded_width(
@@ -520,3 +537,53 @@ def test_faust_source_renders_real_audio(param_spec_name: str) -> None:
     assert np.isfinite(audio).all()
     assert np.max(np.abs(audio)) > _MIN_AUDIBLE_PEAK
     assert np.max(np.abs(audio)) <= 1.0
+
+
+_AUGMENTOR_STAGE_SECONDS = 1.2
+_MIN_STAGE_DIFF = 1e-3
+_AUGMENTOR_STAGE_ENGAGES: Mapping[str, Mapping[str, float]] = {
+    "envelope": {"/augmentor/envelope/depth": 1.0, "/augmentor/envelope/rate": 8.0},
+    "pitch": {"/augmentor/pitch/shift": 7.0, "/augmentor/pitch/mix": 1.0},
+    "filter": {"/augmentor/filter/cutoff": 800.0, "/augmentor/filter/mix": 1.0},
+    "noise": {"/augmentor/noise/amount": 1.0},
+    "reverse": {"/augmentor/reverse/mix": 1.0},
+}
+
+
+def _render_augmentor(overrides: Mapping[str, float]) -> np.ndarray:
+    """Render one augmentor patch through a fresh engine.
+
+    A fresh engine per render keeps delay, noise, and envelope state from leaking across patches
+    the way a reused engine would.
+
+    :param overrides: Native parameter values applied on top of closed controls.
+    :returns: Rendered stereo audio.
+    """
+    dd = cast(_DawDreamerModule, import_module("dawdreamer"))
+    dsp = resolve_faust_dsp(ParamSpecName("faust_augmentor"))
+    engine = dd.RenderEngine(_SAMPLE_RATE, _BLOCK_SIZE)
+    processor = engine.make_faust_processor("faust_augmentor")
+    processor.num_voices = dsp.num_voices
+    assert processor.set_dsp_string(dsp.source)
+    assert processor.compile()
+    for address, value in overrides.items():
+        assert processor.set_parameter(address, value)
+    engine.load_graph([(processor, [])])
+    assert engine.render(_AUGMENTOR_STAGE_SECONDS)
+    return np.asarray(engine.get_audio())
+
+
+@pytest.mark.parametrize("stage", sorted(_AUGMENTOR_STAGE_ENGAGES))
+def test_faust_augmentor_stage_alters_output(stage: str) -> None:
+    """Every augmentor stage audibly changes the voice against its bypass.
+
+    :param stage: Augmentation stage under test.
+    """
+    bypass = _render_augmentor(_RENDER_PARAMETER_OVERRIDES["faust_augmentor"])
+    engaged = _render_augmentor(
+        {**_RENDER_PARAMETER_OVERRIDES["faust_augmentor"], **_AUGMENTOR_STAGE_ENGAGES[stage]}
+    )
+
+    assert engaged.shape == bypass.shape
+    assert np.isfinite(engaged).all()
+    assert np.max(np.abs(engaged - bypass)) > _MIN_STAGE_DIFF

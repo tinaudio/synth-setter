@@ -53,6 +53,9 @@ from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.synth_spec import SYNTHS
 
 _param_specs: dict[ParamSpecName, ParamSpec] = {
+    ParamSpecName("faust_augmentor"): resolve_faust_param_spec(
+        ParamSpecName("faust_augmentor")
+    ),
     ParamSpecName("faust_bright_organ"): resolve_faust_param_spec(
         ParamSpecName("faust_bright_organ")
     ),

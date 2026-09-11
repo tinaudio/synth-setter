@@ -44,6 +44,20 @@ _EXPECTED_PARAMETER_ADDRESSES = {
         ("/bubble/bubble/freq", "/bubble/bubble/freq"),
         ("/bubble/drop", "/bubble/drop"),
     ),
+    "faust_augmentor": (
+        ("/augmentor/envelope/depth", "/augmentor/envelope_depth"),
+        ("/augmentor/envelope/rate", "/augmentor/envelope_rate"),
+        ("/augmentor/filter/cutoff", "/augmentor/filter_cutoff"),
+        ("/augmentor/filter/mix", "/augmentor/filter_mix"),
+        ("/augmentor/filter/resonance", "/augmentor/filter_resonance"),
+        ("/augmentor/gate", "/augmentor/gate"),
+        ("/augmentor/noise/amount", "/augmentor/noise_amount"),
+        ("/augmentor/pitch/mix", "/augmentor/pitch_mix"),
+        ("/augmentor/pitch/shift", "/augmentor/pitch_shift"),
+        ("/augmentor/reverse/mix", "/augmentor/reverse_mix"),
+        ("/augmentor/source/freq", "/augmentor/source_freq"),
+        ("/augmentor/source/gain", "/augmentor/source_gain"),
+    ),
     "faust_church_organ": (
         ("/churchOrgan/Zita_Light/Dry/Wet_Mix", "/churchOrgan/Zita_Light/Wet_Dry_Mix"),
         ("/churchOrgan/Zita_Light/Level", "/churchOrgan/Zita_Light/Level"),
@@ -147,6 +161,7 @@ def test_faustwasm_legacy_digest_projection_is_rejected() -> None:
 @pytest.mark.parametrize(
     ("identity", "channels"),
     [
+        ("faust_augmentor", 2),
         ("faust_bright_organ", 2),
         ("faust_bubble", 2),
         ("faust_church_organ", 2),
@@ -227,7 +242,12 @@ def test_faustwasm_bright_organ_midi_octave_doubles_dominant_frequency() -> None
 @pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize(
     ("identity", "channels"),
-    [("faust_bubble", 2), ("faust_church_organ", 2), ("faust_filter_osc", 1)],
+    [
+        ("faust_augmentor", 2),
+        ("faust_bubble", 2),
+        ("faust_church_organ", 2),
+        ("faust_filter_osc", 1),
+    ],
 )
 def test_faustwasm_mono_source_is_independent_of_midi_pitch(
     identity: str,

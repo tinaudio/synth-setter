@@ -29,6 +29,7 @@ SynthName = NewType("SynthName", str)
 type SynthFormat = Literal["faust", "pyfdn", "surgepy", "torchsynth", "vst3"]
 
 _FAUST_SOURCE_SHA256 = {
+    "faust_augmentor": "2003dbf11b0a32f8d3bfe0575cfae7394f54cdccc82c0e310227cdaa4be7a4a8",
     "faust_bright_organ": "a1bf9f6e45ebbf78dd11fc18603cda048a91a778af1ad79683339b1951813465",
     "faust_bubble": "731727e725ac0336a897c18df4e8b73f1e75c3d8add40a978efb1d95f88db23c",
     "faust_church_organ": "c753731f4053210d42757acb179010185e91d37fb56a8b45e093222be688b512",
@@ -216,6 +217,12 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "plugins/CardinalSynth.vst3",
         "presets/cardinal-base.vstpreset",
         "0.26.2",
+    ),
+    "faust_augmentor": (
+        "faust_augmentor",
+        "registry://faust/faust_augmentor",
+        "",
+        "1",
     ),
     "faust_bright_organ": (
         "faust_bright_organ",

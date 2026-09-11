@@ -86,6 +86,7 @@ def _midpoint_params(param_spec_name: str) -> dict[str, float]:
 @pytest.mark.parametrize(
     ("param_spec_name", "channels"),
     [
+        ("faust_augmentor", 2),
         ("faust_bright_organ", 2),
         ("faust_bubble", 2),
         ("faust_church_organ", 2),

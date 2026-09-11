@@ -232,6 +232,7 @@ def test_render_torchsynth_composes_into_valid_render_config(name: str, num_para
 @pytest.mark.parametrize(
     ("name", "num_params", "channels", "render_group"),
     [
+        ("faust_augmentor", 16, 2, "faust"),
         ("faust_bright_organ", 13, 2, "faust"),
         ("faust_bubble", 10, 2, "faust"),
         ("faust_church_organ", 16, 2, "faust"),
@@ -275,6 +276,7 @@ def test_faustwasm_hydra_version_matches_pinned_node_dependency() -> None:
 @pytest.mark.parametrize(
     ("name", "channels", "render_group"),
     [
+        ("faust_augmentor", 2, "faustwasm"),
         ("faust_bright_organ", 2, "faustwasm"),
         ("faust_bubble", 2, "faustwasm"),
         ("faust_church_organ", 2, "faustwasm"),
@@ -305,6 +307,7 @@ def test_render_faustwasm_composes_with_explicit_v2_contract(
 @pytest.mark.parametrize(
     ("name", "channels", "render_group"),
     [
+        ("faust_augmentor", 2, "faustcpp"),
         ("faust_bright_organ", 2, "faustcpp"),
         ("faust_bubble", 2, "faustcpp"),
         ("faust_church_organ", 2, "faustcpp"),
