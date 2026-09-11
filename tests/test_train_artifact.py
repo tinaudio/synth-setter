@@ -368,6 +368,26 @@ def test_upload_best_checkpoint_upload_failure_returns_none(
     )
 
 
+def test_upload_best_checkpoint_unhashable_path_returns_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A checkpoint that cannot be hashed degrades to lineage-only (None).
+
+    :param monkeypatch: Stubs R2 env-load as available; the hash gate fires first.
+    :param tmp_path: Supplies a directory path that fails the file hash.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", lambda *a, **k: None)
+    assert (
+        _upload_best_checkpoint(
+            _cfg(task_name="flow-simple"),
+            str(tmp_path),
+            _TRAINING_RUN_ID,
+            _LAUNCH_UUID,
+        )
+        is None
+    )
+
+
 def test_log_model_artifact_logs_to_wandb_logger() -> None:
     """A WandbLogger receives a ``model``-typed artifact with the expected name."""
     logger = _RecordingWandbLogger()

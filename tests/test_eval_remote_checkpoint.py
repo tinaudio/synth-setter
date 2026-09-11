@@ -184,6 +184,25 @@ def test_eval_checkpoint_filename_validation_rejects_digest_mismatch(
         eval_module._localize_eval_checkpoint(uri, digest)
 
 
+def test_eval_checkpoint_filename_validation_rejects_local_digest_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Filename-derived validation rejects local bytes with another digest.
+
+    :param tmp_path: Temporary checkpoint and cache directory.
+    :param monkeypatch: Routes the shared cache into the temporary directory.
+    """
+    checkpoint = tmp_path / f"model-{'0' * 64}.ckpt"
+    checkpoint.write_bytes(b"different checkpoint")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    digest = eval_module._resolve_checkpoint_sha256(
+        str(checkpoint), None, validate_chekpoint_sha=True
+    )
+
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+        eval_module._localize_eval_checkpoint(str(checkpoint), digest)
+
+
 def test_eval_checkpoint_filename_validation_rejects_non_boolean_flag() -> None:
     """Filename validation cannot be enabled by a truthy non-boolean value."""
     with pytest.raises(ValueError, match="validate_chekpoint_sha must be a boolean"):

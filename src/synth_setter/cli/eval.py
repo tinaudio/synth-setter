@@ -71,6 +71,9 @@ log = RankedLogger(__name__, rank_zero_only=True)
 
 _MAX_EVALUATION_SEED = 2**32 - 1
 
+# URI schemes served from R2-backed object storage (single-sourced predicate).
+_REMOTE_CHECKPOINT_PREFIXES = ("r2://", "s3://")
+
 
 class _CheckpointChangedDuringDownloadError(RuntimeError):
     """A remote checkpoint changed between metadata lookup and download."""
@@ -487,7 +490,7 @@ def _localize_eval_checkpoint(
     if not isinstance(checkpoint, str):
         raise ValueError("ckpt_path must be a string or null")
     digest = _normalize_checkpoint_sha256(expected_sha256)
-    is_remote = checkpoint.startswith(("r2://", "s3://"))
+    is_remote = checkpoint.startswith(_REMOTE_CHECKPOINT_PREFIXES)
     if not is_remote:
         if digest is None:
             return checkpoint
@@ -592,7 +595,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     is_unpinned_remote = (
         expected_checkpoint_sha256 is None
         and isinstance(configured_checkpoint, str)
-        and configured_checkpoint.startswith(("r2://", "s3://"))
+        and configured_checkpoint.startswith(_REMOTE_CHECKPOINT_PREFIXES)
     )
     checkpoint_path = _localize_eval_checkpoint(
         configured_checkpoint, expected_checkpoint_sha256, trainer.world_size

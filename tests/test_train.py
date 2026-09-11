@@ -2778,6 +2778,52 @@ def test_train_mirrors_checkpoints_to_r2_mid_run_when_enabled(
 
 
 @pytest.mark.slow
+def test_train_best_checkpoint_upload_uses_digest_bearing_name(
+    cfg_train: DictConfig, fake_r2_remote: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The train entrypoint uploads its best checkpoint under a digest-bearing name.
+
+    :param cfg_train: Tiny CPU TorchSynth config producing a best checkpoint.
+    :param fake_r2_remote: Tmp root backing ``r2:`` through the real rclone binary.
+    :param tmp_path: Hosts the offline run dir and the training outputs.
+    :param monkeypatch: Pins a hermetic offline ``WANDB_*`` environment and records uploads.
+    """
+    for key in [k for k in os.environ if k.startswith("WANDB_")]:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("WANDB_MODE", "offline")
+    monkeypatch.setenv("WANDB_DATA_DIR", str(tmp_path / "wandb-data"))
+    wandb.teardown()
+    uploads = _record_successful_r2_uploads(monkeypatch)
+    with open_dict(cfg_train):
+        cfg_train.test = False
+        cfg_train.trainer.max_epochs = 1
+        cfg_train.trainer.limit_train_batches = 1
+        cfg_train.trainer.limit_val_batches = 1
+        cfg_train.training.upload_checkpoints_uri = None
+        cfg_train.logger = {
+            "wandb": {
+                "_target_": "lightning.pytorch.loggers.wandb.WandbLogger",
+                "offline": True,
+                "save_dir": str(tmp_path),
+                "id": None,
+                "job_type": "",
+                "project": "train-digest-filename-test-project",
+            }
+        }
+    HydraConfig().set_config(cfg_train)
+    train(cfg_train)
+    wandb.teardown()
+
+    best_uploads = [uri for _, uri, _ in uploads if not uri.endswith("/last.ckpt")]
+    assert best_uploads, "expected a train-end best-checkpoint upload"
+    for uri in best_uploads:
+        match = re.fullmatch(r".+-(?P<digest>[0-9a-f]{64})\.ckpt", uri)
+        assert match is not None, f"best checkpoint URI lacks a digest: {uri}"
+        remote_bytes = (fake_r2_remote / uri.removeprefix("r2://")).read_bytes()
+        assert hashlib.sha256(remote_bytes).hexdigest() == match.group("digest")
+
+
+@pytest.mark.slow
 def test_train_recovers_r2_checkpoint_after_fit_raises(
     cfg_train: DictConfig, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
