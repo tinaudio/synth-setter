@@ -1037,7 +1037,7 @@ def test_nsynth_sketch_batch_pools_controls_and_zeroes_weak_pitch(
     controls[:, SKETCH_LOUDNESS_ROW, 1::2] = 1.0
     controls[:, SKETCH_CENTROID_ROW, ::2] = 1.0
     controls[:, SKETCH_PITCH_SLICE.start, :] = 0.05
-    controls[:, SKETCH_PITCH_SLICE.start + 1, 1::2] = 0.2
+    controls[:, SKETCH_PITCH_SLICE.start + 1, 1::2] = 0.5
     monkeypatch.setattr(
         "synth_setter.data.third_party_datamodule.extract_sketch_controls_batch",
         lambda audio, sample_rate: controls,
@@ -1060,7 +1060,7 @@ def test_nsynth_sketch_batch_pools_controls_and_zeroes_weak_pitch(
     assert torch.equal(pooled[0, SKETCH_LOUDNESS_ROW], torch.full((32,), 0.5))
     assert torch.equal(pooled[0, SKETCH_CENTROID_ROW], torch.full((32,), 0.5))
     assert torch.count_nonzero(pooled[0, SKETCH_PITCH_SLICE.start]) == 0
-    assert torch.equal(pooled[0, SKETCH_PITCH_SLICE.start + 1], torch.full((32,), 0.2))
+    assert torch.equal(pooled[0, SKETCH_PITCH_SLICE.start + 1], torch.full((32,), 0.25))
 
 
 def test_nsynth_sketch_noncanonical_frame_count_raises(tmp_path: Path) -> None:
