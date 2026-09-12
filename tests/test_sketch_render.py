@@ -512,8 +512,9 @@ def test_prepare_inputs_normalizes_mel_and_zeros_weak_pitch(
     controls = torch.full((386, 401), 0.05)
     controls[0] = 0.25
     controls[1] = 0.5
-    controls[2, 0] = 0.1
-    controls[2, 13] = 0.11
+    # Unit spikes whose 13- and 14-frame window means clear the 0.1 threshold.
+    controls[2, 0] = 1.0
+    controls[2, 13] = 1.0
     monkeypatch.setattr(sketch_render, "make_spectrogram", lambda *args: np.full(shape, 4.0))
     monkeypatch.setattr(
         sketch_render,
@@ -543,8 +544,8 @@ def test_prepare_inputs_normalizes_mel_and_zeros_weak_pitch(
     assert batch["sketch_ctrl"].dtype is torch.float32
     assert torch.equal(batch["sketch_ctrl"][:, 0], torch.full((1, 32), 0.25))
     assert torch.equal(batch["sketch_ctrl"][:, 1], torch.full((1, 32), 0.5))
-    assert batch["sketch_ctrl"][0, 2, 0] == pytest.approx(0.1)
-    assert batch["sketch_ctrl"][0, 2, 1] == pytest.approx(0.11)
+    assert batch["sketch_ctrl"][0, 2, 0] == pytest.approx(0.12307687)
+    assert batch["sketch_ctrl"][0, 2, 1] == pytest.approx(0.11785709)
     assert torch.count_nonzero(batch["sketch_ctrl"][:, 2:, 2:]) == 0
 
 
