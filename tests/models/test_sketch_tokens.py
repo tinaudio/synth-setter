@@ -251,7 +251,7 @@ class TestSketchControlTokens:
         [
             (0, SKETCH_LOUDNESS_ROW, (0.5, 0.5, 0.5, 0.5)),
             (1, SKETCH_CENTROID_ROW, (0.5, 0.5, 0.5, 0.5)),
-            (2, SKETCH_PITCH_SLICE.start, (1.0, 1.0, 1.0, 1.0)),
+            (2, SKETCH_PITCH_SLICE.start, (0.5, 0.5, 0.5, 0.5)),
         ],
     )
     def test_forward_pools_each_group_with_its_specified_reduction(
@@ -338,7 +338,7 @@ class TestTIVSketchControlTokens:
         torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
 
     def test_forward_pools_tiv_coordinates_by_mean(self) -> None:
-        """TIV coordinates use average pooling rather than music pitch maxima."""
+        """TIV coordinates use average pooling."""
         module = SketchControlTokens(d_model=1, num_control_tokens=2, profile="tiv")
         with torch.no_grad():
             cast(torch.nn.Linear, module.projections["tiv"]).weight.fill_(1.0)

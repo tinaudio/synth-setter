@@ -1165,7 +1165,7 @@ The default CLAP, SAME, and S-SONDO sources hydrate under
 loudness, spectral-centroid, and PESTO pitch tracks
 (`features/sketch_controls.py`) from `audio` on the mel frame grid, then stores
 32-frame model-ready controls in a `sketch` struct column (#2707). Loudness and
-centroid use adaptive average pooling; pitch uses adaptive maximum pooling and
+centroid use adaptive average pooling; pitch uses adaptive average pooling and
 remains unthresholded. The `vec` child stores the pooled frame mean for
 contour-similarity search. The struct is an atomic write unit — refreshing
 one child means rewriting the whole column (requires Lance data storage 2.2).
