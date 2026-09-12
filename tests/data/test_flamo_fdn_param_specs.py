@@ -51,7 +51,7 @@ def test_every_pyfdn_spec_json_matches_registered_digest(name: str) -> None:
     spec = resolve_param_spec(ParamSpecName(name))
     assert isinstance(spec, FlamoFDNParamSpec)
 
-    assert pyfdn_param_spec_sha256(spec) == SYNTHS[SynthName(name)].param_spec_sha256
+    assert pyfdn_param_spec_sha256(spec) == SYNTHS[SynthName(name)].source_sha256
 
 
 def test_pyfdn_param_spec_json_is_canonical_and_complete() -> None:

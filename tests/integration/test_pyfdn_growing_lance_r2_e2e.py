@@ -119,9 +119,7 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
                     plugin_path="pyfdn",
                     plugin_state_path="",
                     synth_version="0.4.2",
-                    param_spec_sha256=pyfdn_param_spec_sha256(
-                        PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
-                    ),
+                    source_sha256=pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
                 ),
                 renderer_backend="pyfdn",
                 pyfdn_excitation="impulse",

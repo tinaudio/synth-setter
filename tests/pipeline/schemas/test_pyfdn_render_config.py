@@ -22,7 +22,7 @@ def _pyfdn_render_kwargs(**overrides: object) -> dict[str, object]:
             "plugin_path": "pyfdn",
             "plugin_state_path": "",
             "synth_version": "0.4.2",
-            "param_spec_sha256": pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
+            "source_sha256": pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
         },
         "renderer_backend": "pyfdn",
         "pyfdn_excitation": "impulse",
@@ -163,7 +163,7 @@ def test_pyfdn_plugin_path_with_unregistered_name_rejects_hosted_backend() -> No
         "plugin_path": "pyfdn",
         "plugin_state_path": "",
         "synth_version": "0.4.2",
-        "param_spec_sha256": pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
+        "source_sha256": pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
     }
 
     with pytest.raises(
@@ -186,7 +186,7 @@ def test_pyfdn_name_with_mismatched_spec_rejects_native_backend() -> None:
         "plugin_path": "pyfdn",
         "plugin_state_path": "",
         "synth_version": "0.4.2",
-        "param_spec_sha256": pyfdn_param_spec_sha256(PYFDN_N8_MONO_KRONECKER_PARAM_SPEC),
+        "source_sha256": pyfdn_param_spec_sha256(PYFDN_N8_MONO_KRONECKER_PARAM_SPEC),
     }
 
     with pytest.raises(ValidationError, match="registered pyfdn synth identity"):

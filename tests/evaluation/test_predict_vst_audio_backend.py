@@ -134,7 +134,7 @@ def test_main_pyfdn_renders_prediction_target_and_flattened_params(tmp_path: Pat
             plugin_path="pyfdn",
             plugin_state_path="",
             synth_version="0.4.2",
-            param_spec_sha256=pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
+            source_sha256=pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
         ),
         renderer_backend="pyfdn",
         pyfdn_excitation="impulse",

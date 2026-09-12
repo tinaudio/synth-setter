@@ -120,11 +120,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 
     .. attribute :: source_sha256
 
-        Checked-in source digest for Faust identities; absent for other formats.
-
-    .. attribute :: param_spec_sha256
-
-        Canonical JSON digest for pyFDN parameter specifications; absent for other formats.
+        Checked-in Faust source or canonical pyFDN parameter-spec JSON digest.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
@@ -135,8 +131,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
     plugin_path: str
     plugin_state_path: str
     synth_version: str
-    source_sha256: str | None = None
-    param_spec_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="before")
     @classmethod
@@ -190,8 +185,8 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
             if _is_registry_reference(self.plugin_path):
                 validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
                 raise ValueError("a Faust registry reference requires format='faust'")
-            if self.source_sha256 is not None:
-                raise ValueError("source_sha256 is supported only for format='faust'")
+            if self.source_sha256 is not None and self.format != "pyfdn":
+                raise ValueError("source_sha256 is supported only for format='faust' or 'pyfdn'")
             return self
         if self.plugin_path:
             validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
@@ -206,20 +201,18 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
         return self
 
     @model_validator(mode="after")
-    def _pyfdn_identity_has_registered_param_spec_digest(self) -> SynthSpec:
-        """Require the canonical parameter-schema digest exactly for pyFDN identities.
+    def _pyfdn_identity_has_registered_source_digest(self) -> SynthSpec:
+        """Require the canonical parameter-schema source digest for pyFDN identities.
 
         :returns: This identity when its parameter-spec provenance is coherent.
-        :raises ValueError: The digest is absent, unexpected, or mismatches the registry.
+        :raises ValueError: The digest is absent or mismatches the registry.
         """
-        expected = _PYFDN_PARAM_SPEC_SHA256.get(self.param_spec_name)
         if self.format != "pyfdn":
-            if self.param_spec_sha256 is not None:
-                raise ValueError("param_spec_sha256 is supported only for format='pyfdn'")
             return self
-        if expected is None or self.param_spec_sha256 != expected:
+        expected = _PYFDN_PARAM_SPEC_SHA256.get(self.param_spec_name)
+        if expected is None or self.source_sha256 != expected:
             raise ValueError(
-                "format='pyfdn' requires the registered param_spec_sha256 for "
+                "format='pyfdn' requires the registered source_sha256 for "
                 f"param_spec_name={self.param_spec_name!r}"
             )
         return self
@@ -354,8 +347,7 @@ SYNTHS: Mapping[SynthName, SynthSpec] = MappingProxyType(
             plugin_path=plugin_path,
             plugin_state_path=preset,
             synth_version=synth_version,
-            source_sha256=_FAUST_SOURCE_SHA256.get(name),
-            param_spec_sha256=_PYFDN_PARAM_SPEC_SHA256.get(name),
+            source_sha256=_FAUST_SOURCE_SHA256.get(name) or _PYFDN_PARAM_SPEC_SHA256.get(name),
         )
         for name, (param_spec_name, plugin_path, preset, synth_version) in _synth_rows.items()
     }

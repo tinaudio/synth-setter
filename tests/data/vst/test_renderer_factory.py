@@ -60,7 +60,7 @@ def test_make_audio_renderer_pyfdn_returns_common_renderer() -> None:
                 "plugin_path": "pyfdn",
                 "plugin_state_path": "",
                 "synth_version": "0.4.2",
-                "param_spec_sha256": pyfdn_param_spec_sha256(
+                "source_sha256": pyfdn_param_spec_sha256(
                     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
                 ),
             },
