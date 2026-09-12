@@ -112,6 +112,25 @@ def test_training_step_audio_feedback_backpropagates_to_ffn() -> None:
     assert module.net.weight.grad.item() == pytest.approx(1.0)
 
 
+def test_audio_feedback_fixed_batch_optimizer_step_reduces_objective() -> None:
+    """One optimizer step lowers the combined parameter and audio objective."""
+    module = _module(audio_loss=_audio_loss())
+    batch = {
+        "audio": torch.tensor([[0.0, 0.0]]),
+        "mel": torch.tensor([[1.0]]),
+        "params": torch.tensor([[0.0]]),
+    }
+    optimizer = torch.optim.SGD(module.parameters(), lr=0.1)
+    before = module.training_step(batch, batch_idx=0)
+
+    before.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+    after = module.training_step(batch, batch_idx=0)
+
+    assert after < before
+
+
 def test_constructor_with_audio_feedback_and_compile_raises() -> None:
     """FFN audio feedback rejects compilation before fit setup."""
     with pytest.raises(ValueError, match="audio feedback is incompatible with torch.compile"):

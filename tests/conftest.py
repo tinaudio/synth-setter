@@ -2813,7 +2813,7 @@ def _write_pyfdn_lance_smoke_split(
 
 @pytest.fixture
 def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfig:
-    """Compose a one-step pyFDN flow run over synthetic Lance rows.
+    """Compose a one-step pyFDN training run over synthetic Lance rows.
 
     :param tmp_path: Per-test dataset and output root.
     :param request: Optional indirect parameter: an experiment name, or an
@@ -2868,18 +2868,25 @@ def cfg_pyfdn_train(tmp_path: Path, request: pytest.FixtureRequest) -> DictConfi
             cfg.datamodule.pin_memory = False
             cfg.model.compile = False
             cfg.model.scheduler = None
-            encoder = cfg.model.encoder.backbone if "_online" in experiment else cfg.model.encoder
-            encoder.d_model = 16
-            encoder.n_heads = 1
-            encoder.n_layers = 1
-            encoder.n_conditioning_outputs = 1
-            cfg.model.vector_field.d_model = 16
-            cfg.model.vector_field.num_heads = 1
-            cfg.model.vector_field.d_ff = 16
-            cfg.model.vector_field.num_layers = 1
-            cfg.model.vector_field.projection.num_tokens = 2
-            cfg.model.validation_sample_steps = 1
-            cfg.model.test_sample_steps = 1
+            if "vector_field" in cfg.model:
+                encoder = (
+                    cfg.model.encoder.backbone if "_online" in experiment else cfg.model.encoder
+                )
+                encoder.d_model = 16
+                encoder.n_heads = 1
+                encoder.n_layers = 1
+                encoder.n_conditioning_outputs = 1
+                cfg.model.vector_field.d_model = 16
+                cfg.model.vector_field.num_heads = 1
+                cfg.model.vector_field.d_ff = 16
+                cfg.model.vector_field.num_layers = 1
+                cfg.model.vector_field.projection.num_tokens = 2
+                cfg.model.validation_sample_steps = 1
+                cfg.model.test_sample_steps = 1
+            else:
+                cfg.model.net.d_model = 16
+                cfg.model.net.n_heads = 1
+                cfg.model.net.n_layers = 1
             cfg.callbacks.model_checkpoint.save_top_k = 0
             cfg.callbacks.model_checkpoint.save_last = True
             if "lr_monitor" in cfg.callbacks:

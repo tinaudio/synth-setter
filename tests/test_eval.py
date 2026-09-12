@@ -255,6 +255,54 @@ def test_evaluate_pyfdn_householder_checkpoint_logs_param_mse(
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("cfg_pyfdn_train", ["pyfdn/ffn_audio_flamo"], indirect=True)
+def test_evaluate_pyfdn_ffn_audio_experiment_loads_training_checkpoint(
+    cfg_pyfdn_train: DictConfig,
+) -> None:
+    """The eval root composes the FFN/FLAMO experiment and loads its checkpoint.
+
+    :param cfg_pyfdn_train: One-step FFN/FLAMO run over tiny Lance splits.
+    """
+    HydraConfig().set_config(cfg_pyfdn_train)
+    train(cfg_pyfdn_train)
+    checkpoint = Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt"
+
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg_eval = compose(
+            config_name="eval.yaml",
+            return_hydra_config=True,
+            overrides=[
+                "experiment=pyfdn/ffn_audio_flamo",
+                "trainer=cpu",
+                "++trainer.max_steps=1",
+                "callbacks=none",
+                f"ckpt_path={checkpoint}",
+            ],
+        )
+    with open_dict(cfg_eval):
+        cfg_eval.paths.root_dir = cfg_pyfdn_train.paths.root_dir
+        cfg_eval.paths.output_dir = str(Path(cfg_pyfdn_train.paths.output_dir) / "eval")
+        cfg_eval.paths.log_dir = cfg_eval.paths.output_dir
+        cfg_eval.datamodule.dataset_root = cfg_pyfdn_train.datamodule.dataset_root
+        cfg_eval.datamodule.predict_file = cfg_pyfdn_train.datamodule.predict_file
+        cfg_eval.datamodule.batch_size = 1
+        cfg_eval.datamodule.num_workers = 0
+        cfg_eval.datamodule.pin_memory = False
+        cfg_eval.datamodule.ot = False
+        cfg_eval.model.net.d_model = 16
+        cfg_eval.model.net.n_heads = 1
+        cfg_eval.model.net.n_layers = 1
+        cfg_eval.trainer.limit_test_batches = 1
+    HydraConfig().set_config(cfg_eval)
+
+    metrics, objects = evaluate(cfg_eval)
+
+    assert isinstance(objects["model"], VSTFeedForwardModule)
+    assert torch.isfinite(metrics["test/param_mse"])
+
+
+@pytest.mark.slow
 def test_train_eval_pyfdn_predict_writes_response_metrics(
     cfg_pyfdn_train: DictConfig,
 ) -> None:

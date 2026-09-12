@@ -592,7 +592,7 @@ def test_train_flamo_ffn_real_pyfdn_dataset_checkpoint_evaluates(
         tuple(model.net.parameters()),
         allow_unused=True,
     )
-    assert any(
+    assert all(
         gradient is not None
         and torch.isfinite(gradient).all()
         and torch.count_nonzero(gradient) > 0
