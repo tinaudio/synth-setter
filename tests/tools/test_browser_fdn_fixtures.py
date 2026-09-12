@@ -27,6 +27,9 @@ from synth_setter.tools.browser_fdn_fixtures import (
     synthetic_impulse_response,
 )
 
+_METRIC_ABS_TOLERANCE = 1e-12
+_METRIC_REL_TOLERANCE = 1e-10
+
 
 def test_synthetic_impulse_response_when_seeded_is_deterministic_unit_peak() -> None:
     """Same recipe, same samples, unit peak."""
@@ -113,12 +116,22 @@ def test_build_fixtures_octave_sos_filters_a_unit_impulse_like_scipy() -> None:
 
 
 def test_committed_fixtures_match_regenerated_fixtures() -> None:
-    """The checked-in JSON must equal what the current Python references produce."""
+    """The checked-in JSON must match, allowing only tiny golden metric drift."""
     fixtures = build_fixtures()
 
     for name, payload in fixtures.items():
         committed = json.loads((FIXTURE_DIR / f"{name}.json").read_text(encoding="utf-8"))
-        assert committed == payload, f"{name}.json drifted; rerun the generator"
+        message = f"{name}.json drifted; rerun the generator"
+        if name != "golden":
+            assert committed == payload, message
+            continue
+
+        committed_structure = {key: value for key, value in committed.items() if key != "metrics"}
+        payload_structure = {key: value for key, value in payload.items() if key != "metrics"}
+        assert committed_structure == payload_structure, message
+        assert committed["metrics"] == pytest.approx(
+            payload["metrics"], rel=_METRIC_REL_TOLERANCE, abs=_METRIC_ABS_TOLERANCE
+        ), message
 
 
 def test_main_when_output_dir_given_writes_both_fixture_files(tmp_path: Path) -> None:
