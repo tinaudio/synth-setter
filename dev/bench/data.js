@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789254060078,
+  "lastUpdate": 1789254063786,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -29207,6 +29207,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.860564912799987,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fd00544862927f666bf14f99c5889e4752e50f3f",
+          "message": "internal-fix(data-pipeline): clean up incomplete pyFDN specs (#3561)\n\n* internal-fix(data-pipeline): cull incomplete pyFDN specs\n\n* docs(notebooks): visualize retained pyFDN parameters\n\n* refactor(data-pipeline): rename BasicFDN to FlamoFDN\n\n* chore(ci): refresh PR title check\n\n* internal-fix(data-pipeline): reuse source digest for pyFDN\n\n* internal-fix(data-pipeline): preserve pyFDN spec compatibility",
+          "timestamp": "2026-09-12T17:58:26-04:00",
+          "tree_id": "5d4e9b7df786cec230ee992e657307278f09521f",
+          "url": "https://github.com/tinaudio/synth-setter/commit/fd00544862927f666bf14f99c5889e4752e50f3f"
+        },
+        "date": 1789254063249,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.868820190429688,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.974106649309396,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.07746465504169464,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.006862521171569824,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.3962700366973877,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 9.945389602599993,
             "unit": "seconds"
           }
         ]
