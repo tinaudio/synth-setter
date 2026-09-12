@@ -1290,6 +1290,7 @@ def test_from_hydra_pyfdn_derived_feedback_writes_widened_shard(
         cfg_dataset.synth.plugin_path = "pyfdn"
         cfg_dataset.synth.plugin_state_path = ""
         cfg_dataset.synth.synth_version = "0.4.2"
+        cfg_dataset.synth.source_sha256 = SYNTHS[SynthName(identity)].source_sha256
         cfg_dataset.render.renderer_backend = "pyfdn"
         cfg_dataset.render.pyfdn_excitation = "impulse"
         cfg_dataset.render.sample_rate = 44_100

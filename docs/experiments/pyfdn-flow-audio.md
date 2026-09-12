@@ -70,13 +70,11 @@ Select the corresponding `synth=` configuration and a dataset generated with tha
 same identity. The renderer accepts that spec's width rather than assuming the
 fixed-Householder encoding.
 
-All other registered pyFDN effects are rejected at renderer construction, even
-though the tensor decoder can decode their native controls. Götz adds input tone
-correction and a delayed direct path outside its current build; pitch shifting is
-time-varying; DiffVox is a composite stereo effects chain. Possessing an FDN core
-does not make these complete `FlamoFDN` effects, and no fallback graph is supplied.
-Integer delays and Kronecker reflection choices have zero gradients. Continuous
-gains, feedback coordinates, and filter controls retain gradients.
+Götz, pitch-shift, and DiffVox identities are not registered because their complete
+effects cannot be represented by `FlamoFDN`. Götz adds input tone correction and a
+delayed direct path, pitch shifting is time-varying, and DiffVox is a composite stereo
+effects chain. Integer delays and Kronecker reflection choices have zero gradients.
+Continuous gains, feedback coordinates, and filter controls retain gradients.
 
 ## Channel-aware consumers
 

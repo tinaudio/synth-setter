@@ -26,6 +26,7 @@ from pydantic import (
     ConfigDict,
     Field,
     SerializerFunctionWrapHandler,
+    ValidationInfo,
     computed_field,
     field_validator,
     model_serializer,
@@ -477,11 +478,12 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
 
     @model_validator(mode="before")
     @classmethod
-    def _normalize_legacy_render_contract(cls, data: Any) -> Any:
+    def _normalize_legacy_render_contract(cls, data: Any, info: ValidationInfo) -> Any:
         """Promote persisted backend tokens while retaining their digest projection.
 
         :param data: Raw render configuration.
-        :returns: Canonical configuration with a historical digest marker when needed.
+        :param info: Validation mode distinguishing persisted JSON from authored Python values.
+        :returns: Canonical configuration with historical source identities when needed.
         :raises ValueError: A legacy token is malformed or version 1 would omit Faust provenance.
         """
         if not isinstance(data, dict):
@@ -489,6 +491,28 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         normalized = data.copy()
         normalized.pop("renderer_version", None)
         synth = normalized.get("synth")
+        if (
+            info.mode == "json"
+            and normalized.get("render_contract_version", 2) in (1, 2)
+            and isinstance(synth, dict)
+            and synth.get("format") == "pyfdn"
+            and synth.get("source_sha256") is None
+        ):
+            synth_name = synth.get("name")
+            registered = (
+                SYNTHS[SynthName(synth_name)]
+                if isinstance(synth_name, str) and synth_name in _PYFDN_SYNTH_NAMES
+                else None
+            )
+            if (
+                registered is not None
+                and registered.format == "pyfdn"
+                and registered.param_spec_name == synth.get("param_spec_name")
+            ):
+                promoted_synth = synth.copy()
+                promoted_synth["source_sha256"] = registered.source_sha256
+                normalized["synth"] = promoted_synth
+                synth = promoted_synth
         is_explicit_contract = (
             "render_contract_version" in normalized
             or isinstance(synth, SynthSpec)

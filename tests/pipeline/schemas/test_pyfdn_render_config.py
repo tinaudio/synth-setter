@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -19,6 +21,7 @@ def _pyfdn_render_kwargs(**overrides: object) -> dict[str, object]:
         "synth": {
             "name": "pyfdn_n8_mono_householder",
             "param_spec_name": "pyfdn_n8_mono_householder",
+            "format": "pyfdn",
             "plugin_path": "pyfdn",
             "plugin_state_path": "",
             "synth_version": "0.4.2",
@@ -51,6 +54,31 @@ def test_pyfdn_render_config_uses_existing_renderer_stubs() -> None:
     assert render.pyfdn_excitation == "impulse"
     assert render.plugin_reload_cadence == "render"
     assert render.gui_toggle_cadence == "never"
+
+
+def test_pyfdn_legacy_json_without_source_digest_restores_registered_identity() -> None:
+    """Persisted pre-digest specs gain the registered canonical source identity."""
+    values = _pyfdn_render_kwargs(render_contract_version=2)
+    synth = values["synth"]
+    assert isinstance(synth, dict)
+    del synth["source_sha256"]
+
+    restored = RenderConfig.model_validate_json(json.dumps(values))
+
+    assert restored.synth.source_sha256 == pyfdn_param_spec_sha256(
+        PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
+    )
+
+
+def test_pyfdn_authored_config_without_source_digest_is_rejected() -> None:
+    """New Python-side configurations must state the canonical source identity."""
+    values = _pyfdn_render_kwargs()
+    synth = values["synth"]
+    assert isinstance(synth, dict)
+    del synth["source_sha256"]
+
+    with pytest.raises(ValidationError, match="registered source_sha256"):
+        RenderConfig.model_validate(values)
 
 
 def test_pyfdn_render_config_omitted_excitation_defaults_digest_to_impulse() -> None:
