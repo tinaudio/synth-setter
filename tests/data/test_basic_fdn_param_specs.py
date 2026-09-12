@@ -1,17 +1,73 @@
 """Basic-spec classification must preserve the entire native effect."""
 
+import json
+
+import matplotlib
 import numpy as np
 import pytest
+from pyFDN import plot_flamo_graph
 
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_KRONECKER_ANGLES_NAME,
+    PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_KRONECKER_REFLECT_NAME,
     BasicFDNParamSpec,
     kronecker_feedback_matrix,
+    pyfdn_param_spec_json,
+    pyfdn_param_spec_sha256,
 )
-from synth_setter.data.vst.param_spec_registry import resolve_param_spec
+from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.synth_spec import SYNTHS, SynthName
+
+matplotlib.use("Agg")
+
+PYFDN_PARAM_SPEC_NAMES = tuple(name for name in param_specs if name.startswith("pyfdn_"))
+
+
+@pytest.mark.parametrize("name", PYFDN_PARAM_SPEC_NAMES)
+def test_every_pyfdn_spec_compiles_and_plots_complete_flamo_graph(name: str) -> None:
+    """Every retained pyFDN identity is a complete FLAMO-compatible FDN.
+
+    :param name: Registered pyFDN parameter specification.
+    """
+    spec = resolve_param_spec(ParamSpecName(name))
+    assert isinstance(spec, BasicFDNParamSpec)
+    native, _ = spec.sample(np.random.default_rng(7))
+
+    model = spec.to_basic_fdn(native).to_flamo(nfft=4096)
+    ax = plot_flamo_graph(model, name=name)
+
+    assert ax.patches
+
+
+@pytest.mark.parametrize("name", PYFDN_PARAM_SPEC_NAMES)
+def test_every_pyfdn_spec_json_matches_registered_digest(name: str) -> None:
+    """The stored identity digest detects parameter-schema drift.
+
+    :param name: Registered pyFDN parameter specification.
+    """
+    spec = resolve_param_spec(ParamSpecName(name))
+    assert isinstance(spec, BasicFDNParamSpec)
+
+    assert pyfdn_param_spec_sha256(spec) == SYNTHS[SynthName(name)].param_spec_sha256
+
+
+def test_pyfdn_param_spec_json_is_canonical_and_complete() -> None:
+    """Canonical JSON identifies the spec class, feedback rule, and ordered parameters."""
+    payload = json.loads(pyfdn_param_spec_json(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC))
+
+    assert payload["type"] == "BasicFDNParamSpec"
+    assert payload["feedback_matrix"] == "_householder_feedback"
+    assert [parameter["name"] for parameter in payload["synth_params"]] == [
+        "delays",
+        "input_matrix",
+        "output_matrix",
+        "direct_matrix",
+        "post_delay.rt_dc_seconds",
+        "post_delay.rt_nyquist_seconds",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -31,25 +87,6 @@ def test_basic_spec_build_preserves_complete_offline_effect(name: str) -> None:
     expected = PyFDNRenderer(param_spec_name=ParamSpecName(name)).render(native)[0, :4096]
 
     np.testing.assert_allclose(actual, expected, atol=1e-7, rtol=1e-6)
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "pyfdn_gotz_n8_mono_fixed_delays",
-        "pyfdn_gotz_n8_mono_learned_delays",
-        "pyfdn_gotz_n8_mono_fixed_delays_givens",
-        "pyfdn_gotz_n8_mono_learned_delays_givens",
-        "pyfdn_pitchshift_n8_mono_householder",
-        "pyfdn_diffvox",
-    ],
-)
-def test_advanced_spec_does_not_claim_complete_basic_build(name: str) -> None:
-    """A renderable FDN core does not describe an effect's custom outer processing.
-
-    :param name: Registered advanced FDN effect.
-    """
-    assert not isinstance(resolve_param_spec(ParamSpecName(name)), BasicFDNParamSpec)
 
 
 def test_basic_spec_missing_control_rejected() -> None:

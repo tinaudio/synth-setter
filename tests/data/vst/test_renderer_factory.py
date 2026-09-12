@@ -6,6 +6,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer
+from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    pyfdn_param_spec_sha256,
+)
 from synth_setter.data.vst.renderers import (
     DawDreamerRenderer,
     PedalboardRenderer,
@@ -56,6 +60,9 @@ def test_make_audio_renderer_pyfdn_returns_common_renderer() -> None:
                 "plugin_path": "pyfdn",
                 "plugin_state_path": "",
                 "synth_version": "0.4.2",
+                "param_spec_sha256": pyfdn_param_spec_sha256(
+                    PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
+                ),
             },
             sample_rate=44_100,
             channels=1,

@@ -33,9 +33,6 @@ PYFDN_CANONICAL_SOURCE_SHA256 = "5a215ebf9c4f8300774bee0f1e8e6ce5dd4052cb8c422ae
 PYFDN_SOURCE_CHANNELS = 1
 PYFDN_SOURCE_SAMPLE_RATE_HZ = 44_100
 PYFDN_SOURCE_TOTAL_FRAMES = 176_400
-# Every pyFDN identity renders the mono source; only the DiffVox chain pans it out to stereo.
-PYFDN_DIFFVOX_PARAM_SPEC_NAME = "pyfdn_diffvox"
-PYFDN_STEREO_PARAM_SPEC_NAMES = frozenset({PYFDN_DIFFVOX_PARAM_SPEC_NAME})
 
 
 @dataclass(frozen=True)
@@ -105,12 +102,13 @@ IN_PROCESS_PLUGIN_NAMES = frozenset(
 
 
 def pyfdn_output_channels(param_spec_name: str) -> int:
-    """Return the output channel count a pyFDN identity renders.
+    """Return the channel count shared by every pyFDN identity.
 
     :param param_spec_name: Registered pyFDN param spec name.
-    :returns: ``2`` for the stereo DiffVox chain, else the mono source channel count.
+    :returns: The mono source channel count.
     """
-    return 2 if param_spec_name in PYFDN_STEREO_PARAM_SPEC_NAMES else PYFDN_SOURCE_CHANNELS
+    del param_spec_name
+    return PYFDN_SOURCE_CHANNELS
 
 
 def missing_render_artifacts(plugin_path: str, plugin_state_path: str) -> tuple[str, ...]:

@@ -327,6 +327,8 @@ def identity_group_yaml(spec: SynthSpec) -> str:
     )
     if spec.source_sha256 is not None:
         fields.append(f"source_sha256: {json.dumps(spec.source_sha256)}")
+    if spec.param_spec_sha256 is not None:
+        fields.append(f"param_spec_sha256: {json.dumps(spec.param_spec_sha256)}")
     return "\n".join([*fields, ""])
 
 

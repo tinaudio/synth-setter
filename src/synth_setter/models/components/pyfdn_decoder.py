@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import torch
 from beartype import beartype
-from jaxtyping import Float, Int, jaxtyped
+from jaxtyping import Float, jaxtyped
 from pyFDN import decay_to_first_order_shelf
 from torch import Tensor, nn
 
 from synth_setter.data.pyfdn_param_spec import (
-    PYFDN_FEEDBACK_GIVENS_ANGLES_NAME,
-    PYFDN_FEEDBACK_SKEW_NAME,
-    PYFDN_GOTZ_DELAYS,
     PYFDN_HOUSEHOLDER_VECTOR_NAME,
     PYFDN_KRONECKER_ANGLES_NAME,
     PYFDN_KRONECKER_REFLECT_NAME,
@@ -29,7 +26,6 @@ from synth_setter.data.vst.param_spec import (
     ContinuousParameter,
     DirectionArrayParameter,
     DiscreteArrayParameter,
-    DiscreteLiteralParameter,
     Parameter,
     ParamSpec,
 )
@@ -40,7 +36,6 @@ _PARAM_AXIS = "params"
 _ANY_SHAPE = "..."
 _ORDER = "order"
 _LEVELS = "levels"
-_COORDINATES = "coordinates"
 
 
 class PyFDNParameterDecoder(nn.Module):
@@ -58,10 +53,6 @@ class PyFDNParameterDecoder(nn.Module):
         if not isinstance(spec, PyFDNParamSpec):
             raise ValueError(f"expected a pyFDN param spec, got {param_spec}")
         self.spec: ParamSpec = spec
-        self._gotz_delays: Int[Tensor, _ORDER]
-        self.register_buffer(
-            "_gotz_delays", torch.from_numpy(PYFDN_GOTZ_DELAYS.copy()), persistent=False
-        )
 
     @staticmethod
     @jaxtyped(typechecker=beartype)
@@ -105,23 +96,6 @@ class PyFDNParameterDecoder(nn.Module):
             parameter.max - parameter.min
         )
         return torch.round(decoded).to(values.dtype)
-
-    @staticmethod
-    @jaxtyped(typechecker=beartype)
-    def _decode_literal(
-        values: Float[Tensor, _ANY_SHAPE], parameter: DiscreteLiteralParameter
-    ) -> Float[Tensor, _ANY_SHAPE]:
-        """Round a scalar integer with the offline decoder's half-up rule.
-
-        :param values: One model-space coordinate.
-        :param parameter: Integer-literal metadata.
-        :returns: Rounded native value represented in the input floating dtype.
-        """
-        promoted = values.to(torch.float64)
-        offset = PyFDNParameterDecoder._unit(promoted) * (parameter.max - parameter.min)
-        lower = torch.floor(offset)
-        rounded = parameter.min + lower + (offset - lower >= 0.5).to(offset.dtype)
-        return rounded.to(values.dtype)
 
     @staticmethod
     @jaxtyped(typechecker=beartype)
@@ -177,8 +151,6 @@ class PyFDNParameterDecoder(nn.Module):
             return PyFDNParameterDecoder._decode_discrete(values, parameter).reshape(
                 parameter.shape
             )
-        if isinstance(parameter, DiscreteLiteralParameter):
-            return PyFDNParameterDecoder._decode_literal(values, parameter).squeeze(0)
         if isinstance(parameter, ContinuousArrayParameter):
             return PyFDNParameterDecoder._affine(values, parameter).reshape(parameter.shape)
         if isinstance(parameter, ContinuousParameter):
@@ -217,42 +189,6 @@ class PyFDNParameterDecoder(nn.Module):
             reflection = torch.stack((torch.stack((cosine, sine)), torch.stack((sine, -cosine))))
             kernel = torch.where(flag.to(torch.bool), reflection, rotation)
             feedback = torch.kron(kernel, feedback)
-        return feedback
-
-    @staticmethod
-    @jaxtyped(typechecker=beartype)
-    def _skew_feedback(skew: Float[Tensor, _COORDINATES]) -> Float[Tensor, "order order"]:
-        """Exponentiate lexicographic upper-triangle skew coordinates.
-
-        :param skew: Strictly upper-triangular entries in row order.
-        :returns: Special orthogonal feedback matrix.
-        """
-        order = round((1.0 + (1.0 + 8.0 * skew.numel()) ** 0.5) / 2.0)
-        rows, columns = torch.triu_indices(order, order, offset=1, device=skew.device)
-        upper = skew.new_zeros((order, order)).index_put((rows, columns), skew)
-        return torch.matrix_exp(upper - upper.mT)
-
-    @staticmethod
-    @jaxtyped(typechecker=beartype)
-    def _givens_feedback(
-        angles: Float[Tensor, _COORDINATES],
-    ) -> Float[Tensor, "order order"]:
-        """Multiply lexicographic Givens rotations on the right.
-
-        :param angles: One periodic angle per upper-triangle plane.
-        :returns: Special orthogonal feedback matrix.
-        """
-        order = round((1.0 + (1.0 + 8.0 * angles.numel()) ** 0.5) / 2.0)
-        identity = torch.eye(order, dtype=angles.dtype, device=angles.device)
-        rows, columns = torch.triu_indices(order, order, offset=1, device=angles.device)
-        feedback = identity
-        for angle, row, column in zip(angles, rows, columns, strict=True):
-            first = identity[row]
-            second = identity[column]
-            plane = torch.outer(first, first) + torch.outer(second, second)
-            orientation = torch.outer(second, first) - torch.outer(first, second)
-            rotation = identity + (torch.cos(angle) - 1.0) * plane + torch.sin(angle) * orientation
-            feedback = feedback @ rotation
         return feedback
 
     @jaxtyped(typechecker=beartype)
@@ -309,17 +245,8 @@ class PyFDNParameterDecoder(nn.Module):
             decoded["feedback_matrix"] = self._kronecker(
                 decoded[PYFDN_KRONECKER_ANGLES_NAME], decoded[PYFDN_KRONECKER_REFLECT_NAME]
             )
-        elif PYFDN_FEEDBACK_SKEW_NAME in decoded:
-            decoded["feedback_matrix"] = self._skew_feedback(decoded[PYFDN_FEEDBACK_SKEW_NAME])
-        elif PYFDN_FEEDBACK_GIVENS_ANGLES_NAME in decoded:
-            decoded["feedback_matrix"] = self._givens_feedback(
-                decoded[PYFDN_FEEDBACK_GIVENS_ANGLES_NAME]
-            )
         elif "input_matrix" in decoded:
             direction = params.new_ones(decoded["input_matrix"].shape[0])
             direction = direction / torch.linalg.vector_norm(direction)
             decoded["feedback_matrix"] = self._householder(direction)
-
-        if "feedback_matrix" in decoded and "delays" not in decoded:
-            decoded["delays"] = self._gotz_delays.to(params)
         return decoded
