@@ -254,13 +254,13 @@ class TestSketchControlTokens:
             (2, SKETCH_PITCH_SLICE.start, (0.5, 0.5, 0.5, 0.5)),
         ],
     )
-    def test_forward_pools_each_group_with_its_specified_reduction(
+    def test_forward_pools_all_groups_by_mean(
         self, group_index: int, row: int, expected: tuple[float, ...]
     ) -> None:
-        """Each group's exact pooled values pin mean-vs-max per the design.
+        """Every group's pooled values pin the shared mean reduction.
 
         The alternating input averages to ``0.5`` per bin and maxes to ``1.0``,
-        so swapping either reduction changes the projected token.
+        so restoring maximum pooling for any group changes the projected token.
 
         :param group_index: Column of the group in ``CONTROL_GROUPS`` order.
         :param row: Control row the alternating signal is written to.
