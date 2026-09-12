@@ -1,5 +1,6 @@
 """Hydra entrypoint for training and (optionally) test-set evaluation of a Lightning model."""
 
+import hashlib
 import signal
 from functools import partial
 from pathlib import Path
@@ -93,23 +94,26 @@ def _default_checkpoint_prefix_uri(cfg: DictConfig) -> str:
     return f"r2://{cfg.r2.bucket}/checkpoints/{config_id}"
 
 
-def _derive_checkpoint_uri(cfg: DictConfig, run_id: str, launch_uuid: str) -> str:
-    """Return the launch-scoped ``r2://`` URI for the best checkpoint.
-
-    Honors ``training.upload_checkpoints_uri`` verbatim when set. Otherwise the
-    config and run IDs isolate the checkpoint from later training runs while the
-    fixed ``model.ckpt`` basename keeps W&B artifact resolution unambiguous.
+def _derive_checkpoint_uri(
+    cfg: DictConfig, run_id: str, launch_uuid: str, checkpoint_sha256: str
+) -> str:
+    """Return the digest-bearing ``r2://`` URI for the best checkpoint.
 
     :param cfg: Hydra-composed train cfg; reads ``r2.bucket`` and the optional
         ``training.upload_checkpoints_uri`` override.
     :param run_id: Canonical training run ID used as a provenance path segment.
-    :param launch_uuid: Collision-resistant ID that makes the object immutable.
-    :returns: The canonical ``r2://`` checkpoint URI for this launch.
+    :param launch_uuid: Collision-resistant ID that isolates the default target.
+    :param checkpoint_sha256: Digest appended to the object basename.
+    :returns: The canonical ``r2://`` checkpoint URI ending in ``-<sha256>.ckpt``.
     """
     override = OmegaConf.select(cfg, "training.upload_checkpoints_uri")
-    if override:
-        return str(override)
-    return f"{_default_checkpoint_prefix_uri(cfg)}/{run_id}/{launch_uuid}/model.ckpt"
+    base_uri = (
+        str(override)
+        if override
+        else f"{_default_checkpoint_prefix_uri(cfg)}/{run_id}/{launch_uuid}/model.ckpt"
+    )
+    stem_uri = base_uri.removesuffix(".ckpt")
+    return f"{stem_uri}-{checkpoint_sha256}.ckpt"
 
 
 def _make_launch_namespace(run_id: str) -> str:
@@ -335,7 +339,7 @@ def _upload_best_checkpoint(
     checkpoint persistence. :func:`r2_io.ensure_r2_env_loaded` populates the
     structural ``RCLONE_CONFIG_R2_*`` defaults (so a runtime wiring only the
     secret keys still resolves the ``r2:`` remote) and auth-pings before the
-    upload; ``upload_to_uri`` renames the source to the URI's ``model.ckpt`` basename.
+    digest-bearing upload.
 
     :param cfg: Train cfg forwarded to :func:`_derive_checkpoint_uri`.
     :param best_model_path: ``trainer.checkpoint_callback.best_model_path``;
@@ -353,9 +357,18 @@ def _upload_best_checkpoint(
     except Exception as exc:  # noqa: BLE001 — R2 unavailable must not abort a completed run
         log.info(f"R2 unavailable; logging lineage-only model artifact (no upload): {exc}")
         return None
-    uri = _derive_checkpoint_uri(cfg, run_id, launch_uuid)
+    checkpoint = Path(best_model_path)
     try:
-        r2_io.upload_to_uri(Path(best_model_path), uri)
+        with checkpoint.open("rb") as stream:
+            checkpoint_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+    except OSError as exc:
+        log.warning(
+            f"Checkpoint {checkpoint} cannot be hashed; logging lineage-only artifact: {exc}"
+        )
+        return None
+    uri = _derive_checkpoint_uri(cfg, run_id, launch_uuid, checkpoint_sha256)
+    try:
+        r2_io.upload_to_uri(checkpoint, uri)
     except Exception as exc:  # noqa: BLE001 — upload failure must not abort a completed run
         log.warning(f"Checkpoint upload to {uri} failed; logging lineage-only artifact: {exc}")
         return None

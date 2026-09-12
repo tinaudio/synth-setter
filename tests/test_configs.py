@@ -2058,6 +2058,7 @@ def test_nsynth_sketch_eval_experiment_pins_full_production_run() -> None:
         "last.ckpt"
     )
     assert cfg.ckpt_sha256 == "d20cd4c3c86ae062a206f05596072b230c8aa86334920c775c2b4fec04aefc9e"
+    assert cfg.validate_chekpoint_sha is False
     assert cfg.consumed_train_artifact_alias == "v0"
     assert cfg.datamodule.dataset_uri == "s3://experiments/third_party/NSynth/test.lance"
     assert cfg.datamodule.dataset_version == 1
