@@ -14,7 +14,8 @@ Same analysis as `/repo-review-full`, with two differences:
 1. The final delivery step renders findings in chat instead of submitting a
    GitHub review.
 2. A PR is **not** required. If no PR exists for the current branch, the
-   orchestrator reviews the local branch vs. the default branch.
+   orchestrator reviews the branch vs. the default branch after the launcher
+   verifies that `origin/<current-branch>` exists at the current HEAD.
 
 The foreground dry run posts nothing. On an existing PR, deferred second passes
 may later post only new Codex-verified findings through detached follow-up; this
@@ -80,7 +81,9 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 > **Local-branch mode.** Use this when no `<N>` was passed and a successful
 > open-PR lookup scoped to `<current-repository-owner>:<current-branch>` returns
 > no PR. A lookup failure is a terminal error, not evidence that the branch has
-> no PR. Derive the same fields from local git:
+> no PR. The host launcher has already refused this mode unless the public
+> `origin/<current-branch>` tip equals the current HEAD; do not bypass that
+> precondition. Derive the same fields from local git:
 >
 > ```bash
 > repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
@@ -285,9 +288,10 @@ headless Pi entrypoint instead of maintaining separate nested-agent harnesses.
 
 ## Notes
 
-- The shared launcher permits at most three local pre-PR invocations per branch.
-  On a fourth request it refuses before starting Pi and directs the caller to
-  open the PR and continue with `/repo-review-full`, which uses the public GitHub
+- The shared launcher requires the public `origin/<current-branch>` tip to
+  equal HEAD before a local pre-PR review, then permits at most three such
+  invocations per branch. On a fourth request it refuses before starting Pi and
+  directs the caller to open the PR and continue with `/repo-review-full`, which uses the public GitHub
   review bot. Explicit PR-mode dry runs do not consume the pre-PR budget.
 - This skill's foreground result is side-effect-free on GitHub. For an existing
   PR, detached follow-up may post one review containing only new Codex-verified

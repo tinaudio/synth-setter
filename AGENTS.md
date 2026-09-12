@@ -210,10 +210,11 @@ unintended shell expansion. A `PreToolUse` hook
 - **PR titles stand alone.** Name the specific subject, not just the action:
   reviewers and `git log` readers don't open the issue. `/github-taxonomy`
   has the canonical title rule and examples.
-- **Pre-PR review is temporarily advisory.** Run
-  `/repo-review-full-no-comments` before `gh pr create` when the review
-  automation is healthy, and address every BLOCK/WARN (NIT findings are
-  advisory and gate nothing). The local
+- **Pre-PR review is temporarily advisory.** Commit and push the branch's
+  current HEAD to `origin`, then run `/repo-review-full-no-comments` before
+  `gh pr create` when the review automation is healthy. The review launcher
+  refuses unpublished or stale public branch tips. Address every BLOCK/WARN
+  (NIT findings are advisory and gate nothing). The local
   `pre-pr-review-gate.sh` implementation and tests remain available for repair,
   but its `PreToolUse` registration is suspended while [#2020](https://github.com/tinaudio/synth-setter/issues/2020)
   is unresolved. Server-side tests, metadata checks, branch protection, and
