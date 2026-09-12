@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, NewType
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from synth_setter.param_spec_name import ParamSpecName, ValidatedParamSpecName
 from synth_setter.renderer_backend import FAUST_REGISTRY_PREFIX, TORCHSYNTH_PLUGIN_NAME
@@ -27,6 +27,12 @@ if TYPE_CHECKING:
 
 SynthName = NewType("SynthName", str)
 type SynthFormat = Literal["faust", "pyfdn", "surgepy", "torchsynth", "vst3"]
+
+_PYFDN_PARAM_SPEC_SHA256 = {
+    "pyfdn_n8_mono_householder": "5d43a9eb50b10d9d91a5b748961ce3a382628abf61a797b092de377aa06a5b75",
+    "pyfdn_n8_mono_householder_vector": "51af728a411f40cf08531f1be30398717ef560136d70b76181ad87ae8b88d8fd",
+    "pyfdn_n8_mono_kronecker": "66d27e7e92ba7c4b6059814647df074fd41f903f953cbb6bbc51be33263e8ee1",
+}
 
 _FAUST_SOURCE_SHA256 = {
     "faust_bright_organ": "a1bf9f6e45ebbf78dd11fc18603cda048a91a778af1ad79683339b1951813465",
@@ -114,7 +120,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 
     .. attribute :: source_sha256
 
-        Checked-in source digest for Faust identities; absent for other formats.
+        Checked-in Faust source or canonical pyFDN parameter-spec JSON digest.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
@@ -125,7 +131,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
     plugin_path: str
     plugin_state_path: str
     synth_version: str
-    source_sha256: str | None = None
+    source_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="before")
     @classmethod
@@ -179,8 +185,8 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
             if _is_registry_reference(self.plugin_path):
                 validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
                 raise ValueError("a Faust registry reference requires format='faust'")
-            if self.source_sha256 is not None:
-                raise ValueError("source_sha256 is supported only for format='faust'")
+            if self.source_sha256 is not None and self.format != "pyfdn":
+                raise ValueError("source_sha256 is supported only for format='faust' or 'pyfdn'")
             return self
         if self.plugin_path:
             validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
@@ -190,6 +196,23 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
         if expected is None or self.source_sha256 != expected:
             raise ValueError(
                 f"format='faust' requires the registered source_sha256 for "
+                f"param_spec_name={self.param_spec_name!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _pyfdn_identity_has_registered_source_digest(self) -> SynthSpec:
+        """Require the canonical parameter-schema source digest for pyFDN identities.
+
+        :returns: This identity when its parameter-spec provenance is coherent.
+        :raises ValueError: The digest is absent or mismatches the registry.
+        """
+        if self.format != "pyfdn":
+            return self
+        expected = _PYFDN_PARAM_SPEC_SHA256.get(self.param_spec_name)
+        if expected is None or self.source_sha256 != expected:
+            raise ValueError(
+                "format='pyfdn' requires the registered source_sha256 for "
                 f"param_spec_name={self.param_spec_name!r}"
             )
         return self
@@ -272,30 +295,6 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "1.3.master.f7b97c68",
     ),
     "obxf": ("obxf", "plugins/OB-Xf.vst3", "presets/obxf-base.vstpreset", "1.0.3"),
-    "pyfdn_gotz_n8_mono_fixed_delays": (
-        "pyfdn_gotz_n8_mono_fixed_delays",
-        "pyfdn",
-        "",
-        "0.4.2",
-    ),
-    "pyfdn_gotz_n8_mono_fixed_delays_givens": (
-        "pyfdn_gotz_n8_mono_fixed_delays_givens",
-        "pyfdn",
-        "",
-        "0.4.2",
-    ),
-    "pyfdn_gotz_n8_mono_learned_delays": (
-        "pyfdn_gotz_n8_mono_learned_delays",
-        "pyfdn",
-        "",
-        "0.4.2",
-    ),
-    "pyfdn_gotz_n8_mono_learned_delays_givens": (
-        "pyfdn_gotz_n8_mono_learned_delays_givens",
-        "pyfdn",
-        "",
-        "0.4.2",
-    ),
     "pyfdn_n8_mono_householder": (
         "pyfdn_n8_mono_householder",
         "pyfdn",
@@ -314,13 +313,6 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "",
         "0.4.2",
     ),
-    "pyfdn_pitchshift_n8_mono_householder": (
-        "pyfdn_pitchshift_n8_mono_householder",
-        "pyfdn",
-        "",
-        "0.4.2",
-    ),
-    "pyfdn_diffvox": ("pyfdn_diffvox", "pyfdn", "", "0.4.2"),
     "torchsynth_adsr": ("torchsynth_adsr", "torchsynth", "", "1.0.2"),
     "torchsynth_full": ("torchsynth_full", "torchsynth", "", "1.0.2"),
     "torchsynth_simple": ("torchsynth_simple", "torchsynth", "", "1.0.2"),
@@ -355,7 +347,7 @@ SYNTHS: Mapping[SynthName, SynthSpec] = MappingProxyType(
             plugin_path=plugin_path,
             plugin_state_path=preset,
             synth_version=synth_version,
-            source_sha256=_FAUST_SOURCE_SHA256.get(name),
+            source_sha256=_FAUST_SOURCE_SHA256.get(name) or _PYFDN_PARAM_SPEC_SHA256.get(name),
         )
         for name, (param_spec_name, plugin_path, preset, synth_version) in _synth_rows.items()
     }

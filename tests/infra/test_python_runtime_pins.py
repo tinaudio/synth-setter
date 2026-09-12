@@ -129,6 +129,31 @@ def test_dawdreamer_dependency_pins_faust_contract_version(project_root: Path) -
     assert str(Requirement(dependency).specifier) == "==0.8.3"
 
 
+@pytest.mark.parametrize(
+    ("package", "version"),
+    [("adac", "0.1.0"), ("flamo", "0.2.18"), ("pyFDN", "0.4.2")],
+)
+def test_fdn_runtime_dependencies_are_exactly_pinned(
+    project_root: Path, package: str, version: str
+) -> None:
+    """FDN graph construction retains its verified dependency combination.
+
+    :param project_root: Repository root containing ``pyproject.toml``.
+    :param package: Runtime dependency whose resolver range must stay closed.
+    :param version: Verified exact package version.
+    """
+    with (project_root / "pyproject.toml").open("rb") as fh:
+        pyproject = tomllib.load(fh)
+
+    dependency = next(
+        dependency
+        for dependency in pyproject["dependency-groups"]["audio"]
+        if Requirement(dependency).name == package
+    )
+
+    assert str(Requirement(dependency).specifier) == f"=={version}"
+
+
 def test_pyright_targets_python_312(project_root: Path) -> None:
     """Static analysis uses the same Python version as the runtime floor.
 

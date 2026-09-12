@@ -221,6 +221,8 @@ notebooks = [
   # smoosense[jupyter] supplies neither.
   "nbconvert>=7.16",
   "ipykernel>=6.29",
+  "plotly==5.24.1",
+  "kaleido==0.2.1",
 ]
 util = [
   "click<8.2",

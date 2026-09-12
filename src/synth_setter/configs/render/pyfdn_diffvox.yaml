@@ -1,6 +1,0 @@
-# DiffVox chain: the mono excitation is panned out to stereo, everything else is the pyFDN contract.
-defaults:
-  - pyfdn
-  - _self_
-
-channels: 2

@@ -10,7 +10,10 @@ import torch
 from pedalboard.io import AudioFile
 from pydantic_settings import CliApp
 
-from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
+from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    pyfdn_param_spec_sha256,
+)
 from synth_setter.data.vst import param_specs
 from synth_setter.evaluation.predict_vst_audio import main
 from synth_setter.param_spec_name import ParamSpecName
@@ -131,6 +134,7 @@ def test_main_pyfdn_renders_prediction_target_and_flattened_params(tmp_path: Pat
             plugin_path="pyfdn",
             plugin_state_path="",
             synth_version="0.4.2",
+            source_sha256=pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
         ),
         renderer_backend="pyfdn",
         pyfdn_excitation="impulse",

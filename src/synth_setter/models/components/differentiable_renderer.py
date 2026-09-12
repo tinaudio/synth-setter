@@ -12,8 +12,8 @@ from flamo.processor import system
 from jaxtyping import Float, Shaped, jaxtyped
 from torch import Tensor, nn
 
-from synth_setter.data.basic_fdn import BasicFDN
-from synth_setter.data.pyfdn_param_spec import BasicFDNParamSpec
+from synth_setter.data.flamo_fdn import FlamoFDN
+from synth_setter.data.pyfdn_param_spec import FlamoFDNParamSpec
 from synth_setter.data.pyfdn_source import PYFDN_SOURCE_SAMPLE_RATE_HZ
 from synth_setter.data.torchsynth_grad_render import (
     differentiable_decode,
@@ -112,13 +112,13 @@ class TorchSynthDifferentiableRenderer(nn.Module):
 
 
 class FlamoFDNDifferentiableRenderer(nn.Module):
-    """Bind model predictions to a complete BasicFDN's upstream FLAMO graph."""
+    """Bind model predictions to a complete FlamoFDN's upstream FLAMO graph."""
 
     @jaxtyped(typechecker=beartype)
     def __init__(
         self,
         *,
-        fdn: BasicFDN,
+        fdn: FlamoFDN,
         decoder: nn.Module,
         parameter_width: int,
         signal_length: int,
@@ -195,7 +195,7 @@ class FlamoFDNDifferentiableRenderer(nn.Module):
     ) -> FlamoFDNDifferentiableRenderer:
         """Adapt a registered model encoding without constraining the renderer geometry.
 
-        :param param_spec: Registered BasicFDNParamSpec identity.
+        :param param_spec: Registered FlamoFDNParamSpec identity.
         :param sample_rate: Must match the registered pyFDN dataset sample rate.
         :param signal_length: Positive output length in samples.
         :param fft_size: Optional FFT period forwarded to the renderer.
@@ -204,8 +204,8 @@ class FlamoFDNDifferentiableRenderer(nn.Module):
         """
         decoder = PyFDNParameterDecoder(param_spec)
         spec = decoder.spec
-        if not isinstance(spec, BasicFDNParamSpec):
-            raise ValueError(f"unsupported FLAMO topology: {param_spec} is not a BasicFDN spec")
+        if not isinstance(spec, FlamoFDNParamSpec):
+            raise ValueError(f"unsupported FLAMO topology: {param_spec} is not a FlamoFDN spec")
         if sample_rate != PYFDN_SOURCE_SAMPLE_RATE_HZ:
             raise ValueError(
                 f"FLAMO pyFDN parity requires sample_rate={PYFDN_SOURCE_SAMPLE_RATE_HZ}"
@@ -213,7 +213,7 @@ class FlamoFDNDifferentiableRenderer(nn.Module):
         # The upper endpoint reserves enough delay capacity for every decoded prediction.
         template, _ = decode_model_output(np.ones(spec.encoded_width), spec)
         return cls(
-            fdn=spec.to_basic_fdn(template),
+            fdn=spec.to_flamo_fdn(template),
             decoder=decoder,
             parameter_width=spec.encoded_width,
             signal_length=signal_length,
