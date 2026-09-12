@@ -1,13 +1,13 @@
 # @package _global_
 
-# Local WASM validation dataset for the autonomous syrinx-bird avian-phonation model.
+# Local WASM validation dataset for the autonomous tract3-bird avian-phonation model.
 defaults:
   - override /datamodule: vst
-  - override /synth: faust_syrinx_bird
+  - override /synth: faust_bilateral_syrinx
   - override /render: faustwasm
   - _self_
 
-task_name: faust-syrinx-bird-wasm-200
+task_name: faust-bilateral-syrinx-wasm-200
 
 train_val_test_sizes: [200, 0, 0]
 mask_degenerate_bins: true

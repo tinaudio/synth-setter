@@ -1,7 +1,0 @@
-# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
-name: "faust_syrinx2_bird"
-param_spec_name: "faust_syrinx2_bird"
-plugin_path: "registry://faust/faust_syrinx2_bird"
-plugin_state_path: ""
-synth_version: "1"
-source_sha256: "cfeb46f99a0264ef851b4a241852c4fa0c9312896fa98d52f8db147f2dad5811"

@@ -31,9 +31,8 @@ _NOTE_START_SECONDS = 0.05
 _NOTE_DURATION_SECONDS = 0.25
 _MIN_AUDIBLE_PEAK = 1e-4
 _BIRD_IDENTITIES = {
-    "faust_syrinx_bird": 59,
-    "faust_syrinx2_bird": 77,
-    "faust_tract3_bird": 103,
+    "faust_bilateral_syrinx": 103,
+    "faust_single_syrinx": 77,
 }
 _EXPECTED_PARAMETER_ADDRESSES: Mapping[str, list[str]] = {
     "faust_bright_organ": [

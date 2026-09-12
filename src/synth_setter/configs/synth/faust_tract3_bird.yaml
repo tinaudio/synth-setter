@@ -1,7 +1,0 @@
-# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
-name: "faust_tract3_bird"
-param_spec_name: "faust_tract3_bird"
-plugin_path: "registry://faust/faust_tract3_bird"
-plugin_state_path: ""
-synth_version: "1"
-source_sha256: "f435a8f84df64c22f007af5909f356e26e65c0263a5bb86fd23834fd0dae88c0"

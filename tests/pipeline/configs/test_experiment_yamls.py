@@ -33,9 +33,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # inherit ``smoke-shard``'s task_name via ``@_global_`` defaults chaining.
 DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/10-1k-shards": "10-1k-shards",
-    "generate_dataset/faust-syrinx-bird-wasm-200": "faust-syrinx-bird-wasm-200",
-    "generate_dataset/faust-syrinx2-bird-wasm-200": "faust-syrinx2-bird-wasm-200",
-    "generate_dataset/faust-tract3-bird-wasm-200": "faust-tract3-bird-wasm-200",
+    "generate_dataset/faust-bilateral-syrinx-wasm-200": "faust-bilateral-syrinx-wasm-200",
+    "generate_dataset/faust-single-syrinx-wasm-200": "faust-single-syrinx-wasm-200",
     "generate_dataset/ci-materialize-test": "ci-materialize-test",
     "generate_dataset/faust-shimmer-fdn-lance-50k": "faust-shimmer-fdn-lance-50k",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
@@ -139,9 +138,8 @@ def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() ->
 @pytest.mark.parametrize(
     ("experiment", "identity", "num_params"),
     [
-        ("faust-syrinx-bird-wasm-200", "faust_syrinx_bird", 59),
-        ("faust-syrinx2-bird-wasm-200", "faust_syrinx2_bird", 77),
-        ("faust-tract3-bird-wasm-200", "faust_tract3_bird", 103),
+        ("faust-bilateral-syrinx-wasm-200", "faust_bilateral_syrinx", 103),
+        ("faust-single-syrinx-wasm-200", "faust_single_syrinx", 77),
     ],
 )
 def test_birdsong_wasm_experiment_renders_one_200_row_mono_shard(

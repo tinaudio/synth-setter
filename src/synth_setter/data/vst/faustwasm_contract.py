@@ -59,9 +59,8 @@ _RESERVED_WASM_ADDRESSES = MappingProxyType(
         ParamSpecName("faust_church_organ"): (),
         ParamSpecName("faust_filter_osc"): (),
         ParamSpecName("faust_kronecker_fdn"): (),
-        ParamSpecName("faust_syrinx_bird"): (),
-        ParamSpecName("faust_syrinx2_bird"): (),
-        ParamSpecName("faust_tract3_bird"): (),
+        ParamSpecName("faust_bilateral_syrinx"): (),
+        ParamSpecName("faust_single_syrinx"): (),
     }
 )
 

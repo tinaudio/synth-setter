@@ -92,11 +92,10 @@ def test_faust_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("identity", "channels", "param_width", "base_seed"),
     [
+        ("faust_bilateral_syrinx", 1, 103, 1808),
         ("faust_bright_organ", 2, 13, 1808),
-        ("faust_syrinx_bird", 1, 59, 1808),
-        # Syrinx2 onset is sparse, so this draws a production seed whose row passes.
-        ("faust_syrinx2_bird", 1, 77, 3),
-        ("faust_tract3_bird", 1, 103, 1808),
+        # Single-syrinx onset is sparse, so this draws a production seed whose row passes.
+        ("faust_single_syrinx", 1, 77, 3),
     ],
 )
 def test_faustwasm_generate_cli_writes_real_lance_row(

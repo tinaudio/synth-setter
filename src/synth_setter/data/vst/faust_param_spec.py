@@ -293,9 +293,12 @@ _faust_param_spec_builders: Mapping[ParamSpecName, Callable[[], ParamSpec]] = Ma
         ParamSpecName("faust_filter_osc"): _filter_osc_param_spec,
         ParamSpecName("faust_kronecker_fdn"): _kronecker_fdn_param_spec,
         ParamSpecName("faust_shimmer_fdn"): _shimmer_fdn_param_spec,
-        ParamSpecName("faust_syrinx_bird"): lambda: _birdsong_param_spec("faust_syrinx_bird"),
-        ParamSpecName("faust_syrinx2_bird"): lambda: _birdsong_param_spec("faust_syrinx2_bird"),
-        ParamSpecName("faust_tract3_bird"): lambda: _birdsong_param_spec("faust_tract3_bird"),
+        ParamSpecName("faust_bilateral_syrinx"): lambda: _birdsong_param_spec(
+            "faust_bilateral_syrinx"
+        ),
+        ParamSpecName("faust_single_syrinx"): lambda: _birdsong_param_spec(
+            "faust_single_syrinx"
+        ),
     }
 )
 

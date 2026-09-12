@@ -61,14 +61,11 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("faust_shimmer_fdn"): resolve_faust_param_spec(
         ParamSpecName("faust_shimmer_fdn")
     ),
-    ParamSpecName("faust_syrinx_bird"): resolve_faust_param_spec(
-        ParamSpecName("faust_syrinx_bird")
+    ParamSpecName("faust_bilateral_syrinx"): resolve_faust_param_spec(
+        ParamSpecName("faust_bilateral_syrinx")
     ),
-    ParamSpecName("faust_syrinx2_bird"): resolve_faust_param_spec(
-        ParamSpecName("faust_syrinx2_bird")
-    ),
-    ParamSpecName("faust_tract3_bird"): resolve_faust_param_spec(
-        ParamSpecName("faust_tract3_bird")
+    ParamSpecName("faust_single_syrinx"): resolve_faust_param_spec(
+        ParamSpecName("faust_single_syrinx")
     ),
     ParamSpecName("cardinal"): CARDINAL_PARAM_SPEC,
     ParamSpecName("surge_xt"): SURGE_XT_PARAM_SPEC,
