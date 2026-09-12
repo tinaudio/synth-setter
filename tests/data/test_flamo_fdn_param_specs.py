@@ -12,7 +12,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_KRONECKER_ANGLES_NAME,
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_KRONECKER_REFLECT_NAME,
-    BasicFDNParamSpec,
+    FlamoFDNParamSpec,
     kronecker_feedback_matrix,
     pyfdn_param_spec_json,
     pyfdn_param_spec_sha256,
@@ -33,10 +33,10 @@ def test_every_pyfdn_spec_compiles_and_plots_complete_flamo_graph(name: str) -> 
     :param name: Registered pyFDN parameter specification.
     """
     spec = resolve_param_spec(ParamSpecName(name))
-    assert isinstance(spec, BasicFDNParamSpec)
+    assert isinstance(spec, FlamoFDNParamSpec)
     native, _ = spec.sample(np.random.default_rng(7))
 
-    model = spec.to_basic_fdn(native).to_flamo(nfft=4096)
+    model = spec.to_flamo_fdn(native).to_flamo(nfft=4096)
     ax = plot_flamo_graph(model, name=name)
 
     assert ax.patches
@@ -49,7 +49,7 @@ def test_every_pyfdn_spec_json_matches_registered_digest(name: str) -> None:
     :param name: Registered pyFDN parameter specification.
     """
     spec = resolve_param_spec(ParamSpecName(name))
-    assert isinstance(spec, BasicFDNParamSpec)
+    assert isinstance(spec, FlamoFDNParamSpec)
 
     assert pyfdn_param_spec_sha256(spec) == SYNTHS[SynthName(name)].param_spec_sha256
 
@@ -58,7 +58,7 @@ def test_pyfdn_param_spec_json_is_canonical_and_complete() -> None:
     """Canonical JSON identifies the spec class, feedback rule, and ordered parameters."""
     payload = json.loads(pyfdn_param_spec_json(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC))
 
-    assert payload["type"] == "BasicFDNParamSpec"
+    assert payload["type"] == "FlamoFDNParamSpec"
     assert payload["feedback_matrix"] == "_householder_feedback"
     assert [parameter["name"] for parameter in payload["synth_params"]] == [
         "delays",
@@ -74,47 +74,47 @@ def test_pyfdn_param_spec_json_is_canonical_and_complete() -> None:
     "name",
     ["pyfdn_n8_mono_householder", "pyfdn_n8_mono_householder_vector", "pyfdn_n8_mono_kronecker"],
 )
-def test_basic_spec_build_preserves_complete_offline_effect(name: str) -> None:
-    """No processing exists outside the basic build for a compatible spec.
+def test_flamo_fdn_spec_build_preserves_complete_offline_effect(name: str) -> None:
+    """No processing exists outside the FLAMO FDN build for a compatible spec.
 
-    :param name: Registered basic FDN parameterization.
+    :param name: Registered FLAMO FDN parameterization.
     """
     spec = resolve_param_spec(ParamSpecName(name))
-    assert isinstance(spec, BasicFDNParamSpec)
+    assert isinstance(spec, FlamoFDNParamSpec)
     native, _ = spec.sample(np.random.default_rng(7))
 
-    actual = spec.to_basic_fdn(native).impulse_response(4096)[:, 0, 0]
+    actual = spec.to_flamo_fdn(native).impulse_response(4096)[:, 0, 0]
     expected = PyFDNRenderer(param_spec_name=ParamSpecName(name)).render(native)[0, :4096]
 
     np.testing.assert_allclose(actual, expected, atol=1e-7, rtol=1e-6)
 
 
-def test_basic_spec_missing_control_rejected() -> None:
-    """A partial native mapping cannot construct a basic FDN."""
+def test_flamo_fdn_spec_missing_control_rejected() -> None:
+    """A partial native mapping cannot construct a FLAMO FDN."""
     spec = resolve_param_spec(ParamSpecName("pyfdn_n8_mono_householder"))
-    assert isinstance(spec, BasicFDNParamSpec)
+    assert isinstance(spec, FlamoFDNParamSpec)
     native, _ = spec.sample(np.random.default_rng(3))
     del native["delays"]
 
     with pytest.raises(ValueError, match="exactly"):
-        spec.to_basic_fdn(native)
+        spec.to_flamo_fdn(native)
 
 
-def test_basic_spec_unexpected_control_rejected() -> None:
+def test_flamo_fdn_spec_unexpected_control_rejected() -> None:
     """An unknown native field cannot be silently ignored."""
     spec = resolve_param_spec(ParamSpecName("pyfdn_n8_mono_householder"))
-    assert isinstance(spec, BasicFDNParamSpec)
+    assert isinstance(spec, FlamoFDNParamSpec)
     native, _ = spec.sample(np.random.default_rng(3))
     native["delayz"] = native["delays"]
 
     with pytest.raises(ValueError, match="exactly"):
-        spec.to_basic_fdn(native)
+        spec.to_flamo_fdn(native)
 
 
-def test_basic_spec_out_of_domain_control_rejected_when_feedback_matches() -> None:
+def test_flamo_fdn_spec_out_of_domain_control_rejected_when_feedback_matches() -> None:
     """A matching derived matrix cannot legitimize an invalid declared control."""
     spec = resolve_param_spec(ParamSpecName("pyfdn_n8_mono_kronecker"))
-    assert isinstance(spec, BasicFDNParamSpec)
+    assert isinstance(spec, FlamoFDNParamSpec)
     native, _ = spec.sample(np.random.default_rng(3))
     native[PYFDN_KRONECKER_REFLECT_NAME] = np.full(3, 2)
     native["feedback_matrix"] = kronecker_feedback_matrix(
@@ -123,15 +123,15 @@ def test_basic_spec_out_of_domain_control_rejected_when_feedback_matches() -> No
     )
 
     with pytest.raises(ValueError, match=PYFDN_KRONECKER_REFLECT_NAME):
-        spec.to_basic_fdn(native)
+        spec.to_flamo_fdn(native)
 
 
-def test_basic_spec_feedback_controls_disagree_with_matrix_rejected() -> None:
+def test_flamo_fdn_spec_feedback_controls_disagree_with_matrix_rejected() -> None:
     """The build cannot silently use feedback different from the encoded controls."""
     spec = resolve_param_spec(ParamSpecName("pyfdn_n8_mono_kronecker"))
-    assert isinstance(spec, BasicFDNParamSpec)
+    assert isinstance(spec, FlamoFDNParamSpec)
     native, _ = spec.sample(np.random.default_rng(3))
     native["feedback_matrix"] = np.eye(8)
 
     with pytest.raises(ValueError, match="feedback_matrix"):
-        spec.to_basic_fdn(native)
+        spec.to_flamo_fdn(native)

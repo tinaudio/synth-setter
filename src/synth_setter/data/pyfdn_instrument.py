@@ -14,7 +14,7 @@ from jaxtyping import Float32
 from pyFDN import FDNBuild, build_set_decay, process_fdn
 from pyFDN.td import SOSBank
 
-from synth_setter.data.basic_fdn import BasicFDN
+from synth_setter.data.flamo_fdn import FlamoFDN
 from synth_setter.data.pyfdn_param_spec import (
     PYFDN_HOUSEHOLDER_VECTOR_NAME,
     PYFDN_KRONECKER_ANGLES_NAME,
@@ -25,7 +25,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_RT_MAX_SECONDS,
     PYFDN_RT_MIN_SECONDS,
     PYFDN_RT_NYQUIST_NAME,
-    BasicFDNParamSpec,
+    FlamoFDNParamSpec,
     householder_feedback_matrix,
     kronecker_feedback_matrix,
     require_array,
@@ -318,7 +318,7 @@ class PyFDNRenderer(AudioRenderer):
         """Configure impulse-response rendering or the optional canonical chirp.
 
         :param excitation: ``"impulse"`` for the native IR or ``"chirp"`` for the custom source.
-        :param param_spec_name: Registered complete basic FDN topology.
+        :param param_spec_name: Registered complete FLAMO FDN topology.
         :param synth_version: Required installed pyFDN version.
         :param plugin_path: Required in-process backend sentinel.
         :param sample_rate: Required sample rate.
@@ -333,7 +333,7 @@ class PyFDNRenderer(AudioRenderer):
         from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 
         spec = resolve_param_spec(param_spec_name)
-        if not isinstance(spec, BasicFDNParamSpec):
+        if not isinstance(spec, FlamoFDNParamSpec):
             raise ValueError(f"unsupported pyFDN param spec {param_spec_name!r}")
         if (
             plugin_path != "pyfdn"
@@ -412,10 +412,10 @@ class PyFDNRenderer(AudioRenderer):
         del midi_note, velocity, note_start_and_end, warmup
         if self._param_spec_name in _DERIVED_FEEDBACK:
             params = _verified_plain_params(params, self._param_spec_name)
-        basic = BasicFDN(params_to_fdn_build(params, sample_rate=_SAMPLE_RATE))
-        build = basic.build
+        flamo_fdn = FlamoFDN(params_to_fdn_build(params, sample_rate=_SAMPLE_RATE))
+        build = flamo_fdn.build
         if self._excitation == "impulse":
-            impulse_response = basic.impulse_response(_SIGNAL_LENGTH)
+            impulse_response = flamo_fdn.impulse_response(_SIGNAL_LENGTH)
             impulse_shape = (_SIGNAL_LENGTH, _CHANNELS, _CHANNELS)
             if impulse_response.shape != impulse_shape:
                 raise ValueError(

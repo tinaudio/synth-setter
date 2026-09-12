@@ -177,15 +177,15 @@ def test_decoder_zero_householder_direction_uses_basis_with_zero_gradients() -> 
 def test_decoder_basic_build_fields_match_canonical_offline_build(name: str) -> None:
     """Model decoding supplies the same build fields that the upstream graph consumes.
 
-    :param name: Basic FDN parameterization to decode.
+    :param name: FLAMO FDN parameterization to decode.
     """
-    from synth_setter.data.pyfdn_param_spec import BasicFDNParamSpec
+    from synth_setter.data.pyfdn_param_spec import FlamoFDNParamSpec
 
     decoder = PyFDNParameterDecoder(name)
-    assert isinstance(decoder.spec, BasicFDNParamSpec)
+    assert isinstance(decoder.spec, FlamoFDNParamSpec)
     row = torch.linspace(-0.7, 0.9, decoder.spec.encoded_width, dtype=torch.float64)
     native, _ = decode_model_output(row.numpy(), decoder.spec)
-    canonical = decoder.spec.to_basic_fdn(native).build
+    canonical = decoder.spec.to_flamo_fdn(native).build
 
     fields = decoder.decode_build_fields(row, sample_rate=canonical.fs)
 

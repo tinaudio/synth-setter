@@ -1,4 +1,4 @@
-"""Production-path tests for fixed-value BasicFDN Faust export."""
+"""Production-path tests for fixed-value FlamoFDN Faust export."""
 
 from pathlib import Path
 
@@ -9,7 +9,7 @@ from dawdreamer.dawdreamer import RenderEngine
 from pyFDN import FDNBuild, save_fdn_build
 
 from synth_setter.cli.export_fdn_faust import main
-from synth_setter.data.basic_fdn import BasicFDN
+from synth_setter.data.flamo_fdn import FlamoFDN
 
 _SAMPLE_COUNT = 512
 _BLOCK_SIZE = 128
@@ -106,7 +106,7 @@ def test_export_fdn_faust_mimo_build_matches_each_reference_transfer(
 
     assert result.exit_code == 0, result.output
     actual = _render_faust_transfer(output_path.read_text(), build, input_index)
-    expected = BasicFDN(build).impulse_response(_SAMPLE_COUNT)[:, :, input_index]
+    expected = FlamoFDN(build).impulse_response(_SAMPLE_COUNT)[:, :, input_index]
     np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-5)
 
 

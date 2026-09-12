@@ -29,9 +29,9 @@ SynthName = NewType("SynthName", str)
 type SynthFormat = Literal["faust", "pyfdn", "surgepy", "torchsynth", "vst3"]
 
 _PYFDN_PARAM_SPEC_SHA256 = {
-    "pyfdn_n8_mono_householder": "409ed01ba270efcbd5a3dca6d8404f8824aada9b66fae8057210de902899210a",
-    "pyfdn_n8_mono_householder_vector": "b9a5086d63da5ef9817d4c57251ed7e61c575fcfaa68c73d146db42d9db5edbb",
-    "pyfdn_n8_mono_kronecker": "a2e761fcad8eb80e4e89d4ac553769726e827603bc32cc7ebea594c33d1bc6f6",
+    "pyfdn_n8_mono_householder": "5d43a9eb50b10d9d91a5b748961ce3a382628abf61a797b092de377aa06a5b75",
+    "pyfdn_n8_mono_householder_vector": "51af728a411f40cf08531f1be30398717ef560136d70b76181ad87ae8b88d8fd",
+    "pyfdn_n8_mono_kronecker": "66d27e7e92ba7c4b6059814647df074fd41f903f953cbb6bbc51be33263e8ee1",
 }
 
 _FAUST_SOURCE_SHA256 = {

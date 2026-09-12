@@ -15,7 +15,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_RT_CROSSOVER_HZ,
     PYFDN_RT_DC_NAME,
     PYFDN_RT_NYQUIST_NAME,
-    BasicFDNParamSpec,
+    FlamoFDNParamSpec,
     PyFDNParamSpec,
 )
 from synth_setter.data.vst.param_spec import (
@@ -197,13 +197,13 @@ class PyFDNParameterDecoder(nn.Module):
     ) -> dict[str, Float[Tensor, _ANY_SHAPE]]:
         """Translate a basic model parameterization into the graph's varying build fields.
 
-        :param params: One model-space row for a BasicFDNParamSpec.
+        :param params: One model-space row for a FlamoFDNParamSpec.
         :param sample_rate: Canonical build's processing rate in Hz.
         :returns: Tensor counterparts of A/B/C/D, delays and the post-delay SOS bank.
-        :raises ValueError: This parameterization does not represent a complete BasicFDN.
+        :raises ValueError: This parameterization does not represent a complete FlamoFDN.
         """
-        if not isinstance(self.spec, BasicFDNParamSpec):
-            raise ValueError("parameterization does not represent a complete BasicFDN")
+        if not isinstance(self.spec, FlamoFDNParamSpec):
+            raise ValueError("parameterization does not represent a complete FlamoFDN")
         native = self(params)
         return {
             "A": native["feedback_matrix"],

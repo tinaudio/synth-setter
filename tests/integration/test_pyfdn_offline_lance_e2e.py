@@ -25,7 +25,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
     PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
-    BasicFDNParamSpec,
+    FlamoFDNParamSpec,
     pyfdn_param_spec_sha256,
 )
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
@@ -66,7 +66,7 @@ from synth_setter.workspace import operator_workspace
     ],
 )
 def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
-    tmp_path: Path, synth_name: str, param_spec: BasicFDNParamSpec
+    tmp_path: Path, synth_name: str, param_spec: FlamoFDNParamSpec
 ) -> None:
     """A real accepted row survives storage and the production model-batch reader.
 

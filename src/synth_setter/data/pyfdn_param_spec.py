@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping
 import numpy as np
 from pyFDN import householder_matrix
 
-from synth_setter.data.basic_fdn import BasicFDN
+from synth_setter.data.flamo_fdn import FlamoFDN
 from synth_setter.data.vst.param_spec import (
     AngleArrayParameter,
     ContinuousArrayParameter,
@@ -197,10 +197,10 @@ def pyfdn_param_spec_sha256(spec: PyFDNParamSpec) -> str:
     return hashlib.sha256(pyfdn_param_spec_json(spec).encode()).hexdigest()
 
 
-class BasicFDNParamSpec(PyFDNParamSpec):
-    """A parameterization whose complete impulse response is represented by one BasicFDN."""
+class FlamoFDNParamSpec(PyFDNParamSpec):
+    """A parameterization whose complete impulse response is represented by one FlamoFDN."""
 
-    def to_basic_fdn(self, params: Mapping[str, ParameterValue]) -> BasicFDN:
+    def to_flamo_fdn(self, params: Mapping[str, ParameterValue]) -> FlamoFDN:
         """Validate decoded controls and build the complete effect without outer processing.
 
         :param params: Full native synth mapping, including the derived feedback matrix.
@@ -213,7 +213,7 @@ class BasicFDNParamSpec(PyFDNParamSpec):
 
         expected = {parameter.name for parameter in self.synth_params} | {"feedback_matrix"}
         if set(params) != expected:
-            raise ValueError(f"basic FDN params must contain exactly {sorted(expected)}")
+            raise ValueError(f"FLAMO FDN params must contain exactly {sorted(expected)}")
         for parameter in self.synth_params:
             encoded = np.asarray(parameter.encode(params[parameter.name]))
             if not np.isfinite(encoded).all() or np.any((encoded < 0.0) | (encoded > 1.0)):
@@ -229,8 +229,8 @@ class BasicFDNParamSpec(PyFDNParamSpec):
         if self._feedback_matrix is None or not np.allclose(
             build.A, self._feedback_matrix(dict(params)), rtol=0.0, atol=1e-6
         ):
-            raise ValueError("feedback_matrix does not match the basic FDN controls")
-        return BasicFDN(build)
+            raise ValueError("feedback_matrix does not match the FLAMO FDN controls")
+        return FlamoFDN(build)
 
 
 def _kronecker_feedback_from_params(synth_params: ParameterValues) -> np.ndarray:
@@ -300,7 +300,7 @@ def _householder_feedback(synth_params: ParameterValues) -> np.ndarray:
     return _PYFDN_N8_HOUSEHOLDER_FEEDBACK.copy()
 
 
-PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = BasicFDNParamSpec(
+PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = FlamoFDNParamSpec(
     synth_params=[
         *_fdn_matrix_parameters(delay_min=400, delay_max=1200),
         ContinuousParameter(
@@ -317,7 +317,7 @@ PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC = BasicFDNParamSpec(
     feedback_matrix=_householder_feedback,
 )
 
-PYFDN_N8_MONO_KRONECKER_PARAM_SPEC = BasicFDNParamSpec(
+PYFDN_N8_MONO_KRONECKER_PARAM_SPEC = FlamoFDNParamSpec(
     synth_params=[
         *_fdn_matrix_parameters(delay_min=400, delay_max=1200),
         ContinuousParameter(
@@ -344,7 +344,7 @@ PYFDN_N8_MONO_KRONECKER_PARAM_SPEC = BasicFDNParamSpec(
     feedback_matrix=_kronecker_feedback_from_params,
 )
 
-PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC = BasicFDNParamSpec(
+PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC = FlamoFDNParamSpec(
     synth_params=[
         *_fdn_matrix_parameters(delay_min=400, delay_max=1200),
         ContinuousParameter(
