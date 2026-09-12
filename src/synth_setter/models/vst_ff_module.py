@@ -1,6 +1,8 @@
 """Lightning module for feed-forward VST parameter prediction."""
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 import torch
 from lightning import LightningModule
@@ -11,6 +13,9 @@ from synth_setter.conditioning import (
     conditioning_batch_key,
     resolve_embedding_conditioning,
 )
+
+if TYPE_CHECKING:
+    from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
 
 
 class VSTFeedForwardModule(LightningModule):
@@ -25,6 +30,7 @@ class VSTFeedForwardModule(LightningModule):
         warmup_steps: int = 0,
         conditioning: Conditioning = "mel",
         encoder: torch.nn.Module | None = None,
+        audio_loss: AudioFeedbackLoss | None = None,
         encoder_num_heads: int | None = None,
         encoder_output_dim: int | None = None,
     ):
@@ -39,9 +45,12 @@ class VSTFeedForwardModule(LightningModule):
         :param conditioning: Legacy mel/m2l mode or a fixed-shape embedding spec.
         :param encoder: Profile-selected embedding encoder. When configured, it replaces
             the legacy mel network for cached conditioning.
+        :param audio_loss: Optional rendered-audio loss on predicted parameters; requires
+            uncompiled, single-device training.
         :param encoder_num_heads: Model-owned attention head count for sequence encoders.
         :param encoder_output_dim: Configured cached-encoder output width.
-        :raises ValueError: If cached conditioning has no encoder.
+        :raises ValueError: Cached conditioning has no encoder, or audio feedback is
+            combined with compilation.
         """
         super().__init__()
 
@@ -52,12 +61,28 @@ class VSTFeedForwardModule(LightningModule):
                 raise ValueError("cached conditioning requires an encoder")
             net = encoder
 
-        self.save_hyperparameters(logger=False)
+        self.save_hyperparameters(ignore=["audio_loss"], logger=False)
 
         self.net = net
+        self.audio_loss = audio_loss
+        if audio_loss is not None and compile:
+            from synth_setter.models.components.audio_feedback import (
+                validate_audio_feedback_runtime,
+            )
 
-    def on_train_start(self):
-        pass
+            validate_audio_feedback_runtime(compiled=True, world_size=1)
+
+    def on_train_start(self) -> None:
+        if self.audio_loss is None:
+            return
+        from synth_setter.models.components.audio_feedback import (
+            validate_audio_feedback_runtime,
+        )
+
+        validate_audio_feedback_runtime(
+            compiled=self.hparams.compile,
+            world_size=self.trainer.world_size,
+        )
 
     def _get_conditioning_from_batch(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         return batch[self._conditioning_key]
@@ -76,10 +101,15 @@ class VSTFeedForwardModule(LightningModule):
         return loss, pred_params, target_params, conditioning
 
     def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int):
-        loss, *_ = self.model_step(batch)
+        loss, pred_params, *_ = self.model_step(batch)
         self.log("train/loss", loss, on_step=True, on_epoch=True, prog_bar=True)
+        if self.audio_loss is None:
+            return loss
 
-        return loss
+        endpoint_time = pred_params.new_ones((pred_params.shape[0], 1))
+        audio_term = self.audio_loss(pred_params, endpoint_time, batch["audio"])
+        self.log("train/audio_loss", audio_term, on_step=True, on_epoch=True, prog_bar=True)
+        return loss + audio_term
 
     def on_train_epoch_end(self) -> None:
         pass

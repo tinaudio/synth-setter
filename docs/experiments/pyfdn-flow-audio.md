@@ -1,13 +1,14 @@
-# pyFDN flow matching with direct audio feedback
+# pyFDN training with direct audio feedback
 
-`experiment=pyfdn/flow_audio_flamo` attaches the FLAMO renderer when Hydra
-constructs the flow model. No pretrained checkpoint or separate simulator
-finetuning stage is required. The experiment loads target audio from Lance and
-uses the shared multichannel audio distance alongside flow matching; its inherited
-`lambda_audio=0.03` already contributes to optimization.
+`experiment=pyfdn/flow_audio_flamo` and `experiment=pyfdn/ffn_audio_flamo`
+attach the FLAMO renderer when Hydra constructs the selected model. No pretrained
+checkpoint or separate simulator finetuning stage is required. Both experiments
+load target audio from Lance and use the shared multichannel audio distance
+alongside their parameter objective; the inherited `lambda_audio=0.03` already
+contributes to optimization.
 
 ```text
-flow prediction / endpoint estimate
+flow endpoint estimate or FFN prediction
   → PyFDNParameterDecoder
   → native tensor matrices, delays, and filter controls
   → FLAMO graph with externally bound parameters
@@ -112,18 +113,27 @@ Legacy simulator-control helpers still clip unrestricted responses to `[-1, 1]`
 (#3404). This is separate from channel preservation; unrestricted-amplitude
 finetuning parity is not claimed until that backend-specific policy is removed.
 
-## Reproducible integration experiment
+## Backbone objectives
 
-This creates a tiny real local pyFDN Lance dataset, trains the configured flow
-model, checks audio-only gradients to its vector field, then reloads the real
-checkpoint through evaluation and reads rendered WAVs and audio metrics:
+Flow matching renders its one-step endpoint estimate and applies the configured
+time-dependent audio weight. The FFN has no diffusion time, so it renders the
+direct parameter prediction at the audio loss's full configured weight. In both
+cases the parameter-space objective remains active and gradients from the audio
+term pass through the same decoder and FLAMO graph.
+
+## Reproducible integration experiments
+
+These tests create tiny real local pyFDN Lance datasets, train with FLAMO feedback,
+check audio-only model gradients, and reload real checkpoints through evaluation:
 
 ```bash
 uv run pytest tests/test_train.py::test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates -q
+uv run pytest tests/test_train.py::test_train_flamo_ffn_real_pyfdn_dataset_checkpoint_evaluates -q
 ```
 
-It runs for fixed and learned Householder feedback. Kronecker/Givens prediction
-CSV export has an independent native-angle/encoded-width bug tracked in #3378;
+The flow test runs for fixed and learned Householder feedback; the FFN test uses
+fixed Householder feedback. Kronecker/Givens prediction CSV export has an independent
+native-angle/encoded-width bug tracked in #3378;
 that export path is not claimed to work here.
 
 The same-prediction parity and CPU/CUDA gradient checks are:

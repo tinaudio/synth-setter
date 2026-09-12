@@ -1,9 +1,10 @@
 """Audio-domain feedback loss that backpropagates through a differentiable render.
 
-The flow's one-step parameter estimate is scored against target audio by an injected
-distance, which owns its own space and so is independent of what conditions the flow.
-Gradient reaching the network scales as ``(t - t_min) * (1 - t)``: zero at ``t_min``, zero again at t=1 where the estimate is trivially correct, peaking midway — see
-https://github.com/tinaudio/synth-setter/issues/2665.
+A model-space parameter estimate is scored against target audio by an injected
+distance. Flow matching supplies its one-step estimate and diffusion time; direct predictors
+supply an endpoint weight of one. For flow, gradient reaching the network scales as
+``(t - t_min) * (1 - t)``: zero at ``t_min``, zero again at t=1 where the estimate is
+trivially correct, peaking midway — see https://github.com/tinaudio/synth-setter/issues/2665.
 
 Typical usage:
     audio_term = AudioFeedbackLoss(**audio_loss_config)(
@@ -162,7 +163,7 @@ def time_bucket_means(
 
 
 class AudioFeedbackLoss(nn.Module):
-    """Weighted latent-space audio distance on the flow's rendered one-step estimate."""
+    """Weighted audio distance on a model-space parameter estimate."""
 
     @jaxtyped(typechecker=beartype)
     def __init__(
@@ -223,7 +224,7 @@ class AudioFeedbackLoss(nn.Module):
     ) -> Float[Tensor, _BATCH_TIME_SHAPE]:
         """Ramp the weight from zero at ``t_min`` to ``lambda_audio`` at t=1.
 
-        :param t: Flow time shaped ``(batch, 1)``.
+        :param t: Flow time or direct-predictor endpoint weight shaped ``(batch, 1)``.
         :returns: Per-sample weight shaped ``(batch, 1)``.
         """
         return self.lambda_audio * ((t - self.t_min) / (1 - self.t_min)).clamp(min=0.0)
@@ -239,8 +240,8 @@ class AudioFeedbackLoss(nn.Module):
     ) -> Float[Tensor, _SCALAR_SHAPE]:
         """Render the estimate and return the weighted latent distance to the target.
 
-        :param theta_hat: One-step parameter estimate in model space ``[-1, 1]``.
-        :param t: Flow time shaped ``(batch, 1)``.
+        :param theta_hat: Parameter estimate in model space ``[-1, 1]``.
+        :param t: Flow time or direct-predictor endpoint weight shaped ``(batch, 1)``.
         :param target_audio: Observed audio shaped ``(batch, signal_length)`` or
             ``(batch, channels, signal_length)``; the distance owns channel handling.
         :param keep: Optional CFG keep mask shaped ``(batch,)``; rows at ``False`` are

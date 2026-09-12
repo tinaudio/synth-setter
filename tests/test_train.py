@@ -290,6 +290,37 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
     assert (Path(cfg_pyfdn_train.paths.output_dir) / "checkpoints" / "last.ckpt").is_file()
 
 
+def _generate_local_pyfdn_lance_dataset(
+    cfg: DictConfig,
+    dataset_root: Path,
+    synth: str,
+) -> None:
+    """Generate two real pyFDN rows per split and their training statistics.
+
+    :param cfg: Local pyFDN producer configuration.
+    :param dataset_root: Destination for split Lance datasets and statistics.
+    :param synth: Registered pyFDN identity to render.
+    """
+    from synth_setter.data.vst.writers import make_lance_dataset
+    from synth_setter.pipeline.data.stats import finalize, fold_lance_shard_into_welford
+
+    with open_dict(cfg):
+        cfg.synth.name = synth
+        cfg.synth.param_spec_name = synth
+        cfg.train_val_test_sizes = [2, 2, 2]
+        cfg.render.samples_per_shard = 2
+        cfg.render.min_loudness = -100.0
+        cfg.logger = None
+    spec = spec_from_cfg(cfg)
+    dataset_root.mkdir()
+    for split, seed in (("train", 10), ("val", 20), ("test", 30)):
+        render = spec.render.model_copy(update={"base_seed": seed})
+        make_lance_dataset(str(dataset_root / f"{split}.lance"), render)
+    stats = fold_lance_shard_into_welford((0, 0, 0), dataset_root / "train.lance")
+    mean, std = finalize(stats, mask_degenerate=True)
+    np.savez(dataset_root / "stats.npz", mean=mean, std=std)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize(
     "synth", ["pyfdn_n8_mono_householder", "pyfdn_n8_mono_householder_vector"]
@@ -305,25 +336,12 @@ def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
     :param tmp_path: Root for generated, checkpoint, metric, and audio artifacts.
     :param synth: Feedback topology shared by data generation and differentiable training.
     """
-    from synth_setter.data.vst.writers import make_lance_dataset
-    from synth_setter.pipeline.data.stats import finalize, fold_lance_shard_into_welford
-
-    with open_dict(cfg_dataset_pyfdn_householder):
-        cfg_dataset_pyfdn_householder.synth.name = synth
-        cfg_dataset_pyfdn_householder.synth.param_spec_name = synth
-        cfg_dataset_pyfdn_householder.train_val_test_sizes = [2, 2, 2]
-        cfg_dataset_pyfdn_householder.render.samples_per_shard = 2
-        cfg_dataset_pyfdn_householder.render.min_loudness = -100.0
-        cfg_dataset_pyfdn_householder.logger = None
-    spec = spec_from_cfg(cfg_dataset_pyfdn_householder)
     dataset_root = tmp_path / "dataset"
-    dataset_root.mkdir()
-    for split, seed in (("train", 10), ("val", 20), ("test", 30)):
-        render = spec.render.model_copy(update={"base_seed": seed})
-        make_lance_dataset(str(dataset_root / f"{split}.lance"), render)
-    stats = fold_lance_shard_into_welford((0, 0, 0), dataset_root / "train.lance")
-    mean, std = finalize(stats, mask_degenerate=True)
-    np.savez(dataset_root / "stats.npz", mean=mean, std=std)
+    _generate_local_pyfdn_lance_dataset(
+        cfg_dataset_pyfdn_householder,
+        dataset_root,
+        synth,
+    )
 
     GlobalHydra.instance().clear()
     with hydra.initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -496,6 +514,101 @@ def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
         assert sampled.shape == batch["params"].shape
         assert torch.isfinite(sampled).all()
         getattr(finetune, f"on_{stage}_batch_end")(None, batch, 0)
+
+
+@pytest.mark.slow
+def test_train_flamo_ffn_real_pyfdn_dataset_checkpoint_evaluates(
+    cfg_dataset_pyfdn_householder: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """Train an FFN with real FLAMO feedback, then reload its checkpoint in evaluation.
+
+    :param cfg_dataset_pyfdn_householder: Real local pyFDN producer configuration.
+    :param tmp_path: Root for generated data and training artifacts.
+    """
+    dataset_root = tmp_path / "dataset"
+    _generate_local_pyfdn_lance_dataset(
+        cfg_dataset_pyfdn_householder,
+        dataset_root,
+        "pyfdn_n8_mono_householder",
+    )
+
+    GlobalHydra.instance().clear()
+    with hydra.initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = hydra.compose(
+            config_name="train.yaml",
+            return_hydra_config=True,
+            overrides=["experiment=pyfdn/ffn_audio_flamo", "trainer=cpu"],
+        )
+    with open_dict(cfg):
+        cfg.paths.root_dir = str(operator_workspace())
+        cfg.paths.output_dir = str(tmp_path / "run")
+        cfg.paths.log_dir = str(tmp_path / "run")
+        cfg.logger = None
+        cfg.training.val_audio_probe = False
+        cfg.test = False
+        cfg.datamodule.dataset_root = str(dataset_root)
+        cfg.datamodule.predict_file = str(dataset_root / "test.lance")
+        cfg.datamodule.batch_size = 1
+        cfg.datamodule.num_workers = 0
+        cfg.datamodule.pin_memory = False
+        cfg.datamodule.ot = False
+        cfg.model.audio_loss.t_min = 0.0
+        cfg.model.scheduler = None
+        cfg.model.net.d_model = 8
+        cfg.model.net.n_heads = 1
+        cfg.model.net.n_layers = 1
+        cfg.trainer.max_epochs = 1
+        cfg.trainer.max_steps = 1
+        cfg.trainer.limit_train_batches = 1
+        cfg.trainer.limit_val_batches = 0
+        cfg.trainer.num_sanity_val_steps = 0
+        cfg.trainer.log_every_n_steps = 1
+        cfg.callbacks.model_checkpoint.save_top_k = 0
+        cfg.callbacks.model_checkpoint.save_last = True
+        if "lr_monitor" in cfg.callbacks:
+            del cfg.callbacks.lr_monitor
+    HydraConfig().set_config(cfg)
+
+    train_metrics, objects = train(cfg)
+    checkpoint = Path(cfg.paths.output_dir) / "checkpoints" / "last.ckpt"
+    model = objects["model"]
+
+    assert isinstance(model, VSTFeedForwardModule)
+    assert model.audio_loss is not None
+    assert isinstance(model.audio_loss.renderer, FlamoFDNDifferentiableRenderer)
+    assert checkpoint.is_file()
+    assert torch.isfinite(train_metrics["train/audio_loss_step"])
+    assert train_metrics["train/audio_loss_step"] > 0
+
+    datamodule = objects["datamodule"]
+    datamodule.setup(stage="fit")
+    batch = next(iter(datamodule.train_dataloader()))
+    _, prediction, _, _ = model.model_step(batch)
+    endpoint_time = prediction.new_ones((prediction.shape[0], 1))
+    audio_term = model.audio_loss(prediction, endpoint_time, batch["audio"])
+    audio_gradients = torch.autograd.grad(
+        audio_term,
+        tuple(model.net.parameters()),
+        allow_unused=True,
+    )
+    assert any(
+        gradient is not None
+        and torch.isfinite(gradient).all()
+        and torch.count_nonzero(gradient) > 0
+        for gradient in audio_gradients
+    )
+    datamodule.teardown(stage="fit")
+
+    with open_dict(cfg):
+        cfg.ckpt_path = str(checkpoint)
+        cfg.mode = "test"
+        cfg.trainer.limit_test_batches = 1
+    HydraConfig().set_config(cfg)
+    eval_metrics, eval_objects = evaluate(cfg)
+
+    assert isinstance(eval_objects["model"], VSTFeedForwardModule)
+    assert torch.isfinite(eval_metrics["test/param_mse"])
 
 
 @pytest.mark.slow

@@ -1,6 +1,8 @@
 defaults:
   - backbone@net: ast_projection
   - encoder: null
+  # Off by default: differentiable rendering is opt-in per experiment.
+  - audio_loss: null
   - _self_
 
 _target_: synth_setter.models.vst_ff_module.VSTFeedForwardModule
