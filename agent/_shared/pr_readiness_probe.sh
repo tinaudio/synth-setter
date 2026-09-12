@@ -197,17 +197,38 @@ if [[ "$action_required" == "0" && "$wait_required" == "0" \
     --paginate 2>/dev/null) || copilot_err=1
   reviews_json=$(gh api "repos/${owner}/${name}/pulls/${PR}/reviews" \
     --paginate 2>/dev/null) || copilot_err=1
-  copilot_hits=$(printf '%s\n%s\n' "$comments_json" "$reviews_json" \
+  copilot_comment_hits=$(printf '%s\n' "$comments_json" \
     | jq -r --arg head "$head_sha" '[.[]
         | select(((.user.login // "") | test("copilot"; "i"))
                  and .commit_id == $head)] | length' \
     | awk '{ total += $1 } END { print total + 0 }') || copilot_err=1
+  copilot_review_counts=$(printf '%s\n' "$reviews_json" \
+    | jq -r --arg head "$head_sha" '
+        def quota_denial:
+          ((.body // "") | ascii_downcase) as $body
+          | ($body | contains("unable to review this pull request"))
+            and (($body | contains("quota"))
+                 or ($body | contains("premium request")));
+        [.[]
+          | select(((.user.login // "") | test("copilot"; "i"))
+                   and .commit_id == $head)] as $current
+        | [($current | map(select(quota_denial | not)) | length),
+           ($current | map(select(quota_denial)) | length)]
+        | @tsv' \
+    | awk '{ reviews += $1; denials += $2 }
+           END { print reviews + 0, denials + 0 }') || copilot_err=1
+  read -r copilot_review_hits copilot_quota_denials <<<"$copilot_review_counts"
+  copilot_hits=$((copilot_comment_hits + copilot_review_hits))
   if [[ "$copilot_err" == "1" ]]; then
     echo "Gate 4 (Copilot, advisory): could not query Copilot activity" \
       "— check manually"
   elif [[ "$copilot_hits" -gt 0 ]]; then
     echo "Gate 4 (Copilot, advisory): Copilot has reviewed head" \
       "${short_head} — fresh findings appear as Gate 3 threads"
+  elif [[ "$copilot_quota_denials" -gt 0 ]]; then
+    echo "Gate 4 (Copilot, advisory): review unavailable for head" \
+      "${short_head} — Copilot reported a quota limit; do not retry until" \
+      "quota is restored"
   else
     echo "Gate 4 (Copilot, advisory): no Copilot activity on head" \
       "${short_head} yet — wait ~60s (up to 15 min), then" \
