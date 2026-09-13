@@ -156,37 +156,32 @@ def test_finalize_rejects_embedding_identity_drift_across_splits(
         stage_lance_shard_attempt(
             spec, shard, local, worker_id="pod-b", attempt_uuid=f"b{shard.shard_id}"
         )
+    _install_test_clap(monkeypatch)
 
     with pytest.raises(ValueError, match="embedding types or metadata differ"):
         finalize_from_spec(spec, tmp_path / "work")
 
 
-def test_finalize_uses_staged_embedding_identity_without_loading_checkpoint(
+def test_finalize_rejects_uniform_embedding_identity_not_matching_policy(
     fake_r2_remote: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    del fake_r2_remote
     _install_test_clap(monkeypatch)
     spec = _embedding_spec()
     stage_all_shards(spec, tmp_path)
-
-    def reject_identity_resolution(checkpoint: str) -> str:
-        del checkpoint
-        raise AssertionError("finalize must not resolve worker model artifacts")
-
     monkeypatch.setitem(
         EMBEDDING_REGISTRY,
         "clap",
         replace(
             EMBEDDING_REGISTRY["clap"],
-            resolve_artifact_identity=reject_identity_resolution,
+            resolve_artifact_identity=lambda checkpoint: f"unexpected:{checkpoint}",
         ),
     )
 
-    finalize_from_spec(spec, tmp_path / "work")
-
-    train = lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train")))
-    assert train.count_rows() == spec.train_val_test_sizes[0]
+    with pytest.raises(ValueError, match="configured artifact provenance"):
+        finalize_from_spec(spec, tmp_path / "work")
 
 
 def test_finalize_commits_winners_into_three_splits_with_exact_shard_content(

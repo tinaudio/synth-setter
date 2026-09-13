@@ -9,6 +9,7 @@ are built directly in NumPy so a codec bug cannot corrupt both sides.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -28,6 +29,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     EMBEDDING_REGISTRY,
+    GenerationEmbeddingRuntime,
 )
 from synth_setter.pipeline.data.lance_shard import (
     lance_schema,
@@ -204,7 +206,9 @@ def _install_test_clap(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("torch.cuda.device_count", lambda: 1)
     monkeypatch.setattr("torch.random.fork_rng", nullcontext)
 
-    def load_encoder(checkpoint: str, config: object):
+    def load_encoder(
+        checkpoint: str, config: object
+    ) -> Callable[[np.ndarray, int], np.ndarray]:
         del checkpoint, config
 
         def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -224,6 +228,96 @@ def _install_test_clap(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
     )
     _reset_generation_embedding_runtime()
+
+
+def test_generation_runtime_preserves_row_association_and_vector_width(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _embedding_spec()
+    _install_test_clap(monkeypatch)
+    batch = next(lance.dataset(write_local_shard(spec, 0, tmp_path)).to_batches())
+    runtime = GenerationEmbeddingRuntime(
+        spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
+    )
+
+    augmented = runtime.augment_batch(batch, spec.render.sample_rate)
+
+    audio = batch.column(AUDIO_FIELD).to_numpy_ndarray()
+    embeddings = np.asarray(augmented.column(CLAP_FIELD).to_pylist(), dtype=np.float32)
+    assert embeddings.shape == (batch.num_rows, CLAP_EMBEDDING_DIM)
+    np.testing.assert_allclose(
+        embeddings[:, 0], audio.mean(axis=tuple(range(1, audio.ndim)))
+    )
+
+
+def test_generation_runtime_rejects_encoder_row_count_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _embedding_spec()
+    _install_test_clap(monkeypatch)
+
+    def load_short_encoder(
+        checkpoint: str, config: object
+    ) -> Callable[[np.ndarray, int], np.ndarray]:
+        del checkpoint, config
+
+        def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+            del sample_rate
+            return np.zeros((audio.shape[0] - 1, CLAP_EMBEDDING_DIM), dtype=np.float32)
+
+        return encode
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(EMBEDDING_REGISTRY["clap"], load_encoder=load_short_encoder),
+    )
+    runtime = GenerationEmbeddingRuntime(
+        spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
+    )
+    batch = next(lance.dataset(write_local_shard(spec, 0, tmp_path)).to_batches())
+
+    with pytest.raises(ValueError, match="produced shape"):
+        runtime.augment_batch(batch, spec.render.sample_rate)
+
+
+def test_generation_runtime_rejects_cross_batch_output_shape_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _embedding_spec()
+    _install_test_clap(monkeypatch)
+    calls = 0
+
+    def load_drifting_encoder(
+        checkpoint: str, config: object
+    ) -> Callable[[np.ndarray, int], np.ndarray]:
+        del checkpoint, config
+
+        def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+            nonlocal calls
+            del sample_rate
+            calls += 1
+            width = CLAP_EMBEDDING_DIM if calls == 1 else CLAP_EMBEDDING_DIM + 1
+            return np.zeros((audio.shape[0], width), dtype=np.float32)
+
+        return encode
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(EMBEDDING_REGISTRY["clap"], load_encoder=load_drifting_encoder),
+    )
+    runtime = GenerationEmbeddingRuntime(
+        spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
+    )
+    batch = next(lance.dataset(write_local_shard(spec, 0, tmp_path)).to_batches())
+    runtime.augment_batch(batch, spec.render.sample_rate)
+
+    with pytest.raises(ValueError, match="shape|schema"):
+        runtime.augment_batch(batch, spec.render.sample_rate)
 
 
 def test_stage_attempt_cuda_unavailable_withholds_valid_marker(
