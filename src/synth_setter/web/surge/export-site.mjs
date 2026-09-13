@@ -72,14 +72,13 @@ export async function exportSite({ model, engine, output }) {
       "decode.mjs",
       "author.mjs",
       "audio.mjs",
+      "spectrogram.mjs",
     ]) {
       await cp(path.join(directory, name), path.join(staging, "surge", name));
     }
     await mkdir(path.join(staging, "fdn"));
-    await cp(
-      path.join(web, "fdn", "noise.mjs"),
-      path.join(staging, "fdn", "noise.mjs"),
-    );
+    for (const name of ["noise.mjs", "dsp.mjs", "fft.mjs"])
+      await cp(path.join(web, "fdn", name), path.join(staging, "fdn", name));
     for (const name of ["rk4.mjs", "guidance.mjs"])
       await cp(path.join(web, name), path.join(staging, name));
     await cp(model, path.join(staging, "model"), { recursive: true });

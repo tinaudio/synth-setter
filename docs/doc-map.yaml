@@ -709,6 +709,16 @@ docs:
       - pattern: ".github/workflows/browser-surge-wasm-e2e.yml"
         covers: "Source build and production-path CI"
 
+  - doc: docs/guides/surge-webgpu-comparison.md
+    description: Neural backend comparison and stereo spectrograms
+    sources:
+      - pattern: "src/synth_setter/web/surge/*"
+        covers: "Backend selection, comparison records, and audio views"
+      - pattern: "src/synth_setter/web/fdn/dsp.mjs"
+        covers: "Shared windowed spectral analysis"
+      - pattern: "src/synth_setter/web/fdn/fft.mjs"
+        covers: "Shared FFT implementation"
+
   - doc: docs/guides/surgepy-browser-evaluation.md
     description: Browser-to-SurgePy evaluation playbook
     sources:

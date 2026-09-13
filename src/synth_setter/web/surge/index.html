@@ -128,6 +128,8 @@
       </fieldset>
       <fieldset>
         <legend>Sampling</legend>
+        <label><input id="webgpu" type="checkbox" /> WebGPU neural inference</label>
+        <p>Experimental: conditioning and velocity networks only. Mel, PESTO and Surge stay on WASM. Keep inputs, seed and settings unchanged for a previous-run parameter delta. Neural timing excludes model loading, feature extraction and audio rendering; the first run may compile shaders. Unsupported WebGPU reports an error, not silent fallback.</p>
         <label
           >Conditioning
           <select id="mode">

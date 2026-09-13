@@ -1,4 +1,4 @@
-import * as ort from "../ort/ort.wasm.min.mjs";
+import * as ort from "../ort/ort.webgpu.min.mjs";
 import { renderSurge } from "../engine/runtime.mjs";
 import { branchWeights } from "../guidance.mjs";
 import { integrateRK4 } from "../rk4.mjs";
@@ -63,7 +63,39 @@ async function loadModel() {
     await Promise.all(Object.values(graphs).map((graph) => graph.release()));
     throw error;
   }
-  return { manifest, graphs, preset: loaded["preset.fxp"] };
+  return { manifest, graphs, preset: loaded["preset.fxp"], neuralBytes: {
+    conditioning: loaded["conditioning.onnx"], velocity: loaded["velocity.onnx"],
+  } };
+}
+
+async function neuralGraphs(backend) {
+  if (backend === "wasm") return model.graphs;
+  if (backend !== "webgpu") throw new Error("unsupported neural backend");
+  if (model.gpuGraphs) return model.gpuGraphs;
+  const graphs = {};
+  try {
+    if (!navigator.gpu || !(await navigator.gpu.requestAdapter()))
+      throw new Error("no WebGPU adapter available in this browser");
+    postMessage({ type: "progress", message: "Loading WebGPU neural networks" });
+    for (const name of ["conditioning", "velocity"])
+      graphs[name] = await ort.InferenceSession.create(model.neuralBytes[name], {
+        executionProviders: ["webgpu"],
+        extra: { session: { disable_cpu_ep_fallback: "1" } },
+      });
+    const device = await ort.env.webgpu.device;
+    const info = device.adapterInfo ?? ort.env.webgpu.adapter?.info;
+    model.gpuAdapter = {
+      vendor: info?.vendor ?? "unreported",
+      architecture: info?.architecture ?? "unreported",
+      device: info?.device ?? "unreported",
+      description: info?.description ?? "unreported",
+    };
+    model.gpuGraphs = graphs;
+    return graphs;
+  } catch (error) {
+    await Promise.all(Object.values(graphs).map((graph) => graph.release()));
+    throw new Error(`WebGPU neural inference unavailable: ${error.message}`);
+  }
 }
 
 async function evaluate(input) {
@@ -84,6 +116,7 @@ async function evaluate(input) {
     !input.noise.every(Number.isFinite)
   )
     throw new Error("invalid sampling contract");
+  const neural = await neuralGraphs(input.neuralBackend);
   const melOut = await graphs.frontend.run({
     [graphs.frontend.inputNames[0]]: tensor(input.content, [
       1,
@@ -105,7 +138,8 @@ async function evaluate(input) {
     });
     controls = Float32Array.from(sketchOut[graphs.sketch.outputNames[0]].data);
   }
-  const encoded = await graphs.conditioning.run({
+  const started = performance.now();
+  const encoded = await neural.conditioning.run({
     mel,
     sketch_ctrl: tensor(controls, [1, 386, 32]),
   });
@@ -119,7 +153,7 @@ async function evaluate(input) {
     onStep: (step, total) =>
       postMessage({ type: "progress", message: `Sampling ${step}/${total}` }),
     field: async (state, time) => {
-      const output = await graphs.velocity.run({
+      const output = await neural.velocity.run({
         ...encoded,
         x: tensor(state, [1, 92]),
         t: tensor(Float32Array.of(time), [1, 1]),
@@ -128,6 +162,7 @@ async function evaluate(input) {
       return output.velocity.data;
     },
   });
+  const neuralInferenceMs = performance.now() - started;
   const patch = decodeParameters(params, manifest);
   const [noteStart, noteEnd] = [...patch.note.note_start_and_end].sort(
     (a, b) => a - b,
@@ -159,6 +194,12 @@ async function evaluate(input) {
   for (let index = 0; index < predictedMel.length; index++)
     melError += Math.abs(predictedMel[index] - mel.data[index]);
   return {
+    neuralBackend: input.neuralBackend,
+    frontendBackend: "wasm",
+    rendererBackend: "wasm",
+    neuralInferenceMs,
+    neuralCpuFallback: false,
+    gpuAdapter: input.neuralBackend === "webgpu" ? model.gpuAdapter : null,
     params: Array.from(params),
     mel: Array.from(mel.data),
     sketch: Array.from(controls),
