@@ -313,8 +313,8 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
     the structural rclone defaults, letting ``dispatch_via_skypilot`` produce
     the user-facing "no object storage settings" error.
 
-    `.env` is the local-dev source of truth; CI flows pass secrets via
-    `docker run -e KEY=VAL` and never touch a .env on disk.
+    Process env overrides `.env`; CI flows pass secrets via `docker run -e
+    KEY=VAL` and never touch a .env on disk.
     """
     file_env: dict[str, str] = {}
     resolved_env_file = env_file if env_file is not None else DEFAULT_ENV_FILE
@@ -329,10 +329,8 @@ def resolve_worker_env(env_file: Path | None) -> dict[str, str]:
         resolved = dict(_RCLONE_STRUCTURAL_CONSTANTS)
 
     for key in ("WANDB_API_KEY", "WANDB_PROJECT", "WORKER_GIT_REF"):
-        # First non-blank wins, .env over process env; a blank candidate is
-        # skipped (not preferred-then-dropped), so a quoted-whitespace `.env`
-        # value can't mask a real process-env fallback.
-        for candidate in (file_env.get(key), os.environ.get(key)):
+        # First non-blank wins, process env over .env; blank candidates are skipped.
+        for candidate in (os.environ.get(key), file_env.get(key)):
             cleaned = candidate.strip() if candidate else ""
             if cleaned:
                 resolved[key] = cleaned

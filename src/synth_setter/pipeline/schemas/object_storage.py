@@ -86,13 +86,13 @@ def _clean(value: str | None) -> str | None:
 def _settings_kwargs_from_sources(env_file: Path | None) -> dict[str, str]:
     """Resolve canonical settings before compatible legacy aliases.
 
-    :param env_file: Optional dotenv file to inspect before process environment.
+    :param env_file: Optional dotenv file consulted after process environment.
     :returns: Validated field names with their first non-blank resolved values.
     """
     candidates: dict[str, str | None] = {}
     if env_file is not None and env_file.is_file():
         candidates.update(dotenv_values(env_file))
-    sources = (candidates, os.environ)
+    sources = (os.environ, candidates)
     kwargs: dict[str, str] = {}
     env_to_field: Mapping[str, tuple[str, ...]] = {
         ENV_STORAGE_ACCESS_KEY_ID: ("access_key_id", _RCLONE_ENV_ACCESS_KEY_ID),
