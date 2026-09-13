@@ -41,7 +41,7 @@ _FAUST_SOURCE_SHA256 = {
     "faust_filter_osc": "6ad65d28d787f08a3fa66eb4de7d4091be8d2267ad1e9edc200618effbbe588c",
     "faust_kronecker_fdn": "bb5fac0999788b73cabb7d583ad728d80aa223cd07605342c07e6551de63822e",
     "faust_shimmer_fdn": "30b485b40002bc721101c9c50ec4d84f1d96740db20df0273835d543f168a4df",
-    "faust_bilateral_syrinx": "28630def8953f59c512742a8e29b29e2c1e597e3f36c9d27ea0ee21da44ce488",
+    "faust_bilateral_syrinx": "a6b383ecaa2a133ba34f4ed4a9d1756854960ea6af41f905175e0c86135aab86",
     "faust_single_syrinx": "6036c893f22f7740fb5f343a3e1f83a548e075178f256a3294a008f22a31210f",
 }
 

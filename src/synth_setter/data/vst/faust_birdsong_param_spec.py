@@ -209,33 +209,14 @@ def birdsong_synth_parameters(identity: ParamSpecName) -> list[ContinuousParamet
         for name, minimum, maximum in BIRDSONG_PARAMETER_DOMAINS[identity]
     ]
 
-_SINGLE_SYRINX_SOURCE = r'''// single_syrinx.dsp — single-side syringeal valve + trachea, after
-// N. H. Fletcher, "Bird song — a quantitative acoustic model",
-// J. theor. Biol. 135 (1988) 455-481, as implemented by Smyth & Smith (2002).
-//
-// All equations from Fletcher's typeset text and Appendix A:
-//   eq 1   dp0/dt = (rho c^2/V) ((pG - p0)/ZG - U)
-//   eq 2,3 p0 - p1 = C U|U| + D dU/dt,  C = rho/(8 a^2 x^2),  D = rho/(2 sqrt(a x))
-//   eq 8   m_n [x_n'' + 2 kappa x_n' + w_n^2 (x_n - x0)] = eps F
-//   eq 9   m_1 = A3 rho_M pi a h d / 4
-//   eq 10  kappa -> E kappa when x <= 0
-//   eq 11  m -> m (1 + eta ((x - x0)/h)^2)
-//   A6     F = A1 a h (p0 + p1) - rho U^2 h/(4 x^2 (2a - x)) [ sqrt(x/(2a-x)) atan(sqrt((2a-x)/x)) + x/(2a) ]
-//   eq 7   T = (A2/5) rho_M a h d w1^2   (tension in N <-> f1)
-//   eq 15  beta = 1 - 2 alpha L, alpha = 2e-5 sqrt(w)/a ; end correction 0.6 b
-// Trachea: waveguide, tracheal-side load p1 = Z0 U + 2 p-,  Z0 = rho c/(pi a^2).
-// Defaults: Fletcher Table 1 (raven). Designed to run at 8x (352.8 kHz).
-
-declare name "single_syrinx";
-import("stdfaust.lib");
-
-// NOTE: ma.SR is clamped to 192 kHz in Faust's maths.lib; read the true rate.
-SR = fconstant(int fSamplingFreq, <math.h>);
-T  = 1.0 / SR;
-PI = ma.PI;
-
-
-// ---------------- syllable (52 static params, syllable.lib) and gesture mapping ----------------
+_RIGHT_ROUTING_TOKEN = "__RIGHT_ROUTING__"
+_SINGLE_RIGHT_ROUTING = """p46 = -3;
+p47 = 0;
+p48 = 10;"""
+_BILATERAL_RIGHT_ROUTING = """p46 = hslider("h:A Syllable/h:6 Bilateral/[47]dtb R bias", -3, -8, 2, 0.01);
+p47 = hslider("h:A Syllable/h:6 Bilateral/[48]dtb R from IA pulse", 0, -5, 5, 0.01);
+p48 = hslider("h:A Syllable/h:6 Bilateral/[49]dtb R from RA", 10, 5, 15, 0.01);"""
+_SYLLABLE_SOURCE_TEMPLATE = r'''// ---------------- syllable (52 static params, syllable.lib) and gesture mapping ----------------
 syl = environment {
 // syllable.lib — one canary syllable type as 52 static parameters, driving the
 // song-system network of Alonso, Amador & Mindlin (2016). Output: five gestures
@@ -302,9 +283,7 @@ prate = hslider("h:A Syllable/h:5 Timing/[43]HVC periodic rate [unit:Hz][scale:l
 p43 = hslider("h:A Syllable/h:6 Bilateral/[44]dtb L bias", -3, -8, 2, 0.01);
 p44 = hslider("h:A Syllable/h:6 Bilateral/[45]dtb L from IA pulse", 10, 5, 15, 0.01);
 p45 = hslider("h:A Syllable/h:6 Bilateral/[46]dtb L from RA", 0, -5, 5, 0.01);
-p46 = -3;
-p47 = 0;
-p48 = 10;
+__RIGHT_ROUTING__
 p49 = hslider("h:A Syllable/h:6 Bilateral/[50]Gating L dtb gain[scale:log]", 40, 13.3333, 120, 0.133333);
 p50 = hslider("h:A Syllable/h:6 Bilateral/[51]Gating L offset", 0, -10, 10, 0.001);
 p51 = hslider("h:A Syllable/h:6 Bilateral/[52]Gating R dtb gain[scale:log]", 20, 6.66667, 60, 0.0666667);
@@ -340,7 +319,39 @@ with {
 };
 
 };
-KP   = hslider("h:B Mapping/[0]Pressure scale [unit:Pa per unit P][scale:log]", 1000, 1000/3, 3000, 1);
+'''
+
+
+_SINGLE_SYRINX_SOURCE = (
+    r'''// single_syrinx.dsp — single-side syringeal valve + trachea, after
+// N. H. Fletcher, "Bird song — a quantitative acoustic model",
+// J. theor. Biol. 135 (1988) 455-481, as implemented by Smyth & Smith (2002).
+//
+// All equations from Fletcher's typeset text and Appendix A:
+//   eq 1   dp0/dt = (rho c^2/V) ((pG - p0)/ZG - U)
+//   eq 2,3 p0 - p1 = C U|U| + D dU/dt,  C = rho/(8 a^2 x^2),  D = rho/(2 sqrt(a x))
+//   eq 8   m_n [x_n'' + 2 kappa x_n' + w_n^2 (x_n - x0)] = eps F
+//   eq 9   m_1 = A3 rho_M pi a h d / 4
+//   eq 10  kappa -> E kappa when x <= 0
+//   eq 11  m -> m (1 + eta ((x - x0)/h)^2)
+//   A6     F = A1 a h (p0 + p1) - rho U^2 h/(4 x^2 (2a - x)) [ sqrt(x/(2a-x)) atan(sqrt((2a-x)/x)) + x/(2a) ]
+//   eq 7   T = (A2/5) rho_M a h d w1^2   (tension in N <-> f1)
+//   eq 15  beta = 1 - 2 alpha L, alpha = 2e-5 sqrt(w)/a ; end correction 0.6 b
+// Trachea: waveguide, tracheal-side load p1 = Z0 U + 2 p-,  Z0 = rho c/(pi a^2).
+// Defaults: Fletcher Table 1 (raven). Designed to run at 8x (352.8 kHz).
+
+declare name "single_syrinx";
+import("stdfaust.lib");
+
+// NOTE: ma.SR is clamped to 192 kHz in Faust's maths.lib; read the true rate.
+SR = fconstant(int fSamplingFreq, <math.h>);
+T  = 1.0 / SR;
+PI = ma.PI;
+
+
+'''
+    + _SYLLABLE_SOURCE_TEMPLATE.replace(_RIGHT_ROUTING_TOKEN, _SINGLE_RIGHT_ROUTING)
+    + r'''KP   = hslider("h:B Mapping/[0]Pressure scale [unit:Pa per unit P][scale:log]", 1000, 1000/3, 3000, 1);
 FREF = hslider("h:B Mapping/[1]Tension reference frequency [unit:Hz][scale:log]", 1500, 500, 4500, 1);
 TREF = hslider("h:B Mapping/[2]Tension reference value[scale:log]", 29, 29/3, 87, 0.01);
 KG   = hslider("h:B Mapping/[3]Gating to opening [unit:mm per unit G][scale:log]", 0.1, 0.1/3, 0.3, 0.0001);
@@ -447,8 +458,10 @@ safe(x) = select2(x == x, 0, x) : max(-1e6) : min(1e6) : ma.tanh : *(0.891);
 // output 0: radiated (scaled, safe); taps 1..4: p1 [Pa], U [m3/s], x [m], p0 [Pa]
 process = (step ~ si.bus(9)) : (si.block(9), (*(2e-4*gain) : safe), _, _, _, _) : (_, !, !, !, !);
 '''
+)
 
-_BILATERAL_SYRINX_SOURCE = r'''// bilateral_syrinx.dsp — bilateral avian vocal tract: two Fletcher (1988) syringeal
+_BILATERAL_SYRINX_SOURCE = (
+    r'''// bilateral_syrinx.dsp — bilateral avian vocal tract: two Fletcher (1988) syringeal
 // valves, two bronchial waveguides, the 3-port parallel junction of
 // Smyth & Smith (ASA 2002, eqs 18-20), a tracheal waveguide and a beak.
 //
@@ -477,112 +490,9 @@ PI = ma.PI;
 // Log sliders span canonical/3 .. canonical*3 (Fletcher's "factor of order unity");
 // linear sliders are symmetric about the canonical value.
 
-// ---------------- syllable (52 static params, syllable.lib) and gesture mapping ----------------
-syl = environment {
-// syllable.lib — one canary syllable type as 52 static parameters, driving the
-// song-system network of Alonso, Amador & Mindlin (2016). Output: five gestures
-// P, T_L, T_R, G_L, G_R (paper units). Sliders are centred on the P0 tuple:
-// weights/biases linear +-5, timings and gains log /3..x3, offsets linear.
-// Use as:  sy = library("syllable.lib");  sy.gest : (P, TL, TR, GL, GR)
-
-
-SR = fconstant(int fSamplingFreq, <math.h>);
-T  = 1.0 / SR;
-S(x) = 1.0 / (1.0 + exp(-x));
-ms(x) = x * SR / 1000.0;
-
-
-// ---- 1-8 RA ----
-p1  = hslider("h:A Syllable/h:1 RA/[1]RA exc bias", -3.4, -8.4, 1.6, 0.01);
-p2  = hslider("h:A Syllable/h:1 RA/[2]RA exc from HVC burst", 5, 0, 10, 0.01);
-p3  = hslider("h:A Syllable/h:1 RA/[3]RA exc self", 6, 1, 11, 0.01);
-p4  = hslider("h:A Syllable/h:1 RA/[4]RA exc from RA inh", -3, -8, 2, 0.01);
-p5  = hslider("h:A Syllable/h:1 RA/[5]RA inh bias", -7, -12, -2, 0.01);
-p6  = hslider("h:A Syllable/h:1 RA/[6]RA inh from HVC stop burst", 0, -5, 5, 0.01);
-p7  = hslider("h:A Syllable/h:1 RA/[7]RA inh from RA exc", 6, 1, 11, 0.01);
-p8  = hslider("h:A Syllable/h:1 RA/[8]RA inh self", 3, -2, 8, 0.01);
-// ---- 9-20 respiratory ----
-p9  = hslider("h:A Syllable/h:2 Respiratory/[9]ER exc bias", -7.45, -12.45, -2.45, 0.01);
-p10 = hslider("h:A Syllable/h:2 Respiratory/[10]ER exc from RA", 10, 5, 15, 0.01);
-p11 = hslider("h:A Syllable/h:2 Respiratory/[11]ER exc from IA pulse", 1, -4, 6, 0.01);
-p12 = hslider("h:A Syllable/h:2 Respiratory/[12]ER exc self", 10, 5, 15, 0.01);
-p13 = hslider("h:A Syllable/h:2 Respiratory/[13]ER exc from ER inh", -1.1, -6.1, 3.9, 0.01);
-p14 = hslider("h:A Syllable/h:2 Respiratory/[14]ER inh bias", -11.5, -16.5, -6.5, 0.01);
-p15 = hslider("h:A Syllable/h:2 Respiratory/[15]ER inh from RA", 0, -5, 5, 0.01);
-p16 = hslider("h:A Syllable/h:2 Respiratory/[16]ER inh from ER exc", 10, 5, 15, 0.01);
-p17 = hslider("h:A Syllable/h:2 Respiratory/[17]ER inh self", 2, -3, 7, 0.01);
-p18 = hslider("h:A Syllable/h:2 Respiratory/[18]IR bias", 0, -5, 5, 0.01);
-p19 = hslider("h:A Syllable/h:2 Respiratory/[19]IR from RA", 10, 5, 15, 0.01);
-p20 = hslider("h:A Syllable/h:2 Respiratory/[20]IR from ER exc", -10, -15, -5, 0.01);
-// ---- 21-27 tension and abductor pools ----
-p21 = hslider("h:A Syllable/h:3 nXII/[21]vs bias", -3, -8, 2, 0.01);
-p22 = hslider("h:A Syllable/h:3 nXII/[22]vs from IA pulse", 1, -4, 6, 0.01);
-p23 = hslider("h:A Syllable/h:3 nXII/[23]vs from RA", 0.5, -4.5, 5.5, 0.01);
-p24 = hslider("h:A Syllable/h:3 nXII/[24]vs from ER", 0.5, -4.5, 5.5, 0.01);
-p25 = hslider("h:A Syllable/h:3 nXII/[25]vs from IR", 0, -5, 5, 0.01);
-p26 = hslider("h:A Syllable/h:3 nXII/[26]vtb bias", -3, -8, 2, 0.01);
-p27 = hslider("h:A Syllable/h:3 nXII/[27]vtb from IR", 10, 5, 15, 0.01);
-// ---- 28-34 scalings ----
-p28 = hslider("h:A Syllable/h:4 Scaling/[28]Pressure gain[scale:log]", 2, 0.666667, 6, 0.00666667);
-p29 = hslider("h:A Syllable/h:4 Scaling/[29]Pressure offset", 0, -2, 2, 0.001);
-p30 = hslider("h:A Syllable/h:4 Scaling/[30]Tension L gain[scale:log]", 29, 9.66667, 87, 0.0966667);
-p31 = hslider("h:A Syllable/h:4 Scaling/[31]Tension L offset", 0, -10, 10, 0.001);
-p32 = hslider("h:A Syllable/h:4 Scaling/[32]Tension R gain[scale:log]", 28.5, 9.5, 85.5, 0.095);
-p33 = hslider("h:A Syllable/h:4 Scaling/[33]Tension R offset", 0, -10, 10, 0.001);
-p34L = hslider("h:A Syllable/h:4 Scaling/[34]Gating L vtb gain[scale:log]", 40, 13.3333, 120, 0.133333);
-p34R = hslider("h:A Syllable/h:4 Scaling/[35]Gating R vtb gain", 0, 0, 20, 0.01);      // canonical 0: floor, not centred
-// ---- 35-42 timing ----
-rate  = hslider("h:A Syllable/h:5 Timing/[36]Syllable rate [unit:Hz][scale:log]", 2.85, 0.95, 8.55, 0.0095);
-iaw   = hslider("h:A Syllable/h:5 Timing/[37]IA pulse width [unit:ms][scale:log]", 20, 6.66667, 60, 0.0666667);
-dn    = hslider("h:A Syllable/h:5 Timing/[38]IA to nXII delay [unit:ms][scale:log]", 10, 3.33333, 30, 0.0333333);
-dh    = hslider("h:A Syllable/h:5 Timing/[39]IA to HVC to RA delay [unit:ms][scale:log]", 30, 10, 90, 0.1);
-hw    = hslider("h:A Syllable/h:5 Timing/[40]HVC burst width [unit:ms][scale:log]", 30, 10, 90, 0.1);
-stopd = hslider("h:A Syllable/h:5 Timing/[41]HVC stop burst delay [unit:ms][scale:log]", 300, 100, 900, 1);
-pamt  = hslider("h:A Syllable/h:5 Timing/[42]HVC periodic amount", 0, 0, 10, 0.01);   // canonical 0: floor
-prate = hslider("h:A Syllable/h:5 Timing/[43]HVC periodic rate [unit:Hz][scale:log]", 25, 8.33333, 75, 0.0833333);
-// ---- 43-52 bilateral routing ----
-p43 = hslider("h:A Syllable/h:6 Bilateral/[44]dtb L bias", -3, -8, 2, 0.01);
-p44 = hslider("h:A Syllable/h:6 Bilateral/[45]dtb L from IA pulse", 10, 5, 15, 0.01);
-p45 = hslider("h:A Syllable/h:6 Bilateral/[46]dtb L from RA", 0, -5, 5, 0.01);
-p46 = hslider("h:A Syllable/h:6 Bilateral/[47]dtb R bias", -3, -8, 2, 0.01);
-p47 = hslider("h:A Syllable/h:6 Bilateral/[48]dtb R from IA pulse", 0, -5, 5, 0.01);
-p48 = hslider("h:A Syllable/h:6 Bilateral/[49]dtb R from RA", 10, 5, 15, 0.01);
-p49 = hslider("h:A Syllable/h:6 Bilateral/[50]Gating L dtb gain[scale:log]", 40, 13.3333, 120, 0.133333);
-p50 = hslider("h:A Syllable/h:6 Bilateral/[51]Gating L offset", 0, -10, 10, 0.001);
-p51 = hslider("h:A Syllable/h:6 Bilateral/[52]Gating R dtb gain[scale:log]", 20, 6.66667, 60, 0.0666667);
-p52 = hslider("h:A Syllable/h:6 Bilateral/[53]Gating R offset", 7, -3, 17, 0.001);
-
-// ---- forcing ----
-clock = ba.pulse(max(1, int(SR / rate)));
-age   = (_ + 1 : *(1 - clock)) ~ _;
-pulse(start, width) = 10.0 * ((age >= ms(start)) & (age < ms(start + width)));
-inwin(start, width) = (age >= ms(start)) & (age < ms(start + width));
-F   = pulse(0, iaw);
-Fn  = pulse(dn, iaw);
-Fd  = pulse(dh, hw) + pamt * 0.5 * (1 + os.osc(prate)) * inwin(dh, hw);
-Fd2 = pulse(stopd, hw);
-
-// ---- network: 9 rate ODEs, forward Euler ----
-neural = (step ~ si.bus(9))
-with {
-    step(era, ira, eer, ier, eir, evs, edl, edr, evtb) =
-        era  + T*20 *(-era  + S(p1  + p2*Fd  + p3*era + p4*ira)),
-        ira  + T*20 *(-ira  + S(p5  + p6*Fd2 + p7*era + p8*ira)),
-        eer  + T*250*(-eer  + S(p9  + p10*era + p11*F + p12*eer + p13*ier)),
-        ier  + T*250*(-ier  + S(p14 + p15*era + p16*eer + p17*ier)),
-        eir  + T*250*(-eir  + S(p18 + p19*era + p20*eer)),
-        evs  + T*250*(-evs  + S(p21 + p22*Fn + p23*era + p24*eer + p25*eir)),
-        edl  + T*250*(-edl  + S(p43 + p44*Fn + p45*era)),
-        edr  + T*250*(-edr  + S(p46 + p47*Fn + p48*era)),
-        evtb + T*250*(-evtb + S(p26 + p27*eir));
-};
-gest = neural : (!, !, _, !, _, _, _, _, _) : g
-with {
-    g(eer, eir, evs, edl, edr, evtb) = p28*eer + p29, p30*evs + p31, p32*evs + p33, p49*edl - p34L*evtb + p50, p51*edr - p34R*evtb + p52;
-};
-
-};
-KP   = hslider("h:B Mapping/[0]Pressure scale [unit:Pa per unit P][scale:log]", 1000, 1000/3, 3000, 1);
+'''
+    + _SYLLABLE_SOURCE_TEMPLATE.replace(_RIGHT_ROUTING_TOKEN, _BILATERAL_RIGHT_ROUTING)
+    + r'''KP   = hslider("h:B Mapping/[0]Pressure scale [unit:Pa per unit P][scale:log]", 1000, 1000/3, 3000, 1);
 FREF = hslider("h:B Mapping/[1]Tension reference frequency [unit:Hz][scale:log]", 1500, 500, 4500, 1);
 TREF = hslider("h:B Mapping/[2]Tension reference value[scale:log]", 29, 29/3, 87, 0.01);
 KG   = hslider("h:B Mapping/[3]Gating to opening [unit:mm per unit G][scale:log]", 0.1, 0.1/3, 0.3, 0.0001);
@@ -723,7 +633,7 @@ with {
     pmLn = (pJ - pLj) : de.fdelay(DMAX, NbL - 1) : *(gL);              // back down to valve L
     pmRn = (pJ - pRj) : de.fdelay(DMAX, NbR - 1) : *(gR);
     pTup = (pJ - pTp) * gT;                                             // up the trachea
-    pTpn = pTup : de.fdelay(DMAX, 2*Ntr - 1) : fi.lowpass(1, fcB) : *(0 - rB * gT * gT);  // beak reflection, back to junction
+    pTpn = pTup : de.fdelay(DMAX, 2*Ntr - 1) : fi.lowpass(1, fcB) : *(0 - rB * gT);  // beak reflection, back to junction
     out  = pTup : de.fdelay(DMAX, Ntr) <: _ - (fi.lowpass(1, fcB) : *(rB));            // radiated
 };
 
@@ -731,3 +641,4 @@ safe(x) = select2(x == x, 0, x) : max(-1e6) : min(1e6) : ma.tanh : *(0.891);
 
 process = 0 : (step ~ si.bus(19)) : (si.block(19), (*(2e-3 * gain) : safe), _, _, _, _, _, _, _) : (_, !, !, !, !, !, !, !);
 '''
+)

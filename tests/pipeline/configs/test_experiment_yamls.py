@@ -136,29 +136,27 @@ def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() ->
 
 
 @pytest.mark.parametrize(
-    ("experiment", "identity", "num_params"),
+    "case",
     [
-        ("faust-bilateral-syrinx-wasm-200", "faust_bilateral_syrinx", 103),
-        ("faust-single-syrinx-wasm-200", "faust_single_syrinx", 77),
+        ("faust-bilateral-syrinx-wasm-200", "faust_bilateral_syrinx", 100, 100),
+        ("faust-single-syrinx-wasm-200", "faust_single_syrinx", 74, 200),
     ],
 )
 def test_birdsong_wasm_experiment_renders_one_200_row_mono_shard(
-    experiment: str,
-    identity: str,
-    num_params: int,
+    case: tuple[str, str, int, int],
 ) -> None:
     """Birdsong experiments compose the requested local inspection datasets.
 
-    :param experiment: Dataset experiment file stem.
-    :param identity: Expected synth and parameter-spec identity.
-    :param num_params: Expected encoded parameter width.
+    :param case: Experiment, identity, encoded width, and attempt budget.
     """
+    experiment, identity, num_params, attempts_per_sample = case
     spec = _compose_dataset_spec(f"generate_dataset/{experiment}")
 
     assert spec.render.synth.name == identity
     assert spec.render.renderer_backend == "faustwasm"
     assert spec.render.channels == 1
     assert spec.render.samples_per_shard == 200
+    assert spec.render.attempts_per_sample == attempts_per_sample
     assert spec.train_val_test_sizes == (200, 0, 0)
     assert spec.num_params == num_params
 

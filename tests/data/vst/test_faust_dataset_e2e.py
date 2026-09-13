@@ -90,29 +90,23 @@ def test_faust_generate_cli_writes_real_lance_row(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    ("identity", "channels", "param_width", "base_seed"),
+    "case",
     [
-        ("faust_bilateral_syrinx", 1, 103, 1808),
-        ("faust_bright_organ", 2, 13, 1808),
-        # Single-syrinx onset is sparse, so this draws a production seed whose row passes.
-        ("faust_single_syrinx", 1, 77, 3),
+        ("faust_bilateral_syrinx", 1, 100, 1808, -100.0, 5),
+        ("faust_bright_organ", 2, 13, 1808, -100.0, 5),
+        ("faust_single_syrinx", 1, 74, 42, -55.0, 200),
     ],
 )
 def test_faustwasm_generate_cli_writes_real_lance_row(
     tmp_path: Path,
-    identity: str,
-    channels: int,
-    param_width: int,
-    base_seed: int,
+    case: tuple[str, int, int, int, float, int],
 ) -> None:
     """The production CLI drives Python through Node into a consumable Lance row.
 
     :param tmp_path: Isolated Lance shard destination.
-    :param identity: Registered Faust source identity.
-    :param channels: Native source output channels.
-    :param param_width: Encoded synth-and-note parameter width.
-    :param base_seed: Master seed for the sampled production-path row.
+    :param case: Identity, channels, width, seed, loudness gate, and attempt budget.
     """
+    identity, channels, param_width, base_seed, min_loudness, attempts = case
     config = RenderConfig(
         synth=SYNTHS[SynthName(identity)],
         renderer_backend="faustwasm",
@@ -123,10 +117,10 @@ def test_faustwasm_generate_cli_writes_real_lance_row(
         channels=channels,
         velocity=100,
         signal_duration_seconds=4.0,
-        min_loudness=-100.0,
+        min_loudness=min_loudness,
         samples_per_render_batch=1,
         samples_per_shard=1,
-        attempts_per_sample=5,
+        attempts_per_sample=attempts,
         base_seed=base_seed,
         plugin_reload_cadence="render",
         gui_toggle_cadence="never",
