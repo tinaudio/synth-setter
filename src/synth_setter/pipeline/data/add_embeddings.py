@@ -182,6 +182,7 @@ type Encoder = (
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[Mapping[str, np.ndarray], int, Encoder], pa.Array]
 type ResolveArtifactIdentityFn = Callable[[str], str]
+type ExpectedOutputTypeFn = Callable[[int, int], pa.DataType]
 
 
 @dataclass(frozen=True)
@@ -252,6 +253,10 @@ class EmbeddingSpec:
 
         Checkpoint source to immutable encoder-artifact identity resolver.
 
+    .. attribute :: expected_output_type
+
+        Static primary-column type contract derived from render geometry, when known.
+
     .. attribute :: input_fields
 
         Dataset columns supplying this embedding's encoder input.
@@ -270,6 +275,7 @@ class EmbeddingSpec:
     load_encoder: LoadEncoderFn
     encode_column: EncodeColumnFn
     resolve_artifact_identity: ResolveArtifactIdentityFn
+    expected_output_type: ExpectedOutputTypeFn | None = None
     input_fields: tuple[str, ...] = (AUDIO_FIELD,)
     rerenders: bool = False
 
@@ -1079,6 +1085,44 @@ def _encode_sketch_column(
     return sketch_struct_array(pooled)
 
 
+def _cqt_output_type(num_samples: int, sample_rate: int) -> pa.DataType:
+    """Return CQT's exact primary-column type for one render geometry.
+
+    :param num_samples: Stored waveform samples per row.
+    :param sample_rate: Stored waveform sample rate in Hz.
+    :returns: Fixed CQT bin and frame geometry.
+    """
+    return pa.fixed_shape_tensor(
+        pa.float32(), (CQT_EMBEDDING_DIM, cqt_num_frames(num_samples, sample_rate))
+    )
+
+
+def _sketch_output_type(num_samples: int, sample_rate: int) -> pa.DataType:
+    """Return the render-independent canonical sketch struct type.
+
+    :param num_samples: Unused stored waveform length.
+    :param sample_rate: Unused stored waveform sample rate.
+    :returns: Exact nested sketch storage type.
+    """
+    from synth_setter.pipeline.data.lance_shard import sketch_struct_type
+
+    del num_samples, sample_rate
+    return sketch_struct_type()
+
+
+def _pyfdn_sketch_output_type(num_samples: int, sample_rate: int) -> pa.DataType:
+    """Return the render-independent canonical pyFDN sketch struct type.
+
+    :param num_samples: Unused stored waveform length.
+    :param sample_rate: Unused stored waveform sample rate.
+    :returns: Exact nested pyFDN sketch storage type.
+    """
+    from synth_setter.pipeline.data.lance_shard import pyfdn_sketch_struct_type
+
+    del num_samples, sample_rate
+    return pyfdn_sketch_struct_type()
+
+
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
     "clap": EmbeddingSpec(
         name="clap",
@@ -1103,6 +1147,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_cqt_spec_encoder,
         encode_column=_encode_cqt_column,
         resolve_artifact_identity=_cqt_artifact_identity,
+        expected_output_type=_cqt_output_type,
     ),
     "m2l": EmbeddingSpec(
         name="m2l",
@@ -1151,6 +1196,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_pyfdn_sketch_encoder,
         encode_column=_encode_pyfdn_sketch_column,
         resolve_artifact_identity=_pyfdn_sketch_artifact_identity,
+        expected_output_type=_pyfdn_sketch_output_type,
     ),
     "same_s": EmbeddingSpec(
         name="same_s",
@@ -1188,6 +1234,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_sketch_spec_encoder,
         encode_column=_encode_sketch_column,
         resolve_artifact_identity=_sketch_artifact_identity,
+        expected_output_type=_sketch_output_type,
     ),
     "ssondo": EmbeddingSpec(
         name="ssondo",
