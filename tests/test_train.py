@@ -71,6 +71,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot, GrowingSnapshot
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
+from synth_setter.utils.lr_scheduler import ResumeAwareCosineAnnealingLR
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests._vst import PLUGIN_PATH
@@ -2325,6 +2326,38 @@ def test_train_experiment_labels_offline_run_preserves_display_metadata(
     finally:
         wandb.finish()
         wandb.teardown()
+
+
+def test_train_resume_extended_max_steps_uses_configured_scheduler_horizon(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """The real training entrypoint remaps resumed LR onto an extended horizon.
+
+    :param cfg_train_lance: Composed Lance training configuration.
+    """
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.trainer.fast_dev_run = False
+        cfg_train_lance.trainer.limit_train_batches = 1
+        cfg_train_lance.trainer.limit_val_batches = 1
+        cfg_train_lance.trainer.limit_test_batches = 1
+        cfg_train_lance.trainer.max_steps = 2
+    HydraConfig().set_config(cfg_train_lance)
+
+    _, first_objects = train(cfg_train_lance)
+    checkpoint = Path(cfg_train_lance.paths.output_dir) / "resume.ckpt"
+    first_objects["trainer"].save_checkpoint(checkpoint)
+
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.ckpt_path = str(checkpoint)
+        cfg_train_lance.trainer.max_steps = 4
+
+    _, resumed_objects = train(cfg_train_lance)
+
+    scheduler = resumed_objects["trainer"].lr_scheduler_configs[0].scheduler
+    assert isinstance(scheduler, ResumeAwareCosineAnnealingLR)
+    assert scheduler.T_max == 4
+    assert scheduler.get_last_lr() == pytest.approx([1e-6])
+    assert resumed_objects["trainer"].optimizers[0].param_groups[0]["lr"] == pytest.approx(1e-6)
 
 
 def test_train_wandb_config_resolves_scheduler_max_steps(
