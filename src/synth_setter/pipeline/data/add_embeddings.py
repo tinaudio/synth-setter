@@ -1879,10 +1879,11 @@ class GenerationEmbeddingRuntime:
                 for field in encoded_schema
             ]
         )
-        if self._output_schema is None:
-            self._output_schema = output_schema
-        elif not output_schema.equals(self._output_schema, check_metadata=True):
-            raise ValueError("embedding encoder output schema changed between shard batches")
+        with self._lock:
+            if self._output_schema is None:
+                self._output_schema = output_schema
+            elif not output_schema.equals(self._output_schema, check_metadata=True):
+                raise ValueError("embedding encoder output schema changed between shard batches")
         schema = pa.schema(
             [*batch.schema, *output_schema], metadata=batch.schema.metadata
         )

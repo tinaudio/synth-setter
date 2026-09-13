@@ -284,6 +284,71 @@ def _load_welford_state(
             return int(count), np.array(mean, copy=True), np.array(m2, copy=True)
 
 
+def _validate_embedding_field_type(
+    embedding: object, column: str, field: pa.Field
+) -> None:
+    """Reject physical embedding types outside the registry's fixed float32 contract.
+
+    :param embedding: Selected ``EmbeddingSpec`` registry entry.
+    :param column: Top-level output column being validated.
+    :param field: Physical Arrow field from the fragment.
+    :raises TypeError: The registry entry is not an ``EmbeddingSpec``.
+    :raises ValueError: The field is variable-width, non-float32, or has a wrong static width.
+    """
+    from synth_setter.pipeline.data.add_embeddings import EmbeddingSpec
+
+    if not isinstance(embedding, EmbeddingSpec):
+        raise TypeError("embedding must be an EmbeddingSpec")
+    column_type = field.type
+    index = embedding.index
+    expected_width = None
+    if index is not None and (
+        index.vector_column == column or (index.pool == "none" and embedding.column == column)
+    ):
+        expected_width = index.vector_dim
+    if expected_width is not None:
+        if (
+            not isinstance(column_type, pa.FixedSizeListType)
+            or column_type.value_type != pa.float32()
+            or column_type.list_size != expected_width
+        ):
+            raise ValueError(
+                f"embedding field {column!r} must be fixed_size_list<float32, {expected_width}>"
+            )
+        return
+    if column != embedding.column:
+        if (
+            not isinstance(column_type, pa.FixedSizeListType)
+            or column_type.value_type != pa.float32()
+            or column_type.list_size <= 0
+        ):
+            raise ValueError(
+                f"embedding vector field {column!r} must be a nonempty fixed-size float32 list"
+            )
+        return
+    if isinstance(column_type, pa.FixedShapeTensorType):
+        if column_type.value_type != pa.float32() or any(size <= 0 for size in column_type.shape):
+            raise ValueError(
+                f"embedding field {column!r} must be a nonempty fixed-shape float32 tensor"
+            )
+        return
+    if pa.types.is_struct(column_type):
+        leaves = [child.type for child in column_type]
+        if not leaves or any(
+            child != pa.float32()
+            and not (
+                isinstance(child, pa.FixedSizeListType) and child.value_type == pa.float32()
+            )
+            and not (
+                isinstance(child, pa.FixedShapeTensorType) and child.value_type == pa.float32()
+            )
+            for child in leaves
+        ):
+            raise ValueError(f"embedding field {column!r} has an invalid fixed float32 struct")
+        return
+    raise ValueError(f"embedding field {column!r} has unsupported physical type {column_type}")
+
+
 def _expected_fragment_schema(spec: DatasetSpec, shard_id: int, physical: pa.Schema) -> pa.Schema:
     """Restore the logical base fields and validate configured embedding provenance.
 
@@ -302,8 +367,12 @@ def _expected_fragment_schema(spec: DatasetSpec, shard_id: int, physical: pa.Sch
         _EMBEDDING_ARTIFACT_METADATA,
         _EMBEDDING_NAME_METADATA,
         _output_columns,
+        generation_embedding_identities,
     )
 
+    expected_identities = generation_embedding_identities(
+        policy, param_spec_name=str(spec.render.param_spec_name)
+    )
     expected_embeddings = [
         column
         for name in policy.embeddings
@@ -320,11 +389,14 @@ def _expected_fragment_schema(spec: DatasetSpec, shard_id: int, physical: pa.Sch
         embedding = EMBEDDING_REGISTRY[name]
         for column in _output_columns(embedding):
             field = logical.field(column)
+            _validate_embedding_field_type(embedding, column, field)
             metadata = field.metadata or {}
             if metadata.get(_EMBEDDING_NAME_METADATA) != name.encode():
                 raise ValueError(f"embedding field {column!r} has invalid registry-name metadata")
-            if not metadata.get(_EMBEDDING_ARTIFACT_METADATA):
-                raise ValueError(f"embedding field {column!r} lacks artifact provenance metadata")
+            if metadata.get(_EMBEDDING_ARTIFACT_METADATA) != expected_identities[name].encode():
+                raise ValueError(
+                    f"embedding field {column!r} does not match configured artifact provenance"
+                )
     return logical
 
 
@@ -536,16 +608,8 @@ def _select_checked_winners(
     policy = spec.embedding_generation
     if policy is None:
         return winners
-    from synth_setter.pipeline.data.add_embeddings import (
-        EMBEDDING_REGISTRY,
-        _EMBEDDING_ARTIFACT_METADATA,
-        _output_columns,
-        generation_embedding_identities,
-    )
+    from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, _output_columns
 
-    expected_identities = generation_embedding_identities(
-        policy, param_spec_name=str(spec.render.param_spec_name)
-    )
     embedding_columns = [
         column
         for name in policy.embeddings
@@ -555,13 +619,6 @@ def _select_checked_winners(
     expected_schema = pa.schema(
         [winners[first_shard_id].schema.field(column) for column in embedding_columns]
     )
-    for name in policy.embeddings:
-        for column in _output_columns(EMBEDDING_REGISTRY[name]):
-            metadata = expected_schema.field(column).metadata or {}
-            if metadata.get(_EMBEDDING_ARTIFACT_METADATA) != expected_identities[name].encode():
-                raise ValueError(
-                    f"embedding field {column!r} does not match configured artifact provenance"
-                )
     for shard_id, winner in winners.items():
         shard_schema = pa.schema(
             [winner.schema.field(column) for column in embedding_columns]
