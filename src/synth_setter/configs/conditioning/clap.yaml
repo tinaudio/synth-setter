@@ -9,6 +9,7 @@ model:
   conditioning:
     column: clap
     input_shape: [512]
+    normalization: none
   encoder:
     input_dim: 512
 
@@ -16,3 +17,4 @@ datamodule:
   conditioning:
     column: clap
     input_shape: [512]
+    normalization: none

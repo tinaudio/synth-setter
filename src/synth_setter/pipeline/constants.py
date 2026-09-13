@@ -10,6 +10,19 @@ INPUT_SPEC_FILENAME = "input_spec.json"
 # Normalization statistics (mel-spec mean / std) written by finalize.
 STATS_NPZ_FILENAME = "stats.npz"
 
+
+def conditioning_stats_filename(column: str) -> str:
+    """Return the immutable statistics filename for one cached column.
+
+    :param column: Stored Lance column name.
+    :returns: Column-specific statistics filename.
+    :raises ValueError: The column is not a path-safe identifier.
+    """
+    if not column.isascii() or not column.isidentifier():
+        raise ValueError(f"conditioning column must be a path-safe identifier, got {column!r}")
+    return f"conditioning_stats.{column}.npz"
+
+
 # Zero-byte trust-anchor marker; presence under ``r2.prefix`` is the canonical
 # "this run is ready to consume" signal. Written strictly last by finalize.
 DATASET_COMPLETE_FILENAME = "dataset.complete"

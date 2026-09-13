@@ -8,6 +8,7 @@ model:
   conditioning:
     column: matpac_plus
     input_shape: [3840, 25]
+    normalization: global
   encoder:
     embed_dim: ${model.conditioning.input_shape.0}
     max_seq_len: ${model.conditioning.input_shape.1}
@@ -16,3 +17,4 @@ datamodule:
   conditioning:
     column: matpac_plus
     input_shape: ${model.conditioning.input_shape}
+    normalization: global

@@ -70,6 +70,7 @@ from synth_setter.workspace import operator_workspace
 from tests.conftest import (
     _render_smoke_train_subprocess,
     assert_clap_preserves_resampler_output,
+    assert_conditioning_batch_uses_artifact,
     assert_log_per_param_mse_wired,
     augment_lance_splits_with_embedding,
     augment_lance_splits_with_embeddings,
@@ -2795,6 +2796,7 @@ def _assert_conditioning_train_validate_finite(
 
     HydraConfig().set_config(cfg_train)
     _, train_objects = train(cfg_train)
+    assert_conditioning_batch_uses_artifact(cfg_train, train_objects)
 
     train_model = train_objects["model"]
     assert train_model.encoder.n_conditioning_outputs == len(train_model.vector_field.layers)

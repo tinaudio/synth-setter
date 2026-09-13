@@ -19,18 +19,21 @@ import torch
 from hydra import compose, initialize_config_module
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from synth_setter.conditioning import (
     NUM_SKETCH_TRACK_ROWS,
     SKETCH_PITCH_BINS,
     SKETCH_STORAGE_FRAMES,
+    resolve_embedding_conditioning,
 )
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.models.components.pretrained_encoder import ClapAudioEncoder
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.constants import conditioning_stats_filename
+from synth_setter.pipeline.data.stats import get_conditioning_stats_lance
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
 from synth_setter.resources import vst_headless_wrapper
@@ -1700,6 +1703,66 @@ def augment_lance_splits_with_embeddings(dataset_root: Path) -> Path:
     return dataset_root
 
 
+def _write_configured_conditioning_statistics(cfg: DictConfig, dataset_root: Path) -> None:
+    """Generate the affine required by a composed cached-conditioning profile.
+
+    :param cfg: Composed train configuration selecting the profile.
+    :param dataset_root: Root containing the augmented training split.
+    """
+    conditioning = OmegaConf.to_container(
+        cfg.datamodule.conditioning, resolve=True, throw_on_missing=True
+    )
+    spec = resolve_embedding_conditioning(conditioning)  # type: ignore[arg-type]
+    if spec is None or spec.normalization == "none":
+        return
+    get_conditioning_stats_lance(
+        dataset_root / "train.lance",
+        column=spec.column,
+        input_shape=spec.input_shape,
+        normalization=spec.normalization,
+    )
+
+
+def assert_conditioning_batch_uses_artifact(cfg: DictConfig, object_dict: dict[str, Any]) -> None:
+    """Assert an entrypoint datamodule applies its persisted conditioning affine.
+
+    :param cfg: Composed training configuration selecting the cached profile.
+    :param object_dict: Objects returned by the training entrypoint.
+    """
+    import lance
+
+    conditioning = OmegaConf.to_container(
+        cfg.datamodule.conditioning, resolve=True, throw_on_missing=True
+    )
+    spec = resolve_embedding_conditioning(conditioning)  # type: ignore[arg-type]
+    assert spec is not None
+    if spec.normalization == "none":
+        return
+
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("validate")
+    batch = next(iter(datamodule.val_dataloader()))["conditioning"]
+    assert batch is not None
+    raw = (
+        lance.dataset(str(Path(cfg.datamodule.dataset_root) / "val.lance"))
+        .to_table(columns=[spec.column])
+        .column(0)
+        .combine_chunks()
+        .to_numpy_ndarray()[:1]
+    )
+    with np.load(
+        Path(cfg.datamodule.dataset_root) / conditioning_stats_filename(spec.column)
+    ) as stats:
+        affine_shape = (
+            (spec.input_shape[0], 1)
+            if spec.normalization == "per_channel" and len(spec.input_shape) == 2
+            else stats["mean"].shape
+        )
+        expected = (raw - stats["mean"].reshape(affine_shape)) / stats["std"].reshape(affine_shape)
+    torch.testing.assert_close(batch, torch.from_numpy(expected))
+    assert torch.isfinite(batch).all()
+
+
 def build_surge_xt_embedding_train_cfg(
     output_dir: Path,
     dataset_root: Path,
@@ -1791,6 +1854,8 @@ def build_surge_xt_embedding_train_cfg(
             cfg.callbacks.model_checkpoint.save_last = True
             if cfg.get("callbacks") is not None and "lr_monitor" in cfg.callbacks:
                 cfg.callbacks.lr_monitor = None
+    if not fake:
+        _write_configured_conditioning_statistics(cfg, dataset_root)
     return cfg
 
 
@@ -3137,6 +3202,12 @@ def cfg_train_sketch_lance(
     dataset_root = tmp_path / "lance-data"
     dataset_root.mkdir()
     _write_sketch_lance_root(dataset_root)
+    get_conditioning_stats_lance(
+        dataset_root / "train.lance",
+        column="m2l",
+        input_shape=(128, 42),
+        normalization="per_channel",
+    )
     experiment = getattr(request, "param", "surge/flow_sketch_prelim")
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
