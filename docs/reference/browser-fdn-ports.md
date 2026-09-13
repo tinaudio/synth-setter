@@ -11,6 +11,7 @@ prepare inputs for, and score outputs of, the pyFDN sketch flow without a Python
 | `dsp.mjs`       | scipy `sosfilt`, Schroeder integration, window helpers                                            |
 | `fft.mjs`       | Power spectrum for any frame length (radix-2 plus Bluestein)                                      |
 | `synthetic.mjs` | `synth_setter.tools.browser_fdn_fixtures.synthetic_impulse_response`                              |
+| `author.mjs`    | Browser-only closed-form generator of the same grid `sketch.mjs` extracts                         |
 
 The ports are pinned to the Python references through golden fixtures. Both languages rebuild the
 same 4 s synthetic responses from a 32-bit LCG recipe, so the fixtures store only expected outputs

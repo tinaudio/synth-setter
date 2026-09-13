@@ -37,6 +37,7 @@ test("exported site contains the page, ports, runtimes, and both bundles", async
     "fdn/index.html",
     "fdn/app.mjs",
     "fdn/sketch.mjs",
+    "fdn/author.mjs",
     "fdn/fixtures/octave_bands.json",
     "rk4.mjs",
     "guidance.mjs",
