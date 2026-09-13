@@ -103,6 +103,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
+from synth_setter.pipeline.data.lance_finalize import _validate_embedding_field_type
 from synth_setter.pipeline.data.matpac_plus import (
     MATPAC_PLUS_FRONTEND,
     matpac_plus_num_latent_frames,
@@ -532,6 +533,38 @@ def test_pupujepa_registry_artifact_identity_threads_variant(
 
     assert calls == [("custom/pupujepa", variant)]
     assert "digest" in identity
+
+
+@pytest.mark.parametrize("embedding_name", ["cqt", "sketch", "pyfdn_sketch"])
+def test_registry_exact_output_type_accepts_its_declared_primary_field(
+    embedding_name: str,
+) -> None:
+    embedding = EMBEDDING_REGISTRY[embedding_name]
+    expected_output_type = embedding.expected_output_type
+    assert expected_output_type is not None
+    field_type = expected_output_type(_FIXTURE_SAMPLES, _SAMPLE_RATE)
+
+    _validate_embedding_field_type(
+        embedding,
+        embedding.column,
+        pa.field(embedding.column, field_type, nullable=False),
+        num_samples=_FIXTURE_SAMPLES,
+        sample_rate=_SAMPLE_RATE,
+    )
+
+
+def test_registry_exact_cqt_output_type_rejects_wrong_geometry() -> None:
+    embedding = EMBEDDING_REGISTRY["cqt"]
+    wrong = pa.fixed_shape_tensor(pa.float32(), (1, 1))
+
+    with pytest.raises(ValueError, match="embedding field 'cqt' must have type"):
+        _validate_embedding_field_type(
+            embedding,
+            embedding.column,
+            pa.field(embedding.column, wrong, nullable=False),
+            num_samples=_FIXTURE_SAMPLES,
+            sample_rate=_SAMPLE_RATE,
+        )
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:
