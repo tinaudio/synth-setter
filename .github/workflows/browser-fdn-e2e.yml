@@ -28,6 +28,10 @@ concurrency:
   group: browser-fdn-e2e-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  # Content-addressed export of the flow_sketch checkpoint; see docs/guides/browser-fdn-evaluation.md.
+  BUNDLE_SHA256: "b86aa3474cb86311615c5c01ede0a35e6445982052979dbe11649f6717f98f2d"
+
 jobs:
   browser-fdn:
     name: Real browser ONNX, FaustWasm render, and metrics
