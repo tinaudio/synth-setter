@@ -691,6 +691,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     :raises ValueError: Evaluation mode or seeded evaluation seed is unsupported.
     """
     reset_directories = _output_directories_to_reset(cfg)
+    configured_checkpoint = cfg.ckpt_path
     seeded_evaluation = OmegaConf.select(cfg, "model.seeded_evaluation", default=False)
     if seeded_evaluation:
         evaluation_seed = cfg.get("seed")
@@ -726,7 +727,6 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, logger=logger, callbacks=callbacks)
 
-    configured_checkpoint = cfg.ckpt_path
     is_unpinned_remote = (
         cfg.get("ckpt_sha256") is None
         and isinstance(configured_checkpoint, str)
