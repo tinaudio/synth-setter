@@ -144,6 +144,24 @@ Use a compatible experiment for the dataset and its columns; for example,
 [training experiments](../../src/synth_setter/configs/experiment/), and the selected
 [datamodule config](../../src/synth_setter/configs/datamodule/).
 
+To compute CQT conditioning from each waveform instead of hydrating a stored
+`cqt` column:
+
+```bash
+DATASET_ROOT_URI='r2://BUCKET/data/TASK_NAME/RUN_ID/'
+synth-setter-train \
+  experiment=surge/flow_simple \
+  conditioning=cqt_online \
+  "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI}"
+```
+
+The online profile uses the same channel-mean, float32 `log1p`-magnitude policy
+and 256-by-401 geometry as cached CQT for canonical four-second, 44.1 kHz audio.
+It processes at most 32 rows per CQT call; override
+`model.encoder.backbone.max_batch_size` to trade throughput for peak device
+memory. Model compilation is disabled for this profile pending support for
+compiled frozen waveform encoders.
+
 To derive tonal interval vectors from each waveform during training instead of
 reading a stored sketch column:
 

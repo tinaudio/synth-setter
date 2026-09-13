@@ -1154,8 +1154,12 @@ artifact and input-policy identities so retries reject incompatible output.
 It downmixes channels on-device, stores 8 octaves × 32 bins of float32 `log1p` magnitude on
 the canonical 100 Hz frame grid, and runs in a solo encoder pass to bound transform memory.
 For four-second 44.1 kHz rows the stored shape is `(256, 401)`, consumed by
-`conditioning=cqt` through `EmbeddingPool`. CQT has no checkpoint override; its field identity
-records the immutable source commit and preprocessing policy.
+`conditioning=cqt` through `EmbeddingPool`. `conditioning=cqt_online` instead
+projects raw audio and runs the same checkpoint-free policy inside the model in
+bounded row chunks before the trainable pool. The online profile disables model
+compilation because compiled frozen waveform encoders do not yet support this
+path. CQT has no checkpoint override; its field identity records the immutable
+source commit and preprocessing policy.
 
 The default CLAP, SAME, and S-SONDO sources hydrate under
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed

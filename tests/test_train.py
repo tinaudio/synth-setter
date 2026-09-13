@@ -3585,6 +3585,35 @@ def test_train_matpac_plus_flattened_lance_returns_finite_loss(
     assert_finite_train_loss(metric_dict)
 
 
+@pytest.mark.slow
+def test_train_cqt_online_conditioning_returns_finite_loss(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train one real step from raw Lance audio through online CQT conditioning.
+
+    :param tmp_path: Training output directory.
+    :param fake_surge_smoke_datasets: Tiny production-format Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    cfg = build_surge_xt_embedding_train_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        param_spec_name=param_spec_name,
+        conditioning="cqt_online",
+    )
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    _assert_conditioning_checkpoint_validates(cfg, tmp_path)
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 def test_train_cqt_cached_conditioning_returns_finite_loss(
