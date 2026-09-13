@@ -245,6 +245,41 @@ def _shimmer_fdn_param_spec() -> ParamSpec:
     )
 
 
+def _super_shimmer_fdn_param_spec() -> ParamSpec:
+    """Build the fixed-impulse 16-line super-shimmer FDN specification.
+
+    :returns: Fresh exact-address specification without note coordinates.
+    """
+    shifted_lines = [
+        _trigger_parameter(f"/superShimmerFDN/Shimmer/shifted_lines/line__{index}")
+        for index in range(8)
+    ]
+    return ShimmerFDNParamSpec(
+        [
+            ContinuousParameter(name="/superShimmerFDN/FDN/T60_low", min=0.1, max=20.0),
+            ContinuousParameter(name="/superShimmerFDN/FDN/T60_high", min=0.05, max=20.0),
+            ContinuousParameter(
+                name="/superShimmerFDN/FDN/crossover", min=200.0, max=16000.0
+            ),
+            ContinuousParameter(name="/superShimmerFDN/Modulation/rate", min=0.01, max=0.5),
+            ContinuousParameter(name="/superShimmerFDN/Modulation/depth", min=0.0, max=256.0),
+            ContinuousParameter(
+                name="/superShimmerFDN/Shimmer/transpose", min=-2400.0, max=2400.0
+            ),
+            ContinuousParameter(name="/superShimmerFDN/Shimmer/window", min=64.0, max=8192.0),
+            *shifted_lines,
+            ContinuousParameter(name="/superShimmerFDN/Shimmer/DC_comp_max", min=0.0, max=12.0),
+            ContinuousParameter(name="/superShimmerFDN/Granular/duration", min=0.04, max=0.12),
+            ContinuousParameter(name="/superShimmerFDN/Granular/position", min=0.08, max=0.25),
+            ContinuousParameter(name="/superShimmerFDN/Granular/jitter", min=0.0, max=0.02),
+            _unit_parameter("/superShimmerFDN/Output/dry/wet"),
+            ContinuousParameter(name="/superShimmerFDN/Output/level", min=-40.0, max=12.0),
+            ContinuousParameter(name="/superShimmerFDN/Safety/loop_ceiling", min=-40.0, max=0.0),
+            _trigger_parameter("/superShimmerFDN/Safety/energy_guard_bypass"),
+        ]
+    )
+
+
 def _filter_osc_param_spec() -> ParamSpec:
     """Build the filterOSC specification.
 
@@ -280,6 +315,7 @@ _faust_param_spec_builders: Mapping[ParamSpecName, Callable[[], ParamSpec]] = Ma
         ParamSpecName("faust_filter_osc"): _filter_osc_param_spec,
         ParamSpecName("faust_kronecker_fdn"): _kronecker_fdn_param_spec,
         ParamSpecName("faust_shimmer_fdn"): _shimmer_fdn_param_spec,
+        ParamSpecName("faust_super_shimmer_fdn"): _super_shimmer_fdn_param_spec,
     }
 )
 

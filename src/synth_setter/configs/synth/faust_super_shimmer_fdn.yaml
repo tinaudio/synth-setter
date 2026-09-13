@@ -1,0 +1,7 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "faust_super_shimmer_fdn"
+param_spec_name: "faust_super_shimmer_fdn"
+plugin_path: "registry://faust/faust_super_shimmer_fdn"
+plugin_state_path: ""
+synth_version: "1.0"
+source_sha256: "b6a6636e07c7d94f132c9a4e25302594d78ff3d4227b1c16195331d3355b6894"
