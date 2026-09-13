@@ -101,6 +101,13 @@ class TestValidateStructure:
         spec = _make_valid_spec()
         assert validate_structure(spec) == []
 
+    def test_defaulted_embedding_generation_may_be_omitted(self) -> None:
+        """Legacy specs may omit the disabled embedding-generation policy."""
+        spec = _make_valid_spec()
+
+        assert "embedding_generation" not in spec
+        assert validate_structure(spec) == []
+
     def test_defaulted_storage_dtypes_may_be_omitted(self) -> None:
         """Specs may omit fields supplied by RenderConfig defaults."""
         spec = _make_valid_spec()
@@ -166,9 +173,10 @@ class TestValidateStructure:
         assert any("missing" in e and "r2" in e for e in errors)
 
     def test_required_top_level_fields_match_dataset_spec_model(self) -> None:
-        """Only optional parameter-language metadata may be omitted at the top level."""
+        """Only backward-compatible optional metadata may be omitted at the top level."""
         expected = (set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields)) - {
-            "param_language_dimension"
+            "embedding_generation",
+            "param_language_dimension",
         }
         assert set(_REQUIRED_TOP_LEVEL_FIELDS) == expected
 
