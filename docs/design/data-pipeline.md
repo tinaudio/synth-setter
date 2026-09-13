@@ -221,10 +221,10 @@ What if reconciliation itself has a bug — e.g., it validates a corrupt shard a
 
 The pipeline has two stages. Each is an independent command with well-defined inputs and outputs.
 
-| Stage        | Command                 | Input                                     | Output                                                                                                | Compute                       |
-| ------------ | ----------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------- |
-| **Generate** | `pipeline.cli generate` | Config YAML (first run) or spec (retries) | Lance shard attempts in R2                                                                            | CPU — VST audio rendering     |
-| **Finalize** | `pipeline.cli finalize` | Validated shard attempts in R2            | `train.lance/`, `val.lance/`, `test.lance/`, `stats.npz`, `dataset.json`, `metadata/dataset.complete` | CPU — validate, commit, stats |
+| Stage        | Command                 | Input                                     | Output                                                                                                | Compute                                |
+| ------------ | ----------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| **Generate** | `pipeline.cli generate` | Config YAML (first run) or spec (retries) | Lance shard attempts in R2                                                                            | CPU rendering; optional GPU embeddings |
+| **Finalize** | `pipeline.cli finalize` | Validated shard attempts in R2            | `train.lance/`, `val.lance/`, `test.lance/`, `stats.npz`, `dataset.json`, `metadata/dataset.complete` | CPU — validate, commit, stats          |
 
 Finalize commits the winning worker fragments into the split datasets:
 
@@ -1160,6 +1160,17 @@ records the immutable source commit and preprocessing policy.
 The default CLAP, SAME, and S-SONDO sources hydrate under
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
 `checkpoints.<embedding>=<source>` Hydra overrides remain authoritative.
+
+A dataset spec may instead freeze an `embedding_generation` policy so each GPU
+worker computes every selected registry column for the rows in its owned shards.
+The worker appends those columns while staging one uncommitted fragment; it never
+commits a shared Lance transaction. CUDA availability, output row count, Arrow
+type, nullability, finiteness, and artifact metadata are admission checks, so a
+failed embedding attempt cannot publish `.valid`. Growing branches require their
+baseline's extra columns and provenance to match the policy, while finalize
+remains the sole manifest writer and requires one identical embedding schema
+across all winning fragments. Index construction remains a separate
+`add-embeddings` operation.
 
 `sketch` is not a learned embedding: it extracts the Sketch2Sound-style
 loudness, spectral-centroid, and PESTO pitch tracks

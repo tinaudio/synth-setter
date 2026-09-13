@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import shutil
+from hashlib import sha256
 from pathlib import Path
 
 import lance
@@ -10,17 +12,25 @@ import pytest
 
 from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, MEL_SPEC_FIELD, dataset_field_shapes
 from synth_setter.pipeline.data import growing_lance
+from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, _write_columns
 from synth_setter.pipeline.data.growing_lance import (
     ActiveGrowingSnapshot,
     GrowingPlan,
     GrowingSnapshot,
+    finalize_staged_refresh,
     initialize_growing_branch,
     materialize_and_activate,
     pending_refresh_request,
     publish_growing_branch,
 )
-from synth_setter.pipeline.data.lance_shard import commit_lance_dataset, lance_schema
+from synth_setter.pipeline.data.lance_shard import (
+    commit_lance_dataset,
+    lance_fragment,
+    lance_schema,
+)
+from synth_setter.pipeline.data.lance_staging import stage_lance_shard_attempt
 from synth_setter.pipeline.data.stats import save_welford
+from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.pipeline.data.test_lance_fragment_finalize_poc import (
     _FIELD_SHAPES,
@@ -28,7 +38,12 @@ from tests.pipeline.data.test_lance_fragment_finalize_poc import (
     _arange_arrays,
     _worker_writes_fragment,
 )
-from tests.pipeline.data.test_lance_staging import tiny_lance_spec
+from tests.pipeline.data.test_lance_staging import (
+    _embedding_spec,
+    _install_test_clap,
+    tiny_lance_spec,
+    write_local_shard,
+)
 
 
 def _baseline_dataset(tmp_path: Path) -> tuple[DatasetSpec, Path, Path]:
@@ -95,11 +110,30 @@ def test_initialize_recovers_branch_created_without_contract_metadata(
     assert snapshot.high_watermark == 2
 
 
-def test_initialize_widened_baseline_rejects_post_finalize_columns(tmp_path: Path) -> None:
-    """A baseline carrying add-embeddings columns cannot fork a growing branch.
+def test_dataset_spec_fingerprint_preserves_legacy_null_policy_digest() -> None:
+    spec = tiny_lance_spec()
+    legacy_json = spec.model_dump_json().replace(',"embedding_generation":null', "")
 
-    Growing shards are rendered with the spec schema only, so a wider baseline would reject every
-    staged shard; init must fail early and name the columns.
+    assert growing_lance.dataset_spec_fingerprint(spec) == sha256(legacy_json.encode()).hexdigest()
+
+
+def test_initialize_unaugmented_baseline_rejects_embedding_policy(tmp_path: Path) -> None:
+    _, train_uri, metadata_root = _baseline_dataset(tmp_path)
+
+    with pytest.raises(ValueError, match="do not match configured generation columns"):
+        initialize_growing_branch(
+            train_uri,
+            spec=_embedding_spec(),
+            branch="growing",
+            baseline_version=1,
+            metadata_root=metadata_root,
+            max_train_shards=5,
+            num_extra_shards=2,
+        )
+
+
+def test_initialize_widened_baseline_rejects_post_finalize_columns(tmp_path: Path) -> None:
+    """A widened baseline without embedding provenance cannot fork a growing branch.
 
     :param tmp_path: Isolated Lance and metadata roots.
     """
@@ -112,7 +146,7 @@ def test_initialize_widened_baseline_rejects_post_finalize_columns(tmp_path: Pat
             (metadata_root / "versions/1" / name).read_bytes()
         )
 
-    with pytest.raises(ValueError, match=r"clap.*--baseline-version"):
+    with pytest.raises(ValueError, match=r"clap.*provenance"):
         initialize_growing_branch(
             train_uri,
             spec=spec,
@@ -123,6 +157,115 @@ def test_initialize_widened_baseline_rejects_post_finalize_columns(tmp_path: Pat
             num_extra_shards=2,
         )
     assert "growing" not in lance.dataset(str(train_uri)).branches.list()
+
+
+def test_initialize_augmented_baseline_rejects_unreproducible_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_test_clap(monkeypatch)
+    spec, train_uri, metadata_root = _baseline_dataset(tmp_path)
+    dataset = lance.dataset(str(train_uri))
+    config = AddEmbeddingsConfig(
+        lance_uri=str(train_uri),
+        embeddings=("clap",),
+        checkpoints={"clap": "custom"},
+        device="cpu",
+        build_index=False,
+    )
+    _write_columns(dataset, [EMBEDDING_REGISTRY["clap"]], 8000, config)
+    version_root = metadata_root / f"versions/{dataset.version}"
+    version_root.mkdir()
+    for name in ("welford.npz", "stats.npz"):
+        (version_root / name).write_bytes((metadata_root / "versions/1" / name).read_bytes())
+
+    with pytest.raises(ValueError, match="cannot be reproduced"):
+        initialize_growing_branch(
+            train_uri,
+            spec=spec,
+            branch="growing",
+            baseline_version=dataset.version,
+            metadata_root=metadata_root,
+            max_train_shards=3,
+            num_extra_shards=1,
+        )
+
+
+def test_growing_registry_augmented_baseline_stages_and_appends_embedded_shard(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del fake_r2_remote
+    _install_test_clap(monkeypatch)
+    _, train_uri, metadata_root = _baseline_dataset(tmp_path)
+    shutil.rmtree(train_uri)
+    spec = tiny_lance_spec()
+    local_shards = [
+        write_local_shard(spec, shard_id, tmp_path / f"baseline-{shard_id}")
+        for shard_id in (0, 1)
+    ]
+    schema = lance.dataset(str(local_shards[0])).schema
+    fragments = [
+        lance_fragment(train_uri, schema, lance.dataset(str(path)).to_batches())
+        for path in local_shards
+    ]
+    commit_lance_dataset(train_uri, schema, fragments)
+    dataset = lance.dataset(str(train_uri))
+    config = AddEmbeddingsConfig(
+        lance_uri=str(train_uri),
+        embeddings=("clap",),
+        device="cpu",
+        build_index=False,
+    )
+    _write_columns(dataset, [EMBEDDING_REGISTRY["clap"]], 8000, config)
+    assert dataset.schema.field("clap").nullable is True
+    version_root = metadata_root / f"versions/{dataset.version}"
+    version_root.mkdir()
+    for name in ("welford.npz", "stats.npz"):
+        (version_root / name).write_bytes((metadata_root / "versions/1" / name).read_bytes())
+
+    snapshot = initialize_growing_branch(
+        train_uri,
+        spec=spec,
+        branch="growing",
+        baseline_version=dataset.version,
+        metadata_root=metadata_root,
+        max_train_shards=3,
+        num_extra_shards=1,
+    )
+    pending = pending_refresh_request(snapshot)
+    assert pending is not None
+    assert snapshot.embedding_generation is not None
+    assert snapshot.embedding_generation.embeddings == ("clap",)
+    worker_spec = spec.model_copy(
+        update={"embedding_generation": snapshot.embedding_generation}
+    )
+    shard = GrowingPlan(2, 3, 1, 2).extra_shard(worker_spec, 2)
+    local = write_local_shard(worker_spec, 2, tmp_path / "new", shard=shard)
+    stage_lance_shard_attempt(
+        worker_spec,
+        shard,
+        local,
+        worker_id="pod-b",
+        attempt_uuid="grow-2",
+        target_lance_uri=snapshot.branch_uri,
+        attempt_staging_dir_uri=spec.r2.growing_shard_staging_dir_uri("growing", 2),
+    )
+
+    published = finalize_staged_refresh(
+        train_uri,
+        spec=worker_spec,
+        current=snapshot,
+        pending=pending,
+        metadata_root=metadata_root,
+    )
+
+    grown = lance.dataset(published.branch_uri)
+    assert published.row_count == 6
+    assert grown.schema.field("clap").nullable is True
+    assert grown.schema.field("clap").metadata[b"synth_setter.embedding.name"] == b"clap"
+    assert grown.to_table(columns=["clap"])["clap"].null_count == 0
 
 
 def _append_fragments(

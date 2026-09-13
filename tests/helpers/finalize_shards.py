@@ -345,6 +345,7 @@ def stub_finalize_lance_io(monkeypatch: pytest.MonkeyPatch) -> None:
     from synth_setter.pipeline.data.lance_finalize import (
         CheckedLanceWinner,
         StagedLanceAttempt,
+        _shard_schema,
     )
 
     def fake_select(
@@ -372,6 +373,7 @@ def stub_finalize_lance_io(monkeypatch: pytest.MonkeyPatch) -> None:
                 # fragment is never read — a placeholder satisfies the field.
                 fragment=cast(Any, object()),
                 welford=welford,
+                schema=_shard_schema(spec, shard.shard_id),
             )
             for shard in spec.shards
         }

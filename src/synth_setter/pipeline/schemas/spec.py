@@ -70,6 +70,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DatasetSpec",
+    "GenerationEmbeddingPolicy",
     "InputAudioSource",
     "OutputFormat",
     "R2Location",
@@ -1202,6 +1203,77 @@ def _can_derive_prefix(data: dict[str, Any], r2: dict[str, Any]) -> bool:
     return True
 
 
+class GenerationEmbeddingPolicy(BaseModel):  # noqa: DOC601, DOC603 — Fields describe policy.
+    """GPU embedding columns computed before each worker stages a Lance shard."""
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    embeddings: tuple[str, ...] = Field(description="Ordered embedding registry keys to write.")
+    checkpoints: dict[str, str] = Field(
+        default_factory=dict, description="Checkpoint overrides keyed by selected registry name."
+    )
+    device: str = Field(description="Explicit CUDA device used by this worker.")
+    lance_batch_size: int = Field(default=128, ge=1, description="Rows encoded per batch.")
+
+    @field_validator("embeddings", mode="before")
+    @classmethod
+    def _validate_embeddings(cls, value: object) -> object:
+        """Freeze Hydra/JSON lists and reject unsupported generation policies.
+
+        :param value: Raw embedding selection.
+        :returns: Validated immutable registry-key sequence.
+        :raises ValueError: Selection is empty, unknown, duplicated, or re-renders rows.
+        """
+        from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
+
+        if not isinstance(value, (list, tuple)):
+            return value
+        embeddings = tuple(value)
+        if not embeddings:
+            raise ValueError("embeddings must select at least one registry key")
+        unknown = sorted(set(embeddings) - set(EMBEDDING_REGISTRY))
+        if unknown:
+            raise ValueError(f"unknown generation embeddings: {unknown}")
+        if len(set(embeddings)) != len(embeddings):
+            raise ValueError("generation embeddings must not contain duplicates")
+        rerendering = [name for name in embeddings if EMBEDDING_REGISTRY[name].rerenders]
+        if rerendering:
+            raise ValueError(f"generation embeddings cannot re-render rows: {rerendering}")
+        return embeddings
+
+    @field_validator("device")
+    @classmethod
+    def _device_must_be_cuda(cls, value: str) -> str:
+        """Require explicit CUDA placement; runtime availability is checked by the worker.
+
+        :param value: Configured Torch device.
+        :returns: CUDA device unchanged.
+        :raises ValueError: Device does not select CUDA.
+        """
+        prefix, separator, index = value.partition(":")
+        if prefix != "cuda" or (separator and not index.isdigit()):
+            raise ValueError("generation embeddings require an explicit CUDA device")
+        return value
+
+    @model_validator(mode="after")
+    def _checkpoint_keys_must_be_selected(self) -> GenerationEmbeddingPolicy:
+        """Reject checkpoint overrides outside the selected generation policy.
+
+        :returns: Validated policy.
+        :raises ValueError: An override is unselected or unsupported by its registry entry.
+        """
+        from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
+
+        unselected = sorted(set(self.checkpoints) - set(self.embeddings))
+        if unselected:
+            raise ValueError(f"checkpoint overrides are not selected embeddings: {unselected}")
+        for name in self.checkpoints:
+            spec = EMBEDDING_REGISTRY[name]
+            if not spec.default_checkpoint:
+                raise ValueError(f"{name} does not support checkpoint overrides")
+        return self
+
+
 class DatasetSpec(BaseModel):
     """Unified dataset specification — config + materialized runtime in one model.
 
@@ -1254,6 +1326,10 @@ class DatasetSpec(BaseModel):
     .. attribute :: param_language_dimension
 
         Optional EmbeddingGemma width; finalize publishes one embedding per logical field.
+
+    .. attribute :: embedding_generation
+
+        Optional GPU embedding policy applied by workers before Lance fragment staging.
 
     .. attribute :: use_shard_queue
 
@@ -1330,6 +1406,11 @@ class DatasetSpec(BaseModel):
     param_language_dimension: Literal[128, 256, 512, 768] | None = Field(
         default=None,
         description="Optional Matryoshka width for finalized per-field EmbeddingGemma metadata.",
+    )
+
+    embedding_generation: GenerationEmbeddingPolicy | None = Field(
+        default=None,
+        description="GPU embedding policy applied before each Lance shard attempt is staged.",
     )
 
     use_shard_queue: bool = Field(
