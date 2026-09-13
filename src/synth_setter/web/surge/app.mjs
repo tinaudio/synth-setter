@@ -123,6 +123,7 @@ worker.onmessage = ({ data }) => {
     notifyParent({ type: "comparison-ready", manifest: contract });
   } else if (data.type === "progress") {
     element("status").textContent = data.message;
+    notifyParent({ type: "comparison-progress", message: data.message });
   } else if (data.type === "error") {
     fail(data.message);
   } else if (data.type === "complete") {

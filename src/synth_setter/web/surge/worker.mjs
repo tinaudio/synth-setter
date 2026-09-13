@@ -12,9 +12,41 @@ const engineCommit = "dd68c74346c828ef25bd6504867936648161b7a7";
 let model;
 
 async function bytes(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
-  return new Uint8Array(await response.arrayBuffer());
+  const name = url.pathname.split("/").at(-1);
+  const controller = new AbortController();
+  const idleTimeoutMs = 60000;
+  const progressIntervalMs = 200;
+  const bytesPerMiB = 1048576;
+  let timer;
+  const renew = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(new Error(`Download stalled for ${idleTimeoutMs / 1000} seconds: ${name}. Retry on a stable connection.`)), idleTimeoutMs);
+  };
+  postMessage({ type: "progress", message: `Downloading ${name}…` });
+  renew();
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+    const total = Number(response.headers.get("content-length"));
+    let received = 0, updated = -Infinity;
+    const stream = response.body.pipeThrough(new TransformStream({
+      transform(chunk, output) {
+        received += chunk.byteLength;
+        renew();
+        if (performance.now() - updated >= progressIntervalMs || received === total) {
+          updated = performance.now();
+          postMessage({ type: "progress", message: `Downloading ${name}: ${(received / bytesPerMiB).toFixed(1)} / ${total > 0 ? (total / bytesPerMiB).toFixed(1) : "unknown"} MiB` });
+        }
+        output.enqueue(chunk);
+      },
+    }));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch (error) {
+    if (controller.signal.aborted) throw controller.signal.reason;
+    throw new Error(`Unable to download ${name}: ${error.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function loadModel(modelId = null) {
@@ -57,6 +89,7 @@ async function loadModel(modelId = null) {
   const graphs = {};
   try {
     for (const name of ["frontend", "conditioning", "velocity", ...(manifest.sketch ? ["sketch"] : [])]) {
+      postMessage({ type: "progress", message: `Initializing ${name} neural graph…` });
       graphs[name] = await ort.InferenceSession.create(loaded[`${name}.onnx`], {
         executionProviders: ["wasm"],
       });

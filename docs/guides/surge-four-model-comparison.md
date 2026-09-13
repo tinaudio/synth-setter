@@ -5,6 +5,13 @@ four checkpoints and choose **Run selected models**. All selected models load
 before their independent browser workers start inference. Each result has its
 own audio, spectrogram, JSON record and **Download FXP patch** link.
 
+Each card reports the file being downloaded, received/total MiB, and graph
+initialization. Velocity graphs exceed 100 MB each: leave progressing downloads
+open, or select fewer models on a slow connection. A network transfer with no
+bytes for 60 seconds fails with its filename; the comparison's four-minute
+loading deadline resets on progress rather than cutting off healthy transfers.
+Retry with **Run selected models** after a loading error.
+
 | Arm             | Training step | Encoded output width |
 | --------------- | ------------: | -------------------: |
 | Simple baseline |       101,999 |                   92 |

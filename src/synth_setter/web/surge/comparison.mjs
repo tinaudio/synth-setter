@@ -30,6 +30,14 @@ function finish() {
   link.textContent = "Download comparison records";
 }
 
+function renewLoadingDeadline(state) {
+  clearTimeout(state.timer);
+  state.timer = setTimeout(() => {
+    state.failed = true;
+    state.reject(new Error("Model loading made no progress for four minutes; retry to reload it"));
+  }, 240000);
+}
+
 function createFrame(entry) {
   const card = document.createElement("section");
   const heading = document.createElement("h2");
@@ -46,10 +54,7 @@ function createFrame(entry) {
   state.ready = new Promise((resolve, reject) => {
     state.resolve = resolve;
     state.reject = reject;
-    state.timer = setTimeout(() => {
-      state.failed = true;
-      reject(new Error("Model loading timed out; retry to reload it"));
-    }, 240000);
+    renewLoadingDeadline(state);
   });
   frames.set(entry.id, state);
   card.append(heading, iframe);
@@ -61,7 +66,9 @@ window.addEventListener("message", ({ source, origin, data }) => {
   if (origin !== location.origin) return;
   const state = [...frames.values()].find((item) => item.iframe.contentWindow === source);
   if (!state || data?.modelId !== state.entry.id) return;
-  if (data.type === "comparison-ready") {
+  if (data.type === "comparison-progress" && !state.loaded && !state.failed) {
+    renewLoadingDeadline(state);
+  } else if (data.type === "comparison-ready") {
     clearTimeout(state.timer);
     if (data.manifest.checkpointSha256 !== state.entry.checkpointSha256) {
       state.failed = true;
