@@ -37,6 +37,7 @@ from synth_setter.conditioning import (
 )
 from synth_setter.data.vst.shapes import AUDIO_FIELD, make_spectrogram
 from synth_setter.data.vst_datamodule import load_mel_statistics
+from synth_setter.features.pyfdn_controls import extract_reverb_sketch
 from synth_setter.features.sketch_controls import extract_sketch_controls_batch
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import retry_lance_read
@@ -733,7 +734,15 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         model_batch = dict(batch)
         if self.sketch_controls is None:
             return model_batch
-        controls = extract_sketch_controls_batch(model_batch[AUDIO_FIELD], self.sample_rate)
+        audio = model_batch[AUDIO_FIELD]
+        if self.sketch_controls.profile == "pyfdn_reverb":
+            mono = audio.detach().mean(dim=1).cpu().numpy()
+            controls = np.stack(
+                [extract_reverb_sketch(waveform, float(self.sample_rate)) for waveform in mono]
+            )
+            model_batch[SKETCH_CTRL_FIELD] = torch.from_numpy(controls).to(audio.device)
+            return model_batch
+        controls = extract_sketch_controls_batch(audio, self.sample_rate)
         pooled = pool_sketch_controls(controls, self.sketch_controls.num_frames)
         pitch = pooled[:, SKETCH_PITCH_SLICE]
         pooled[:, SKETCH_PITCH_SLICE] = pitch.where(

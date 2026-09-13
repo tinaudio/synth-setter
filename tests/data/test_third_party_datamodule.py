@@ -20,6 +20,7 @@ from pedalboard.io import AudioFile
 
 from synth_setter.conditioning import (
     NUM_SKETCH_CONTROLS,
+    PYFDN_SKETCH_CONTROLS,
     SKETCH_CENTROID_ROW,
     SKETCH_CTRL_FIELD,
     SKETCH_LOUDNESS_ROW,
@@ -32,6 +33,7 @@ from synth_setter.data.third_party_datamodule import (
     decode_clip,
 )
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEL_N_MELS, make_spectrogram
+from synth_setter.features.pyfdn_controls import extract_reverb_sketch
 from tests.helpers.lance_fixtures import wav_bytes, write_blob_audio_corpus
 
 # Keep the test corpus compact while retaining a legal mel front-end.
@@ -87,6 +89,8 @@ def _datamodule(
     uri: str | Path,
     *,
     sample_rate: int = _TARGET_SAMPLE_RATE,
+    channels: int = _TARGET_CHANNELS,
+    signal_duration_seconds: float = _DURATION_SECONDS,
     audio_column: str = AUDIO_FIELD,
     amplitude_scale: float = 1.0,
     dataset_version: int = 1,
@@ -105,6 +109,8 @@ def _datamodule(
 
     :param uri: Corpus Lance path, or an ``r2://`` URI, read in place.
     :param sample_rate: Target render rate the corpus is mapped onto.
+    :param channels: Target channel count.
+    :param signal_duration_seconds: Target clip duration.
     :param audio_column: Blob column the corpus stores its audio in.
     :param amplitude_scale: Gain applied to decoded audio.
     :param dataset_version: Immutable Lance snapshot to serve.
@@ -123,8 +129,8 @@ def _datamodule(
     return ThirdPartyAudioDataModule(
         dataset_uri=str(uri),
         sample_rate=sample_rate,
-        channels=_TARGET_CHANNELS,
-        signal_duration_seconds=_DURATION_SECONDS,
+        channels=channels,
+        signal_duration_seconds=signal_duration_seconds,
         dataset_version=dataset_version,
         batch_size=2,
         audio_column=audio_column,
@@ -1122,6 +1128,62 @@ def test_nsynth_sketch_batch_real_pesto_emits_finite_canonical_controls(tmp_path
     assert torch.all(pitch.amax(dim=0) >= 0.1)
     assert batch[AUDIO_FIELD].shape == (1, _TARGET_CHANNELS, sample_rate // 2)
     assert "params" not in batch
+
+
+def test_pyfdn_reverb_sketch_decoded_stereo_rir_returns_mono_signed_controls(
+    tmp_path: Path,
+) -> None:
+    """Real extraction consumes the decoded, downmixed target waveform.
+
+    :param tmp_path: Isolated corpus fixture directory.
+    """
+    sample_rate = 44_100
+    duration_seconds = 4.0
+    samples = np.arange(int(sample_rate * duration_seconds), dtype=np.float32)
+    envelope = np.exp(-8.0 * samples / sample_rate).astype(np.float32)
+    stereo_ir = np.stack(
+        (
+            envelope * np.sin(2 * np.pi * 997.0 * samples / sample_rate),
+            envelope * np.sin(2 * np.pi * 2_003.0 * samples / sample_rate),
+        )
+    ).astype(np.float32)
+    buffer = io.BytesIO()
+    with AudioFile(buffer, "w", format="wav", samplerate=sample_rate, num_channels=2) as handle:
+        handle.write(stereo_ir)
+    corpus = tmp_path / "rir.lance"
+    table = pa.table(
+        {AUDIO_FIELD: blob_array([buffer.getvalue(), buffer.getvalue()])},
+        schema=pa.schema([blob_field(AUDIO_FIELD)]),
+    )
+    lance.write_dataset(table, corpus, mode="create", data_storage_version="2.2")
+    datamodule = _datamodule(
+        corpus,
+        sample_rate=sample_rate,
+        channels=1,
+        signal_duration_seconds=duration_seconds,
+        downmix=True,
+        sketch={
+            "profile": "pyfdn_reverb",
+            "column": "pyfdn_sketch",
+            "num_frames": 32,
+            "num_control_tokens": 32,
+        },
+    )
+    datamodule.setup("predict")
+    decoded = next(iter(datamodule.predict_dataloader()))
+
+    batch = datamodule.on_after_batch_transfer(decoded, 0)
+
+    controls = batch[SKETCH_CTRL_FIELD]
+    expected = extract_reverb_sketch(decoded[AUDIO_FIELD][0, 0].numpy(), float(sample_rate))
+    assert decoded[AUDIO_FIELD].shape == (2, 1, int(sample_rate * duration_seconds))
+    assert controls.shape == (2, PYFDN_SKETCH_CONTROLS, 32)
+    assert controls.dtype == torch.float32
+    assert controls.device == decoded[AUDIO_FIELD].device
+    assert torch.isfinite(controls).all()
+    assert torch.any(controls < 0.0)
+    torch.testing.assert_close(controls[0], torch.from_numpy(expected), rtol=0, atol=0)
+    torch.testing.assert_close(controls[1], controls[0], rtol=0, atol=0)
 
 
 def test_statistics_overflowing_float32_are_rejected(tmp_path: Path) -> None:
