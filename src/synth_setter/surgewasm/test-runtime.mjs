@@ -68,7 +68,7 @@ after(async () => {
     }
 });
 
-const render = (parameters = []) => renderSurge({
+const render = (parameters = [], overrides = {}) => renderSurge({
     root,
     loader,
     preset,
@@ -79,7 +79,23 @@ const render = (parameters = []) => renderSurge({
     noteEnd: 0.5,
     sampleRate: 44100,
     frames: 44100,
+    ...overrides,
 });
+
+const loaderInspectingValuesAtDestroy = (observedValues) => async (options) => {
+    const module = await loader(options);
+    const cwrap = module.cwrap.bind(module);
+    module.cwrap = (name, returnType, argumentTypes) => {
+        const wrapped = cwrap(name, returnType, argumentTypes);
+        if (name !== 'ss_destroy') return wrapped;
+        return () => {
+            const paramValue = cwrap('sh_param_value', 'number', ['number']);
+            for (const id of observedValues.keys()) observedValues.set(id, paramValue(id));
+            wrapped();
+        };
+    };
+    return module;
+};
 
 test('renderSurge_fixed_fxp_returns_finite_nonzero_stereo_audio', async () => {
     const result = await render();
@@ -99,6 +115,39 @@ test('renderSurge_model_native_parameter_subset_matches_live_host', async () => 
 
     assert.equal(mappedParameters.length, 89);
     assert.ok(result.left.some((sample) => sample !== 0));
+});
+
+test('renderSurge_saved_fxp_reloads_continuous_and_categorical_values', async () => {
+    const changed = await render([
+        { id: 308, name: 'A Filter 1 Cutoff', value: 0.2 },
+        { id: 223, name: 'A Osc 1 Octave', value: 0.8305 },
+    ]);
+    const reloadedValues = new Map([[308, undefined], [223, undefined]]);
+
+    await render([], {
+        loader: loaderInspectingValuesAtDestroy(reloadedValues),
+        preset: changed.fxp,
+    });
+
+    assert.ok(Math.abs(reloadedValues.get(308) - 0.2) < 1e-6);
+    assert.ok(Math.abs(reloadedValues.get(223) - 0.83) < 1e-6);
+});
+
+test('renderSurge_saved_fxp_has_native_chunk_header', async () => {
+    const { fxp } = await render();
+    const view = new DataView(fxp.buffer, fxp.byteOffset, fxp.byteLength);
+    const text = (start, length) => new TextDecoder().decode(fxp.subarray(start, start + length));
+
+    assert.equal(text(0, 4), 'CcnK');
+    assert.equal(view.getUint32(4), 0);
+    assert.equal(text(8, 4), 'FPCh');
+    assert.equal(view.getUint32(12), 1);
+    assert.equal(text(16, 4), 'cjs3');
+    assert.equal(view.getUint32(20), 1);
+    assert.equal(view.getUint32(24), 1);
+    assert.deepEqual(fxp.slice(28, 56), new Uint8Array(28));
+    assert.equal(view.getUint32(56), fxp.byteLength - 60);
+    assert.equal(text(60, 4), 'sub3');
 });
 
 test('renderSurge_closed_filter_attenuates_note_energy', async () => {

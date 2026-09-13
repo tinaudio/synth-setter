@@ -44,7 +44,9 @@ from synth_setter.models.music_frontend import (
 )
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.renderer_factory import anchor_render_preset
 from synth_setter.resources import as_file, configs_dir, param_map
+from synth_setter.synth_spec import SynthName, resolve_synth
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +54,11 @@ _SCHEMA_VERSION = 1
 _SAMPLE_RATE = 44_100
 _SAMPLE_FRAMES = 176_400
 _CHANNELS = 2
-_PARAM_SPEC_NAME = "surge_simple"
-_ENCODED_WIDTH = 92
 _NUM_MUSIC_CONTROLS = 386
 _GRAPH_FILES = (
     "conditioning.onnx",
     "frontend.onnx",
     "preset.fxp",
-    "sketch.onnx",
     "velocity.onnx",
 )
 _NATIVE_REFERENCE_VERSION = "1.3.4"
@@ -150,28 +149,28 @@ def _decoder_parameters(spec: ParamSpec, parameter_map: SynthParamMap) -> list[d
     ]
 
 
-def _validate_model(model: VSTFlowMatchingModule) -> SketchControlSpec:
+def _validate_model(model: VSTFlowMatchingModule) -> tuple[ParamSpec, SketchControlSpec | None]:
     """Validate the fixed browser Surge flow contract.
 
     :param model: Candidate CPU evaluation checkpoint.
-    :returns: Resolved music sketch configuration.
+    :returns: Registered parameter encoding and optional music sketch configuration.
     :raises ValueError: The checkpoint is incompatible with the browser app.
     """
     sketch = resolve_sketch_controls(model.hparams["sketch_controls"])
-    if model.hparams.get("param_spec") != _PARAM_SPEC_NAME:
-        raise ValueError("browser Surge bundles require the surge_simple parameter spec")
+    if model.hparams.get("param_spec") not in {"surge_simple", "surge_xt"}:
+        raise ValueError("browser Surge bundles require surge_simple or surge_xt")
+    spec = resolve_param_spec(ParamSpecName(model.hparams["param_spec"]))
     if model.hparams.get("conditioning") != "mel":
         raise ValueError("browser Surge bundles require mel content conditioning")
-    if model.hparams.get("num_params") != _ENCODED_WIDTH:
-        raise ValueError("browser Surge bundles require 92 model outputs")
-    if (
-        sketch is None
-        or sketch.profile != "music"
+    if model.hparams.get("num_params") != spec.encoded_width:
+        raise ValueError("browser Surge model width must match its parameter spec")
+    if sketch is not None and (
+        sketch.profile != "music"
         or sketch.layout.num_controls != _NUM_MUSIC_CONTROLS
         or sketch.num_frames != 32
     ):
         raise ValueError("browser Surge bundles require music sketch controls shaped (386, 32)")
-    return sketch
+    return spec, sketch
 
 
 def export_browser_surge_bundle(
@@ -196,11 +195,11 @@ def export_browser_surge_bundle(
     """
     if output.exists():
         raise FileExistsError(f"bundle destination already exists: {output}")
-    sketch = _validate_model(model)
-    render = load_render_config()
+    spec, sketch = _validate_model(model)
+    identity = resolve_synth(SynthName(f"{model.hparams['param_spec']}_surgepy"))
+    render = anchor_render_preset(load_render_config().model_copy(update={"synth": identity}))
     if (
-        render.param_spec_name != _PARAM_SPEC_NAME
-        or render.sample_rate != _SAMPLE_RATE
+        render.sample_rate != _SAMPLE_RATE
         or render.channels != _CHANNELS
         or int(render.sample_rate * render.signal_duration_seconds) != _SAMPLE_FRAMES
     ):
@@ -214,11 +213,15 @@ def export_browser_surge_bundle(
         mel_frontend = StereoMelFrontend(
             sample_rate=_SAMPLE_RATE, mean=stats["mean"], std=stats["std"]
         ).eval()
-    sketch_frontend = MusicSketchFrontend(
-        sample_rate=_SAMPLE_RATE,
-        output_frames=sketch.num_frames,
-        pitch_zero_threshold=sketch.pitch_zero_threshold,
-    ).eval()
+    sketch_frontend = (
+        MusicSketchFrontend(
+            sample_rate=_SAMPLE_RATE,
+            output_frames=sketch.num_frames,
+            pitch_zero_threshold=sketch.pitch_zero_threshold,
+        ).eval()
+        if sketch is not None
+        else None
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(dir=output.parent, prefix=f".{output.name}."))
     try:
@@ -227,7 +230,7 @@ def export_browser_surge_bundle(
             mel_frontend=mel_frontend,
             sketch_frontend=sketch_frontend,
             sketch=sketch,
-            spec=resolve_param_spec(ParamSpecName(_PARAM_SPEC_NAME)),
+            spec=spec,
             parameter_map=parameter_map,
             preset=preset,
             stats_path=stats_path,
@@ -249,8 +252,8 @@ def _write_bundle(
     *,
     model: VSTFlowMatchingModule,
     mel_frontend: StereoMelFrontend,
-    sketch_frontend: MusicSketchFrontend,
-    sketch: SketchControlSpec,
+    sketch_frontend: MusicSketchFrontend | None,
+    sketch: SketchControlSpec | None,
     spec: ParamSpec,
     parameter_map: SynthParamMap,
     preset: Path,
@@ -276,25 +279,30 @@ def _write_bundle(
     """
     waveform = torch.zeros(1, _CHANNELS, _SAMPLE_FRAMES)
     with torch.no_grad():
-        batch = {"mel": mel_frontend(waveform), "sketch_ctrl": sketch_frontend(waveform)}
+        batch = {"mel": mel_frontend(waveform)}
+        if sketch_frontend is not None:
+            batch["sketch_ctrl"] = sketch_frontend(waveform)
     export_flow_onnx(model, batch, staging / "flow")
     for name in ("conditioning.onnx", "velocity.onnx"):
         (staging / "flow" / name).rename(staging / name)
     (staging / "flow").rmdir()
     export_stereo_mel_onnx(mel_frontend, staging / "frontend.onnx")
-    export_music_sketch_onnx(sketch_frontend, staging / "sketch.onnx")
+    if sketch_frontend is not None:
+        export_music_sketch_onnx(sketch_frontend, staging / "sketch.onnx")
     shutil.copyfile(preset, staging / "preset.fxp")
     manifest: dict[str, object] = {
         "schemaVersion": _SCHEMA_VERSION,
-        "paramSpecName": _PARAM_SPEC_NAME,
-        "encodedWidth": _ENCODED_WIDTH,
+        "paramSpecName": model.hparams["param_spec"],
+        "encodedWidth": spec.encoded_width,
         "parameters": _decoder_parameters(spec, parameter_map),
         "sketch": {
             "profile": sketch.profile,
             "numControls": sketch.layout.num_controls,
             "numFrames": sketch.num_frames,
             "pitchZeroThreshold": sketch.pitch_zero_threshold,
-        },
+        }
+        if sketch is not None
+        else None,
         "sampleRate": _SAMPLE_RATE,
         "frames": _SAMPLE_FRAMES,
         "channels": _CHANNELS,
@@ -309,7 +317,7 @@ def _write_bundle(
         },
         "files": {
             name: {"sha256": _sha256(staging / name), "bytes": (staging / name).stat().st_size}
-            for name in _GRAPH_FILES
+            for name in (*_GRAPH_FILES, *(("sketch.onnx",) if sketch is not None else ()))
         },
         "checkpointSha256": checkpoint_sha256,
         "statsSha256": _sha256(stats_path),

@@ -12,9 +12,11 @@ from hydra.utils import instantiate
 from lightning import Trainer
 
 from synth_setter.cli.sketch_render import _resolve_stats, load_render_config
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.models.components.transformer import ApproxEquivTransformer, LearntProjection
 from synth_setter.models.flow_onnx import branch_weights
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.renderer_factory import make_audio_renderer
 from synth_setter.tools.export_browser_surge_bundle import (
     _load_settings,
@@ -64,11 +66,14 @@ def stats_path() -> Path:
 
 
 @pytest.fixture(scope="module")
-def tiny_music_model() -> VSTFlowMatchingModule:
+def tiny_music_model(request: pytest.FixtureRequest) -> VSTFlowMatchingModule:
     """Build a small flow while retaining the real Surge decoder contract.
 
-    :returns: Evaluation model with stereo mel, music sketch, and 92 outputs.
+    :param request: Optional parameter spec and sketch-enabled fixture configuration.
+    :returns: Evaluation model matching the requested Surge encoding.
     """
+    spec_name, has_sketch = getattr(request, "param", ("surge_simple", True))
+    width = resolve_param_spec(ParamSpecName(spec_name)).encoded_width
     torch.manual_seed(7)
     model = instantiate(
         {"_target_": "synth_setter.models.vst_flow_matching_module.VSTFlowMatchingModule"},
@@ -84,7 +89,7 @@ def tiny_music_model() -> VSTFlowMatchingModule:
             spec_shape=(128, 401),
         ),
         vector_field=ApproxEquivTransformer(
-            projection=LearntProjection(d_model=16, d_token=16, num_params=92, num_tokens=4),
+            projection=LearntProjection(d_model=16, d_token=16, num_params=width, num_tokens=4),
             d_model=16,
             conditioning_dim=16,
             num_heads=2,
@@ -94,15 +99,63 @@ def tiny_music_model() -> VSTFlowMatchingModule:
         ),
         optimizer=torch.optim.Adam,
         scheduler=None,
-        num_params=92,
-        param_spec="surge_simple",
-        sketch_controls={"profile": "music", "num_frames": 32, "num_control_tokens": 32},
+        num_params=width,
+        param_spec=spec_name,
+        sketch_controls=(
+            {"profile": "music", "num_frames": 32, "num_control_tokens": 32}
+            if has_sketch
+            else None
+        ),
         test_sample_steps=9,
         test_cfg_strength=1.25,
         test_sketch_cfg_strength=2.0,
     ).eval()
     assert isinstance(model, VSTFlowMatchingModule)
     return model
+
+
+@pytest.mark.parametrize("tiny_music_model", [("surge_xt", False)], indirect=True)
+def test_export_bundle_full_baseline_graphs_match_native_velocity(
+    tmp_path: Path, tiny_music_model: VSTFlowMatchingModule, stats_path: Path
+) -> None:
+    """The full-spec baseline consumes mel without a sketch graph.
+
+    :param tmp_path: Export destination parent.
+    :param tiny_music_model: Full-spec baseline network.
+    :param stats_path: Production stereo statistics.
+    """
+    bundle = tmp_path / "baseline"
+    manifest = export_browser_surge_bundle(
+        tiny_music_model, stats_path, bundle, checkpoint_sha256="c" * 64, git_revision="test"
+    )
+    waveform = np.zeros((1, 2, _FRAMES), dtype=np.float32)
+    (mel,) = ort.InferenceSession(str(bundle / "frontend.onnx")).run(None, {"waveform": waveform})
+    (conditioning,) = ort.InferenceSession(str(bundle / "conditioning.onnx")).run(
+        None, {"mel": mel}
+    )
+    state = np.linspace(-1, 1, 300, dtype=np.float32)[None]
+    time = np.array([[0.5]], dtype=np.float32)
+    (velocity,) = ort.InferenceSession(str(bundle / "velocity.onnx")).run(
+        None,
+        {
+            "x": state,
+            "t": time,
+            "conditioning": conditioning,
+            "branch_weights": np.array([-1, 2], dtype=np.float32),
+        },
+    )
+    assert tiny_music_model.encoder is not None
+    with torch.no_grad():
+        encoded = tiny_music_model.encoder(torch.from_numpy(mel))
+        x, t = torch.from_numpy(state), torch.from_numpy(time)
+        expected = 2 * tiny_music_model.vector_field(
+            x, t, encoded
+        ) - tiny_music_model.vector_field(x, t, None)
+    assert isinstance(velocity, np.ndarray)
+    np.testing.assert_allclose(velocity, expected.numpy(), atol=1e-5, rtol=1e-4)
+    assert manifest["encodedWidth"] == 300
+    assert manifest["sketch"] is None
+    assert not (bundle / "sketch.onnx").exists()
 
 
 def test_export_bundle_manifest_describes_graphs_preset_and_decoder(

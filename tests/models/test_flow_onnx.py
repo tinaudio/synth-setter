@@ -59,6 +59,45 @@ def flow_model() -> VSTFlowMatchingModule:
     return model
 
 
+@pytest.fixture
+def baseline_flow_model() -> VSTFlowMatchingModule:
+    """Return a small production mel-only model with a 300-parameter state.
+
+    :returns: Evaluation model without sketch-control tokens.
+    """
+    torch.manual_seed(23)
+    model = instantiate(
+        {"_target_": "synth_setter.models.vst_flow_matching_module.VSTFlowMatchingModule"},
+        encoder=instantiate(
+            {"_target_": "synth_setter.models.components.transformer.AudioSpectrogramTransformer"},
+            d_model=16,
+            n_heads=2,
+            n_layers=1,
+            n_conditioning_outputs=1,
+            patch_size=4,
+            patch_stride=2,
+            spec_shape=(8, 8),
+        ),
+        vector_field=ApproxEquivTransformer(
+            projection=LearntProjection(d_model=16, d_token=16, num_params=300, num_tokens=4),
+            d_model=16,
+            conditioning_dim=16,
+            num_heads=2,
+            num_layers=1,
+            d_ff=16,
+            zero_init=False,
+        ),
+        optimizer=torch.optim.Adam,
+        scheduler=None,
+        num_params=300,
+        conditioning="mel",
+        sketch_controls=None,
+    ).eval()
+    assert isinstance(model, VSTFlowMatchingModule)
+    assert model.sketch_tokens is None
+    return model
+
+
 @pytest.mark.parametrize("strengths", [(0.0, 0.0), (2.0, 3.0)])
 def test_exported_velocity_same_inputs_matches_production(
     tmp_path: Path, flow_model: VSTFlowMatchingModule, strengths: tuple[float, float]
@@ -102,6 +141,123 @@ def test_exported_velocity_same_inputs_matches_production(
     assert actual.shape == expected.shape
     assert actual.dtype == np.float32
     np.testing.assert_allclose(actual, expected.numpy(), rtol=2e-5, atol=2e-5)
+
+
+def test_exported_baseline_conditioning_changes_velocity(
+    tmp_path: Path, baseline_flow_model: VSTFlowMatchingModule
+) -> None:
+    """The mel-only graph must carry encoded content into the exported field.
+
+    :param tmp_path: Export directory.
+    :param baseline_flow_model: Small production baseline architecture.
+    """
+    mel = torch.randn(1, 2, 8, 8)
+    export_flow_onnx(baseline_flow_model, {"mel": mel}, tmp_path)
+    encoder = ort.InferenceSession(str(tmp_path / "conditioning.onnx"))
+    field = ort.InferenceSession(str(tmp_path / "velocity.onnx"))
+    (first_conditioning,) = encoder.run(None, {"mel": mel.numpy()})
+    (second_conditioning,) = encoder.run(None, {"mel": (-mel).numpy()})
+    inputs = {
+        "x": np.zeros((1, 300), dtype=np.float32),
+        "t": np.array([[0.3]], dtype=np.float32),
+        "branch_weights": np.array([0.0, 1.0], dtype=np.float32),
+    }
+    (first,) = field.run(None, {**inputs, "conditioning": first_conditioning})
+    (second,) = field.run(None, {**inputs, "conditioning": second_conditioning})
+    assert isinstance(first, np.ndarray)
+    assert isinstance(second, np.ndarray)
+    assert first.shape == (1, baseline_flow_model.hparams["num_params"])
+    assert not np.allclose(first, second, rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.parametrize("cfg_strength", [0.0, 2.0])
+def test_exported_baseline_velocity_matches_production(
+    tmp_path: Path, baseline_flow_model: VSTFlowMatchingModule, cfg_strength: float
+) -> None:
+    """The two exported baseline branches must reproduce native classifier-free guidance.
+
+    :param tmp_path: Export directory.
+    :param baseline_flow_model: Small production baseline architecture.
+    :param cfg_strength: Content guidance strength.
+    """
+    mel = torch.randn(1, 2, 8, 8)
+    export_flow_onnx(baseline_flow_model, {"mel": mel}, tmp_path)
+    encoder = ort.InferenceSession(str(tmp_path / "conditioning.onnx"))
+    (conditioning,) = encoder.run(None, {"mel": mel.numpy()})
+    x = torch.randn(1, 300)
+    t = torch.tensor([[0.3]])
+    field = ort.InferenceSession(str(tmp_path / "velocity.onnx"))
+    (actual,) = field.run(
+        None,
+        {
+            "x": x.numpy(),
+            "t": t.numpy(),
+            "conditioning": conditioning,
+            "branch_weights": np.array([1.0 - cfg_strength, cfg_strength], dtype=np.float32),
+        },
+    )
+    with torch.no_grad():
+        expected = baseline_flow_model._velocity_field(
+            baseline_flow_model.encoder(mel), cfg_strength, None
+        )(x, t)
+    assert isinstance(actual, np.ndarray)
+    np.testing.assert_allclose(actual, expected.numpy(), rtol=2e-5, atol=2e-5)
+
+
+def test_exported_baseline_cfg_weights_change_velocity(
+    tmp_path: Path, baseline_flow_model: VSTFlowMatchingModule
+) -> None:
+    """Host-supplied baseline CFG weights must alter the actual ONNX field output.
+
+    :param tmp_path: Export directory.
+    :param baseline_flow_model: Small production baseline architecture.
+    """
+    mel = torch.randn(1, 2, 8, 8)
+    export_flow_onnx(baseline_flow_model, {"mel": mel}, tmp_path)
+    encoder = ort.InferenceSession(str(tmp_path / "conditioning.onnx"))
+    field = ort.InferenceSession(str(tmp_path / "velocity.onnx"))
+    (conditioning,) = encoder.run(None, {"mel": mel.numpy()})
+    inputs = {
+        "x": np.zeros((1, 300), dtype=np.float32),
+        "t": np.array([[0.3]], dtype=np.float32),
+        "conditioning": conditioning,
+    }
+    (unconditional,) = field.run(
+        None, {**inputs, "branch_weights": np.array([1.0, 0.0], dtype=np.float32)}
+    )
+    (conditional,) = field.run(
+        None, {**inputs, "branch_weights": np.array([0.0, 1.0], dtype=np.float32)}
+    )
+    assert isinstance(unconditional, np.ndarray)
+    assert isinstance(conditional, np.ndarray)
+    assert [item.name for item in encoder.get_inputs()] == ["mel"]
+    assert [item.name for item in field.get_inputs()] == [
+        "x",
+        "t",
+        "conditioning",
+        "branch_weights",
+    ]
+    assert not np.allclose(unconditional, conditional, rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "mel",
+    [torch.zeros(1, 2, 8), torch.zeros(0, 2, 8, 8)],
+    ids=["rank-three", "empty-batch"],
+)
+def test_export_baseline_malformed_mel_rejected_before_writing(
+    tmp_path: Path, baseline_flow_model: VSTFlowMatchingModule, mel: torch.Tensor
+) -> None:
+    """Malformed baseline mel input must fail before an export is published.
+
+    :param tmp_path: Parent of the absent export destination.
+    :param baseline_flow_model: Small production baseline architecture.
+    :param mel: Invalid mel tensor.
+    """
+    destination = tmp_path / "bundle"
+    with pytest.raises(ValueError, match="nonempty rank-4 mel"):
+        export_flow_onnx(baseline_flow_model, {"mel": mel}, destination)
+    assert not destination.exists()
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf")])

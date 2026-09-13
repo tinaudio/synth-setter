@@ -1,4 +1,4 @@
-import { cp, mkdir, rename, rm, mkdtemp, realpath, stat } from "node:fs/promises";
+import { cp, mkdir, readFile, rename, rm, mkdtemp, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,26 +21,29 @@ async function canonicalProspectivePath(destination) {
   }
 }
 
-export async function exportSite({ model, engine, output }) {
+export async function exportSite({ model, engine, output, comparison }) {
   const destination = await canonicalProspectivePath(output);
-  for (const source of [model, engine, ort]) {
+  for (const source of [model, engine, ort, ...(comparison ? [comparison] : [])]) {
     const relative = path.relative(await realpath(source), destination);
     if (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`)) {
       throw new Error("output must not be inside a copied source tree");
     }
   }
+  const models = [model];
+  if (comparison) {
+    const catalog = JSON.parse(await readFile(path.join(comparison, "catalog.json"), "utf8"));
+    if (!Array.isArray(catalog.models) || catalog.models.length !== 4 ||
+        new Set(catalog.models.map((entry) => entry.id)).size !== 4 ||
+        catalog.models.some((entry) => !/^[a-z0-9-]+$/.test(entry.id)))
+      throw new Error("invalid four-model catalog");
+    models.push(...catalog.models.map((entry) => path.join(comparison, entry.id)));
+  }
+  for (const root of models) {
+    const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
+    for (const name of ["frontend.onnx", "conditioning.onnx", "velocity.onnx", "preset.fxp", ...(manifest.sketch ? ["sketch.onnx"] : [])])
+      await stat(path.join(root, name));
+  }
   for (const [root, files] of [
-    [
-      model,
-      [
-        "manifest.json",
-        "frontend.onnx",
-        "sketch.onnx",
-        "conditioning.onnx",
-        "velocity.onnx",
-        "preset.fxp",
-      ],
-    ],
     [
       engine,
       [
@@ -68,6 +71,8 @@ export async function exportSite({ model, engine, output }) {
     for (const name of [
       "index.html",
       "app.mjs",
+      "start.mjs",
+      "comparison.mjs",
       "worker.mjs",
       "decode.mjs",
       "author.mjs",
@@ -82,6 +87,7 @@ export async function exportSite({ model, engine, output }) {
     for (const name of ["rk4.mjs", "guidance.mjs"])
       await cp(path.join(web, name), path.join(staging, name));
     await cp(model, path.join(staging, "model"), { recursive: true });
+    if (comparison) await cp(comparison, path.join(staging, "models"), { recursive: true });
     await cp(engine, path.join(staging, "engine"), { recursive: true });
     await cp(
       path.join(web, "..", "surgewasm", "runtime.mjs"),
@@ -106,13 +112,13 @@ if (
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
     if (
-      !["--model", "--engine", "--output"].includes(args[index]) ||
+      !["--model", "--engine", "--output", "--comparison"].includes(args[index]) ||
       !args[index + 1]
     )
-      throw new Error("Usage: --model DIR --engine DIR --output DIR");
+      throw new Error("Usage: --model DIR --engine DIR --output DIR [--comparison DIR]");
     options[args[index].slice(2)] = path.resolve(args[index + 1]);
   }
-  if (Object.keys(options).length !== 3)
+  if (!["model", "engine", "output"].every((name) => options[name]))
     throw new Error("--model, --engine and --output are required");
   await exportSite(options);
   console.log(`Static Surge evaluation: ${options.output}/surge/index.html`);

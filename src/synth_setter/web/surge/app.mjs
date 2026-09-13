@@ -4,6 +4,12 @@ import { spectrogramCanvas } from "./spectrogram.mjs";
 
 const element = (id) => document.getElementById(id);
 const number = (id) => Number(element(id).value);
+const query = new URLSearchParams(location.search);
+const modelId = query.get("model");
+const embedded = query.has("embedded") && parent !== window;
+const notifyParent = (data) => {
+  if (embedded) parent.postMessage({ ...data, modelId, height: document.documentElement.scrollHeight }, location.origin);
+};
 const worker = new Worker(new URL("./worker.mjs", import.meta.url), {
   type: "module",
 });
@@ -94,6 +100,7 @@ function fail(message) {
   window.surgeEval = { state: "error", message };
   element("status").textContent = `Error: ${message}`;
   element("run").disabled = !contract;
+  notifyParent({ type: "comparison-error", message });
 }
 
 worker.onmessage = ({ data }) => {
@@ -102,8 +109,18 @@ worker.onmessage = ({ data }) => {
     element("steps").value = String(contract.sampling.steps);
     element("contentCfg").value = String(contract.sampling.contentCfg);
     element("sketchCfg").value = String(contract.sampling.sketchCfg);
-    element("status").textContent = "Ready — choose content and sketch inputs";
+    if (!contract.sketch) {
+      element("mode").value = "mel_only";
+      for (const mode of ["both", "sketch_only"])
+        element("mode").querySelector(`option[value="${mode}"]`).disabled = true;
+      element("sketchCfg").disabled = true;
+      element("sketchSource").disabled = true;
+      element("sketchUpload").hidden = true;
+      element("author").hidden = true;
+    }
+    element("status").textContent = `Ready — ${contract.paramSpecName}, ${contract.encodedWidth} encoded outputs, ${contract.sketch ? "sketch" : "baseline"}`;
     element("run").disabled = false;
+    notifyParent({ type: "comparison-ready", manifest: contract });
   } else if (data.type === "progress") {
     element("status").textContent = data.message;
   } else if (data.type === "error") {
@@ -139,16 +156,27 @@ worker.onmessage = ({ data }) => {
       }));
       if (record.comparisonToPrevious)
         table("Neural comparison — previous matching inputs/settings (not audio parity)", Object.entries(record.comparisonToPrevious));
-      showSketch(record.sketch);
+      if (contract.sketch) showSketch(record.sketch);
       playback("Target", target, "target.wav");
       if (runSettings.sketchSource === "extracted") {
         playback("Sketch", [sketchAudio.slice(0, contract.frames), sketchAudio.slice(contract.frames)], "sketch.wav");
       } else {
         const note = document.createElement("p");
-        note.textContent = "Authored contour: no source sketch recording or audio spectrogram.";
+        note.textContent = contract.sketch
+          ? "Authored contour: no source sketch recording or audio spectrogram."
+          : "Baseline: sketch conditioning is disabled.";
         element("results").append(note);
       }
-      playback("Prediction", record.audio, "pred.wav");
+      playback("Prediction", record.audio, modelId ? `${modelId}-pred.wav` : "pred.wav");
+      const patchLink = document.createElement("a");
+      const patchUrl = URL.createObjectURL(new Blob([Uint8Array.from(record.fxp)], { type: "application/octet-stream" }));
+      urls.push(patchUrl);
+      patchLink.href = patchUrl;
+      patchLink.download = modelId ? `${modelId}.fxp` : "pred.fxp";
+      patchLink.textContent = "Download FXP patch";
+      const patchWarning = document.createElement("p");
+      patchWarning.textContent = "FXP saved by Surge 1.4. Surge 1.3 reports a patch-version warning and may omit newer features.";
+      element("results").append(patchLink, patchWarning);
       window.surgeEval = record;
       previousRun = record;
       const link = document.createElement("a");
@@ -157,18 +185,42 @@ worker.onmessage = ({ data }) => {
       );
       urls.push(url);
       link.href = url;
-      link.download = `evaluation-${record.neuralBackend}.json`;
+      link.download = `evaluation-${modelId ? `${modelId}-` : ""}${record.neuralBackend}.json`;
       link.textContent = "Download evaluation record";
       element("results").append(link);
       element("status").textContent = "Evaluation complete";
       element("run").disabled = false;
+      notifyParent({ type: "comparison-complete", record });
     } catch (error) {
       fail(error.message);
     }
   }
 };
 worker.onerror = (event) => fail(event.message);
-worker.postMessage({ type: "load" });
+worker.postMessage({ type: "load", modelId });
+if (embedded) {
+  element("controls").hidden = true;
+  document.querySelector("h1").hidden = true;
+  for (const paragraph of document.querySelectorAll("body > p:not([id])")) paragraph.hidden = true;
+  document.body.style.margin = "0";
+  document.body.style.padding = "0";
+}
+window.addEventListener("message", ({ source, origin, data }) => {
+  if (!embedded || source !== parent || origin !== location.origin || data?.type !== "comparison-run") return;
+  if (!contract || element("run").disabled) return fail("model is not ready for comparison");
+  for (const [id, file] of [["contentAudio", data.contentFile], ["sketchAudio", data.sketchFile]]) {
+    const transfer = new DataTransfer();
+    if (file instanceof File) transfer.items.add(file);
+    element(id).files = transfer.files;
+  }
+  for (const id of ["contentCfg", "sketchCfg", "steps", "seed", "pitch", "start", "end", "loudness", "centroid"])
+    element(id).value = String(data.settings[id]);
+  element("sketchSource").value = data.settings.sketchSource;
+  element("mode").value = !contract.sketch && data.settings.mode === "both" ? "mel_only" : data.settings.mode;
+  element("webgpu").checked = data.settings.neuralBackend === "webgpu";
+  if (!element("controls").checkValidity()) return fail("invalid comparison controls");
+  element("controls").requestSubmit();
+});
 
 element("sketchSource").addEventListener("change", () => {
   const authored = element("sketchSource").value === "authored";
@@ -186,8 +238,8 @@ element("controls").addEventListener("submit", async (event) => {
   try {
     const contentFile = element("contentAudio").files[0];
     const sketchFile = element("sketchAudio").files[0];
-    const authored = element("sketchSource").value === "authored";
-    if (!contentFile || (!authored && !sketchFile))
+    const authored = Boolean(contract.sketch) && element("sketchSource").value === "authored";
+    if (!contentFile || (contract.sketch && !authored && !sketchFile))
       throw new Error("choose content and sketch audio");
     element("status").textContent = "Decoding audio";
     content = await decodeStereo(
@@ -195,7 +247,7 @@ element("controls").addEventListener("submit", async (event) => {
       contract.sampleRate,
       contract.frames,
     );
-    sketchAudio = authored
+    sketchAudio = authored || !contract.sketch
       ? new Float32Array(content.length)
       : await decodeStereo(
           await sketchFile.arrayBuffer(),
@@ -205,10 +257,10 @@ element("controls").addEventListener("submit", async (event) => {
     runSettings = {
       mode: element("mode").value,
       contentCfg: number("contentCfg"),
-      sketchCfg: number("sketchCfg"),
+      sketchCfg: contract.sketch ? number("sketchCfg") : 0,
       steps: number("steps"),
       seed: number("seed"),
-      sketchSource: element("sketchSource").value,
+      sketchSource: contract.sketch ? element("sketchSource").value : "disabled",
       neuralBackend: element("webgpu").checked ? "webgpu" : "wasm",
     };
     worker.postMessage({

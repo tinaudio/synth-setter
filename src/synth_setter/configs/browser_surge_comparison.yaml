@@ -1,0 +1,45 @@
+models:
+  - id: simple-baseline
+    param_spec: surge_simple
+    sketch: false
+    step: 101999
+    epoch: 52
+    checkpoint: r2://intermediate-data/checkpoints/flow_sketch_prelim_base/flow_sketch_prelim_base-20260902T054618853Z-1a5ffac540cc4f7e8cdc8617f93b1570/last.ckpt
+    sha256: 71fb131adb8c7c6d362ae5d9d718fbb53ed7d290eccc76fe3d5a630879f2dac3
+    md5: 681a4f174e4502cd00771e142d823b2d
+    bytes: 479438187
+    stats: r2://experiments/browser-evaluation/c0c45d75a8b77004b3802c761bc77b5b34e7709a08343b2cf70fee04b7f52a19/stats.npz
+    stats_sha256: c0c45d75a8b77004b3802c761bc77b5b34e7709a08343b2cf70fee04b7f52a19
+  - id: simple-sketch
+    param_spec: surge_simple
+    sketch: true
+    step: 99999
+    epoch: 51
+    checkpoint: r2://intermediate-data/checkpoints/flow_sketch_prelim/flow_sketch_prelim-20260902T044048985Z-eed5063da1164b1e92ac62a55ffc17b3/last.ckpt
+    sha256: 87a0fcb20f9efbcb56fffc6e3ee6e1c8743c47013c297e33516b472543468c07
+    md5: 282938567529f39fc202048e87cb3acb
+    bytes: 481880593
+    stats: r2://experiments/browser-evaluation/c0c45d75a8b77004b3802c761bc77b5b34e7709a08343b2cf70fee04b7f52a19/stats.npz
+    stats_sha256: c0c45d75a8b77004b3802c761bc77b5b34e7709a08343b2cf70fee04b7f52a19
+  - id: xt-baseline
+    param_spec: surge_xt
+    sketch: false
+    step: 199863
+    epoch: 102
+    checkpoint: r2://intermediate-data/checkpoints/flow_sketch_prelim_base/flow_sketch_prelim_base-20260903T112142439Z-19cc8b0da52244b381bc3893343fefb8/last.ckpt
+    sha256: de63e60b19a80fb3e708895b1b0ad67b8f54806b2e86b7b93f4db7b3a5b13a14
+    md5: 5c102177194aae99db723f50b13534af
+    bytes: 482313643
+    stats: r2://experiments/data/surge-xt-surgepy-lance-2m-40k-10k/surge-xt-surgepy-lance-2m-40k-10k-20260902T164243493Z/stats.npz
+    stats_sha256: 1fae0889f145ce061e2e2ae1aca17c3bf8374ffcc1b4ebeb766d778e73e30f40
+  - id: xt-sketch
+    param_spec: surge_xt
+    sketch: true
+    step: 200000
+    epoch: 102
+    checkpoint: r2://intermediate-data/checkpoints/flow_sketch_prelim/flow_sketch_prelim-20260909T065229413Z-fae00335c5b6472abce2887d611213b7/last.ckpt
+    sha256: 2f6e9a9222394853c12e6a839283cae9746e23dd5715abd37c11b7864b7dc96f
+    md5: 7a03c0fd61dcac0563be73ad89c64700
+    bytes: 484756177
+    stats: r2://experiments/data/surge-xt-surgepy-lance-2m-40k-10k/surge-xt-surgepy-lance-2m-40k-10k-20260902T164243493Z/stats.npz
+    stats_sha256: 1fae0889f145ce061e2e2ae1aca17c3bf8374ffcc1b4ebeb766d778e73e30f40
