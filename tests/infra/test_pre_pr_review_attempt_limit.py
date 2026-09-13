@@ -48,6 +48,17 @@ def _review_checkout(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     checkout = tmp_path / "checkout"
     shutil.copytree(_REPO_ROOT / "agent", checkout / "agent")
     sh.Command("git")("init", "-q", "-b", "test-branch", checkout)
+    git = sh.Command("git").bake("-C", checkout)
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test User")
+    (checkout / "tracked.txt").write_text("initial\n")
+    git("add", "tracked.txt")
+    git("commit", "-q", "-m", "test: initialize review branch")
+
+    origin = tmp_path / "origin.git"
+    sh.Command("git")("init", "-q", "--bare", origin)
+    git("remote", "add", "origin", origin)
+    git("push", "-q", "-u", "origin", "test-branch")
 
     lookup_log = tmp_path / "gh-lookups"
     lookup_log.touch()
@@ -113,6 +124,39 @@ def _run_review(checkout: Path, env: dict[str, str], request: tuple[str, ...]) -
         stderr=stderr.getvalue().decode(),
         stdout=stdout,
     )
+
+
+def test_pre_pr_review_unpublished_branch_refused_before_pi(tmp_path: Path) -> None:
+    """Refuse approval review when the branch no longer exists on ``origin``.
+
+    :param tmp_path: Temporary checkout and fake external process directory.
+    """
+    checkout, env, invocation_log = _review_checkout(tmp_path)
+    sh.Command("git")("-C", checkout, "push", "-q", "origin", "--delete", "test-branch")
+
+    refused = _run_review(checkout, env, ("repo-review-full-no-comments",))
+
+    assert refused.returncode == 2
+    assert "Push test-branch to origin before requesting pre-PR approval" in refused.stderr
+    assert not invocation_log.exists()
+
+
+def test_pre_pr_review_stale_public_branch_refused_before_pi(tmp_path: Path) -> None:
+    """Refuse approval review when local HEAD is newer than ``origin``.
+
+    :param tmp_path: Temporary checkout and fake external process directory.
+    """
+    checkout, env, invocation_log = _review_checkout(tmp_path)
+    (checkout / "tracked.txt").write_text("new local commit\n")
+    git = sh.Command("git").bake("-C", checkout)
+    git("add", "tracked.txt")
+    git("commit", "-q", "-m", "test: advance local review branch")
+
+    refused = _run_review(checkout, env, ("repo-review-full-no-comments",))
+
+    assert refused.returncode == 2
+    assert "Push test-branch to origin before requesting pre-PR approval" in refused.stderr
+    assert not invocation_log.exists()
 
 
 def test_pre_pr_sentinel_review_fourth_attempt_refused_before_pi(tmp_path: Path) -> None:

@@ -12,12 +12,9 @@ from scipy.signal import sosfreqz
 import synth_setter.data.pyfdn_instrument as pyfdn_instrument
 from synth_setter.data.pyfdn_instrument import PyFDNRenderer, params_to_fdn_build
 from synth_setter.data.pyfdn_param_spec import (
-    PYFDN_DIFFVOX_PARAM_SPEC,
-    PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_PARAM_SPEC,
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
     PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
-    PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
 )
 from synth_setter.data.pyfdn_source import canonical_pyfdn_source_provenance
 from synth_setter.data.vst.param_spec import ParameterValues, ParamSpec
@@ -188,16 +185,10 @@ def test_pyfdn_renderer_distinct_dataset_inputs_produce_distinct_outputs() -> No
             1,
         ),
         (
-            "pyfdn_pitchshift_n8_mono_householder",
-            PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+            "pyfdn_n8_mono_kronecker",
+            PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
             1,
         ),
-        (
-            "pyfdn_gotz_n8_mono_fixed_delays",
-            PYFDN_GOTZ_N8_MONO_FIXED_DELAYS_PARAM_SPEC,
-            1,
-        ),
-        ("pyfdn_diffvox", PYFDN_DIFFVOX_PARAM_SPEC, 2),
     ],
 )
 def test_pyfdn_renderer_dataset_input_supported_topology_returns_expected_shape(

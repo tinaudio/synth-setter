@@ -11,6 +11,10 @@ import pyarrow as pa
 import pytest
 
 from synth_setter.cli.generate_dataset import build_generate_args
+from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    pyfdn_param_spec_sha256,
+)
 from synth_setter.data.vst.shapes import AUDIO_FIELD, DATASET_FIELD_NAMES
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.lance_shard import (
@@ -61,9 +65,11 @@ def _render_config(source_root: Path, txid: str, sampling_seed: int) -> RenderCo
         synth=SynthSpec(
             name=SynthName("pyfdn_n8_mono_householder"),
             param_spec_name=ParamSpecName("pyfdn_n8_mono_householder"),
+            format="pyfdn",
             plugin_path="pyfdn",
             plugin_state_path="",
             synth_version="0.4.2",
+            source_sha256=pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
         ),
         renderer_backend="pyfdn",
         render_contract_version=2,

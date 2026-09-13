@@ -56,8 +56,8 @@ def test_sketch_num_frames_one_second_matches_mel_grid() -> None:
     assert sketch_num_frames(samples, _SAMPLE_RATE) == samples // mel_hop_length(_SAMPLE_RATE) + 1
 
 
-def test_pool_sketch_controls_uses_track_means_and_pitch_maxima() -> None:
-    """Canonical storage pooling preserves the declared reduction per control group."""
+def test_pool_sketch_controls_averages_tracks_and_pitch() -> None:
+    """Canonical storage pooling averages every control group, including pitch."""
     controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 64)
     controls[:, SKETCH_LOUDNESS_ROW, 1::2] = 1.0
     controls[:, SKETCH_CENTROID_ROW, ::2] = 1.0
@@ -72,7 +72,9 @@ def test_pool_sketch_controls_uses_track_means_and_pitch_maxima() -> None:
     torch.testing.assert_close(
         pooled[0, SKETCH_CENTROID_ROW], torch.full((32,), 0.5), rtol=0, atol=0
     )
-    torch.testing.assert_close(pooled[0, SKETCH_PITCH_SLICE.start], torch.ones(32), rtol=0, atol=0)
+    torch.testing.assert_close(
+        pooled[0, SKETCH_PITCH_SLICE.start], torch.full((32,), 0.5), rtol=0, atol=0
+    )
 
 
 @pytest.mark.parametrize("input_frames,output_frames", [(0, 0), (0, 32), (32, 0), (32, -1)])
@@ -117,7 +119,7 @@ def test_pool_sketch_controls_nondivisible_windows_overlap_at_boundaries() -> No
         pooled[0, SKETCH_LOUDNESS_ROW], torch.tensor((1.0, 3.0)), rtol=0, atol=0
     )
     torch.testing.assert_close(
-        pooled[0, SKETCH_PITCH_SLICE.start], torch.tensor((2.0, 4.0)), rtol=0, atol=0
+        pooled[0, SKETCH_PITCH_SLICE.start], torch.tensor((1.0, 3.0)), rtol=0, atol=0
     )
 
 

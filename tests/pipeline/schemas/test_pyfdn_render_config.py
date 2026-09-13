@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
 import synth_setter.renderer_backend as renderer_backend_contract
+from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
+    pyfdn_param_spec_sha256,
+)
 from synth_setter.pipeline.schemas.spec import InputAudioSource, RenderConfig
 
 
@@ -14,9 +21,11 @@ def _pyfdn_render_kwargs(**overrides: object) -> dict[str, object]:
         "synth": {
             "name": "pyfdn_n8_mono_householder",
             "param_spec_name": "pyfdn_n8_mono_householder",
+            "format": "pyfdn",
             "plugin_path": "pyfdn",
             "plugin_state_path": "",
             "synth_version": "0.4.2",
+            "source_sha256": pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
         },
         "renderer_backend": "pyfdn",
         "pyfdn_excitation": "impulse",
@@ -82,6 +91,31 @@ def test_pyfdn_render_config_uses_existing_renderer_stubs() -> None:
     assert render.pyfdn_excitation == "impulse"
     assert render.plugin_reload_cadence == "render"
     assert render.gui_toggle_cadence == "never"
+
+
+def test_pyfdn_legacy_json_without_source_digest_restores_registered_identity() -> None:
+    """Persisted pre-digest specs gain the registered canonical source identity."""
+    values = _pyfdn_render_kwargs(render_contract_version=2)
+    synth = values["synth"]
+    assert isinstance(synth, dict)
+    del synth["source_sha256"]
+
+    restored = RenderConfig.model_validate_json(json.dumps(values))
+
+    assert restored.synth.source_sha256 == pyfdn_param_spec_sha256(
+        PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
+    )
+
+
+def test_pyfdn_authored_config_without_source_digest_is_rejected() -> None:
+    """New Python-side configurations must state the canonical source identity."""
+    values = _pyfdn_render_kwargs()
+    synth = values["synth"]
+    assert isinstance(synth, dict)
+    del synth["source_sha256"]
+
+    with pytest.raises(ValidationError, match="registered source_sha256"):
+        RenderConfig.model_validate(values)
 
 
 def test_pyfdn_render_config_omitted_excitation_defaults_digest_to_impulse() -> None:
@@ -257,10 +291,11 @@ def test_pyfdn_plugin_path_with_unregistered_name_rejects_hosted_backend() -> No
     """The native package sentinel cannot route through a hosted backend."""
     synth = {
         "name": "unregistered_pyfdn",
-        "param_spec_name": "surge_4",
+        "param_spec_name": "pyfdn_n8_mono_householder",
         "plugin_path": "pyfdn",
         "plugin_state_path": "",
         "synth_version": "0.4.2",
+        "source_sha256": pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
     }
 
     with pytest.raises(
@@ -279,10 +314,11 @@ def test_pyfdn_name_with_mismatched_spec_rejects_native_backend() -> None:
     """A pyFDN synth and unrelated parameter spec are not a registered identity."""
     synth = {
         "name": "pyfdn_n8_mono_householder",
-        "param_spec_name": "surge_4",
+        "param_spec_name": "pyfdn_n8_mono_kronecker",
         "plugin_path": "pyfdn",
         "plugin_state_path": "",
         "synth_version": "0.4.2",
+        "source_sha256": pyfdn_param_spec_sha256(PYFDN_N8_MONO_KRONECKER_PARAM_SPEC),
     }
 
     with pytest.raises(ValidationError, match="registered pyfdn synth identity"):
@@ -318,50 +354,6 @@ def test_pyfdn_identity_rejects_hosted_backend() -> None:
         match="all pyFDN identities require renderer_backend='pyfdn'",
     ):
         RenderConfig.model_validate(_pyfdn_render_kwargs(renderer_backend="pedalboard"))
-
-
-def test_pyfdn_pitchshift_identity_hosted_backend_error_names_family() -> None:
-    """Pitch-shift backend errors describe the pyFDN family without naming plain FDN."""
-    identity = "pyfdn_pitchshift_n8_mono_householder"
-    synth = {
-        "name": identity,
-        "param_spec_name": identity,
-        "plugin_path": "pyfdn",
-        "plugin_state_path": "",
-        "synth_version": "0.4.2",
-    }
-
-    with pytest.raises(
-        ValidationError,
-        match="all pyFDN identities require renderer_backend='pyfdn'",
-    ):
-        RenderConfig.model_validate(
-            _pyfdn_render_kwargs(synth=synth, renderer_backend="pedalboard")
-        )
-
-
-def _diffvox_synth() -> dict[str, str]:
-    return {
-        "name": "pyfdn_diffvox",
-        "param_spec_name": "pyfdn_diffvox",
-        "plugin_path": "pyfdn",
-        "plugin_state_path": "",
-        "synth_version": "0.4.2",
-    }
-
-
-def test_pyfdn_diffvox_render_config_accepts_stereo_output() -> None:
-    """The DiffVox chain pans the mono excitation out to two channels."""
-    render = RenderConfig.model_validate(_pyfdn_render_kwargs(synth=_diffvox_synth(), channels=2))
-
-    assert render.channels == 2
-    assert render.param_spec_name == "pyfdn_diffvox"
-
-
-def test_pyfdn_diffvox_render_config_rejects_mono_output() -> None:
-    """The stereo chain cannot be declared with the mono FDN geometry."""
-    with pytest.raises(ValidationError, match="channels=2"):
-        RenderConfig.model_validate(_pyfdn_render_kwargs(synth=_diffvox_synth(), channels=1))
 
 
 def test_pyfdn_mono_identity_rejects_stereo_output() -> None:

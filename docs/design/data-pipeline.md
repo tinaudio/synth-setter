@@ -1165,7 +1165,7 @@ The default CLAP, SAME, and S-SONDO sources hydrate under
 loudness, spectral-centroid, and PESTO pitch tracks
 (`features/sketch_controls.py`) from `audio` on the mel frame grid, then stores
 32-frame model-ready controls in a `sketch` struct column (#2707). Loudness and
-centroid use adaptive average pooling; pitch uses adaptive maximum pooling and
+centroid use adaptive average pooling; pitch uses adaptive average pooling and
 remains unthresholded. The `vec` child stores the pooled frame mean for
 contour-similarity search. The struct is an atomic write unit — refreshing
 one child means rewriting the whole column (requires Lance data storage 2.2).
@@ -1357,7 +1357,7 @@ DawDreamer host. Faust render groups recompile per row so DSP and voice state
 cannot cross sample boundaries. Existing v2 specs with a blank Faust plugin path
 remain accepted; external files and other URIs are not supported by the registry
 renderer. The standalone `synth-setter-export-fdn-faust` command instead emits a
-fixed-value BasicFDN `.dsp` artifact and verifies direct DawDreamer compilation
+fixed-value FlamoFDN `.dsp` artifact and verifies direct DawDreamer compilation
 without adding a registry identity. `pyfdn` uses the same `AudioRenderer` and
 accepted-sample path with
 fixed zero-valued MIDI compatibility inputs. It samples complete 91-coordinate

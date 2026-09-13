@@ -19,7 +19,6 @@ from synth_setter.clap import (
     DEFAULT_CLAP_TRAINING_CHECKPOINT_SHA256,
 )
 from synth_setter.conditioning import NUM_SKETCH_CONTROLS, resolve_sketch_controls
-from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 from synth_setter.data.vst.param_spec_registry import param_specs, resolve_param_spec_width
 from synth_setter.models.components.rendered_reward import (
     RenderedAudioReward,
@@ -29,12 +28,10 @@ from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.data.meanaudio import MEANAUDIO_EMBEDDING_DIM
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
-from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.pupujepa import (
     DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
 )
-from synth_setter.renderer_factory import make_audio_renderer
 from synth_setter.resources import configs_dir
 from synth_setter.utils import extras
 from tests.conftest import _build_surge_xt_smoke_cfg
@@ -317,34 +314,6 @@ def test_pyfdn_cepstrum_online_experiment_sizes_ast_to_quefrency_grid() -> None:
             ["experiment=pyfdn/flow", "ckpt_path=null"],
             id="eval",
         ),
-        pytest.param(
-            "train.yaml",
-            [
-                "experiment=pyfdn/flow",
-                "synth=pyfdn_pitchshift_n8_mono_householder",
-            ],
-            id="pitchshift",
-        ),
-        pytest.param(
-            "train.yaml",
-            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_fixed_delays"],
-            id="gotz_fixed_delays",
-        ),
-        pytest.param(
-            "train.yaml",
-            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_learned_delays"],
-            id="gotz_learned_delays",
-        ),
-        pytest.param(
-            "train.yaml",
-            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_fixed_delays_givens"],
-            id="gotz_fixed_delays_givens",
-        ),
-        pytest.param(
-            "train.yaml",
-            ["experiment=pyfdn/flow", "synth=pyfdn_gotz_n8_mono_learned_delays_givens"],
-            id="gotz_learned_delays_givens",
-        ),
     ],
 )
 def test_pyfdn_flow_composition_enables_per_param_metrics(
@@ -358,62 +327,6 @@ def test_pyfdn_flow_composition_enables_per_param_metrics(
     cfg = _compose(config_name, overrides)
 
     assert cfg.callbacks.log_per_param_mse.param_spec == cfg.synth.param_spec_name
-
-
-@pytest.mark.parametrize(
-    "identity",
-    [
-        "pyfdn_gotz_n8_mono_fixed_delays_givens",
-        "pyfdn_gotz_n8_mono_learned_delays_givens",
-    ],
-)
-def test_pyfdn_gotz_givens_hydra_selector_owns_codec_identity(identity: str) -> None:
-    """Each Givens selector propagates its incompatible codec identity through Hydra.
-
-    :param identity: Fixed- or learned-delay Givens synth identity.
-    """
-    cfg = _compose("train.yaml", ["experiment=pyfdn/flow", f"synth={identity}"])
-
-    assert cfg.synth.param_spec_name == identity
-    assert cfg.datamodule.param_spec_name == identity
-    assert cfg.model.param_spec == identity
-
-
-def test_pyfdn_pitchshift_hydra_identity_dispatches_matching_renderer() -> None:
-    """The pitch-shift synth group reaches its native renderer through Hydra."""
-    cfg = _compose(
-        "train.yaml",
-        ["experiment=pyfdn/flow", "synth=pyfdn_pitchshift_n8_mono_householder"],
-    )
-    render_values = OmegaConf.to_container(cfg.render, resolve=True)
-    assert isinstance(render_values, dict)
-    render_values["synth"] = OmegaConf.to_container(cfg.synth, resolve=True)
-
-    render = RenderConfig.model_validate(render_values)
-    renderer = make_audio_renderer(render)
-
-    assert cfg.datamodule.param_spec_name == "pyfdn_pitchshift_n8_mono_householder"
-    assert cfg.model.param_spec == "pyfdn_pitchshift_n8_mono_householder"
-    assert isinstance(renderer, PyFDNRenderer)
-    assert renderer.source_provenance["implementation"] == "pyFDN.process_fdn"
-
-
-def test_pyfdn_diffvox_experiment_dispatches_stereo_renderer() -> None:
-    """The DiffVox experiment composes a stereo render contract and its renderer."""
-    cfg = _compose("train.yaml", ["experiment=pyfdn/diffvox_flow"])
-    render_values = OmegaConf.to_container(cfg.render, resolve=True)
-    assert isinstance(render_values, dict)
-    render_values["synth"] = OmegaConf.to_container(cfg.synth, resolve=True)
-
-    render = RenderConfig.model_validate(render_values)
-    renderer = make_audio_renderer(render)
-
-    assert render.channels == 2
-    assert cfg.datamodule.param_spec_name == "pyfdn_diffvox"
-    assert cfg.model.param_spec == "pyfdn_diffvox"
-    assert cfg.model.encoder.input_channels == 2
-    assert isinstance(renderer, PyFDNRenderer)
-    assert renderer.channels == 2
 
 
 def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:

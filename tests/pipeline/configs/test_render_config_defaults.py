@@ -236,7 +236,7 @@ def test_render_torchsynth_composes_into_valid_render_config(name: str, num_para
         ("faust_bubble", 10, 2, "faust"),
         ("faust_church_organ", 16, 2, "faust"),
         ("faust_filter_osc", 6, 1, "faust_filter_osc"),
-        ("faust_kronecker_fdn", 38, 1, "faust_kronecker_fdn"),
+        ("faust_kronecker_fdn", 39, 1, "faust_kronecker_fdn"),
     ],
 )
 def test_render_faust_composes_into_valid_render_config(

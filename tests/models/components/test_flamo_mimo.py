@@ -8,7 +8,7 @@ import torch
 from pyFDN import FDNBuild
 from torch import nn
 
-from synth_setter.data.basic_fdn import BasicFDN
+from synth_setter.data.flamo_fdn import FlamoFDN
 from synth_setter.models.components.differentiable_renderer import FlamoFDNDifferentiableRenderer
 
 
@@ -82,7 +82,7 @@ def test_flamo_mimo_predictions_preserve_every_transfer_path(build: FDNBuild) ->
     :param build: Complete MIMO template.
     """
     renderer = FlamoFDNDifferentiableRenderer(
-        fdn=BasicFDN(build),
+        fdn=FlamoFDN(build),
         decoder=_GainDecoder(build),
         parameter_width=10,
         signal_length=512,
@@ -96,7 +96,7 @@ def test_flamo_mimo_predictions_preserve_every_transfer_path(build: FDNBuild) ->
     assert actual.shape == (2, 6, 512)
     for index, row in enumerate(rows.detach().numpy()):
         native = replace(build, B=row[:4].reshape(2, 2), D=row[4:].reshape(3, 2))
-        expected = BasicFDN(native).impulse_response(512).transpose(1, 2, 0).reshape(6, 512)
+        expected = FlamoFDN(native).impulse_response(512).transpose(1, 2, 0).reshape(6, 512)
         np.testing.assert_allclose(actual[index].detach().numpy(), expected, atol=1e-9, rtol=1e-7)
 
 
@@ -106,7 +106,7 @@ def test_flamo_mimo_nonfirst_output_backpropagates_to_its_direct_input(build: FD
     :param build: Complete MIMO template.
     """
     renderer = FlamoFDNDifferentiableRenderer(
-        fdn=BasicFDN(build),
+        fdn=FlamoFDN(build),
         decoder=_GainDecoder(build),
         parameter_width=10,
         signal_length=512,

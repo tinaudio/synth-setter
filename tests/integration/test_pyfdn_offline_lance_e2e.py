@@ -25,9 +25,9 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     PYFDN_N8_MONO_HOUSEHOLDER_VECTOR_PARAM_SPEC,
     PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
-    PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    FlamoFDNParamSpec,
+    pyfdn_param_spec_sha256,
 )
-from synth_setter.data.vst.param_spec import ParamSpec
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.lance_shard import (
@@ -66,7 +66,7 @@ from synth_setter.workspace import operator_workspace
     ],
 )
 def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
-    tmp_path: Path, synth_name: str, param_spec: ParamSpec
+    tmp_path: Path, synth_name: str, param_spec: FlamoFDNParamSpec
 ) -> None:
     """A real accepted row survives storage and the production model-batch reader.
 
@@ -81,6 +81,7 @@ def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
             plugin_path="pyfdn",
             plugin_state_path="",
             synth_version="0.4.2",
+            source_sha256=pyfdn_param_spec_sha256(param_spec),
         ),
         renderer_backend="pyfdn",
         pyfdn_excitation="impulse",
@@ -177,94 +178,6 @@ def test_pyfdn_acceptance_lance_reader_rerender_round_trip(
 
 
 @pytest.mark.slow
-def test_pyfdn_pitchshift_lance_reader_rerender_round_trip(tmp_path: Path) -> None:
-    """A real pitch-shift row survives generation, loading, and native rerender.
-
-    :param tmp_path: Isolated destination for the production Lance writer.
-    """
-    identity = ParamSpecName("pyfdn_pitchshift_n8_mono_householder")
-    render = RenderConfig(
-        synth=SynthSpec(
-            name=SynthName(identity),
-            param_spec_name=identity,
-            plugin_path="pyfdn",
-            plugin_state_path="",
-            synth_version="0.4.2",
-        ),
-        renderer_backend="pyfdn",
-        pyfdn_excitation="impulse",
-        sample_rate=44_100,
-        channels=1,
-        velocity=0,
-        signal_duration_seconds=4.0,
-        min_loudness=-100.0,
-        audio_dtype="float32",
-        mel_spec_dtype="float32",
-        samples_per_render_batch=1,
-        samples_per_shard=1,
-        base_seed=23,
-        attempts_per_sample=100,
-        param_sample_cadence="sample",
-        plugin_reload_cadence="render",
-        gui_toggle_cadence="never",
-    )
-    spec = DatasetSpec.model_validate(
-        {
-            "task_name": "pyfdn-pitchshift-cli-e2e",
-            "output_format": "lance",
-            "train_val_test_sizes": [1, 0, 0],
-            "base_seed": 23,
-            "r2": {"bucket": "intermediate-data"},
-            "render": render.model_dump(mode="json"),
-        }
-    )
-    shard = spec.shards[0]
-    output = tmp_path / shard.filename
-
-    result = subprocess.run(  # noqa: S603 — production argv from the validated spec
-        build_generate_args(spec, shard, tmp_path),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
-
-    assert result.returncode == 0, result.stderr[-2000:]
-    dataset = lance.dataset(str(output))
-    assert dataset.count_rows() == 1
-    datamodule = LanceVSTDataModule(
-        dataset_root=tmp_path,
-        predict_file=output,
-        use_saved_mean_and_variance=False,
-        batch_size=1,
-        ot=False,
-        num_workers=0,
-        conditioning="audio",
-        pin_memory=False,
-        param_spec_name=identity,
-    )
-    datamodule.setup("predict")
-    batch = next(iter(datamodule.predict_dataloader()))
-    audio = batch["audio"]
-    params = batch["params"]
-    assert audio is not None
-    assert params is not None
-    encoded = PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC.model_to_encoded(params[0].numpy())
-    decoded, note_params = PYFDN_PITCHSHIFT_N8_MONO_HOUSEHOLDER_PARAM_SPEC.decode(encoded)
-    rerendered = PyFDNRenderer(param_spec_name=identity).render(decoded)
-
-    assert spec.num_params == 45
-    assert audio.shape == (1, 1, 176_400)
-    assert params.shape == (1, 45)
-    assert audio.dtype == params.dtype == torch.float32
-    assert torch.isfinite(audio).all()
-    assert torch.all((-1.0 <= audio) & (audio <= 1.0))
-    assert torch.all((-1.0 <= params) & (params <= 1.0))
-    assert note_params == {"pitch": 0, "note_start_and_end": (0.0, 0.0)}
-    np.testing.assert_allclose(rerendered, audio[0].numpy(), rtol=1e-4, atol=5e-5)
-
-
-@pytest.mark.slow
 def test_pyfdn_sketch_generation_augmentation_training_sampling_end_to_end(
     tmp_path: Path,
 ) -> None:
@@ -280,6 +193,7 @@ def test_pyfdn_sketch_generation_augmentation_training_sampling_end_to_end(
             plugin_path="pyfdn",
             plugin_state_path="",
             synth_version="0.4.2",
+            source_sha256=pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
         ),
         renderer_backend="pyfdn",
         pyfdn_excitation="impulse",

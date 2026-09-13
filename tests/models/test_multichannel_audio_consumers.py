@@ -8,7 +8,7 @@ import torch
 from pyFDN import FDNBuild
 from torch import nn
 
-from synth_setter.data.basic_fdn import BasicFDN
+from synth_setter.data.flamo_fdn import FlamoFDN
 from synth_setter.models.components.audio_distance import MultichannelAudioDistance
 from synth_setter.models.components.differentiable_renderer import FlamoFDNDifferentiableRenderer
 from synth_setter.models.components.vector_field import VectorField
@@ -139,7 +139,7 @@ def test_finetune_real_stereo_renderer_preserves_observation_and_control(
         fs=float(_RATE),
     )
     renderer = FlamoFDNDifferentiableRenderer(
-        fdn=BasicFDN(build),
+        fdn=FlamoFDN(build),
         decoder=decoder,
         parameter_width=4,
         signal_length=_SAMPLES,

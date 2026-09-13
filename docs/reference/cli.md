@@ -18,7 +18,7 @@ URI; embedding augmentation takes one split `.lance` URI. The root layout comes 
 [`r2` config](../../src/synth_setter/configs/r2/default.yaml) and the selected
 [dataset experiment](../../src/synth_setter/configs/experiment/generate_dataset/).
 
-## Export a BasicFDN build to Faust
+## Export a FlamoFDN build to Faust
 
 Convert a pyFDN v2 build JSON into a fixed-value Faust program:
 
@@ -29,7 +29,7 @@ synth-setter-export-fdn-faust "$FDN_BUILD_JSON" "$FAUST_DSP"
 ```
 
 The command preserves the build's sample rate and MIMO topology while converting
-`BasicFDN` through FLAMO and ADAC. It exposes no runtime controls and compiles the generated
+`FlamoFDN` through FLAMO and ADAC. It exposes no runtime controls and compiles the generated
 source directly with DawDreamer before atomically publishing the destination. The output path
 must not already exist. This standalone artifact export does not register the DSP as a synth or
 route it through the registry-backed Faust renderer.
