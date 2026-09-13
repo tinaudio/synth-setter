@@ -53,6 +53,18 @@ def test_compile_artifact_rejects_non_faust_identity_before_filesystem_write(
 
 
 @pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
+def test_compile_fdn_effect_records_stereo_input_contract(tmp_path: Path) -> None:
+    manifest = compile_faustwasm_artifact(
+        SYNTHS[SynthName("faust_fdn_effect")],
+        tmp_path,
+        backend_version=_configured_backend_version(),
+    )
+
+    assert manifest.inputs == 2
+    assert manifest.outputs == 2
+
+
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize(
     ("field", "replacement"),
     [
@@ -61,6 +73,7 @@ def test_compile_artifact_rejects_non_faust_identity_before_filesystem_write(
         ("sourceSha256", "0" * 64),
         ("mode", "poly"),
         ("voices", 1),
+        ("inputs", 1),
         ("outputs", 2),
         ("parameters", []),
     ],

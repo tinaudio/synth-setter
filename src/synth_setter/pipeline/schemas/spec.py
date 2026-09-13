@@ -407,7 +407,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     )
     input_audio_source: InputAudioSource | None = Field(
         default=None,
-        description="Pinned dataset split supplying per-sample pyFDN input audio.",
+        description="Pinned dataset split supplying per-sample effect input audio.",
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
     channels: int = Field(description="Audio channel count.")
@@ -789,7 +789,12 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         )
         if self.renderer_backend != "pyfdn":
             if self.input_audio_source is not None:
-                raise ValueError("input_audio_source requires renderer_backend='pyfdn'")
+                if self.renderer_backend != "faustwasm":
+                    raise ValueError(
+                        "input_audio_source requires renderer_backend='pyfdn' or 'faustwasm'"
+                    )
+                if self.render_contract_version == 1:
+                    raise ValueError("input_audio_source rejects render_contract_version=1")
             if pyfdn_identity:
                 raise ValueError("all pyFDN identities require renderer_backend='pyfdn'")
             if self.pyfdn_excitation is not None:

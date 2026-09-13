@@ -38,11 +38,16 @@ class FaustDsp:
     .. attribute :: outputs
 
        Native output channel count.
+
+    .. attribute :: inputs
+
+       Native input channel count.
     """
 
     source: str
     num_voices: int
     outputs: int
+    inputs: int = 0
 
 
 _BRIGHT_ORGAN_SOURCE = r"""import("stdfaust.lib");
@@ -175,6 +180,21 @@ orgue = os.osc(f)       *p0
 
 process = orgue*g*t <: r;
 """
+
+_FDN_EFFECT_SOURCE = r'''declare name "fdnEffect";
+
+import("stdfaust.lib");
+
+decay = hslider("decay", 0.7, 0.0, 0.95, 0.01);
+damping = hslider("damping", 6000, 500, 18000, 1);
+dryWet = hslider("dryWet", 0.5, 0.0, 1.0, 0.01);
+
+comb(delay) = + ~ (@(delay) : fi.lowpass(1, damping) : *(decay));
+fdn = _ <: comb(149), comb(211), comb(263), comb(293) :> /(4);
+effect = _ <: *(1-dryWet), (fdn : *(dryWet)) :> _;
+
+process = effect, effect;
+'''
 
 _FILTER_OSC_SOURCE = r"""declare name "filterOSC";
 declare version "0.0";
@@ -374,6 +394,9 @@ _faust_dsps: dict[ParamSpecName, FaustDsp] = {
     ParamSpecName("faust_bright_organ"): FaustDsp(_BRIGHT_ORGAN_SOURCE, num_voices=1, outputs=2),
     ParamSpecName("faust_bubble"): FaustDsp(_BUBBLE_SOURCE, num_voices=0, outputs=2),
     ParamSpecName("faust_church_organ"): FaustDsp(_CHURCH_ORGAN_SOURCE, num_voices=0, outputs=2),
+    ParamSpecName("faust_fdn_effect"): FaustDsp(
+        _FDN_EFFECT_SOURCE, num_voices=0, inputs=2, outputs=2
+    ),
     ParamSpecName("faust_filter_osc"): FaustDsp(_FILTER_OSC_SOURCE, num_voices=0, outputs=1),
     ParamSpecName("faust_kronecker_fdn"): FaustDsp(
         _KRONECKER_FDN_SOURCE, num_voices=0, outputs=1
