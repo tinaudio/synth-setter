@@ -45,6 +45,40 @@ np.testing.assert_array_equal(audio.T,np.asarray(record['audio'],dtype=np.float3
   return JSON.parse(await readFile(destination, "utf8"));
 }
 
+for (const [id, maximum] of [["contentCfg", 200], ["sketchCfg", 200], ["steps", 20000]]) {
+  test(`${id} accepts the expanded maximum and rejects its successor`, { timeout: 300000 }, async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      await prepare(page);
+      const input = page.locator(`#${id}`);
+      await input.fill(String(maximum));
+      assert.equal(await input.evaluate((node) => node.checkValidity()), true);
+      await input.fill(String(maximum + 1));
+      assert.equal(await input.evaluate((node) => node.validity.rangeOverflow), true);
+    } finally {
+      await browser.close();
+    }
+  });
+}
+
+for (const [steps, expected] of [[20000, /Sampling \d+\/20000/], [20001, /Error: invalid sampling contract/]]) {
+  test(`worker enforces the expanded sampling boundary at ${steps}`, { timeout: 300000 }, async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      await prepare(page);
+      await page.locator("#steps").evaluate((node, maximum) => { node.max = String(maximum); }, steps);
+      await page.locator("#steps").fill(String(steps));
+      await page.getByRole("button", { name: "Run evaluation" }).click();
+      await page.waitForFunction(() => window.surgeEval?.state === "error" || /Sampling \d+\/20000/.test(document.getElementById("status").textContent), null, { timeout: 240000 });
+      assert.match(await page.locator("#status").textContent(), expected);
+    } finally {
+      await browser.close();
+    }
+  });
+}
+
 test("neural checkbox switches real execution while preserving features and three audio views", { timeout: 1200000 }, async () => {
   const browser = await chromium.launch({ headless: true, args: JSON.parse(process.env.SURGE_BROWSER_GPU_ARGS ?? "[]") });
   try {

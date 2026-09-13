@@ -111,7 +111,7 @@ async function evaluate(input) {
   if (
     !Number.isInteger(input.steps) ||
     input.steps < 1 ||
-    input.steps > 2000 ||
+    input.steps > 20000 ||
     input.noise.length !== 92 ||
     !input.noise.every(Number.isFinite)
   )

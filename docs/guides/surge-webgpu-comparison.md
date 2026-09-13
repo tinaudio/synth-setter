@@ -33,6 +33,13 @@ extraction on WASM isolates it from this neural-backend comparison. Neither a
 small parameter delta nor similar audio establishes native1.3/WASM1.4 sonic
 parity; oscillator state can also change rendered audio between runs.
 
+The UI accepts content/sketch CFG strengths up to **200** and RK4 runs up to
+**20,000 steps**, without changing checkpoint defaults. High guidance can
+produce unstable results; long runs can take substantially more time. Boundary
+coverage verifies that a real 20,000-step model run starts, then closes the
+browser; it does not claim completion of that full neural run. A separate
+analytic-field test completes all 20,000 RK4 steps.
+
 ## Audio and spectrograms
 
 Results include players, WAV downloads and spectrograms for **Target**, **Sketch**
