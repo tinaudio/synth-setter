@@ -129,7 +129,6 @@ jobs:
           CI: "true"
           GH_TOKEN: ${{ github.token }}
           PI_CODING_AGENT_DIR: ${{ runner.temp }}/pi-agent
-          PI_REVIEW_FOLLOW_UP_OWNERSHIP_WAIT_SECONDS: "900"
           PI_REVIEW_SKILLS_ROOT: ${{ github.workspace }}/.review-skills/codex/synth-setter-skills
           PR_NUMBER: >-
             ${{ github.event.pull_request.number || github.event.issue.number }}

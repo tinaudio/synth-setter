@@ -7,7 +7,6 @@ import json
 import os
 import signal
 import sys
-import threading
 import time
 from pathlib import Path
 from typing import Any, cast
@@ -529,7 +528,10 @@ def test_supervisor_mixed_ownership_reports_one_terminal_status_per_pass(tmp_pat
     )
     manifest.write_text(json.dumps(payload))
 
-    completed = _run_supervisor(manifest, _environment(tmp_path, mode="missing"))
+    completed = _run_supervisor(
+        manifest,
+        _environment(tmp_path, mode="missing", foreground_stopped=False),
+    )
 
     assert completed == 1
     attempts = [(row.skill, row.status) for row in _read_result(manifest).attempts]
@@ -537,47 +539,6 @@ def test_supervisor_mixed_ownership_reports_one_terminal_status_per_pass(tmp_pat
         ("correctness-review", "adopted-foreground-result"),
         ("code-health", "failed"),
     ]
-
-
-def test_supervisor_waits_for_delayed_foreground_report_without_duplicate_launch(
-    tmp_path: Path,
-) -> None:
-    """Adopt a report that finishes during the bounded ownership grace period.
-
-    :param tmp_path: Temporary review root and delayed foreground output.
-    """
-    launch_marker = tmp_path / "pi-launched"
-    pi = _fake_pi(tmp_path)
-    pi.write_text(
-        pi.read_text().replace("runtime =", f"Path({str(launch_marker)!r}).touch()\nruntime =")
-    )
-    foreground_output = tmp_path / "delayed.jsonl"
-    manifest = _manifest(tmp_path, output_path=foreground_output)
-    report = {
-        "skill": "correctness-review",
-        "target": "PR #2174",
-        "findings": [],
-        "what_looks_good": ["The delayed foreground report validates."],
-    }
-
-    def write_report() -> None:
-        time.sleep(0.5)
-        event = {"message": {"role": "assistant", "content": json.dumps(report)}}
-        foreground_output.write_text(json.dumps(event) + "\n")
-
-    writer = threading.Thread(target=write_report)
-    writer.start()
-    environment = _environment(tmp_path, mode="valid", foreground_stopped=False)
-    environment["PI_REVIEW_FOLLOW_UP_OWNERSHIP_WAIT_SECONDS"] = "1"
-    try:
-        completed = _run_supervisor(manifest, environment)
-    finally:
-        writer.join()
-
-    assert completed == 0
-    assert not launch_marker.exists()
-    statuses = [attempt.status for attempt in _read_result(manifest).attempts]
-    assert statuses == ["adopted-foreground-result"]
 
 
 def test_supervisor_unstoppable_foreground_owner_fails_closed(tmp_path: Path) -> None:
@@ -604,8 +565,8 @@ def test_supervisor_unstoppable_foreground_owner_fails_closed(tmp_path: Path) ->
     assert "ownership" in {diagnostic.category for diagnostic in result.diagnostics}
 
 
-def test_supervisor_host_exit_does_not_authorize_duplicate_launch(tmp_path: Path) -> None:
-    """Fail closed because foreground host exit does not stop its workers.
+def test_supervisor_stopped_foreground_relaunches_unfinished_pass(tmp_path: Path) -> None:
+    """Relaunch an unfinished pass after the foreground host proves shutdown.
 
     :param tmp_path: Temporary review root and fake Pi executable.
     """
@@ -618,11 +579,32 @@ def test_supervisor_host_exit_does_not_authorize_duplicate_launch(tmp_path: Path
 
     completed = _run_supervisor(manifest, _environment(tmp_path, mode="valid"))
 
-    assert completed == 1
-    assert not launch_marker.exists()
+    assert completed == 0
+    assert launch_marker.exists()
     result = _read_result(manifest)
-    assert [attempt.status for attempt in result.attempts] == ["failed"]
-    assert "ownership" in {diagnostic.category for diagnostic in result.diagnostics}
+    assert [attempt.status for attempt in result.attempts] == ["success"]
+    assert not result.diagnostics
+
+
+def test_supervisor_failed_relaunch_retains_foreground_ownership_audit(
+    tmp_path: Path,
+) -> None:
+    """Retain the transferred foreground handle when its replacement fails.
+
+    :param tmp_path: Temporary review root and failing fake Pi executable.
+    """
+    _fake_pi(tmp_path)
+    foreground_output = tmp_path / "unfinished.jsonl"
+    manifest = _manifest(tmp_path, output_path=foreground_output)
+
+    completed = _run_supervisor(manifest, _environment(tmp_path, mode="nonzero"))
+
+    assert completed == 1
+    result = _read_result(manifest)
+    assert result.attempts[0].status == "failed"
+    assert result.attempts[0].agent_id == "agent-foreground"
+    assert result.attempts[0].output_path == str(foreground_output)
+    assert result.attempts[0].detail == "Pi follow-up child exited with code 7"
 
 
 def test_follow_up_result_failed_status_requires_diagnostic() -> None:

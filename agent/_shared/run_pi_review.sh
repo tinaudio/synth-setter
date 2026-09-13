@@ -163,9 +163,11 @@ return only the specified foreground deliverable."
     echo "Pi review host failed; inspect live transcript: ${transcript}" >&2
     return 1
   fi
+  # Pinned Tintin aborts its in-process workers on session_shutdown before Pi exits.
   if [[ -s "${PI_REVIEW_FOLLOW_UP_MANIFEST}" ]]; then
     if [[ "${CI:-}" == "true" ]]; then
-      if ! "${review_python}" agent/_shared/run_pi_review_follow_up.py \
+      if ! SYNTH_SETTER_PI_REVIEW_FOREGROUND_STOPPED=1 \
+        "${review_python}" agent/_shared/run_pi_review_follow_up.py \
         --supervise "${PI_REVIEW_FOLLOW_UP_MANIFEST}"; then
         echo \
           "Synchronous Pi review follow-up failed: ${PI_REVIEW_FOLLOW_UP_MANIFEST}" \
@@ -178,7 +180,8 @@ return only the specified foreground deliverable."
     else
       local follow_up_pid
       if follow_up_pid="$(
-        "${review_python}" agent/_shared/run_pi_review_follow_up.py \
+        SYNTH_SETTER_PI_REVIEW_FOREGROUND_STOPPED=1 \
+          "${review_python}" agent/_shared/run_pi_review_follow_up.py \
           "${PI_REVIEW_FOLLOW_UP_MANIFEST}"
       )"; then
         echo \
