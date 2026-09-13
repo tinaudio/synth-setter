@@ -138,25 +138,14 @@ def _preserved_output_paths(
 
 
 def _remove_output_directory(path: Path) -> None:
-    """Remove output contents without replacing a directory symlink.
+    """Remove an invocation-owned output directory.
 
     :param path: Semantic output directory to clear.
-    :raises NotADirectoryError: If a semantic output symlink targets a non-directory.
+    :raises ValueError: If the semantic root is a symlink to potentially shared storage.
     """
     if path.is_symlink():
-        try:
-            target = path.resolve(strict=True)
-        except FileNotFoundError:
-            path.unlink()
-            return
-        if not target.is_dir():
-            raise NotADirectoryError(path)
-        for child in target.iterdir():
-            if child.is_dir() and not child.is_symlink():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
-    elif path.exists():
+        raise ValueError(f"semantic output root must not be a symlink: {path}")
+    if path.exists():
         shutil.rmtree(path)
 
 
@@ -172,7 +161,13 @@ def _start_output_publication_attempt(
     :param reset_directories: Semantic roots produced rather than consumed by this invocation.
     :param preserve_paths: Inputs inside reset roots that must remain at their configured paths.
     :returns: Attempt identity used for the immutable remote payload.
+    :raises ValueError: If a semantic output root is a symlink.
     """
+    for directory_name in reset_directories:
+        semantic_root = output_dir / directory_name
+        if semantic_root.is_symlink():
+            raise ValueError(f"semantic output root must not be a symlink: {semantic_root}")
+
     preserved_paths: list[Path] = []
     excluded_paths: list[Path] = []
     for path in preserve_paths:
@@ -747,11 +742,17 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     output_dir = Path(cfg.paths.output_dir)
     publication_attempt = None
     if trainer.is_global_zero:
-        preserve_paths = (Path(checkpoint_path),) if checkpoint_path is not None else ()
+        preserve_paths = []
+        if checkpoint_path is not None:
+            preserve_paths.append(Path(checkpoint_path))
+        if isinstance(configured_checkpoint, str) and not configured_checkpoint.startswith(
+            ("r2://", "s3://")
+        ):
+            preserve_paths.append(Path(configured_checkpoint))
         publication_attempt = _start_output_publication_attempt(
             output_dir,
             reset_directories=reset_directories,
-            preserve_paths=preserve_paths,
+            preserve_paths=tuple(preserve_paths),
         )
     trainer.strategy.barrier("eval-attempt-output-reset")
 

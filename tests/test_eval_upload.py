@@ -219,80 +219,27 @@ def test_start_output_attempt_preserves_external_symlink_to_checkpoint(
     assert checkpoint.read_bytes() == b"checkpoint"
 
 
-def test_start_output_attempt_preserves_checkpoint_in_symlinked_semantic_root(
+def test_start_output_attempt_rejects_symlinked_semantic_root_without_mutation(
     tmp_path: Path,
 ) -> None:
-    """A symlinked predictions root is cleared without replacing the alias.
+    """A semantic-root symlink fails before external output storage is cleared.
 
-    :param tmp_path: Holds the output symlink and its external target.
+    :param tmp_path: Holds the output symlink and its shared external target.
     """
     output_dir = tmp_path / "output"
     output_dir.mkdir()
-    external_predictions = tmp_path / "external-predictions"
+    external_predictions = tmp_path / "shared-predictions"
     external_predictions.mkdir()
-    checkpoint = external_predictions / "model.ckpt"
-    checkpoint.write_bytes(b"checkpoint")
-    stale_prediction = external_predictions / "stale.pt"
-    stale_prediction.write_bytes(b"stale")
+    existing_prediction = external_predictions / "other-run.pt"
+    existing_prediction.write_bytes(b"existing")
     predictions_alias = output_dir / "predictions"
     predictions_alias.symlink_to(external_predictions, target_is_directory=True)
 
-    _start_output_publication_attempt(
-        output_dir, preserve_paths=(predictions_alias / checkpoint.name,)
-    )
+    with pytest.raises(ValueError, match="semantic output root must not be a symlink"):
+        _start_output_publication_attempt(output_dir)
 
     assert predictions_alias.is_symlink()
-    assert checkpoint.read_bytes() == b"checkpoint"
-    assert not stale_prediction.exists()
-
-
-def test_start_output_attempt_preserves_external_alias_into_symlinked_root(
-    tmp_path: Path,
-) -> None:
-    """Combined checkpoint and output aliases retain the checkpoint across reset.
-
-    :param tmp_path: Holds both aliases and the external checkpoint target.
-    """
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
-    external_predictions = tmp_path / "external-predictions"
-    external_predictions.mkdir()
-    checkpoint = external_predictions / "model.ckpt"
-    checkpoint.write_bytes(b"checkpoint")
-    predictions_alias = output_dir / "predictions"
-    predictions_alias.symlink_to(external_predictions, target_is_directory=True)
-    checkpoint_alias = tmp_path / "checkpoint.ckpt"
-    checkpoint_alias.symlink_to(predictions_alias / checkpoint.name)
-
-    _start_output_publication_attempt(output_dir, preserve_paths=(checkpoint_alias,))
-
-    assert predictions_alias.is_symlink()
-    assert checkpoint_alias.read_bytes() == b"checkpoint"
-    assert checkpoint.read_bytes() == b"checkpoint"
-
-
-def test_start_output_attempt_excludes_all_aliases_to_preserved_checkpoint(
-    tmp_path: Path,
-) -> None:
-    """Every published semantic-root alias to an input is excluded.
-
-    :param tmp_path: Holds aliased output roots and their checkpoint target.
-    """
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
-    external_outputs = tmp_path / "external-outputs"
-    external_outputs.mkdir()
-    checkpoint = external_outputs / "model.ckpt"
-    checkpoint.write_bytes(b"checkpoint")
-    (output_dir / "audio").symlink_to(external_outputs, target_is_directory=True)
-    (output_dir / "predictions").symlink_to(external_outputs, target_is_directory=True)
-    checkpoint_alias = tmp_path / "checkpoint.ckpt"
-    checkpoint_alias.symlink_to(checkpoint)
-
-    attempt = _start_output_publication_attempt(output_dir, preserve_paths=(checkpoint_alias,))
-
-    assert checkpoint_alias.read_bytes() == b"checkpoint"
-    assert attempt.excluded_paths == (Path("audio/model.ckpt"), Path("predictions/model.ckpt"))
+    assert existing_prediction.read_bytes() == b"existing"
 
 
 def test_start_output_attempt_preserves_checkpoint_below_output_symlink(
