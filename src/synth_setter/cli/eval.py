@@ -83,12 +83,17 @@ class _OutputPublicationAttempt:
 
         Collision-resistant immutable payload path segment.
 
+    .. attribute :: published_directories
+
+        Semantic roots produced by this invocation and eligible for publication.
+
     .. attribute :: excluded_paths
 
         Output-relative inputs retained locally but omitted from publication.
     """
 
     attempt_id: str
+    published_directories: tuple[str, ...] = _PUBLISHED_OUTPUT_DIRECTORIES
     excluded_paths: tuple[Path, ...] = ()
 
 
@@ -196,21 +201,27 @@ def _start_output_publication_attempt(
                 restored_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(temporary_path, restored_path)
     (output_dir / "predictions").mkdir(parents=True, exist_ok=True)
-    return _OutputPublicationAttempt(uuid4().hex, tuple(excluded_paths))
+    return _OutputPublicationAttempt(
+        attempt_id=uuid4().hex,
+        published_directories=reset_directories,
+        excluded_paths=tuple(excluded_paths),
+    )
 
 
 def _stage_attempt_outputs(
     output_dir: Path,
     staging_dir: Path,
+    published_directories: tuple[str, ...],
     excluded_paths: tuple[Path, ...],
 ) -> None:
     """Copy this invocation's semantic output roots into an isolated tree.
 
     :param output_dir: Hydra directory containing attempt-owned generated roots.
     :param staging_dir: Empty local payload directory populated by this function.
+    :param published_directories: Attempt-owned semantic roots eligible for publication.
     :param excluded_paths: Output-relative inputs omitted from the publication payload.
     """
-    for directory_name in _PUBLISHED_OUTPUT_DIRECTORIES:
+    for directory_name in published_directories:
         source_dir = output_dir / directory_name
         if source_dir.is_dir():
             shutil.copytree(source_dir, staging_dir / directory_name)
@@ -624,10 +635,11 @@ def _output_directories_to_reset(cfg: DictConfig) -> tuple[str, ...]:
 
     :param cfg: Evaluation config whose predict postprocessing may consume existing audio.
     :returns: Output directory names safe to clear before evaluation.
+    :raises ValueError: If ``cfg.mode`` is not a supported evaluation mode.
     """
     mode = cfg.get("mode", "test")
     if mode not in ("test", "val", "validate", "predict"):
-        return ()
+        raise ValueError(f"unsupported evaluation mode: {mode!r}")
     consumes_existing_audio = (
         mode == "predict" and cfg.evaluation.compute_metrics and not cfg.evaluation.render_vst
     )
@@ -681,8 +693,9 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         ``trainer.callback_metrics`` (``torch.Tensor`` values) with audio
         metrics from :func:`_run_predict_postprocessing` (Python ``float``),
         so callers iterating values must handle both.
-    :raises ValueError: Seeded evaluation lacks a supported explicit integer seed.
+    :raises ValueError: Evaluation mode or seeded evaluation seed is unsupported.
     """
+    reset_directories = _output_directories_to_reset(cfg)
     seeded_evaluation = OmegaConf.select(cfg, "model.seeded_evaluation", default=False)
     if seeded_evaluation:
         evaluation_seed = cfg.get("seed")
@@ -732,7 +745,6 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             cfg.ckpt_sha256 = _checkpoint_sha256(Path(checkpoint_path))
 
     output_dir = Path(cfg.paths.output_dir)
-    reset_directories = _output_directories_to_reset(cfg)
     publication_attempt = None
     if trainer.is_global_zero:
         preserve_paths = (Path(checkpoint_path),) if checkpoint_path is not None else ()
@@ -981,7 +993,12 @@ def _maybe_upload_output_dir(
     with tempfile.TemporaryDirectory(prefix="synth-setter-eval-publication-") as temp_dir:
         staging_dir = Path(temp_dir) / "payload"
         staging_dir.mkdir()
-        _stage_attempt_outputs(output_dir, staging_dir, attempt.excluded_paths)
+        _stage_attempt_outputs(
+            output_dir,
+            staging_dir,
+            attempt.published_directories,
+            attempt.excluded_paths,
+        )
         r2_io.upload_dir_immutable(staging_dir, payload_uri)
 
         pointer_path = Path(temp_dir) / _PUBLICATION_POINTER_FILENAME

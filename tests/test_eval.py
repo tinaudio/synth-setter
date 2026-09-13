@@ -2462,16 +2462,11 @@ def test_evaluate_unregistered_param_spec_name_raises_resolution_error(
 
 
 @pytest.mark.fake_vst
-def test_evaluate_unknown_mode_returns_only_callback_metrics(
+def test_evaluate_unknown_mode_raises_without_mutating_outputs(
     tmp_path: Path,
     fake_surge_smoke_datasets: Path,
 ) -> None:
-    """An unrecognized ``mode`` runs no trainer stage and returns the empty callback metrics.
-
-    ``evaluate`` has no ``else``/raise on its mode branch: an unknown spelling is a
-    silent no-op that skips test/validate/predict, so ``trainer.callback_metrics``
-    is empty and no ``audio/*`` postprocessing runs. Pins that contract so a typo'd
-    mode fails visibly (empty metrics) rather than masquerading as a passing run.
+    """An unrecognized ``mode`` fails before reused outputs can be reset or published.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
     :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
@@ -2489,11 +2484,11 @@ def test_evaluate_unknown_mode_returns_only_callback_metrics(
 
     HydraConfig().set_config(cfg)
     try:
-        metric_dict, _ = evaluate(cfg)
+        with pytest.raises(ValueError, match="unsupported evaluation mode"):
+            evaluate(cfg)
     finally:
         GlobalHydra.instance().clear()
 
-    assert metric_dict == {}
     assert audio_path.read_text() == "existing"
     assert metrics_path.read_text() == "existing"
     assert predictions_path.read_text() == "existing"

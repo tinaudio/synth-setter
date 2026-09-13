@@ -352,6 +352,37 @@ def test_maybe_upload_output_dir_preserved_checkpoint_is_not_published(
     assert not (payload_root / "predictions" / "model.ckpt").exists()
 
 
+def test_maybe_upload_output_dir_omits_consumed_audio_root(
+    fake_r2_remote: Path, storage_credentials: None, tmp_path: Path
+) -> None:
+    """Compute-only publication omits its pre-rendered audio input tree.
+
+    :param fake_r2_remote: Local-backed remote receiving the payload.
+    :param storage_credentials: Dummy secrets so the real credential check passes.
+    :param tmp_path: Holds the reused output workspace.
+    """
+    output_dir = tmp_path / "run"
+    (output_dir / "audio").mkdir(parents=True)
+    (output_dir / "audio" / "input.wav").write_bytes(b"audio")
+    attempt = _start_output_publication_attempt(
+        output_dir,
+        reset_directories=("metrics", "predictions"),
+    )
+    (output_dir / "metrics").mkdir()
+    (output_dir / "metrics" / "metrics.json").write_text('{"value": 1}')
+
+    payload_uri = _maybe_upload_output_dir(
+        _upload_cfg(output_dir, "r2://bucket/evals/run-1"),
+        is_global_zero=True,
+        attempt=attempt,
+    )
+
+    assert payload_uri is not None
+    payload_root = fake_r2_remote / payload_uri.removeprefix("r2://")
+    assert (payload_root / "metrics" / "metrics.json").is_file()
+    assert not (payload_root / "audio").exists()
+
+
 def test_maybe_upload_output_dir_attempt_payload_is_immutable(
     fake_r2_remote: Path, storage_credentials: None, tmp_path: Path
 ) -> None:
@@ -377,30 +408,40 @@ def test_maybe_upload_output_dir_attempt_payload_is_immutable(
     assert json.loads((payload_root / "metrics" / "metrics.json").read_text()) == {"value": 1}
 
 
-def test_maybe_upload_output_dir_payload_failure_does_not_commit_pointer(
+def test_maybe_upload_output_dir_payload_failure_preserves_previous_pointer(
     fake_r2_remote: Path, storage_credentials: None, tmp_path: Path
 ) -> None:
-    """A failed real-rclone payload upload leaves no publication pointer.
+    """A failed retry retains the previous pointer and immutable payload.
 
-    :param fake_r2_remote: Local-backed remote made invalid at the payload prefix.
+    :param fake_r2_remote: Local-backed remote holding the successful payload.
     :param storage_credentials: Dummy secrets so the real credential check passes.
-    :param tmp_path: Holds the output workspace.
+    :param tmp_path: Holds the reused output workspace.
     """
     output_dir = tmp_path / "run"
-    attempt = _start_output_publication_attempt(output_dir)
+    cfg = _upload_cfg(output_dir, "r2://bucket/evals/run-1")
+    successful_attempt = _start_output_publication_attempt(output_dir)
     _write_output_tree(output_dir)
+    successful_payload_uri = _maybe_upload_output_dir(
+        cfg,
+        is_global_zero=True,
+        attempt=successful_attempt,
+    )
     publication_root = fake_r2_remote / "bucket" / "evals" / "run-1"
-    publication_root.mkdir(parents=True)
-    (publication_root / "attempts").write_text("blocks attempt directories")
+    pointer_path = publication_root / "latest.json"
+    previous_pointer = pointer_path.read_text()
+
+    failed_attempt = _start_output_publication_attempt(output_dir)
+    _write_output_tree(output_dir)
+    failed_payload = publication_root / "attempts" / failed_attempt.attempt_id
+    failed_payload.write_text("blocks retry payload directory")
 
     with pytest.raises(subprocess.CalledProcessError):
-        _maybe_upload_output_dir(
-            _upload_cfg(output_dir, "r2://bucket/evals/run-1"),
-            is_global_zero=True,
-            attempt=attempt,
-        )
+        _maybe_upload_output_dir(cfg, is_global_zero=True, attempt=failed_attempt)
 
-    assert not (publication_root / "latest.json").exists()
+    assert pointer_path.read_text() == previous_pointer
+    assert successful_payload_uri is not None
+    successful_payload = fake_r2_remote / successful_payload_uri.removeprefix("r2://")
+    assert (successful_payload / "metrics" / "metrics.json").is_file()
 
 
 def test_maybe_upload_output_dir_rejects_non_r2_uri(tmp_path: Path) -> None:
