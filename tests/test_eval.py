@@ -21,7 +21,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import Any, Literal, NamedTuple
 from unittest.mock import MagicMock, patch
 
 import lance
@@ -1700,6 +1700,57 @@ def test_evaluate_unpinned_remote_checkpoint_records_resolved_digest(
     assert Path(objects["trainer"].ckpt_path).read_bytes() == local_checkpoint.read_bytes()
 
 
+@pytest.mark.parametrize("pinned", [False, True], ids=["unpinned", "pinned"])
+def test_evaluate_local_checkpoint_inside_predictions_survives_reset(
+    cfg_train: DictConfig,
+    cfg_eval: DictConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    pinned: bool,
+) -> None:
+    """Evaluate a local checkpoint stored inside the reset-owned predictions root.
+
+    :param cfg_train: Tiny TorchSynth CPU training configuration.
+    :param cfg_eval: Matching TorchSynth CPU evaluation configuration.
+    :param monkeypatch: Isolates the content-addressed checkpoint cache.
+    :param pinned: Whether localization copies the configured input into the digest cache.
+    """
+    for cfg in (cfg_train, cfg_eval):
+        with open_dict(cfg):
+            cfg.datamodule.signal_length = 512
+            cfg.model.net.channels = 2
+            cfg.model.net.encoder_blocks = 1
+            cfg.model.net.hidden_dim = 8
+            cfg.model.net.norm = "ln"
+            cfg.model.net.trunk_blocks = 1
+    with open_dict(cfg_train):
+        cfg_train.test = False
+        cfg_train.trainer.limit_train_batches = 1
+        cfg_train.trainer.limit_val_batches = 1
+    with open_dict(cfg_eval):
+        cfg_eval.trainer.limit_test_batches = 1
+
+    HydraConfig().set_config(cfg_train)
+    train(cfg_train)
+
+    source_checkpoint = Path(cfg_train.paths.output_dir) / "checkpoints" / "last.ckpt"
+    configured_checkpoint = Path(cfg_eval.paths.output_dir) / "predictions" / "model.ckpt"
+    configured_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source_checkpoint, configured_checkpoint)
+    checkpoint_digest = hashlib.sha256(configured_checkpoint.read_bytes()).hexdigest()
+    with open_dict(cfg_eval):
+        cfg_eval.ckpt_path = str(configured_checkpoint)
+        cfg_eval.ckpt_sha256 = checkpoint_digest if pinned else None
+    monkeypatch.setenv("XDG_CACHE_HOME", str(Path(cfg_eval.paths.output_dir) / "cache"))
+
+    HydraConfig().set_config(cfg_eval)
+    metrics, objects = evaluate(cfg_eval)
+
+    assert math.isfinite(metrics["test/param_mse"].item())
+    assert configured_checkpoint.read_bytes() == source_checkpoint.read_bytes()
+    assert Path(objects["trainer"].ckpt_path).read_bytes() == source_checkpoint.read_bytes()
+
+
 def _prepare_flowmol3_eval_checkpoint(tmp_path: Path) -> DictConfig:
     """Compose a tiny eval config and write its matching FlowMol3 checkpoint.
 
@@ -2106,6 +2157,7 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
     request: pytest.FixtureRequest,
     dataset_variant: _FakeOracleDataset,
     monkeypatch: pytest.MonkeyPatch,
+    fake_r2_remote: Path,
 ) -> None:
     """``mode=predict`` runs the oracle's predict + postprocessing and merges audio metrics.
 
@@ -2122,16 +2174,31 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
     :param dataset_variant: Dataset fixture and datamodule override under test.
     :param monkeypatch: Stubs the render/metrics subprocesses and the headless
         wrapper extraction so no real VST host or Python subprocess launches.
+    :param fake_r2_remote: Local-backed remote receiving attempt-owned outputs.
     """
     cfg = _compose_parametrized_fake_oracle_eval_cfg(
         tmp_path, request, dataset_variant, mode="predict"
     )
+    with open_dict(cfg):
+        cfg.evaluation.render_vst = False
+        cfg.evaluation.compute_metrics = True
+        cfg.evaluation.upload_output_dir_uri = "r2://bucket/evals/public-dispatch"
+    audio_input = tmp_path / "audio" / "input.wav"
+    audio_input.parent.mkdir(parents=True)
+    audio_input.write_bytes(b"pre-rendered")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "test-access-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "test-secret-key")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
+    monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
     fake_run = fake_postprocessing_subprocess()
+    real_subprocess_run = subprocess.run
 
     def _write_current_and_unsupported_metrics(
         args: list[str],
-        **kwargs: object,
-    ) -> None:
+        **kwargs: Any,
+    ) -> subprocess.CompletedProcess[Any] | None:
+        if args[0] in ("git", "rclone"):
+            return real_subprocess_run(args, **kwargs)
         fake_run(args, **kwargs)
         if any(COMPUTE_AUDIO_METRICS_FRAGMENT in arg for arg in args):
             metrics_dir = Path(args[args.index("-m") + 3])
@@ -2139,6 +2206,7 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
                 ",mean,std\nmss,1.0,0.2\n"
             )
             (metrics_dir / "shuffle_permutation.csv").write_text("dest_idx,src_idx\n0,1\n1,0\n")
+        return None
 
     monkeypatch.setattr(
         "synth_setter.cli.eval.subprocess.run",
@@ -2163,6 +2231,12 @@ def test_evaluate_predict_mode_merges_audio_metrics_into_metric_dict(
             value = metric_dict[f"audio/{key}_{stat}"]
             assert isinstance(value, float) and math.isfinite(value)
     assert not any("shuffle" in key for key in metric_dict)
+    assert audio_input.read_bytes() == b"pre-rendered"
+    publication_root = fake_r2_remote / "bucket" / "evals" / "public-dispatch"
+    pointer = json.loads((publication_root / "latest.json").read_text())
+    payload_root = fake_r2_remote / pointer["payload_uri"].removeprefix("r2://")
+    assert (payload_root / "metrics").is_dir()
+    assert not (payload_root / "audio").exists()
 
 
 @pytest.mark.slow
@@ -2416,29 +2490,36 @@ def test_evaluate_unregistered_param_spec_name_raises_resolution_error(
 
 
 @pytest.mark.fake_vst
-def test_evaluate_unknown_mode_returns_only_callback_metrics(
+def test_evaluate_unknown_mode_raises_without_mutating_outputs(
     tmp_path: Path,
     fake_surge_smoke_datasets: Path,
 ) -> None:
-    """An unrecognized ``mode`` runs no trainer stage and returns the empty callback metrics.
-
-    ``evaluate`` has no ``else``/raise on its mode branch: an unknown spelling is a
-    silent no-op that skips test/validate/predict, so ``trainer.callback_metrics``
-    is empty and no ``audio/*`` postprocessing runs. Pins that contract so a typo'd
-    mode fails visibly (empty metrics) rather than masquerading as a passing run.
+    """An unrecognized ``mode`` fails before reused outputs can be reset or published.
 
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
     :param fake_surge_smoke_datasets: CPU-fast surge_4 dataset (no real VST).
     """
     cfg = _compose_fake_oracle_eval_cfg(tmp_path, fake_surge_smoke_datasets, mode="bogus-mode")
+    audio_path = tmp_path / "audio" / "existing.wav"
+    metrics_path = tmp_path / "metrics" / "existing.json"
+    predictions_path = tmp_path / "predictions" / "existing.pt"
+    audio_path.parent.mkdir(parents=True)
+    metrics_path.parent.mkdir(parents=True)
+    predictions_path.parent.mkdir(parents=True)
+    audio_path.write_text("existing")
+    metrics_path.write_text("existing")
+    predictions_path.write_text("existing")
 
     HydraConfig().set_config(cfg)
     try:
-        metric_dict, _ = evaluate(cfg)
+        with pytest.raises(ValueError, match="unsupported evaluation mode"):
+            evaluate(cfg)
     finally:
         GlobalHydra.instance().clear()
 
-    assert metric_dict == {}
+    assert audio_path.read_text() == "existing"
+    assert metrics_path.read_text() == "existing"
+    assert predictions_path.read_text() == "existing"
 
 
 @pytest.mark.parametrize("synth_group", ["surge_simple", "surge_xt"])

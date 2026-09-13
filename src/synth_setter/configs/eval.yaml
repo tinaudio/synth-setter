@@ -41,7 +41,7 @@ evaluation:
   # so target audio comes from the dataset instead of a re-render.
   no_params: false
   num_workers: 1
-  # Opt-in: an `r2://bucket/prefix` mirror of the whole run dir, copied after eval.
+  # Opt-in suite root: immutable attempt payloads plus a publish-last `latest.json` pointer.
   upload_output_dir_uri: null
 
 # Local path or R2-backed r2:// / s3:// object URI.

@@ -460,17 +460,27 @@ The R2 eval path follows the [storage-provenance-spec](storage-provenance-spec.m
 eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
 ```
 
-After metrics, optionally upload all eval outputs to R2:
+After a successful evaluation, `evaluation.upload_output_dir_uri` can publish the
+files owned by that invocation. The configured URI is a stable suite root, not a
+directory mirror:
 
-```bash
-make upload-eval
-# rclone sync \
-#   logs/eval/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/ \
-#   r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022500Z/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/ \
-#   --checksum
+```text
+<upload_output_dir_uri>/
+├── attempts/<attempt_id>/...  # immutable semantic payload
+└── latest.json                # {schema_version, attempt_id, payload_uri}
 ```
 
-Not automatic — explicit `make` target. Toggle via Hydra config or CLI flag.
+The global-zero rank resets the generated `audio/`, `metrics/`, and
+`predictions/` roots before evaluation, uploads only those roots with rclone
+checksum and immutable checks, then writes `latest.json` last. The `wandb/`
+operational directory is never part of the payload. A
+failed evaluation never enters publication; a failed payload upload may leave an
+unreferenced attempt prefix but cannot replace the pointer.
+
+Consumers that previously appended paths such as `metrics/metrics.json` directly
+to `upload_output_dir_uri` must first read `latest.json` and append the path to
+its `payload_uri`. The W&B `eval-results` artifact already references that
+immutable payload URI directly.
 
 **Browsing eval results in R2:**
 
