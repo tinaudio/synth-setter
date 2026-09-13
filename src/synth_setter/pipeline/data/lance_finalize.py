@@ -536,8 +536,16 @@ def _select_checked_winners(
     policy = spec.embedding_generation
     if policy is None:
         return winners
-    from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, _output_columns
+    from synth_setter.pipeline.data.add_embeddings import (
+        EMBEDDING_REGISTRY,
+        _EMBEDDING_ARTIFACT_METADATA,
+        _output_columns,
+        generation_embedding_identities,
+    )
 
+    expected_identities = generation_embedding_identities(
+        policy, param_spec_name=str(spec.render.param_spec_name)
+    )
     embedding_columns = [
         column
         for name in policy.embeddings
@@ -547,6 +555,13 @@ def _select_checked_winners(
     expected_schema = pa.schema(
         [winners[first_shard_id].schema.field(column) for column in embedding_columns]
     )
+    for name in policy.embeddings:
+        for column in _output_columns(EMBEDDING_REGISTRY[name]):
+            metadata = expected_schema.field(column).metadata or {}
+            if metadata.get(_EMBEDDING_ARTIFACT_METADATA) != expected_identities[name].encode():
+                raise ValueError(
+                    f"embedding field {column!r} does not match configured artifact provenance"
+                )
     for shard_id, winner in winners.items():
         shard_schema = pa.schema(
             [winner.schema.field(column) for column in embedding_columns]

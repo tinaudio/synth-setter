@@ -18,14 +18,16 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     pyfdn_param_spec_sha256,
 )
+from synth_setter.data.vst.shapes import CLAP_FIELD
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.add_embeddings import CLAP_EMBEDDING_DIM
 from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import upload_spec
 from synth_setter.synth_spec import SynthName, SynthSpec
 
-pytestmark = [pytest.mark.integration_r2, pytest.mark.r2, pytest.mark.slow]
+pytestmark = [pytest.mark.gpu, pytest.mark.integration_r2, pytest.mark.r2, pytest.mark.slow]
 
 
 def _run(argv: list[str], *, timeout: int = 900) -> subprocess.CompletedProcess[str]:
@@ -111,6 +113,11 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
             "train_val_test_sizes": [2, 1, 1],
             "base_seed": 3090,
             "mask_degenerate_bins": True,
+            "embedding_generation": {
+                "embeddings": ["clap"],
+                "device": "cuda",
+                "lance_batch_size": 1,
+            },
             "r2": {"bucket": "intermediate-data", "prefix": prefix},
             "render": RenderConfig(
                 synth=SynthSpec(
@@ -262,9 +269,14 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
         assert baseline_branch.count_rows() == 2
         assert refreshed.count_rows() == 3
         assert refreshed_files[: len(baseline_files)] == baseline_files
-        audio = np.asarray(refreshed.to_table(columns=["audio"])["audio"].to_pylist())
+        table = refreshed.to_table(columns=["audio", CLAP_FIELD])
+        audio = np.asarray(table["audio"].to_pylist())
+        embeddings = np.asarray(table[CLAP_FIELD].to_pylist())
         assert np.isfinite(audio).all()
         assert np.any(audio != 0)
+        assert embeddings.shape == (3, CLAP_EMBEDDING_DIM)
+        assert np.isfinite(embeddings).all()
+        assert len({tuple(row) for row in embeddings}) == 3
         for split in ("val", "test"):
             target, options = r2_io.lance_target(spec.r2.split_lance_uri(split))
             pinned = lance.dataset(target, storage_options=options)

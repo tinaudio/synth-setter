@@ -1752,25 +1752,9 @@ def build_index(
     return True
 
 
-@dataclass(frozen=True)
-class _GenerationRuntimeConfig:  # noqa: DOC601, DOC603 — internal config adapter.
-    """Adapt the generation policy to registry loader inputs."""
-
-    embeddings: tuple[str, ...]
-    checkpoints: dict[str, str]
-    device: str
-    lance_batch_size: int
-    param_spec_name: str
-    param_text_normalizer: str
-    num_workers: int = 1
-    sketch_encode_batch: int = SKETCH_ENCODE_MAX_BATCH
-    render: None = None
-    param_shift_seed: int = 0
-
-
 def _generation_runtime_config(
     policy: object, *, param_spec_name: str
-) -> tuple[_GenerationRuntimeConfig, tuple[EmbeddingSpec, ...]]:
+) -> tuple[AddEmbeddingsConfig, tuple[EmbeddingSpec, ...]]:
     """Adapt a validated generation policy to registry operations.
 
     :param policy: Validated generation embedding policy.
@@ -1779,17 +1763,20 @@ def _generation_runtime_config(
     :raises TypeError: Policy is not a validated generation policy.
     """
     from synth_setter.data.vst.param_text import DEFAULT_PARAM_TEXT_NORMALIZER
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
     from synth_setter.pipeline.schemas.spec import GenerationEmbeddingPolicy
 
     if not isinstance(policy, GenerationEmbeddingPolicy):
         raise TypeError("policy must be a GenerationEmbeddingPolicy")
-    config = _GenerationRuntimeConfig(
+    config = AddEmbeddingsConfig(
+        lance_uri="generation://local-shard",
         embeddings=policy.embeddings,
         checkpoints=dict(policy.checkpoints),
         device=policy.device,
         lance_batch_size=policy.lance_batch_size,
         param_spec_name=param_spec_name,
         param_text_normalizer=DEFAULT_PARAM_TEXT_NORMALIZER,
+        build_index=False,
     )
     return config, tuple(EMBEDDING_REGISTRY[name] for name in policy.embeddings)
 
@@ -1804,8 +1791,7 @@ def generation_embedding_identities(
     :returns: Registry names mapped to artifact identities.
     """
     config, specs = _generation_runtime_config(policy, param_spec_name=param_spec_name)
-    typed_config = cast("AddEmbeddingsConfig", config)
-    return {spec.name: _resolve_artifact_identity(spec, typed_config) for spec in specs}
+    return {spec.name: _resolve_artifact_identity(spec, config) for spec in specs}
 
 
 class GenerationEmbeddingRuntime:
@@ -1821,6 +1807,8 @@ class GenerationEmbeddingRuntime:
         import torch
 
         config, specs = _generation_runtime_config(policy, param_spec_name=param_spec_name)
+        if config.device is None:
+            raise RuntimeError("generation embedding policy must select a CUDA device")
         if not torch.cuda.is_available():
             raise RuntimeError(
                 f"generation embeddings require configured CUDA device {config.device!r}, "
@@ -1838,9 +1826,8 @@ class GenerationEmbeddingRuntime:
             sorted({field for spec in self._specs for field in spec.input_fields})
         )
         self._lock = threading.Lock()
-        config = cast("AddEmbeddingsConfig", self._config)
         with torch.random.fork_rng():
-            self._encoders = _load_encoders(self._specs, config)
+            self._encoders = _load_encoders(self._specs, self._config)
         self._identities = generation_embedding_identities(
             policy, param_spec_name=param_spec_name
         )
@@ -1878,7 +1865,7 @@ class GenerationEmbeddingRuntime:
         encoded_schema = _embedding_output_schema(
             encoded.schema,
             self._specs,
-            cast("AddEmbeddingsConfig", self._config),
+            self._config,
             identities=self._identities,
         )
         output_schema = pa.schema(

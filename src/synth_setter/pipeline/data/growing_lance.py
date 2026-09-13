@@ -38,6 +38,7 @@ from synth_setter.pipeline.schemas.spec import GenerationEmbeddingPolicy
 if TYPE_CHECKING:
     from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
 
+_EMBEDDING_FIELD_NAME_KEY = b"synth_setter.embedding.name"
 _GROWING_PENDING_PROPERTY = "synth_setter.growing_pending_identity"
 _LOCAL_SOURCE_PROPERTY = "synth_setter.growing_remote_identity"
 
@@ -366,7 +367,7 @@ def dataset_spec_fingerprint(spec: DatasetSpec) -> str:
     payload = spec.model_dump(mode="json")
     if payload["embedding_generation"] is None:
         del payload["embedding_generation"]
-    serialized = json.dumps(payload, separators=(",", ":"))
+    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return sha256(serialized.encode()).hexdigest()
 
 
@@ -496,6 +497,15 @@ def _sorted_metadata(metadata: dict[bytes, bytes] | None) -> list[tuple[str, str
     return sorted((key.hex(), value.hex()) for key, value in (metadata or {}).items())
 
 
+def _legacy_schema_fingerprint(dataset: lance.LanceDataset) -> str:
+    """Return the byte-serialized fingerprint stored by pre-policy snapshots.
+
+    :param dataset: Pinned Lance dataset version.
+    :returns: SHA-256 digest of the Arrow IPC schema bytes.
+    """
+    return sha256(dataset.schema.serialize().to_pybytes()).hexdigest()
+
+
 def _schema_fingerprint(dataset: lance.LanceDataset) -> str:
     """Digest the exact logical Arrow schema independent of metadata ordering.
 
@@ -503,6 +513,11 @@ def _schema_fingerprint(dataset: lance.LanceDataset) -> str:
     :returns: SHA-256 hexadecimal digest.
     """
     schema = dataset.schema
+    carries_embeddings = any(
+        _EMBEDDING_FIELD_NAME_KEY in (field.metadata or {}) for field in schema
+    )
+    if not carries_embeddings:
+        return _legacy_schema_fingerprint(dataset)
     payload = {
         "fields": [
             {
@@ -516,6 +531,16 @@ def _schema_fingerprint(dataset: lance.LanceDataset) -> str:
         "metadata": _sorted_metadata(schema.metadata),
     }
     return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _schema_fingerprint_matches(dataset: lance.LanceDataset, expected: str) -> bool:
+    """Accept canonical fingerprints and legacy Arrow-byte snapshot identities.
+
+    :param dataset: Pinned Lance dataset version.
+    :param expected: Fingerprint stored by the ready snapshot.
+    :returns: Whether the dataset matches either supported fingerprint format.
+    """
+    return expected in {_schema_fingerprint(dataset), _legacy_schema_fingerprint(dataset)}
 
 
 def _file_sha256(path: Path) -> str:
@@ -865,19 +890,19 @@ def publish_growing_branch(
     )
     source_transaction = _transaction(transaction_source, source.version)
     source_rows = source.count_rows()
-    source_schema_fingerprint = _schema_fingerprint(source)
+    schema_matches = _schema_fingerprint_matches(source, current.schema_fingerprint)
     if (
         source_transaction.uuid != current.transaction
         or source_rows != current.row_count
         or len(old_identities) != current.fragment_count
-        or source_schema_fingerprint != current.schema_fingerprint
+        or not schema_matches
     ):
         raise ValueError(
             "ready snapshot does not match its native branch version: "
             f"transaction={source_transaction.uuid == current.transaction}, "
             f"rows={source_rows == current.row_count}, "
             f"fragments={len(old_identities) == current.fragment_count}, "
-            f"schema={source_schema_fingerprint == current.schema_fingerprint}"
+            f"schema={schema_matches}"
         )
     _validate_new_fragment_files(
         source,
@@ -1142,7 +1167,7 @@ def materialize_and_activate(
             raise ValueError("remote row count does not match snapshot")
         if len(source.get_fragments()) != snapshot.fragment_count:
             raise ValueError("remote fragment count does not match snapshot")
-        if _schema_fingerprint(source) != snapshot.schema_fingerprint:
+        if not _schema_fingerprint_matches(source, snapshot.schema_fingerprint):
             raise ValueError("remote schema does not match snapshot")
 
         dataset_path = local_root / "train.lance"

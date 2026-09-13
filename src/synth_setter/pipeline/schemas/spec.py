@@ -15,6 +15,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -29,6 +30,7 @@ from pydantic import (
     SerializerFunctionWrapHandler,
     ValidationInfo,
     computed_field,
+    field_serializer,
     field_validator,
     model_serializer,
     model_validator,
@@ -1209,8 +1211,8 @@ class GenerationEmbeddingPolicy(BaseModel):  # noqa: DOC601, DOC603 — Fields d
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
 
     embeddings: tuple[str, ...] = Field(description="Ordered embedding registry keys to write.")
-    checkpoints: dict[str, str] = Field(
-        default_factory=dict, description="Checkpoint overrides keyed by selected registry name."
+    checkpoints: tuple[tuple[str, str], ...] = Field(
+        default=(), description="Immutable checkpoint overrides keyed by registry name."
     )
     device: str = Field(description="Explicit CUDA device used by this worker.")
     lance_batch_size: int = Field(default=128, ge=1, description="Rows encoded per batch.")
@@ -1239,7 +1241,47 @@ class GenerationEmbeddingPolicy(BaseModel):  # noqa: DOC601, DOC603 — Fields d
         rerendering = [name for name in embeddings if EMBEDDING_REGISTRY[name].rerenders]
         if rerendering:
             raise ValueError(f"generation embeddings cannot re-render rows: {rerendering}")
+        if len(embeddings) > 1 and any(
+            not EMBEDDING_REGISTRY[name].co_resident for name in embeddings
+        ):
+            raise ValueError(
+                "non-co-resident generation embeddings must run in separate dataset jobs"
+            )
         return embeddings
+
+    @field_validator("checkpoints", mode="before")
+    @classmethod
+    def _freeze_checkpoints(cls, value: object) -> object:
+        """Freeze checkpoint mappings so a policy cannot mutate after validation.
+
+        :param value: Hydra mapping or serialized key-value pairs.
+        :returns: Sorted immutable key-value pairs.
+        :raises ValueError: Serialized pairs contain duplicate keys.
+        """
+        if isinstance(value, Mapping):
+            value = tuple(value.items())
+        elif not isinstance(value, (list, tuple)):
+            return value
+        pairs: list[tuple[str, str]] = []
+        for pair in value:
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                raise ValueError("checkpoint overrides must be key-value pairs")
+            name, checkpoint = pair
+            if not isinstance(name, str) or not isinstance(checkpoint, str):
+                raise ValueError("checkpoint override keys and values must be strings")
+            pairs.append((name, checkpoint))
+        if len({pair[0] for pair in pairs}) != len(pairs):
+            raise ValueError("checkpoint overrides must have unique registry keys")
+        return tuple(sorted(pairs))
+
+    @field_serializer("checkpoints")
+    def _serialize_checkpoints(self, value: tuple[tuple[str, str], ...]) -> dict[str, str]:
+        """Serialize immutable checkpoint pairs as the public mapping contract.
+
+        :param value: Validated immutable checkpoint pairs.
+        :returns: Checkpoint overrides keyed by embedding name.
+        """
+        return dict(value)
 
     @field_validator("device")
     @classmethod
@@ -1264,10 +1306,11 @@ class GenerationEmbeddingPolicy(BaseModel):  # noqa: DOC601, DOC603 — Fields d
         """
         from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
 
-        unselected = sorted(set(self.checkpoints) - set(self.embeddings))
+        checkpoint_names = {name for name, _ in self.checkpoints}
+        unselected = sorted(checkpoint_names - set(self.embeddings))
         if unselected:
             raise ValueError(f"checkpoint overrides are not selected embeddings: {unselected}")
-        for name in self.checkpoints:
+        for name in checkpoint_names:
             spec = EMBEDDING_REGISTRY[name]
             if not spec.default_checkpoint:
                 raise ValueError(f"{name} does not support checkpoint overrides")

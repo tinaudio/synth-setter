@@ -117,6 +117,22 @@ def test_dataset_spec_fingerprint_preserves_legacy_null_policy_digest() -> None:
     assert growing_lance.dataset_spec_fingerprint(spec) == sha256(legacy_json.encode()).hexdigest()
 
 
+def test_dataset_spec_fingerprint_preserves_legacy_non_ascii_encoding() -> None:
+    spec = tiny_lance_spec().model_copy(update={"task_name": "synth-é"})
+    legacy_json = spec.model_dump_json().replace(',"embedding_generation":null', "")
+
+    assert growing_lance.dataset_spec_fingerprint(spec) == sha256(legacy_json.encode()).hexdigest()
+
+
+def test_schema_fingerprint_preserves_legacy_unaugmented_digest(tmp_path: Path) -> None:
+    _, train_uri, _ = _baseline_dataset(tmp_path)
+    dataset = lance.dataset(str(train_uri))
+
+    assert growing_lance._schema_fingerprint(dataset) == sha256(
+        dataset.schema.serialize().to_pybytes()
+    ).hexdigest()
+
+
 def test_initialize_unaugmented_baseline_rejects_embedding_policy(tmp_path: Path) -> None:
     _, train_uri, metadata_root = _baseline_dataset(tmp_path)
 
@@ -157,6 +173,25 @@ def test_initialize_widened_baseline_rejects_post_finalize_columns(tmp_path: Pat
             num_extra_shards=2,
         )
     assert "growing" not in lance.dataset(str(train_uri)).branches.list()
+
+
+def test_schema_fingerprint_accepts_legacy_augmented_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_test_clap(monkeypatch)
+    _, train_uri, _ = _baseline_dataset(tmp_path)
+    dataset = lance.dataset(str(train_uri))
+    config = AddEmbeddingsConfig(
+        lance_uri=str(train_uri),
+        embeddings=("clap",),
+        device="cpu",
+        build_index=False,
+    )
+    _write_columns(dataset, [EMBEDDING_REGISTRY["clap"]], 8000, config)
+    legacy = sha256(dataset.schema.serialize().to_pybytes()).hexdigest()
+
+    assert growing_lance._schema_fingerprint_matches(dataset, legacy)
 
 
 def test_initialize_augmented_baseline_rejects_unreproducible_checkpoint(

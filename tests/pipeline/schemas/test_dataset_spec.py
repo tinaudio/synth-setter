@@ -89,6 +89,7 @@ def test_dataset_spec_embedding_generation_round_trips_strict_policy() -> None:
     assert restored.embedding_generation == spec.embedding_generation
     assert restored.embedding_generation is not None
     assert restored.embedding_generation.embeddings == ("clap", "m2l")
+    assert restored.embedding_generation.checkpoints == (("clap", "local-clap"),)
 
 
 @pytest.mark.parametrize(
@@ -97,6 +98,10 @@ def test_dataset_spec_embedding_generation_round_trips_strict_policy() -> None:
         ({"embeddings": ["unknown"], "device": "cuda"}, "unknown"),
         ({"embeddings": ["param_shift"], "device": "cuda"}, "re-render"),
         ({"embeddings": ["clap"], "device": "cpu"}, "CUDA"),
+        (
+            {"embeddings": ["clap", "same_s"], "device": "cuda"},
+            "non-co-resident",
+        ),
         (
             {"embeddings": ["clap"], "device": "cuda", "unexpected": True},
             "extra_forbidden",
