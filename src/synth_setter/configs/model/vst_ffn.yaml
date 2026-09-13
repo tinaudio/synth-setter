@@ -17,7 +17,7 @@ net:
   spec_shape: [128, 401]
 
 scheduler:
-  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  _target_: synth_setter.utils.lr_scheduler.ResumeAwareCosineAnnealingLR
   _partial_: true
   T_max: ${trainer.max_steps}
   eta_min: ${mul:${model.optimizer.lr},1e-2}
