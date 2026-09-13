@@ -213,6 +213,28 @@ def test_pyfdn_dataset_input_projects_excitation_as_dataset() -> None:
     )
 
 
+def test_pyfdn_dataset_input_digest_covers_adaptation_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rotating the adaptation policy must retire the dataset-input contract digest.
+
+    :param monkeypatch: Policy-token override fixture.
+    """
+    dataset_input = RenderConfig.model_validate(
+        _pyfdn_render_kwargs(render_contract_version=2, input_audio_source=_input_audio_source())
+    )
+    impulse = RenderConfig.model_validate(_pyfdn_render_kwargs())
+    before = dataset_input.shard_metadata().render_contract_digest
+    impulse_before = impulse.shard_metadata().render_contract_digest
+
+    monkeypatch.setattr(
+        renderer_backend_contract, "INPUT_AUDIO_ADAPTATION_POLICY", "test-policy-v2"
+    )
+
+    assert dataset_input.shard_metadata().render_contract_digest != before
+    assert impulse.shard_metadata().render_contract_digest == impulse_before
+
+
 def test_pyfdn_render_contract_digest_distinguishes_excitation() -> None:
     """Impulse-response and chirp datasets cannot finalize into one dataset."""
     impulse = RenderConfig.model_validate(_pyfdn_render_kwargs())

@@ -132,6 +132,8 @@ def _render_in_batches(
         if render_cfg.input_audio_source is not None
         else None
     )
+    if input_audio_pool is not None:
+        logger.info(f"Input audio pool: {input_audio_pool.adaptation_provenance()}")
     share_params = render_cfg.param_sample_cadence == "shard"
     clipped_rejections = 0
     non_finite_rejections = 0

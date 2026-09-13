@@ -13,6 +13,7 @@ from synth_setter.data.vst.input_audio import InputAudioPool
 from synth_setter.pipeline.data.lance_shard import SHARD_METADATA_SCHEMA_KEY, tensor_array
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import InputAudioSource
+from synth_setter.renderer_backend import INPUT_AUDIO_ADAPTATION_POLICY
 
 _FRAMES = 8
 _SAMPLE_RATE = 44_100
@@ -139,7 +140,114 @@ def test_input_audio_pool_missing_audio_column_raises(
         InputAudioPool(_source(source_root, txid), sample_rate=_SAMPLE_RATE, frames=_FRAMES)
 
 
-def test_input_audio_pool_wrong_frame_count_raises(
+def test_input_audio_pool_longer_row_truncates_to_first_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    audio = np.linspace(-0.5, 0.5, 12, dtype=np.float32).reshape(1, 1, 12)
+    txid = _write_source(source_root, audio)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    pool = InputAudioPool(_source(source_root, txid), sample_rate=_SAMPLE_RATE, frames=_FRAMES)
+
+    np.testing.assert_array_equal(pool.take(0), audio[0, 0, :_FRAMES])
+
+
+def test_input_audio_pool_shorter_row_zero_pads_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    audio = np.full((1, 1, 5), 0.25, dtype=np.float32)
+    txid = _write_source(source_root, audio)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    pool = InputAudioPool(_source(source_root, txid), sample_rate=_SAMPLE_RATE, frames=_FRAMES)
+
+    row = pool.take(0)
+    assert row.shape == (_FRAMES,)
+    np.testing.assert_array_equal(row[:5], np.full(5, 0.25, dtype=np.float32))
+    np.testing.assert_array_equal(row[5:], np.zeros(_FRAMES - 5, dtype=np.float32))
+
+
+def test_input_audio_pool_foreign_rate_resamples_to_target_grid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    audio = np.full((1, 1, 2205), 0.25, dtype=np.float32)
+    txid = _write_source(source_root, audio, sample_rate=22_050)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    pool = InputAudioPool(_source(source_root, txid), sample_rate=_SAMPLE_RATE, frames=_FRAMES)
+
+    row = pool.take(0)
+    assert row.shape == (_FRAMES,)
+    assert row.dtype == np.float32
+    assert np.isfinite(row).all()
+    # Loose: the soxr edge transient rings on the first samples of short excerpts.
+    np.testing.assert_allclose(row, np.full(_FRAMES, 0.25, dtype=np.float32), atol=5e-2)
+
+
+def test_input_audio_pool_resample_wires_rates_and_truncation_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import librosa
+
+    source_root = tmp_path / "source"
+    ramp = np.linspace(0.0, 1.0, 2205, dtype=np.float32).reshape(1, 1, 2205)
+    txid = _write_source(source_root, ramp, sample_rate=22_050)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    pool = InputAudioPool(_source(source_root, txid), sample_rate=_SAMPLE_RATE, frames=_FRAMES)
+
+    expected = librosa.resample(ramp[0], orig_sr=22_050, target_sr=_SAMPLE_RATE)[0, :_FRAMES]
+    np.testing.assert_array_equal(pool.take(0), np.ascontiguousarray(expected, dtype=np.float32))
+
+
+def test_input_audio_pool_stereo_row_downmixes_to_mono_mean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    audio = np.stack(
+        [np.zeros(_FRAMES, dtype=np.float32), np.ones(_FRAMES, dtype=np.float32)]
+    ).reshape(1, 2, _FRAMES)
+    txid = _write_source(source_root, audio)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    pool = InputAudioPool(_source(source_root, txid), sample_rate=_SAMPLE_RATE, frames=_FRAMES)
+
+    np.testing.assert_array_equal(pool.take(0), np.full(_FRAMES, 0.5, dtype=np.float32))
+
+
+def test_input_audio_pool_matching_geometry_skips_adaptation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    audio = np.zeros((1, 1, _FRAMES), dtype=np.float32)
+    txid = _write_source(source_root, audio)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    pool = InputAudioPool(_source(source_root, txid), sample_rate=_SAMPLE_RATE, frames=_FRAMES)
+
+    assert pool.adapted is False
+    assert pool.source_sample_rate == _SAMPLE_RATE
+    assert (pool.source_channels, pool.source_frames) == (1, _FRAMES)
+
+
+def test_input_audio_pool_foreign_geometry_reports_adaptation_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    audio = np.zeros((1, 1, 12), dtype=np.float32)
+    txid = _write_source(source_root, audio, sample_rate=22_050)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    pool = InputAudioPool(_source(source_root, txid), sample_rate=_SAMPLE_RATE, frames=_FRAMES)
+
+    assert pool.adapted is True
+    provenance = pool.adaptation_provenance()
+    assert provenance["source_sample_rate"] == 22_050
+    assert (provenance["source_channels"], provenance["source_frames"]) == (1, 12)
+    assert (provenance["target_sample_rate"], provenance["target_frames"]) == (
+        _SAMPLE_RATE,
+        _FRAMES,
+    )
+    assert provenance["policy"] == INPUT_AUDIO_ADAPTATION_POLICY
+
+
+def test_input_audio_pool_foreign_frame_count_adapts_instead_of_raising(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source_root = tmp_path / "source"
@@ -147,11 +255,13 @@ def test_input_audio_pool_wrong_frame_count_raises(
     txid = _write_source(source_root, audio)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
-    with pytest.raises(ValueError, match="shape"):
-        InputAudioPool(_source(source_root, txid), sample_rate=_SAMPLE_RATE, frames=_FRAMES)
+    pool = InputAudioPool(_source(source_root, txid), sample_rate=_SAMPLE_RATE, frames=_FRAMES)
+
+    assert pool.adapted is True
+    assert pool.take(0).shape == (_FRAMES,)
 
 
-def test_input_audio_pool_sample_rate_mismatch_raises(
+def test_input_audio_pool_foreign_sample_rate_adapts_instead_of_raising(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source_root = tmp_path / "source"
@@ -159,8 +269,10 @@ def test_input_audio_pool_sample_rate_mismatch_raises(
     txid = _write_source(source_root, audio, sample_rate=48_000)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
-    with pytest.raises(ValueError, match="sample rate"):
-        InputAudioPool(_source(source_root, txid), sample_rate=_SAMPLE_RATE, frames=_FRAMES)
+    pool = InputAudioPool(_source(source_root, txid), sample_rate=_SAMPLE_RATE, frames=_FRAMES)
+
+    assert pool.adapted is True
+    assert pool.take(0).shape == (_FRAMES,)
 
 
 def test_input_audio_pool_nonfinite_row_raises(

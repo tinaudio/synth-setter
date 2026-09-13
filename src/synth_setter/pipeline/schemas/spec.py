@@ -1059,6 +1059,10 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
                 contract["canonical_source_sha256"] = (
                     renderer_backend_contract.PYFDN_CANONICAL_SOURCE_SHA256
                 )
+            if self.input_audio_source is not None:
+                contract["input_audio_adaptation"] = (
+                    renderer_backend_contract.INPUT_AUDIO_ADAPTATION_POLICY
+                )
         canonical_contract = json.dumps(contract, sort_keys=True, separators=(",", ":"))
         return ShardMetadata(
             velocity=self.velocity,
