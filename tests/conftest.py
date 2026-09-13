@@ -527,6 +527,23 @@ def cfg_torchsynth_flow_train(tmp_path: Path) -> DictConfig:
 
 
 @pytest.fixture
+def cfg_torchsynth_flow_finetune_train(tmp_path: Path) -> DictConfig:
+    """Compose a one-step CPU smoke config for TorchSynth simulator-feedback finetuning.
+
+    :param tmp_path: Pinned Hydra output and log directory.
+    :returns: Ready-to-run null-control finetuning configuration.
+    """
+    return _compose_torchsynth_flow_smoke(
+        tmp_path,
+        "torchsynth/flow_finetune_null",
+        "model.base_checkpoint=null",
+        "model.validation_sample_steps=1",
+        "model.test_sample_steps=1",
+        "model.cfg_dropout_rate=0.0",
+    )
+
+
+@pytest.fixture
 def cfg_torchsynth_flow_ram_train(tmp_path: Path) -> DictConfig:
     """Compose a one-step CPU smoke config for RAM post-training of a TorchSynth flow.
 
