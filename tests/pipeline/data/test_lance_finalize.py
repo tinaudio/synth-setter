@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,13 +25,16 @@ from synth_setter.cli.finalize_dataset import finalize, finalize_from_spec
 from synth_setter.data.normalization_stats import estimate_log_mel_statistics
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
+    CLAP_FIELD,
     DATASET_FIELD_NAMES,
     MEL_SPEC_FIELD,
 )
 from synth_setter.models.components.spec_encoder import LogMelFrontend
+from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
 from synth_setter.pipeline.data.lance_finalize import finalize_lance_fragments
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
 from synth_setter.pipeline.data.lance_staging import (
+    _reset_generation_embedding_runtime,
     shard_has_complete_attempt,
     stage_lance_shard_attempt,
 )
@@ -39,6 +43,8 @@ from synth_setter.pipeline.schemas.lance_attempt import (
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.pipeline.data.test_lance_staging import (
+    _embedding_spec,
+    _install_test_clap,
     shard_arrays,
     staging_dir,
     tiny_lance_spec,
@@ -94,6 +100,93 @@ def read_columns(uri: Path) -> dict[str, np.ndarray]:
         field: np.stack(list(iter_lance_column_rows(uri, field)), axis=0)
         for field in DATASET_FIELD_NAMES
     }
+
+
+def test_finalize_commits_augmented_fragments_with_identical_embedding_schema(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_test_clap(monkeypatch)
+    spec = _embedding_spec()
+    stage_all_shards(spec, tmp_path)
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    train = lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train")))
+    local_names = lance.dataset(str(tmp_path / "w-0" / spec.shards[0].filename)).schema.names
+    assert train.schema.names == [*local_names, CLAP_FIELD]
+    clap_field = train.schema.field(CLAP_FIELD)
+    assert clap_field.nullable is False
+    assert clap_field.metadata[b"synth_setter.embedding.name"] == b"clap"
+    vectors = train.to_table(columns=[CLAP_FIELD])[CLAP_FIELD].combine_chunks().values.to_numpy()
+    assert vectors.dtype == np.float32
+    assert np.isfinite(vectors).all()
+    decoded = read_columns(split_dataset_path(fake_r2_remote, spec, "train"))
+    np.testing.assert_array_equal(
+        decoded[AUDIO_FIELD],
+        np.concatenate([shard_arrays(spec, 0)[AUDIO_FIELD], shard_arrays(spec, 1)[AUDIO_FIELD]]),
+    )
+
+
+def test_finalize_rejects_embedding_identity_drift_across_splits(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del fake_r2_remote
+    _install_test_clap(monkeypatch)
+    spec = _embedding_spec()
+    for shard in spec.shards[:2]:
+        local = write_local_shard(spec, shard.shard_id, tmp_path / f"a-{shard.shard_id}")
+        stage_lance_shard_attempt(
+            spec, shard, local, worker_id="pod-a", attempt_uuid=f"a{shard.shard_id}"
+        )
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(
+            EMBEDDING_REGISTRY["clap"],
+            resolve_artifact_identity=lambda checkpoint: f"other-clap:{checkpoint}",
+        ),
+    )
+    _reset_generation_embedding_runtime()
+    for shard in spec.shards[2:]:
+        local = write_local_shard(spec, shard.shard_id, tmp_path / f"b-{shard.shard_id}")
+        stage_lance_shard_attempt(
+            spec, shard, local, worker_id="pod-b", attempt_uuid=f"b{shard.shard_id}"
+        )
+
+    with pytest.raises(ValueError, match="embedding types or metadata differ"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_uses_staged_embedding_identity_without_loading_checkpoint(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_test_clap(monkeypatch)
+    spec = _embedding_spec()
+    stage_all_shards(spec, tmp_path)
+
+    def reject_identity_resolution(checkpoint: str) -> str:
+        del checkpoint
+        raise AssertionError("finalize must not resolve worker model artifacts")
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(
+            EMBEDDING_REGISTRY["clap"],
+            resolve_artifact_identity=reject_identity_resolution,
+        ),
+    )
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    train = lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train")))
+    assert train.count_rows() == spec.train_val_test_sizes[0]
 
 
 def test_finalize_commits_winners_into_three_splits_with_exact_shard_content(

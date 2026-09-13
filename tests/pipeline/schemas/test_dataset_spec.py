@@ -71,6 +71,45 @@ def _valid_spec_kwargs(plugin_path: str = "/fake/Plugin.vst3", **overrides: Any)
     return kwargs
 
 
+def test_dataset_spec_embedding_generation_round_trips_strict_policy() -> None:
+    """Workers receive an immutable generation-only embedding policy from JSON."""
+    spec = DatasetSpec.model_validate(
+        _valid_spec_kwargs(
+            embedding_generation={
+                "embeddings": ["clap", "m2l"],
+                "checkpoints": {"clap": "local-clap"},
+                "device": "cuda:0",
+                "lance_batch_size": 8,
+            }
+        )
+    )
+
+    restored = DatasetSpec.model_validate_json(spec.model_dump_json())
+
+    assert restored.embedding_generation == spec.embedding_generation
+    assert restored.embedding_generation is not None
+    assert restored.embedding_generation.embeddings == ("clap", "m2l")
+
+
+@pytest.mark.parametrize(
+    ("policy", "match"),
+    [
+        ({"embeddings": ["unknown"], "device": "cuda"}, "unknown"),
+        ({"embeddings": ["param_shift"], "device": "cuda"}, "re-render"),
+        ({"embeddings": ["clap"], "device": "cpu"}, "CUDA"),
+        (
+            {"embeddings": ["clap"], "device": "cuda", "unexpected": True},
+            "extra_forbidden",
+        ),
+    ],
+)
+def test_dataset_spec_embedding_generation_rejects_unsafe_policy(
+    policy: dict[str, object], match: str
+) -> None:
+    with pytest.raises(ValidationError, match=match):
+        DatasetSpec.model_validate(_valid_spec_kwargs(embedding_generation=policy))
+
+
 @pytest.fixture()
 def patch_runtime_io(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub git/timestamp factories so DatasetSpec construction is deterministic."""

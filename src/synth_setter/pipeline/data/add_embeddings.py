@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -1631,7 +1632,8 @@ def _write_columns(
             nonlocal next_progress_row, rows_processed, last_progress_at, last_udf_end
             udf_started = time.monotonic()
             sources = _decoded_sources(batch, input_fields)
-            output = _encode_columns(sources, sample_rate, specs, encoders, stage_ms)
+            encoded = _encode_columns(sources, sample_rate, specs, encoders, stage_ms)
+            output = pa.RecordBatch.from_arrays(encoded.columns, schema=output_schema)
             rows_processed += batch.num_rows
             now = time.monotonic()
             interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
@@ -1748,6 +1750,166 @@ def build_index(
         metric=metric,
     )
     return True
+
+
+@dataclass(frozen=True)
+class _GenerationRuntimeConfig:  # noqa: DOC601, DOC603 — internal config adapter.
+    """Adapt the generation policy to registry loader inputs."""
+
+    embeddings: tuple[str, ...]
+    checkpoints: dict[str, str]
+    device: str
+    lance_batch_size: int
+    param_spec_name: str
+    param_text_normalizer: str
+    num_workers: int = 1
+    sketch_encode_batch: int = SKETCH_ENCODE_MAX_BATCH
+    render: None = None
+    param_shift_seed: int = 0
+
+
+def _generation_runtime_config(
+    policy: object, *, param_spec_name: str
+) -> tuple[_GenerationRuntimeConfig, tuple[EmbeddingSpec, ...]]:
+    """Adapt a validated generation policy to registry operations.
+
+    :param policy: Validated generation embedding policy.
+    :param param_spec_name: Param registry key for parameter-sourced encoders.
+    :returns: Loader configuration and selected registry entries.
+    :raises TypeError: Policy is not a validated generation policy.
+    """
+    from synth_setter.data.vst.param_text import DEFAULT_PARAM_TEXT_NORMALIZER
+    from synth_setter.pipeline.schemas.spec import GenerationEmbeddingPolicy
+
+    if not isinstance(policy, GenerationEmbeddingPolicy):
+        raise TypeError("policy must be a GenerationEmbeddingPolicy")
+    config = _GenerationRuntimeConfig(
+        embeddings=policy.embeddings,
+        checkpoints=dict(policy.checkpoints),
+        device=policy.device,
+        lance_batch_size=policy.lance_batch_size,
+        param_spec_name=param_spec_name,
+        param_text_normalizer=DEFAULT_PARAM_TEXT_NORMALIZER,
+    )
+    return config, tuple(EMBEDDING_REGISTRY[name] for name in policy.embeddings)
+
+
+def generation_embedding_identities(
+    policy: object, *, param_spec_name: str
+) -> dict[str, str]:
+    """Resolve exact artifact provenance for a generation policy.
+
+    :param policy: Validated generation embedding policy.
+    :param param_spec_name: Param registry key for parameter-sourced encoders.
+    :returns: Registry names mapped to artifact identities.
+    """
+    config, specs = _generation_runtime_config(policy, param_spec_name=param_spec_name)
+    typed_config = cast("AddEmbeddingsConfig", config)
+    return {spec.name: _resolve_artifact_identity(spec, typed_config) for spec in specs}
+
+
+class GenerationEmbeddingRuntime:
+    """Own one worker's registry encoders and serialize GPU access across shard threads."""
+
+    def __init__(self, policy: object, *, param_spec_name: str) -> None:
+        """Load configured encoders after proving the selected CUDA device is usable.
+
+        :param policy: Validated generation embedding policy.
+        :param param_spec_name: Param registry key for parameter-sourced encoders.
+        :raises RuntimeError: CUDA is unavailable or the selected device does not exist.
+        """
+        import torch
+
+        config, specs = _generation_runtime_config(policy, param_spec_name=param_spec_name)
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                f"generation embeddings require configured CUDA device {config.device!r}, "
+                "but CUDA is unavailable"
+            )
+        device = torch.device(config.device)
+        if device.index is not None and device.index >= torch.cuda.device_count():
+            raise RuntimeError(
+                f"generation embedding CUDA device {config.device!r} does not exist; "
+                f"found {torch.cuda.device_count()} device(s)"
+            )
+        self._config = config
+        self._specs = specs
+        self._input_fields = tuple(
+            sorted({field for spec in self._specs for field in spec.input_fields})
+        )
+        self._lock = threading.Lock()
+        config = cast("AddEmbeddingsConfig", self._config)
+        with torch.random.fork_rng():
+            self._encoders = _load_encoders(self._specs, config)
+        self._identities = generation_embedding_identities(
+            policy, param_spec_name=param_spec_name
+        )
+        self._output_schema: pa.Schema | None = None
+
+    @property
+    def batch_size(self) -> int:
+        """Return the maximum source rows encoded together."""
+        return self._config.lance_batch_size
+
+    @property
+    def output_columns(self) -> tuple[str, ...]:
+        """Return every top-level embedding field in configured order."""
+        return tuple(column for spec in self._specs for column in _output_columns(spec))
+
+    def augment_batch(self, batch: pa.RecordBatch, sample_rate: int) -> pa.RecordBatch:
+        """Append validated embedding arrays without changing source row order.
+
+        :param batch: Source shard rows in canonical order.
+        :param sample_rate: Stored audio sample rate in Hz.
+        :returns: Source and embedding columns with provenance metadata.
+        :raises ValueError: An encoder changes row count or output schema across batches.
+        """
+        with self._lock:
+            encoded = _encode_columns(
+                _decoded_sources(batch, self._input_fields),
+                sample_rate,
+                self._specs,
+                self._encoders,
+            )
+        if encoded.num_rows != batch.num_rows:
+            raise ValueError(
+                f"embedding encoders produced {encoded.num_rows} rows for {batch.num_rows} inputs"
+            )
+        encoded_schema = _embedding_output_schema(
+            encoded.schema,
+            self._specs,
+            cast("AddEmbeddingsConfig", self._config),
+            identities=self._identities,
+        )
+        output_schema = pa.schema(
+            [
+                pa.field(
+                    field.name,
+                    field.type,
+                    nullable=False,
+                    metadata=field.metadata,
+                )
+                for field in encoded_schema
+            ]
+        )
+        if self._output_schema is None:
+            self._output_schema = output_schema
+        elif not output_schema.equals(self._output_schema, check_metadata=True):
+            raise ValueError("embedding encoder output schema changed between shard batches")
+        schema = pa.schema(
+            [*batch.schema, *output_schema], metadata=batch.schema.metadata
+        )
+        return pa.RecordBatch.from_arrays(
+            [*batch.columns, *encoded.columns], schema=schema
+        )
+
+    def close(self) -> None:
+        """Release registry encoders that own process pools or other resources."""
+        for encoder in self._encoders:
+            closer = getattr(encoder, "close", None)
+            if callable(closer):
+                closer()
+        self._encoders.clear()
 
 
 def _embedding_output_schema(
