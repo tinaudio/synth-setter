@@ -1163,10 +1163,13 @@ The default CLAP, SAME, and S-SONDO sources hydrate under
 
 A dataset spec may instead freeze an `embedding_generation` policy so each GPU
 worker computes every selected registry column for the rows in its owned shards.
-The worker appends those columns while staging one uncommitted fragment; it never
-commits a shared Lance transaction. CUDA availability, output row count, Arrow
-type, nullability, finiteness, and artifact metadata are admission checks, so a
-failed embedding attempt cannot publish `.valid`. Growing branches require their
+Spec materialization resolves each checkpoint once and persists its exact artifact
+identity; workers verify their local artifacts against that identity before
+encoding, and finalize never resolves worker-local or floating sources. The worker
+appends those columns while staging one uncommitted fragment; it never commits a
+shared Lance transaction. CUDA availability, output row count, Arrow type,
+nullability, finiteness, and artifact metadata are admission checks, so a failed
+embedding attempt cannot publish `.valid`. Growing branches require their
 baseline's extra columns and provenance to match the policy, while finalize
 remains the sole manifest writer and requires one identical embedding schema
 across all winning fragments. Index construction remains a separate

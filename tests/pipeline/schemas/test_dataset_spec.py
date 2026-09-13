@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,6 +15,7 @@ from pydantic import ValidationError
 import synth_setter.data.vst.param_spec_registry as param_spec_registry
 from synth_setter.data.vst import param_specs
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
 from synth_setter.pipeline.schemas.spec import (
     DatasetSpec,
     OutputFormat,
@@ -78,6 +80,10 @@ def test_dataset_spec_embedding_generation_round_trips_strict_policy() -> None:
             embedding_generation={
                 "embeddings": ["clap", "m2l"],
                 "checkpoints": {"clap": "local-clap"},
+                "artifact_identities": {
+                    "clap": "clap-v1:sha256",
+                    "m2l": "m2l-v1:package",
+                },
                 "device": "cuda:0",
                 "lance_batch_size": 8,
             }
@@ -90,6 +96,50 @@ def test_dataset_spec_embedding_generation_round_trips_strict_policy() -> None:
     assert restored.embedding_generation is not None
     assert restored.embedding_generation.embeddings == ("clap", "m2l")
     assert restored.embedding_generation.checkpoints == (("clap", "local-clap"),)
+    assert restored.embedding_generation.artifact_identities == (
+        ("clap", "clap-v1:sha256"),
+        ("m2l", "m2l-v1:package"),
+    )
+
+
+def test_dataset_spec_materializes_artifact_identity_only_on_first_parse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def resolve(checkpoint: str) -> str:
+        nonlocal calls
+        calls += 1
+        return f"frozen:{checkpoint}"
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(EMBEDDING_REGISTRY["clap"], resolve_artifact_identity=resolve),
+    )
+    spec = DatasetSpec.model_validate(
+        _valid_spec_kwargs(embedding_generation={"embeddings": ["clap"], "device": "cuda"})
+    )
+    assert calls == 1
+    assert spec.embedding_generation is not None
+    assert spec.embedding_generation.artifact_identities == (
+        ("clap", f"frozen:{EMBEDDING_REGISTRY['clap'].default_checkpoint}"),
+    )
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(
+            EMBEDDING_REGISTRY["clap"],
+            resolve_artifact_identity=lambda checkpoint: (_ for _ in ()).throw(
+                FileNotFoundError(checkpoint)
+            ),
+        ),
+    )
+
+    restored = DatasetSpec.model_validate_json(spec.model_dump_json())
+
+    assert calls == 1
+    assert restored.embedding_generation == spec.embedding_generation
 
 
 @pytest.mark.parametrize(

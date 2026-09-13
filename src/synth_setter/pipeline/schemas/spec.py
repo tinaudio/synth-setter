@@ -1214,6 +1214,9 @@ class GenerationEmbeddingPolicy(BaseModel):  # noqa: DOC601, DOC603 — Fields d
     checkpoints: tuple[tuple[str, str], ...] = Field(
         default=(), description="Immutable checkpoint overrides keyed by registry name."
     )
+    artifact_identities: tuple[tuple[str, str], ...] = Field(
+        default=(), description="Frozen artifact identities keyed by registry name."
+    )
     device: str = Field(description="Explicit CUDA device used by this worker.")
     lance_batch_size: int = Field(default=128, ge=1, description="Rows encoded per batch.")
 
@@ -1274,12 +1277,39 @@ class GenerationEmbeddingPolicy(BaseModel):  # noqa: DOC601, DOC603 — Fields d
             raise ValueError("checkpoint overrides must have unique registry keys")
         return tuple(sorted(pairs))
 
-    @field_serializer("checkpoints")
-    def _serialize_checkpoints(self, value: tuple[tuple[str, str], ...]) -> dict[str, str]:
-        """Serialize immutable checkpoint pairs as the public mapping contract.
+    @field_validator("artifact_identities", mode="before")
+    @classmethod
+    def _freeze_artifact_identities(cls, value: object) -> object:
+        """Freeze artifact identities so persisted policy cannot drift.
 
-        :param value: Validated immutable checkpoint pairs.
-        :returns: Checkpoint overrides keyed by embedding name.
+        :param value: Identity mapping or serialized key-value pairs.
+        :returns: Sorted immutable key-value pairs.
+        :raises ValueError: Pairs are malformed, duplicated, or blank.
+        """
+        if isinstance(value, Mapping):
+            value = tuple(value.items())
+        elif not isinstance(value, (list, tuple)):
+            return value
+        pairs: list[tuple[str, str]] = []
+        for pair in value:
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                raise ValueError("artifact identities must be key-value pairs")
+            name, identity = pair
+            if not isinstance(name, str) or not isinstance(identity, str):
+                raise ValueError("artifact identity keys and values must be strings")
+            if not identity.strip():
+                raise ValueError("artifact identities must be nonblank")
+            pairs.append((name, identity))
+        if len({pair[0] for pair in pairs}) != len(pairs):
+            raise ValueError("artifact identities must have unique registry keys")
+        return tuple(sorted(pairs))
+
+    @field_serializer("checkpoints", "artifact_identities")
+    def _serialize_named_pairs(self, value: tuple[tuple[str, str], ...]) -> dict[str, str]:
+        """Serialize immutable named pairs as the public mapping contract.
+
+        :param value: Validated immutable key-value pairs.
+        :returns: Values keyed by embedding name.
         """
         return dict(value)
 
@@ -1299,10 +1329,10 @@ class GenerationEmbeddingPolicy(BaseModel):  # noqa: DOC601, DOC603 — Fields d
 
     @model_validator(mode="after")
     def _checkpoint_keys_must_be_selected(self) -> GenerationEmbeddingPolicy:
-        """Reject checkpoint overrides outside the selected generation policy.
+        """Reject checkpoint or artifact keys outside the selected policy.
 
         :returns: Validated policy.
-        :raises ValueError: An override is unselected or unsupported by its registry entry.
+        :raises ValueError: Named values are incomplete, unselected, or unsupported.
         """
         from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
 
@@ -1314,6 +1344,9 @@ class GenerationEmbeddingPolicy(BaseModel):  # noqa: DOC601, DOC603 — Fields d
             spec = EMBEDDING_REGISTRY[name]
             if not spec.default_checkpoint:
                 raise ValueError(f"{name} does not support checkpoint overrides")
+        identity_names = {name for name, _ in self.artifact_identities}
+        if identity_names and identity_names != set(self.embeddings):
+            raise ValueError("artifact identities must exactly match selected embeddings")
         return self
 
 
@@ -1586,6 +1619,37 @@ class DatasetSpec(BaseModel):
         if isinstance(r2, dict) and "prefix" not in r2:
             data["r2"] = _fill_default_r2_prefix(data, r2)
         return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _materialize_embedding_artifact_identities(cls, data: Any) -> Any:
+        """Resolve embedding artifact identities once into the persisted dataset policy.
+
+        :param data: Raw dataset-spec input.
+        :returns: Input with complete frozen artifact identities when embeddings are enabled.
+        :raises ValueError: The render parameter registry is unavailable during materialization.
+        """
+        if not isinstance(data, dict) or data.get("embedding_generation") is None:
+            return data
+        policy = GenerationEmbeddingPolicy.model_validate(data["embedding_generation"])
+        if policy.artifact_identities:
+            return data
+        render = data.get("render")
+        synth = render.get("synth") if isinstance(render, dict) else None
+        param_spec_name = synth.get("param_spec_name") if isinstance(synth, dict) else None
+        if not isinstance(param_spec_name, str) or not param_spec_name:
+            raise ValueError(
+                "render.synth.param_spec_name is required to materialize embedding artifacts"
+            )
+        from synth_setter.pipeline.data.add_embeddings import generation_embedding_identities
+
+        identities = generation_embedding_identities(policy, param_spec_name=param_spec_name)
+        materialized = policy.model_copy(
+            update={"artifact_identities": tuple(sorted(identities.items()))}
+        )
+        normalized = dict(data)
+        normalized["embedding_generation"] = materialized
+        return normalized
 
     @model_validator(mode="before")
     @classmethod

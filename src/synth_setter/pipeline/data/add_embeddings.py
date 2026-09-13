@@ -1803,10 +1803,14 @@ class GenerationEmbeddingRuntime:
         :param policy: Validated generation embedding policy.
         :param param_spec_name: Param registry key for parameter-sourced encoders.
         :raises RuntimeError: CUDA is unavailable or the selected device does not exist.
+        :raises ValueError: Worker artifacts differ from the frozen generation policy.
         """
         import torch
 
+        from synth_setter.pipeline.schemas.spec import GenerationEmbeddingPolicy
+
         config, specs = _generation_runtime_config(policy, param_spec_name=param_spec_name)
+        assert isinstance(policy, GenerationEmbeddingPolicy)
         if config.device is None:
             raise RuntimeError("generation embedding policy must select a CUDA device")
         if not torch.cuda.is_available():
@@ -1826,11 +1830,17 @@ class GenerationEmbeddingRuntime:
             sorted({field for spec in self._specs for field in spec.input_fields})
         )
         self._lock = threading.Lock()
-        with torch.random.fork_rng():
-            self._encoders = _load_encoders(self._specs, self._config)
-        self._identities = generation_embedding_identities(
+        expected_identities = dict(policy.artifact_identities)
+        if not expected_identities:
+            raise ValueError("generation embedding policy lacks frozen artifact identities")
+        actual_identities = generation_embedding_identities(
             policy, param_spec_name=param_spec_name
         )
+        if actual_identities != expected_identities:
+            raise ValueError("worker embedding artifacts do not match the frozen generation policy")
+        with torch.random.fork_rng():
+            self._encoders = _load_encoders(self._specs, self._config)
+        self._identities = expected_identities
         self._output_schema: pa.Schema | None = None
 
     @property
