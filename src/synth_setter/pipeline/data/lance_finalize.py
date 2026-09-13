@@ -24,6 +24,7 @@ from zipfile import BadZipFile
 
 import lance
 import numpy as np
+import pyarrow as pa
 import structlog
 import torch
 from pydantic import ValidationError
@@ -77,8 +78,6 @@ _NORMALIZATION_TAKE_BATCH_SIZE = 32
 logger = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
-    import pyarrow as pa
-
     from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 
@@ -125,11 +124,16 @@ class CheckedLanceWinner:
     .. attribute :: welford
 
         Welford ``(count, mean, m2)`` state from the attempt's stats sidecar.
+
+    .. attribute :: schema
+
+        Logical fragment schema validated against the configured generation policy.
     """
 
     attempt: StagedLanceAttempt
     fragment: lance.fragment.FragmentMetadata
     welford: WelfordState
+    schema: pa.Schema
 
 
 def staged_complete_attempts(
@@ -280,23 +284,162 @@ def _load_welford_state(
             return int(count), np.array(mean, copy=True), np.array(m2, copy=True)
 
 
+def _validate_embedding_field_type(
+    embedding: object,
+    column: str,
+    field: pa.Field,
+    *,
+    num_samples: int,
+    sample_rate: int,
+) -> None:
+    """Reject physical embedding types outside the registry's fixed float32 contract.
+
+    :param embedding: Selected ``EmbeddingSpec`` registry entry.
+    :param column: Top-level output column being validated.
+    :param field: Physical Arrow field from the fragment.
+    :param num_samples: Stored waveform samples per row.
+    :param sample_rate: Stored waveform sample rate in Hz.
+    :raises TypeError: The registry entry is not an ``EmbeddingSpec``.
+    :raises ValueError: The field is variable-width, non-float32, or has a wrong static width.
+    """
+    from synth_setter.pipeline.data.add_embeddings import EmbeddingSpec
+
+    if not isinstance(embedding, EmbeddingSpec):
+        raise TypeError("embedding must be an EmbeddingSpec")
+    column_type = field.type
+    if column == embedding.column and embedding.expected_output_type is not None:
+        expected_type = embedding.expected_output_type(num_samples, sample_rate)
+        if column_type != expected_type:
+            raise ValueError(
+                f"embedding field {column!r} must have type {expected_type}, got {column_type}"
+            )
+        return
+    index = embedding.index
+    expected_width = None
+    if index is not None and (index.vector_column or embedding.column) == column:
+        expected_width = index.vector_dim
+    if expected_width is not None:
+        if (
+            not isinstance(column_type, pa.FixedSizeListType)
+            or column_type.value_type != pa.float32()
+            or column_type.list_size != expected_width
+        ):
+            raise ValueError(
+                f"embedding field {column!r} must be fixed_size_list<float32, {expected_width}>"
+            )
+        return
+    if column != embedding.column:
+        if (
+            not isinstance(column_type, pa.FixedSizeListType)
+            or column_type.value_type != pa.float32()
+            or column_type.list_size <= 0
+        ):
+            raise ValueError(
+                f"embedding vector field {column!r} must be a nonempty fixed-size float32 list"
+            )
+        return
+    if isinstance(column_type, pa.FixedShapeTensorType):
+        if column_type.value_type != pa.float32() or any(size <= 0 for size in column_type.shape):
+            raise ValueError(
+                f"embedding field {column!r} must be a nonempty fixed-shape float32 tensor"
+            )
+        return
+    if pa.types.is_struct(column_type):
+        leaves = [child.type for child in column_type]
+        if not leaves or any(
+            child != pa.float32()
+            and not (
+                isinstance(child, pa.FixedSizeListType) and child.value_type == pa.float32()
+            )
+            and not (
+                isinstance(child, pa.FixedShapeTensorType) and child.value_type == pa.float32()
+            )
+            for child in leaves
+        ):
+            raise ValueError(f"embedding field {column!r} has an invalid fixed float32 struct")
+        return
+    raise ValueError(f"embedding field {column!r} has unsupported physical type {column_type}")
+
+
+def _expected_fragment_schema(spec: DatasetSpec, shard_id: int, physical: pa.Schema) -> pa.Schema:
+    """Restore the logical base fields and validate configured embedding provenance.
+
+    :param spec: Dataset policy selecting exact generated embedding fields.
+    :param shard_id: Shard whose base metadata is expected.
+    :param physical: Schema read from one uncommitted fragment file.
+    :returns: Logical schema suitable for the split manifest commit.
+    :raises TypeError: The base audio field lacks its fixed-shape tensor contract.
+    :raises ValueError: Fields or embedding provenance differ from the frozen policy.
+    """
+    base = _shard_schema(spec, shard_id)
+    audio_type = base.field(AUDIO_FIELD).type
+    if not isinstance(audio_type, pa.FixedShapeTensorType):
+        raise TypeError(f"base audio field has unsupported type {audio_type}")
+    render = spec.render_for_shard(spec.shards[shard_id])
+    policy = spec.embedding_generation
+    if policy is None:
+        return base
+    from synth_setter.pipeline.data.add_embeddings import (
+        EMBEDDING_REGISTRY,
+        _EMBEDDING_ARTIFACT_METADATA,
+        _EMBEDDING_NAME_METADATA,
+        _output_columns,
+    )
+
+    expected_identities = dict(policy.artifact_identities)
+    if not expected_identities:
+        raise ValueError("generation embedding policy lacks frozen artifact identities")
+    expected_embeddings = [
+        column
+        for name in policy.embeddings
+        for column in _output_columns(EMBEDDING_REGISTRY[name])
+    ]
+    expected_names = [*base.names, *expected_embeddings]
+    if physical.names != expected_names:
+        raise ValueError(
+            f"fragment fields {physical.names} do not match configured fields {expected_names}"
+        )
+    fields = [base.field(name) if name in base.names else physical.field(name) for name in physical.names]
+    logical = pa.schema(fields, metadata=base.metadata)
+    for name in policy.embeddings:
+        embedding = EMBEDDING_REGISTRY[name]
+        for column in _output_columns(embedding):
+            field = logical.field(column)
+            _validate_embedding_field_type(
+                embedding,
+                column,
+                field,
+                num_samples=audio_type.shape[-1],
+                sample_rate=render.sample_rate,
+            )
+            metadata = field.metadata or {}
+            if metadata.get(_EMBEDDING_NAME_METADATA) != name.encode():
+                raise ValueError(f"embedding field {column!r} has invalid registry-name metadata")
+            if metadata.get(_EMBEDDING_ARTIFACT_METADATA) != expected_identities[name].encode():
+                raise ValueError(
+                    f"embedding field {column!r} does not match configured artifact provenance"
+                )
+    return logical
+
+
 def _validate_fragment_files(
     spec: DatasetSpec,
     attempt: StagedLanceAttempt,
     fragment: lance.fragment.FragmentMetadata,
-) -> None:
+) -> pa.Schema:
     """Validate fragment paths, object presence, and physical Arrow schemas.
 
     :param spec: Validated dataset spec.
     :param attempt: Staged attempt being checked.
     :param fragment: Deserialized metadata naming the fragment files.
+    :returns: Logical schema shared by the fragment's data files.
     :raises ValueError: A path escapes the split or a file is absent, empty, or schema-drifted.
     """
     from lance.file import LanceFileReader
 
     split_uri = spec.r2.split_lance_uri(split_for_shard(spec, attempt.shard_id))
     split_target, storage_options = r2_io.lance_target(split_uri)
-    expected_schema = _shard_schema(spec, attempt.shard_id)
+    expected_schema: pa.Schema | None = None
     if not fragment.files:
         raise ValueError(
             f"shard {attempt.shard_id} attempt {attempt.name}: fragment has no data files"
@@ -335,12 +478,21 @@ def _validate_fragment_files(
                 f"{data_file.path} physical row count {physical_rows} does not match "
                 f"sidecar row count {fragment.physical_rows}"
             )
-        if not fragment_schema_matches(physical_schema, expected_schema):
+        logical_schema = _expected_fragment_schema(spec, attempt.shard_id, physical_schema)
+        if not fragment_schema_matches(physical_schema, logical_schema):
             raise ValueError(
                 f"shard {attempt.shard_id} attempt {attempt.name}: fragment physical schema "
                 "does not match spec-derived shard schema: "
-                f"{fragment_schema_mismatch_detail(physical_schema, expected_schema)}"
+                f"{fragment_schema_mismatch_detail(physical_schema, logical_schema)}"
             )
+        if expected_schema is not None and not logical_schema.equals(
+            expected_schema, check_metadata=True
+        ):
+            raise ValueError("fragment data files do not share an identical schema")
+        expected_schema = logical_schema
+    if expected_schema is None:
+        raise ValueError("fragment has no readable data-file schema")
+    return expected_schema
 
 
 def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> CheckedLanceWinner:
@@ -366,8 +518,10 @@ def load_checked_winner(spec: DatasetSpec, attempt: StagedLanceAttempt) -> Check
             f"shard {attempt.shard_id} attempt {attempt.name}: fragment has {rows} rows, "
             f"stats count {welford[0]}; spec expects {spec.render.samples_per_shard}"
         )
-    _validate_fragment_files(spec, attempt, fragment)
-    return CheckedLanceWinner(attempt=attempt, fragment=fragment, welford=welford)
+    schema = _validate_fragment_files(spec, attempt, fragment)
+    return CheckedLanceWinner(
+        attempt=attempt, fragment=fragment, welford=welford, schema=schema
+    )
 
 
 def _shard_schema(spec: DatasetSpec, shard_id: int) -> pa.Schema:
@@ -383,20 +537,6 @@ def _shard_schema(spec: DatasetSpec, shard_id: int) -> pa.Schema:
         render.shard_metadata(),
         field_dtypes=dataset_field_dtypes(render),
     )
-
-
-def _split_schema(spec: DatasetSpec, first_shard_id: int) -> pa.Schema:
-    """Build a split dataset's Arrow schema from the spec.
-
-    Mirrors the worker writer's construction: shapes come from the render
-    config, and ``ShardMetadata`` is seeded by the split's first shard so
-    consumers keep reading ``sample_rate`` etc. from splits.
-
-    :param spec: Validated dataset spec.
-    :param first_shard_id: The split's first shard, whose seed the metadata carries.
-    :returns: Arrow schema for the split's ``Overwrite`` commit.
-    """
-    return _shard_schema(spec, first_shard_id)
 
 
 def _recorded_attempt_names(spec: DatasetSpec) -> dict[int, str]:
@@ -487,6 +627,29 @@ def _select_checked_winners(
             preferred_name=recorded.get(shard.shard_id),
         )
         report_finalize_progress(progress_callback, "shard_processed")
+    policy = spec.embedding_generation
+    if policy is None:
+        return winners
+    from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, _output_columns
+
+    embedding_columns = [
+        column
+        for name in policy.embeddings
+        for column in _output_columns(EMBEDDING_REGISTRY[name])
+    ]
+    first_shard_id = min(winners)
+    expected_schema = pa.schema(
+        [winners[first_shard_id].schema.field(column) for column in embedding_columns]
+    )
+    for shard_id, winner in winners.items():
+        shard_schema = pa.schema(
+            [winner.schema.field(column) for column in embedding_columns]
+        )
+        if not shard_schema.equals(expected_schema, check_metadata=True):
+            raise ValueError(
+                f"shard {shard_id} embedding types or metadata differ from shard "
+                f"{first_shard_id}"
+            )
     return winners
 
 
@@ -710,7 +873,7 @@ def finalize_lance_fragments(  # noqa: DOC502
         target, storage_options = r2_io.lance_target(spec.r2.split_lance_uri(split))
         commit_lance_dataset(
             target,
-            _split_schema(spec, lo),
+            winners[lo].schema,
             [winners[shard_id].fragment for shard_id in range(lo, hi)],
             storage_options=storage_options,
         )

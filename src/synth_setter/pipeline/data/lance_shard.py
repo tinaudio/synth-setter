@@ -28,10 +28,12 @@ from synth_setter.data.vst.shapes import (
     DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
     DEBUG_FIELD,
+    NUM_SKETCH_CONTROLS,
     SKETCH_CENTROID_CHILD,
     SKETCH_CENTROID_ROW,
     SKETCH_LOUDNESS_CHILD,
     SKETCH_LOUDNESS_ROW,
+    SKETCH_PITCH_BINS,
     SKETCH_PITCH_CHILD,
     SKETCH_PITCH_SLICE,
     SKETCH_VEC_CHILD,
@@ -115,6 +117,51 @@ def tensor_array(values: np.ndarray, dtype: np.dtype, inner_shape: tuple[int, ..
     if rows.shape[0] == 0:
         raise ValueError(f"expected a non-empty batch of {inner_shape} tensors, got 0 rows")
     return pa.FixedShapeTensorArray.from_numpy_ndarray(rows)
+
+
+def sketch_struct_type() -> pa.StructType:
+    """Return the canonical nested sketch storage type.
+
+    :returns: Exact child names, ordering, and physical types for one sketch row.
+    """
+    return pa.struct(
+        [
+            pa.field(SKETCH_LOUDNESS_CHILD, pa.list_(pa.float32(), SKETCH_STORAGE_FRAMES)),
+            pa.field(SKETCH_CENTROID_CHILD, pa.list_(pa.float32(), SKETCH_STORAGE_FRAMES)),
+            pa.field(
+                SKETCH_PITCH_CHILD,
+                pa.fixed_shape_tensor(
+                    pa.float32(), (SKETCH_PITCH_BINS, SKETCH_STORAGE_FRAMES)
+                ),
+            ),
+            pa.field(SKETCH_VEC_CHILD, pa.list_(pa.float32(), NUM_SKETCH_CONTROLS)),
+        ]
+    )
+
+
+def pyfdn_sketch_struct_type() -> pa.StructType:
+    """Return the canonical nested pyFDN sketch storage type.
+
+    :returns: Exact child names, ordering, and physical types for one pyFDN sketch row.
+    """
+    return pa.struct(
+        [
+            pa.field(
+                PYFDN_SKETCH_EDC_CHILD,
+                pa.fixed_shape_tensor(
+                    pa.float32(), (PYFDN_SKETCH_EDC_BANDS, SKETCH_STORAGE_FRAMES)
+                ),
+            ),
+            pa.field(
+                PYFDN_SKETCH_ECHO_DENSITY_CHILD,
+                pa.list_(pa.float32(), SKETCH_STORAGE_FRAMES),
+            ),
+            pa.field(
+                PYFDN_SKETCH_SPECTRAL_FLATNESS_CHILD,
+                pa.list_(pa.float32(), SKETCH_STORAGE_FRAMES),
+            ),
+        ]
+    )
 
 
 def _fixed_size_list_array(values: np.ndarray) -> pa.FixedSizeListArray:

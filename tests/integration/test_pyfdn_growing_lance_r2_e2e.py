@@ -18,8 +18,10 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
     pyfdn_param_spec_sha256,
 )
+from synth_setter.data.vst.shapes import CLAP_FIELD
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.add_embeddings import CLAP_EMBEDDING_DIM
 from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.spec_io import upload_spec
@@ -88,12 +90,22 @@ def _train_command(
     return command
 
 
+@pytest.mark.parametrize(
+    "with_embeddings",
+    [
+        pytest.param(False, id="cpu"),
+        pytest.param(True, marks=pytest.mark.gpu, id="clap-gpu"),
+    ],
+)
 def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
     tmp_path: Path,
+    *,
+    with_embeddings: bool,
 ) -> None:
     """Public processes publish, poll, adopt, checkpoint, and resume exact data identity.
 
     :param tmp_path: Local operator, materialization, and training workspace.
+    :param with_embeddings: Whether generation adds GPU CLAP columns.
     """
     assert r2_io.is_r2_reachable(), "real R2 credentials are required"
     for command in (
@@ -104,42 +116,47 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
     ):
         assert shutil.which(command), f"installed public CLI is missing: {command}"
     prefix = f"ci-growing-pyfdn/{os.environ.get('GITHUB_RUN_ID', 'local')}/{uuid.uuid4().hex}/"
-    spec = DatasetSpec.model_validate(
-        {
-            "task_name": "pyfdn-growing-r2-e2e",
-            "output_format": "lance",
-            "train_val_test_sizes": [2, 1, 1],
-            "base_seed": 3090,
-            "mask_degenerate_bins": True,
-            "r2": {"bucket": "intermediate-data", "prefix": prefix},
-            "render": RenderConfig(
-                synth=SynthSpec(
-                    name=SynthName("pyfdn_n8_mono_householder"),
-                    param_spec_name=ParamSpecName("pyfdn_n8_mono_householder"),
-                    plugin_path="pyfdn",
-                    plugin_state_path="",
-                    synth_version="0.4.2",
-                    source_sha256=pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
-                ),
-                renderer_backend="pyfdn",
-                pyfdn_excitation="impulse",
-                sample_rate=44_100,
-                channels=1,
-                velocity=0,
-                signal_duration_seconds=4.0,
-                min_loudness=-100.0,
-                audio_dtype="float32",
-                mel_spec_dtype="float32",
-                samples_per_render_batch=1,
-                samples_per_shard=1,
-                base_seed=3090,
-                attempts_per_sample=100,
-                param_sample_cadence="sample",
-                plugin_reload_cadence="render",
-                gui_toggle_cadence="never",
-            ).model_dump(mode="json"),
+    spec_values = {
+        "task_name": "pyfdn-growing-r2-e2e",
+        "output_format": "lance",
+        "train_val_test_sizes": [2, 1, 1],
+        "base_seed": 3090,
+        "mask_degenerate_bins": True,
+        "r2": {"bucket": "intermediate-data", "prefix": prefix},
+        "render": RenderConfig(
+            synth=SynthSpec(
+                name=SynthName("pyfdn_n8_mono_householder"),
+                param_spec_name=ParamSpecName("pyfdn_n8_mono_householder"),
+                plugin_path="pyfdn",
+                plugin_state_path="",
+                synth_version="0.4.2",
+                source_sha256=pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
+            ),
+            renderer_backend="pyfdn",
+            pyfdn_excitation="impulse",
+            sample_rate=44_100,
+            channels=1,
+            velocity=0,
+            signal_duration_seconds=4.0,
+            min_loudness=-100.0,
+            audio_dtype="float32",
+            mel_spec_dtype="float32",
+            samples_per_render_batch=1,
+            samples_per_shard=1,
+            base_seed=3090,
+            attempts_per_sample=100,
+            param_sample_cadence="sample",
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        ).model_dump(mode="json"),
+    }
+    if with_embeddings:
+        spec_values["embedding_generation"] = {
+            "embeddings": ["clap"],
+            "device": "cuda",
+            "lance_batch_size": 1,
         }
-    )
+    spec = DatasetSpec.model_validate(spec_values)
     r2_io.ensure_r2_env_loaded()
     upload_spec(spec)
     processes: list[subprocess.Popen[str]] = []
@@ -262,9 +279,16 @@ def test_pyfdn_r2_public_clis_refresh_at_epoch_boundary_and_resume_checkpoint(
         assert baseline_branch.count_rows() == 2
         assert refreshed.count_rows() == 3
         assert refreshed_files[: len(baseline_files)] == baseline_files
-        audio = np.asarray(refreshed.to_table(columns=["audio"])["audio"].to_pylist())
+        columns = ["audio", *([CLAP_FIELD] if with_embeddings else [])]
+        table = refreshed.to_table(columns=columns)
+        audio = np.asarray(table["audio"].to_pylist())
         assert np.isfinite(audio).all()
         assert np.any(audio != 0)
+        if with_embeddings:
+            embeddings = np.asarray(table[CLAP_FIELD].to_pylist())
+            assert embeddings.shape == (3, CLAP_EMBEDDING_DIM)
+            assert np.isfinite(embeddings).all()
+            assert len({tuple(row) for row in embeddings}) == 3
         for split in ("val", "test"):
             target, options = r2_io.lance_target(spec.r2.split_lance_uri(split))
             pinned = lance.dataset(target, storage_options=options)

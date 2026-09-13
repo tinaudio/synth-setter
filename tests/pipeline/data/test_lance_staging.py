@@ -9,6 +9,9 @@ are built directly in NumPy so a codec bug cannot corrupt both sides.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 
 import lance
@@ -17,17 +20,27 @@ import pytest
 
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
+    CLAP_FIELD,
     DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
+    SSONDO_FIELD,
     dataset_field_shapes,
 )
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.add_embeddings import (
+    CLAP_EMBEDDING_DIM,
+    EMBEDDING_REGISTRY,
+    SSONDO_EMBEDDING_DIM,
+    GenerationEmbeddingRuntime,
+    _EMBEDDING_NAME_METADATA,
+)
 from synth_setter.pipeline.data.lance_shard import (
     lance_schema,
     record_batch_from_arrays,
     write_lance_dataset,
 )
 from synth_setter.pipeline.data.lance_staging import (
+    _reset_generation_embedding_runtime,
     complete_attempt_names,
     shard_has_complete_attempt,
     split_for_shard,
@@ -179,6 +192,224 @@ def test_complete_attempt_names_ignores_empty_attempt_name() -> None:
 def test_parse_shard_staging_dir_accepts_seven_digit_shard_id() -> None:
     """Directory parsing stays aligned with ``:06d`` after the minimum width is exceeded."""
     assert parse_shard_staging_dir("shard-1000000") == 1_000_000
+
+
+def _embedding_spec() -> DatasetSpec:
+    values = tiny_lance_spec().model_dump(mode="json")
+    values["embedding_generation"] = {
+        "embeddings": ["clap"],
+        "artifact_identities": {
+            "clap": f"test-clap:{EMBEDDING_REGISTRY['clap'].default_checkpoint}"
+        },
+        "device": "cuda",
+        "lance_batch_size": 1,
+    }
+    return DatasetSpec.model_validate(values)
+
+
+def _install_test_clap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("torch.cuda.device_count", lambda: 1)
+    monkeypatch.setattr("torch.random.fork_rng", nullcontext)
+
+    def load_encoder(
+        checkpoint: str, config: object
+    ) -> Callable[[np.ndarray, int], np.ndarray]:
+        del checkpoint, config
+
+        def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+            del sample_rate
+            means = audio.mean(axis=1, keepdims=True, dtype=np.float32)
+            return np.repeat(means, CLAP_EMBEDDING_DIM, axis=1)
+
+        return encode
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(
+            EMBEDDING_REGISTRY["clap"],
+            load_encoder=load_encoder,
+            resolve_artifact_identity=lambda checkpoint: f"test-clap:{checkpoint}",
+        ),
+    )
+    _reset_generation_embedding_runtime()
+
+
+def test_generation_runtime_preserves_row_association_and_vector_width(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _embedding_spec()
+    _install_test_clap(monkeypatch)
+    batch = next(lance.dataset(write_local_shard(spec, 0, tmp_path)).to_batches())
+    runtime = GenerationEmbeddingRuntime(
+        spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
+    )
+
+    augmented = runtime.augment_batch(batch, spec.render.sample_rate)
+
+    audio = batch.column(AUDIO_FIELD).to_numpy_ndarray()
+    embeddings = np.asarray(augmented.column(CLAP_FIELD).to_pylist(), dtype=np.float32)
+    assert embeddings.shape == (batch.num_rows, CLAP_EMBEDDING_DIM)
+    np.testing.assert_allclose(
+        embeddings[:, 0], audio.mean(axis=tuple(range(1, audio.ndim)))
+    )
+
+
+def test_generation_runtime_preserves_co_resident_output_order_and_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = _embedding_spec().model_dump(mode="json")
+    values["embedding_generation"]["embeddings"] = ["clap", "ssondo"]
+    values["embedding_generation"]["artifact_identities"]["ssondo"] = (
+        f"test-ssondo:{EMBEDDING_REGISTRY['ssondo'].default_checkpoint}"
+    )
+    spec = DatasetSpec.model_validate(values)
+    _install_test_clap(monkeypatch)
+
+    def load_ssondo_encoder(
+        checkpoint: str, config: object
+    ) -> Callable[[np.ndarray, int], np.ndarray]:
+        del checkpoint, config
+
+        def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+            del sample_rate
+            means = audio.mean(axis=(1, 2), keepdims=False, dtype=np.float32)[:, None]
+            return np.repeat(means + 1.0, SSONDO_EMBEDDING_DIM, axis=1)
+
+        return encode
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "ssondo",
+        replace(
+            EMBEDDING_REGISTRY["ssondo"],
+            load_encoder=load_ssondo_encoder,
+            resolve_artifact_identity=lambda checkpoint: f"test-ssondo:{checkpoint}",
+        ),
+    )
+    batch = next(lance.dataset(write_local_shard(spec, 0, tmp_path)).to_batches())
+    runtime = GenerationEmbeddingRuntime(
+        spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
+    )
+
+    augmented = runtime.augment_batch(batch, spec.render.sample_rate)
+
+    assert augmented.schema.names[-2:] == [CLAP_FIELD, SSONDO_FIELD]
+    assert augmented.schema.field(CLAP_FIELD).metadata[_EMBEDDING_NAME_METADATA] == b"clap"
+    assert augmented.schema.field(SSONDO_FIELD).metadata[_EMBEDDING_NAME_METADATA] == b"ssondo"
+    audio = batch.column(AUDIO_FIELD).to_numpy_ndarray()
+    ssondo = np.asarray(augmented.column(SSONDO_FIELD).to_pylist(), dtype=np.float32)
+    np.testing.assert_allclose(ssondo[:, 0], audio.mean(axis=(1, 2)) + 1.0)
+
+
+def test_generation_runtime_rejects_artifact_identity_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _embedding_spec()
+    _install_test_clap(monkeypatch)
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(
+            EMBEDDING_REGISTRY["clap"],
+            resolve_artifact_identity=lambda checkpoint: f"drifted:{checkpoint}",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="frozen generation policy"):
+        GenerationEmbeddingRuntime(
+            spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
+        )
+
+
+def test_generation_runtime_rejects_encoder_row_count_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _embedding_spec()
+    _install_test_clap(monkeypatch)
+
+    def load_short_encoder(
+        checkpoint: str, config: object
+    ) -> Callable[[np.ndarray, int], np.ndarray]:
+        del checkpoint, config
+
+        def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+            del sample_rate
+            return np.zeros((audio.shape[0] - 1, CLAP_EMBEDDING_DIM), dtype=np.float32)
+
+        return encode
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(EMBEDDING_REGISTRY["clap"], load_encoder=load_short_encoder),
+    )
+    runtime = GenerationEmbeddingRuntime(
+        spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
+    )
+    batch = next(lance.dataset(write_local_shard(spec, 0, tmp_path)).to_batches())
+
+    with pytest.raises(ValueError, match="produced shape"):
+        runtime.augment_batch(batch, spec.render.sample_rate)
+
+
+def test_generation_runtime_rejects_cross_batch_output_shape_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _embedding_spec()
+    _install_test_clap(monkeypatch)
+    calls = 0
+
+    def load_drifting_encoder(
+        checkpoint: str, config: object
+    ) -> Callable[[np.ndarray, int], np.ndarray]:
+        del checkpoint, config
+
+        def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+            nonlocal calls
+            del sample_rate
+            calls += 1
+            width = CLAP_EMBEDDING_DIM if calls == 1 else CLAP_EMBEDDING_DIM + 1
+            return np.zeros((audio.shape[0], width), dtype=np.float32)
+
+        return encode
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(EMBEDDING_REGISTRY["clap"], load_encoder=load_drifting_encoder),
+    )
+    runtime = GenerationEmbeddingRuntime(
+        spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
+    )
+    batch = next(lance.dataset(write_local_shard(spec, 0, tmp_path)).to_batches())
+    runtime.augment_batch(batch, spec.render.sample_rate)
+
+    with pytest.raises(ValueError, match="shape|schema"):
+        runtime.augment_batch(batch, spec.render.sample_rate)
+
+
+def test_stage_attempt_cuda_unavailable_withholds_valid_marker(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _embedding_spec()
+    local_shard = write_local_shard(spec, 0, tmp_path)
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+    _reset_generation_embedding_runtime()
+
+    with pytest.raises(RuntimeError, match="CUDA"):
+        stage_lance_shard_attempt(
+            spec, spec.shards[0], local_shard, worker_id="pod-a", attempt_uuid="no-gpu"
+        )
+
+    assert not (staging_dir(fake_r2_remote, spec, 0) / "pod-a-no-gpu.valid").exists()
 
 
 def test_stage_attempt_writes_fragment_data_into_assigned_split_dataset_dir(

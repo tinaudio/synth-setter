@@ -61,6 +61,7 @@ from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     AUDIO_MP3_FIELD,
     AUDIO_UUID_FIELD,
+    CLAP_FIELD,
     MEL_SPEC_FIELD,
     PARAM_ARRAY_FIELD,
     dataset_field_shapes,
@@ -68,6 +69,7 @@ from synth_setter.data.vst.shapes import (
 from synth_setter.evaluation.oracle_probe import OracleProbeProvenance
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.ci.validate_shard import validate_all_shards_from_r2
+from synth_setter.pipeline.data.add_embeddings import CLAP_EMBEDDING_DIM
 from synth_setter.pipeline.data.lance_staging import shard_has_complete_attempt, split_for_shard
 from synth_setter.pipeline.data.param_language import load_param_language
 from synth_setter.pipeline.schemas.render_metrics import (
@@ -393,6 +395,51 @@ def test_from_hydra_pyfdn_householder_writes_consumable_shard(
     assert np.any(audio != 0.0)
     assert np.isfinite(params).all()
     assert ((params >= 0.0) & (params <= 1.0)).all()
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_from_hydra_gpu_embedding_policy_writes_final_clap_column(
+    cfg_dataset_pyfdn_householder: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The public generation and finalize entrypoints persist real GPU embeddings.
+
+    :param cfg_dataset_pyfdn_householder: Composed production pyFDN dataset config.
+    :param fake_r2_remote: Local filesystem backing the real rclone transport.
+    :param monkeypatch: Configures the single local worker process.
+    :param tmp_path: Finalize workspace.
+    """
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    with open_dict(cfg_dataset_pyfdn_householder):
+        cfg_dataset_pyfdn_householder.train_val_test_sizes = [2, 0, 0]
+        cfg_dataset_pyfdn_householder.render.samples_per_shard = 2
+        cfg_dataset_pyfdn_householder.render.min_loudness = -100.0
+        cfg_dataset_pyfdn_householder.r2.prefix = "fake-r2/pyfdn-gpu-embeddings/"
+        cfg_dataset_pyfdn_householder.logger = None
+        cfg_dataset_pyfdn_householder.embedding_generation = {
+            "embeddings": ["clap"],
+            "device": "cuda",
+            "lance_batch_size": 2,
+        }
+
+    spec = spec_from_cfg(cfg_dataset_pyfdn_householder)
+    from_hydra(cfg_dataset_pyfdn_householder)
+    finalize_dir = tmp_path / "finalize"
+    finalize_dir.mkdir()
+    finalize_lance(spec, finalize_dir)
+
+    dataset_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "train.lance"
+    table = lance.dataset(dataset_path).to_table(columns=[AUDIO_FIELD, CLAP_FIELD])
+    embeddings = np.asarray(table.column(CLAP_FIELD).combine_chunks().to_pylist())
+    assert table.num_rows == 2
+    assert embeddings.shape == (2, CLAP_EMBEDDING_DIM)
+    assert table.schema.field(CLAP_FIELD).type.value_type == pa.float32()
+    assert np.isfinite(embeddings).all()
+    assert not np.array_equal(embeddings[0], embeddings[1])
 
 
 @pytest.mark.slow

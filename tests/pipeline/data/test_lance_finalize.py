@@ -10,27 +10,45 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from collections.abc import Callable
+from contextlib import nullcontext
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import lance
 import numpy as np
 import pyarrow as pa
 import pytest
 import torch
+from lance.file import LanceFileReader
 from omegaconf import OmegaConf
 
 from synth_setter.cli.finalize_dataset import finalize, finalize_from_spec
 from synth_setter.data.normalization_stats import estimate_log_mel_statistics
+from synth_setter.conditioning import PYFDN_SKETCH_CONTROLS
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
+    CLAP_FIELD,
+    CQT_FIELD,
     DATASET_FIELD_NAMES,
     MEL_SPEC_FIELD,
+    NUM_SKETCH_CONTROLS,
+    SKETCH_STRUCT_FIELD,
+    mel_n_frames_from_samples,
 )
 from synth_setter.models.components.spec_encoder import LogMelFrontend
+from synth_setter.pipeline.data.add_embeddings import CLAP_EMBEDDING_DIM, EMBEDDING_REGISTRY
+from synth_setter.pipeline.data.cqt import CQT_EMBEDDING_DIM, cqt_num_frames
 from synth_setter.pipeline.data.lance_finalize import finalize_lance_fragments
-from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
+from synth_setter.pipeline.data.lance_shard import (
+    iter_lance_column_rows,
+    read_shard_metadata,
+    tensor_array,
+)
 from synth_setter.pipeline.data.lance_staging import (
+    _reset_generation_embedding_runtime,
     shard_has_complete_attempt,
     stage_lance_shard_attempt,
 )
@@ -39,6 +57,8 @@ from synth_setter.pipeline.schemas.lance_attempt import (
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.pipeline.data.test_lance_staging import (
+    _embedding_spec,
+    _install_test_clap,
     shard_arrays,
     staging_dir,
     tiny_lance_spec,
@@ -94,6 +114,277 @@ def read_columns(uri: Path) -> dict[str, np.ndarray]:
         field: np.stack(list(iter_lance_column_rows(uri, field)), axis=0)
         for field in DATASET_FIELD_NAMES
     }
+
+
+def test_finalize_commits_augmented_fragments_with_identical_embedding_schema(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_test_clap(monkeypatch)
+    spec = _embedding_spec()
+    stage_all_shards(spec, tmp_path)
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    train = lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train")))
+    local_names = lance.dataset(str(tmp_path / "w-0" / spec.shards[0].filename)).schema.names
+    assert train.schema.names == [*local_names, CLAP_FIELD]
+    clap_field = train.schema.field(CLAP_FIELD)
+    assert clap_field.nullable is False
+    assert clap_field.metadata[b"synth_setter.embedding.name"] == b"clap"
+    vectors = train.to_table(columns=[CLAP_FIELD])[CLAP_FIELD].combine_chunks().values.to_numpy()
+    assert vectors.dtype == np.float32
+    assert np.isfinite(vectors).all()
+    decoded = read_columns(split_dataset_path(fake_r2_remote, spec, "train"))
+    np.testing.assert_array_equal(
+        decoded[AUDIO_FIELD],
+        np.concatenate([shard_arrays(spec, 0)[AUDIO_FIELD], shard_arrays(spec, 1)[AUDIO_FIELD]]),
+    )
+
+
+def test_finalize_skips_stale_embedding_attempt_for_later_configured_artifact(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_test_clap(monkeypatch)
+    spec = _embedding_spec()
+    assert spec.embedding_generation is not None
+    stale_policy = spec.embedding_generation.model_copy(
+        update={"artifact_identities": (("clap", "stale:artifact"),)}
+    )
+    stale_spec = spec.model_copy(update={"embedding_generation": stale_policy})
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(
+            EMBEDDING_REGISTRY["clap"],
+            resolve_artifact_identity=lambda checkpoint: "stale:artifact",
+        ),
+    )
+    _reset_generation_embedding_runtime()
+    stage_all_shards(stale_spec, tmp_path / "stale", worker_id="worker-a")
+    _install_test_clap(monkeypatch)
+    stage_all_shards(spec, tmp_path / "current", worker_id="worker-b")
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    card_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "dataset.json"
+    card = LanceDatasetCard.model_validate_json(card_path.read_text())
+    assert all(attempt.attempt.startswith("worker-b-") for attempt in card.selected_attempts)
+
+
+def test_finalize_uses_frozen_identity_when_resolver_becomes_unavailable(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_test_clap(monkeypatch)
+    spec = _embedding_spec()
+    stage_all_shards(spec, tmp_path)
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(
+            EMBEDDING_REGISTRY["clap"],
+            resolve_artifact_identity=lambda checkpoint: (_ for _ in ()).throw(
+                FileNotFoundError(checkpoint)
+            ),
+        ),
+    )
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    train = lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train")))
+    assert train.count_rows() == 4
+
+
+def test_finalize_rejects_cross_winner_embedding_nullability_drift(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_test_clap(monkeypatch)
+    spec = _embedding_spec()
+    stage_all_shards(spec, tmp_path)
+    target = fragment_data_file(fake_r2_remote, spec, shard_id=1)
+    table = LanceFileReader(str(target)).read_all().to_table()
+    index = table.schema.get_field_index(CLAP_FIELD)
+    field = table.schema.field(index)
+    drifted = table.set_column(
+        index,
+        pa.field(field.name, field.type, nullable=True, metadata=field.metadata),
+        table.column(index),
+    )
+    bad_dataset = tmp_path / "nullable-embedding.lance"
+    lance.write_dataset(drifted, bad_dataset)
+    shutil.copyfile(next((bad_dataset / "data").iterdir()), target)
+
+    with pytest.raises(ValueError, match="embedding types or metadata differ"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def _struct_embedding_spec(embedding_name: str) -> DatasetSpec:
+    values = tiny_lance_spec().model_dump(mode="json")
+    values["render"]["channels"] = 1
+    values["embedding_generation"] = {
+        "embeddings": [embedding_name],
+        "artifact_identities": {embedding_name: f"test:{embedding_name}"},
+        "device": "cuda",
+    }
+    return DatasetSpec.model_validate(values)
+
+
+def _install_test_struct_embedding(
+    monkeypatch: pytest.MonkeyPatch, embedding_name: str
+) -> None:
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("torch.cuda.device_count", lambda: 1)
+    monkeypatch.setattr("torch.random.fork_rng", nullcontext)
+
+    def load_encoder(checkpoint: str, config: object) -> Callable[[np.ndarray, int], np.ndarray]:
+        del checkpoint, config
+
+        def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+            controls = (
+                NUM_SKETCH_CONTROLS
+                if embedding_name == "sketch"
+                else PYFDN_SKETCH_CONTROLS
+            )
+            frames = (
+                mel_n_frames_from_samples(audio.shape[-1], sample_rate)
+                if embedding_name == "sketch"
+                else 32
+            )
+            return np.zeros((len(audio), controls, frames), dtype=np.float32)
+
+        return encode
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        embedding_name,
+        replace(
+            EMBEDDING_REGISTRY[embedding_name],
+            load_encoder=load_encoder,
+            resolve_artifact_identity=lambda checkpoint: f"test:{embedding_name}",
+        ),
+    )
+    _reset_generation_embedding_runtime()
+
+
+@pytest.mark.parametrize("embedding_name", ["sketch", "pyfdn_sketch"])
+def test_finalize_accepts_canonical_struct_embedding_schema(
+    embedding_name: str,
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _struct_embedding_spec(embedding_name)
+    _install_test_struct_embedding(monkeypatch, embedding_name)
+    stage_all_shards(spec, tmp_path)
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    train = lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train")))
+    assert pa.types.is_struct(train.schema.field(EMBEDDING_REGISTRY[embedding_name].column).type)
+
+
+def test_finalize_rejects_wrong_struct_embedding_children(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _struct_embedding_spec("sketch")
+    _install_test_struct_embedding(monkeypatch, "sketch")
+    stage_all_shards(spec, tmp_path)
+    target = fragment_data_file(fake_r2_remote, spec, shard_id=0)
+    table = LanceFileReader(str(target)).read_all().to_table()
+    index = table.schema.get_field_index(SKETCH_STRUCT_FIELD)
+    field = table.schema.field(index)
+    junk = pa.StructArray.from_arrays(
+        [
+            pa.FixedSizeListArray.from_arrays(
+                pa.array(np.zeros(table.num_rows, dtype=np.float32)), 1
+            )
+        ],
+        names=["junk"],
+    )
+    drifted = table.set_column(
+        index,
+        pa.field(SKETCH_STRUCT_FIELD, junk.type, nullable=False, metadata=field.metadata),
+        junk,
+    )
+    bad_dataset = tmp_path / "bad-struct.lance"
+    lance.write_dataset(drifted, bad_dataset)
+    shutil.copyfile(next((bad_dataset / "data").iterdir()), target)
+
+    with pytest.raises(ValueError, match="embedding field 'sketch'"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_rejects_wrong_cqt_tensor_geometry(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = tiny_lance_spec().model_dump(mode="json")
+    values["embedding_generation"] = {
+        "embeddings": ["cqt"],
+        "artifact_identities": {"cqt": "test:cqt"},
+        "device": "cuda",
+    }
+    spec = DatasetSpec.model_validate(values)
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("torch.cuda.device_count", lambda: 1)
+    monkeypatch.setattr("torch.random.fork_rng", nullcontext)
+
+    def load_encoder(checkpoint: str, config: object) -> Callable[[np.ndarray, int], np.ndarray]:
+        del checkpoint, config
+
+        def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+            return np.zeros(
+                (
+                    len(audio),
+                    CQT_EMBEDDING_DIM,
+                    cqt_num_frames(audio.shape[-1], sample_rate),
+                ),
+                dtype=np.float32,
+            )
+
+        return encode
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "cqt",
+        replace(
+            EMBEDDING_REGISTRY["cqt"],
+            load_encoder=load_encoder,
+            resolve_artifact_identity=lambda checkpoint: "test:cqt",
+        ),
+    )
+    _reset_generation_embedding_runtime()
+    stage_all_shards(spec, tmp_path)
+    target = fragment_data_file(fake_r2_remote, spec, shard_id=0)
+    table = LanceFileReader(str(target)).read_all().to_table()
+    index = table.schema.get_field_index(CQT_FIELD)
+    field = table.schema.field(index)
+    wrong = tensor_array(
+        np.zeros((table.num_rows, 1, 1), dtype=np.float32),
+        np.dtype("float32"),
+        (1, 1),
+    )
+    drifted = table.set_column(
+        index,
+        pa.field(CQT_FIELD, wrong.type, nullable=False, metadata=field.metadata),
+        wrong,
+    )
+    bad_dataset = tmp_path / "bad-cqt.lance"
+    lance.write_dataset(drifted, bad_dataset)
+    shutil.copyfile(next((bad_dataset / "data").iterdir()), target)
+
+    with pytest.raises(ValueError, match="embedding field 'cqt'"):
+        finalize_from_spec(spec, tmp_path / "work")
 
 
 def test_finalize_commits_winners_into_three_splits_with_exact_shard_content(
@@ -1064,6 +1355,38 @@ def test_finalize_rejects_fragment_path_outside_split_data(
     sidecar_path.write_text(json.dumps(payload))
 
     with pytest.raises(ValueError, match="unsafe fragment data path"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_rejects_wrong_embedding_width(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_test_clap(monkeypatch)
+    spec = _embedding_spec()
+    stage_all_shards(spec, tmp_path)
+    target_file = fragment_data_file(fake_r2_remote, spec)
+    table = LanceFileReader(str(target_file)).read_all().to_table()
+    wrong = pa.FixedSizeListArray.from_arrays(
+        pa.array(np.zeros(table.num_rows * (CLAP_EMBEDDING_DIM - 1), dtype=np.float32)),
+        CLAP_EMBEDDING_DIM - 1,
+    )
+    bad_table = table.set_column(
+        table.schema.get_field_index(CLAP_FIELD),
+        pa.field(
+            CLAP_FIELD,
+            wrong.type,
+            nullable=False,
+            metadata=table.schema.field(CLAP_FIELD).metadata,
+        ),
+        wrong,
+    )
+    bad_dataset = tmp_path / "bad-embedding.lance"
+    lance.write_dataset(bad_table, bad_dataset)
+    shutil.copyfile(next((bad_dataset / "data").iterdir()), target_file)
+
+    with pytest.raises(ValueError, match=r"fixed_size_list<float32, 512>"):
         finalize_from_spec(spec, tmp_path / "work")
 
 

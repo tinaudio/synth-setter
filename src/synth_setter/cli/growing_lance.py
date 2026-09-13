@@ -115,6 +115,19 @@ def _ready_version(spec: DatasetSpec, branch: str) -> int:
     return version
 
 
+def _spec_for_snapshot(spec: DatasetSpec, snapshot: GrowingSnapshot) -> DatasetSpec:
+    """Apply the growing branch's frozen embedding policy to its producer spec.
+
+    :param spec: Original immutable dataset specification.
+    :param snapshot: Ready growing snapshot carrying branch-specific augmentation.
+    :returns: Effective worker specification for this branch.
+    :raises ValueError: An explicit input policy disagrees with the branch policy.
+    """
+    if spec.embedding_generation not in (None, snapshot.embedding_generation):
+        raise ValueError("input embedding policy disagrees with growing snapshot")
+    return spec.model_copy(update={"embedding_generation": snapshot.embedding_generation})
+
+
 def _ready_snapshot(spec: DatasetSpec, branch: str, version: int | None = None) -> GrowingSnapshot:
     """Load and validate the ready snapshot the tag points at.
 
@@ -131,7 +144,8 @@ def _ready_snapshot(spec: DatasetSpec, branch: str, version: int | None = None) 
     )
     if snapshot.branch != branch or snapshot.version != version:
         raise ValueError("ready tag and growing snapshot identity disagree")
-    if snapshot.dataset_spec_fingerprint != dataset_spec_fingerprint(spec):
+    effective_spec = _spec_for_snapshot(spec, snapshot)
+    if snapshot.dataset_spec_fingerprint != dataset_spec_fingerprint(effective_spec):
         raise ValueError("ready snapshot dataset specification disagrees with input")
     return snapshot
 
@@ -263,13 +277,14 @@ def generate(args: argparse.Namespace) -> None:
     pending_uri = spec.r2.growing_metadata_uri(args.branch, "pending.json")
     while True:
         current = _ready_snapshot(spec, args.branch)
+        worker_spec = _spec_for_snapshot(spec, current)
         expected = pending_refresh_request(current)
         if expected is None:
             logger.info("growing_branch_at_capacity", branch=args.branch)
             return
         pending = _load_pending(pending_uri) if _pending_exists(spec, args.branch) else None
         if pending is not None and pending == expected:
-            generate_pending_shards(spec, current, pending, work_dir=args.work_dir)
+            generate_pending_shards(worker_spec, current, pending, work_dir=args.work_dir)
         else:
             logger.info("growing_pending_not_ready", branch=args.branch)
         if args.poll_seconds <= 0:
@@ -351,6 +366,7 @@ def _finalize_pending(spec: DatasetSpec, branch: str, work_dir: Path) -> None:
     :param work_dir: Local operator workspace.
     """
     current = _ready_snapshot(spec, branch)
+    effective_spec = _spec_for_snapshot(spec, current)
     if pending_refresh_request(current) is None:
         _complete_stale_pending(spec, branch, work_dir, current)
         return
@@ -364,7 +380,7 @@ def _finalize_pending(spec: DatasetSpec, branch: str, work_dir: Path) -> None:
         return
     published = finalize_staged_refresh(
         spec.r2.split_lance_uri("train"),
-        spec=spec,
+        spec=effective_spec,
         current=current,
         pending=pending,
         metadata_root=work_dir,

@@ -15,6 +15,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -29,6 +30,7 @@ from pydantic import (
     SerializerFunctionWrapHandler,
     ValidationInfo,
     computed_field,
+    field_serializer,
     field_validator,
     model_serializer,
     model_validator,
@@ -70,6 +72,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DatasetSpec",
+    "GenerationEmbeddingPolicy",
     "InputAudioSource",
     "OutputFormat",
     "R2Location",
@@ -1202,6 +1205,151 @@ def _can_derive_prefix(data: dict[str, Any], r2: dict[str, Any]) -> bool:
     return True
 
 
+class GenerationEmbeddingPolicy(BaseModel):  # noqa: DOC601, DOC603 — Fields describe policy.
+    """GPU embedding columns computed before each worker stages a Lance shard."""
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    embeddings: tuple[str, ...] = Field(description="Ordered embedding registry keys to write.")
+    checkpoints: tuple[tuple[str, str], ...] = Field(
+        default=(), description="Immutable checkpoint overrides keyed by registry name."
+    )
+    artifact_identities: tuple[tuple[str, str], ...] = Field(
+        default=(), description="Frozen artifact identities keyed by registry name."
+    )
+    device: str = Field(description="Explicit CUDA device used by this worker.")
+    lance_batch_size: int = Field(default=128, ge=1, description="Rows encoded per batch.")
+
+    @field_validator("embeddings", mode="before")
+    @classmethod
+    def _validate_embeddings(cls, value: object) -> object:
+        """Freeze Hydra/JSON lists and reject unsupported generation policies.
+
+        :param value: Raw embedding selection.
+        :returns: Validated immutable registry-key sequence.
+        :raises ValueError: Selection is empty, unknown, duplicated, or re-renders rows.
+        """
+        from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
+
+        if not isinstance(value, (list, tuple)):
+            return value
+        embeddings = tuple(value)
+        if not embeddings:
+            raise ValueError("embeddings must select at least one registry key")
+        unknown = sorted(set(embeddings) - set(EMBEDDING_REGISTRY))
+        if unknown:
+            raise ValueError(f"unknown generation embeddings: {unknown}")
+        if len(set(embeddings)) != len(embeddings):
+            raise ValueError("generation embeddings must not contain duplicates")
+        rerendering = [name for name in embeddings if EMBEDDING_REGISTRY[name].rerenders]
+        if rerendering:
+            raise ValueError(f"generation embeddings cannot re-render rows: {rerendering}")
+        if len(embeddings) > 1 and any(
+            not EMBEDDING_REGISTRY[name].co_resident for name in embeddings
+        ):
+            raise ValueError(
+                "non-co-resident generation embeddings must run in separate dataset jobs"
+            )
+        return embeddings
+
+    @field_validator("checkpoints", mode="before")
+    @classmethod
+    def _freeze_checkpoints(cls, value: object) -> object:
+        """Freeze checkpoint mappings so a policy cannot mutate after validation.
+
+        :param value: Hydra mapping or serialized key-value pairs.
+        :returns: Sorted immutable key-value pairs.
+        :raises ValueError: Serialized pairs contain duplicate keys.
+        """
+        if isinstance(value, Mapping):
+            value = tuple(value.items())
+        elif not isinstance(value, (list, tuple)):
+            return value
+        pairs: list[tuple[str, str]] = []
+        for pair in value:
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                raise ValueError("checkpoint overrides must be key-value pairs")
+            name, checkpoint = pair
+            if not isinstance(name, str) or not isinstance(checkpoint, str):
+                raise ValueError("checkpoint override keys and values must be strings")
+            pairs.append((name, checkpoint))
+        if len({pair[0] for pair in pairs}) != len(pairs):
+            raise ValueError("checkpoint overrides must have unique registry keys")
+        return tuple(sorted(pairs))
+
+    @field_validator("artifact_identities", mode="before")
+    @classmethod
+    def _freeze_artifact_identities(cls, value: object) -> object:
+        """Freeze artifact identities so persisted policy cannot drift.
+
+        :param value: Identity mapping or serialized key-value pairs.
+        :returns: Sorted immutable key-value pairs.
+        :raises ValueError: Pairs are malformed, duplicated, or blank.
+        """
+        if isinstance(value, Mapping):
+            value = tuple(value.items())
+        elif not isinstance(value, (list, tuple)):
+            return value
+        pairs: list[tuple[str, str]] = []
+        for pair in value:
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                raise ValueError("artifact identities must be key-value pairs")
+            name, identity = pair
+            if not isinstance(name, str) or not isinstance(identity, str):
+                raise ValueError("artifact identity keys and values must be strings")
+            if not identity.strip():
+                raise ValueError("artifact identities must be nonblank")
+            pairs.append((name, identity))
+        if len({pair[0] for pair in pairs}) != len(pairs):
+            raise ValueError("artifact identities must have unique registry keys")
+        return tuple(sorted(pairs))
+
+    @field_serializer("checkpoints", "artifact_identities")
+    def _serialize_named_pairs(self, value: tuple[tuple[str, str], ...]) -> dict[str, str]:
+        """Serialize immutable named pairs as the public mapping contract.
+
+        :param value: Validated immutable key-value pairs.
+        :returns: Values keyed by embedding name.
+        """
+        return dict(value)
+
+    @field_validator("device")
+    @classmethod
+    def _device_must_be_cuda(cls, value: str) -> str:
+        """Require explicit CUDA placement; runtime availability is checked by the worker.
+
+        :param value: Configured Torch device.
+        :returns: CUDA device unchanged.
+        :raises ValueError: Device does not select CUDA.
+        """
+        prefix, separator, index = value.partition(":")
+        if prefix != "cuda" or (separator and not index.isdigit()):
+            raise ValueError("generation embeddings require an explicit CUDA device")
+        return value
+
+    @model_validator(mode="after")
+    def _checkpoint_keys_must_be_selected(self) -> GenerationEmbeddingPolicy:
+        """Reject checkpoint or artifact keys outside the selected policy.
+
+        :returns: Validated policy.
+        :raises ValueError: Named values are incomplete, unselected, or unsupported.
+        """
+        from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
+
+        checkpoint_names = {name for name, _ in self.checkpoints}
+        unselected = sorted(checkpoint_names - set(self.embeddings))
+        if unselected:
+            raise ValueError(f"checkpoint overrides are not selected embeddings: {unselected}")
+        for name in checkpoint_names:
+            spec = EMBEDDING_REGISTRY[name]
+            if not spec.default_checkpoint:
+                raise ValueError(f"{name} does not support checkpoint overrides")
+        identity_names = {name for name, _ in self.artifact_identities}
+        if identity_names and identity_names != set(self.embeddings):
+            raise ValueError("artifact identities must exactly match selected embeddings")
+        return self
+
+
 class DatasetSpec(BaseModel):
     """Unified dataset specification — config + materialized runtime in one model.
 
@@ -1254,6 +1402,10 @@ class DatasetSpec(BaseModel):
     .. attribute :: param_language_dimension
 
         Optional EmbeddingGemma width; finalize publishes one embedding per logical field.
+
+    .. attribute :: embedding_generation
+
+        Optional GPU embedding policy applied by workers before Lance fragment staging.
 
     .. attribute :: use_shard_queue
 
@@ -1330,6 +1482,11 @@ class DatasetSpec(BaseModel):
     param_language_dimension: Literal[128, 256, 512, 768] | None = Field(
         default=None,
         description="Optional Matryoshka width for finalized per-field EmbeddingGemma metadata.",
+    )
+
+    embedding_generation: GenerationEmbeddingPolicy | None = Field(
+        default=None,
+        description="GPU embedding policy applied before each Lance shard attempt is staged.",
     )
 
     use_shard_queue: bool = Field(
@@ -1462,6 +1619,37 @@ class DatasetSpec(BaseModel):
         if isinstance(r2, dict) and "prefix" not in r2:
             data["r2"] = _fill_default_r2_prefix(data, r2)
         return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _materialize_embedding_artifact_identities(cls, data: Any) -> Any:
+        """Resolve embedding artifact identities once into the persisted dataset policy.
+
+        :param data: Raw dataset-spec input.
+        :returns: Input with complete frozen artifact identities when embeddings are enabled.
+        :raises ValueError: The render parameter registry is unavailable during materialization.
+        """
+        if not isinstance(data, dict) or data.get("embedding_generation") is None:
+            return data
+        policy = GenerationEmbeddingPolicy.model_validate(data["embedding_generation"])
+        if policy.artifact_identities:
+            return data
+        render = data.get("render")
+        synth = render.get("synth") if isinstance(render, dict) else None
+        param_spec_name = synth.get("param_spec_name") if isinstance(synth, dict) else None
+        if not isinstance(param_spec_name, str) or not param_spec_name:
+            raise ValueError(
+                "render.synth.param_spec_name is required to materialize embedding artifacts"
+            )
+        from synth_setter.pipeline.data.add_embeddings import generation_embedding_identities
+
+        identities = generation_embedding_identities(policy, param_spec_name=param_spec_name)
+        materialized = policy.model_copy(
+            update={"artifact_identities": tuple(sorted(identities.items()))}
+        )
+        normalized = dict(data)
+        normalized["embedding_generation"] = materialized
+        return normalized
 
     @model_validator(mode="before")
     @classmethod

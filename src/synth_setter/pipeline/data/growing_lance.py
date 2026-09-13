@@ -33,10 +33,12 @@ from synth_setter.pipeline.data.stats import (
     merge_welford,
     save_welford,
 )
+from synth_setter.pipeline.schemas.spec import GenerationEmbeddingPolicy
 
 if TYPE_CHECKING:
     from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
 
+_EMBEDDING_FIELD_NAME_KEY = b"synth_setter.embedding.name"
 _GROWING_PENDING_PROPERTY = "synth_setter.growing_pending_identity"
 _LOCAL_SOURCE_PROPERTY = "synth_setter.growing_remote_identity"
 
@@ -145,6 +147,9 @@ class GrowingSnapshot(BaseModel):
     .. attribute :: high_watermark
 
         Next direct train position.
+    .. attribute :: embedding_generation
+
+        Frozen worker policy inferred from or checked against the baseline schema.
     .. attribute :: dataset_spec_fingerprint
 
         Frozen producer specification digest.
@@ -177,6 +182,7 @@ class GrowingSnapshot(BaseModel):
     max_train_shards: int
     num_extra_shards: int
     high_watermark: int
+    embedding_generation: GenerationEmbeddingPolicy | None = None
     dataset_spec_fingerprint: str
     row_count: int
     fragment_count: int
@@ -358,7 +364,11 @@ def dataset_spec_fingerprint(spec: DatasetSpec) -> str:
     :param spec: Producer specification.
     :returns: SHA-256 hexadecimal digest.
     """
-    return sha256(spec.model_dump_json().encode()).hexdigest()
+    payload = spec.model_dump(mode="json")
+    if payload["embedding_generation"] is None:
+        del payload["embedding_generation"]
+    serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return sha256(serialized.encode()).hexdigest()
 
 
 def _plan(snapshot: GrowingSnapshot) -> GrowingPlan:
@@ -416,13 +426,139 @@ def _transaction(dataset: lance.LanceDataset, version: int) -> lance.Transaction
     return transaction
 
 
+def _generation_policy_for_baseline(
+    spec: DatasetSpec,
+    baseline_schema: pa.Schema,
+    extra_columns: Sequence[str],
+) -> GenerationEmbeddingPolicy | None:
+    """Freeze the policy needed to reproduce a baseline's embedding fields.
+
+    :param spec: Frozen producer specification, optionally carrying an explicit policy.
+    :param baseline_schema: Checked-out baseline schema.
+    :param extra_columns: Baseline fields absent from the render schema.
+    :returns: Explicit or metadata-inferred generation policy, or ``None`` without extras.
+    :raises ValueError: Extra fields are not a complete registry-backed embedding selection.
+    """
+    if not extra_columns and spec.embedding_generation is None:
+        return None
+    from synth_setter.pipeline.data.add_embeddings import (
+        EMBEDDING_REGISTRY,
+        _EMBEDDING_ARTIFACT_METADATA,
+        _EMBEDDING_NAME_METADATA,
+        _output_columns,
+    )
+
+    names: list[str] = []
+    baseline_identities: dict[str, str] = {}
+    for column in extra_columns:
+        metadata = baseline_schema.field(column).metadata or {}
+        encoded_name = metadata.get(_EMBEDDING_NAME_METADATA)
+        encoded_identity = metadata.get(_EMBEDDING_ARTIFACT_METADATA)
+        if encoded_name is None or not encoded_identity:
+            raise ValueError(f"baseline extra field {column!r} lacks embedding provenance")
+        name = encoded_name.decode()
+        identity = encoded_identity.decode()
+        if name not in EMBEDDING_REGISTRY or EMBEDDING_REGISTRY[name].rerenders:
+            raise ValueError(f"baseline extra field {column!r} has unsupported embedding {name!r}")
+        if name in baseline_identities and baseline_identities[name] != identity:
+            raise ValueError(f"baseline embedding {name!r} has inconsistent artifact provenance")
+        baseline_identities[name] = identity
+        if name not in names:
+            names.append(name)
+    policy = spec.embedding_generation
+    if policy is None:
+        policy = GenerationEmbeddingPolicy(
+            embeddings=tuple(names),
+            artifact_identities=tuple(sorted(baseline_identities.items())),
+            device="cuda",
+        )
+        from synth_setter.pipeline.data.add_embeddings import generation_embedding_identities
+
+        reproducible = generation_embedding_identities(
+            policy, param_spec_name=str(spec.render.param_spec_name)
+        )
+        if reproducible != baseline_identities:
+            raise ValueError("baseline embeddings cannot be reproduced by default checkpoints")
+    configured_columns = [
+        column
+        for name in policy.embeddings
+        for column in _output_columns(EMBEDDING_REGISTRY[name])
+    ]
+    if list(extra_columns) != configured_columns:
+        raise ValueError(
+            f"baseline embedding columns {list(extra_columns)} do not match configured "
+            f"generation columns {configured_columns}"
+        )
+    expected_identities = dict(policy.artifact_identities)
+    for name in policy.embeddings:
+        for column in _output_columns(EMBEDDING_REGISTRY[name]):
+            metadata = baseline_schema.field(column).metadata or {}
+            if metadata.get(_EMBEDDING_NAME_METADATA) != name.encode():
+                raise ValueError(
+                    f"baseline embedding field {column!r} has invalid registry-name metadata"
+                )
+            if metadata.get(_EMBEDDING_ARTIFACT_METADATA) != expected_identities[name].encode():
+                raise ValueError(
+                    f"baseline embedding field {column!r} does not match the frozen artifact"
+                )
+    if expected_identities != baseline_identities:
+        raise ValueError("baseline embedding artifacts do not match the frozen generation policy")
+    return policy
+
+
+def _sorted_metadata(metadata: dict[bytes, bytes] | None) -> list[tuple[str, str]]:
+    """Return metadata in a serialization-order-independent form.
+
+    :param metadata: Arrow schema or field metadata.
+    :returns: Sorted hexadecimal key-value pairs.
+    """
+    return sorted((key.hex(), value.hex()) for key, value in (metadata or {}).items())
+
+
+def _legacy_schema_fingerprint(dataset: lance.LanceDataset) -> str:
+    """Return the byte-serialized fingerprint stored by pre-policy snapshots.
+
+    :param dataset: Pinned Lance dataset version.
+    :returns: SHA-256 digest of the Arrow IPC schema bytes.
+    """
+    return sha256(dataset.schema.serialize().to_pybytes()).hexdigest()
+
+
 def _schema_fingerprint(dataset: lance.LanceDataset) -> str:
-    """Digest a dataset's serialized Arrow schema.
+    """Digest the exact logical Arrow schema independent of metadata ordering.
 
     :param dataset: Open Lance dataset.
     :returns: SHA-256 hexadecimal digest.
     """
-    return sha256(dataset.schema.serialize().to_pybytes()).hexdigest()
+    schema = dataset.schema
+    carries_embeddings = any(
+        _EMBEDDING_FIELD_NAME_KEY in (field.metadata or {}) for field in schema
+    )
+    if not carries_embeddings:
+        return _legacy_schema_fingerprint(dataset)
+    payload = {
+        "fields": [
+            {
+                "name": field.name,
+                "type": str(field.type),
+                "nullable": field.nullable,
+                "metadata": _sorted_metadata(field.metadata),
+            }
+            for field in schema
+        ],
+        "metadata": _sorted_metadata(schema.metadata),
+    }
+    return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _schema_fingerprint_matches(dataset: lance.LanceDataset, expected: str) -> bool:
+    """Accept canonical fingerprints and legacy Arrow-byte snapshot identities.
+
+    :param dataset: Pinned Lance dataset version.
+    :param expected: Fingerprint stored by the ready snapshot.
+    :returns: Whether the dataset matches either supported fingerprint format.
+    """
+    return expected in {_schema_fingerprint(dataset), _legacy_schema_fingerprint(dataset)}
 
 
 def _file_sha256(path: Path) -> str:
@@ -547,18 +683,16 @@ def initialize_growing_branch(
     """
     dataset = _open_train(train_uri)
     baseline = dataset.checkout_version(baseline_version)
-    # Growing shards carry the spec schema only, so a baseline widened by
-    # add-embeddings would reject every staged shard (#3251); refuse it here.
     spec_fields = lance_schema(
         dataset_field_shapes(spec.render, spec.num_params), spec.render.shard_metadata()
     ).names
     extra_columns = [name for name in baseline.schema.names if name not in spec_fields]
-    if extra_columns:
-        raise ValueError(
-            f"baseline train version {baseline_version} carries post-finalize columns "
-            f"{extra_columns} absent from the spec schema; pass --baseline-version "
-            "pointing at the finalized pre-embedding version"
-        )
+    embedding_generation = _generation_policy_for_baseline(
+        spec, baseline.schema, extra_columns
+    )
+    effective_spec = spec.model_copy(
+        update={"embedding_generation": embedding_generation}
+    )
     baseline_transaction = _transaction(dataset, baseline_version)
     baseline_train_shards = len(baseline.get_fragments())
     expected_train_shards = spec.train_val_test_sizes[0] // spec.render.samples_per_shard
@@ -581,7 +715,7 @@ def initialize_growing_branch(
     if not stats_path.is_file() or not welford_path.is_file():
         raise ValueError("baseline stats.npz and welford.npz are required")
     load_welford(welford_path, expected_shape=_expected_mel_shape(spec))
-    fingerprint = dataset_spec_fingerprint(spec)
+    fingerprint = dataset_spec_fingerprint(effective_spec)
     contract = {
         "synth_setter.growing_baseline_train_shards": str(baseline_train_shards),
         "synth_setter.growing_baseline_transaction": baseline_transaction.uuid,
@@ -590,6 +724,10 @@ def initialize_growing_branch(
         "synth_setter.growing_max_train_shards": str(max_train_shards),
         "synth_setter.growing_num_extra_shards": str(num_extra_shards),
     }
+    if embedding_generation is not None:
+        contract["synth_setter.growing_embedding_generation"] = (
+            embedding_generation.model_dump_json()
+        )
     checked_out = _create_or_resume_branch(dataset, branch, baseline_version, contract)
     snapshot = GrowingSnapshot(
         branch=branch,
@@ -602,6 +740,7 @@ def initialize_growing_branch(
         max_train_shards=max_train_shards,
         num_extra_shards=num_extra_shards,
         high_watermark=baseline_train_shards,
+        embedding_generation=embedding_generation,
         dataset_spec_fingerprint=fingerprint,
         row_count=baseline.count_rows(),
         fragment_count=baseline_train_shards,
@@ -768,13 +907,21 @@ def publish_growing_branch(
         _open_train(train_uri) if current.version == current.baseline_version else source
     )
     source_transaction = _transaction(transaction_source, source.version)
+    source_rows = source.count_rows()
+    schema_matches = _schema_fingerprint_matches(source, current.schema_fingerprint)
     if (
         source_transaction.uuid != current.transaction
-        or source.count_rows() != current.row_count
+        or source_rows != current.row_count
         or len(old_identities) != current.fragment_count
-        or _schema_fingerprint(source) != current.schema_fingerprint
+        or not schema_matches
     ):
-        raise ValueError("ready snapshot does not match its native branch version")
+        raise ValueError(
+            "ready snapshot does not match its native branch version: "
+            f"transaction={source_transaction.uuid == current.transaction}, "
+            f"rows={source_rows == current.row_count}, "
+            f"fragments={len(old_identities) == current.fragment_count}, "
+            f"schema={schema_matches}"
+        )
     _validate_new_fragment_files(
         source,
         fragments,
@@ -823,6 +970,7 @@ def publish_growing_branch(
         max_train_shards=current.max_train_shards,
         num_extra_shards=current.num_extra_shards,
         high_watermark=pending.next_high_watermark,
+        embedding_generation=current.embedding_generation,
         dataset_spec_fingerprint=current.dataset_spec_fingerprint,
         row_count=expected_rows,
         fragment_count=len(identities),
@@ -1037,7 +1185,7 @@ def materialize_and_activate(
             raise ValueError("remote row count does not match snapshot")
         if len(source.get_fragments()) != snapshot.fragment_count:
             raise ValueError("remote fragment count does not match snapshot")
-        if _schema_fingerprint(source) != snapshot.schema_fingerprint:
+        if not _schema_fingerprint_matches(source, snapshot.schema_fingerprint):
             raise ValueError("remote schema does not match snapshot")
 
         dataset_path = local_root / "train.lance"
