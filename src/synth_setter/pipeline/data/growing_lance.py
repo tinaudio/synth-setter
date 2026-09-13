@@ -446,24 +446,39 @@ def _generation_policy_for_baseline(
         _EMBEDDING_ARTIFACT_METADATA,
         _EMBEDDING_NAME_METADATA,
         _output_columns,
-        generation_embedding_identities,
     )
 
     names: list[str] = []
+    baseline_identities: dict[str, str] = {}
     for column in extra_columns:
         metadata = baseline_schema.field(column).metadata or {}
         encoded_name = metadata.get(_EMBEDDING_NAME_METADATA)
-        if encoded_name is None or not metadata.get(_EMBEDDING_ARTIFACT_METADATA):
+        encoded_identity = metadata.get(_EMBEDDING_ARTIFACT_METADATA)
+        if encoded_name is None or not encoded_identity:
             raise ValueError(f"baseline extra field {column!r} lacks embedding provenance")
         name = encoded_name.decode()
+        identity = encoded_identity.decode()
         if name not in EMBEDDING_REGISTRY or EMBEDDING_REGISTRY[name].rerenders:
             raise ValueError(f"baseline extra field {column!r} has unsupported embedding {name!r}")
+        if name in baseline_identities and baseline_identities[name] != identity:
+            raise ValueError(f"baseline embedding {name!r} has inconsistent artifact provenance")
+        baseline_identities[name] = identity
         if name not in names:
             names.append(name)
-    policy = spec.embedding_generation or GenerationEmbeddingPolicy(
-        embeddings=tuple(names),
-        device="cuda",
-    )
+    policy = spec.embedding_generation
+    if policy is None:
+        policy = GenerationEmbeddingPolicy(
+            embeddings=tuple(names),
+            artifact_identities=tuple(sorted(baseline_identities.items())),
+            device="cuda",
+        )
+        from synth_setter.pipeline.data.add_embeddings import generation_embedding_identities
+
+        reproducible = generation_embedding_identities(
+            policy, param_spec_name=str(spec.render.param_spec_name)
+        )
+        if reproducible != baseline_identities:
+            raise ValueError("baseline embeddings cannot be reproduced by default checkpoints")
     configured_columns = [
         column
         for name in policy.embeddings
@@ -474,9 +489,7 @@ def _generation_policy_for_baseline(
             f"baseline embedding columns {list(extra_columns)} do not match configured "
             f"generation columns {configured_columns}"
         )
-    expected_identities = generation_embedding_identities(
-        policy, param_spec_name=str(spec.render.param_spec_name)
-    )
+    expected_identities = dict(policy.artifact_identities)
     for name in policy.embeddings:
         for column in _output_columns(EMBEDDING_REGISTRY[name]):
             metadata = baseline_schema.field(column).metadata or {}
@@ -486,9 +499,10 @@ def _generation_policy_for_baseline(
                 )
             if metadata.get(_EMBEDDING_ARTIFACT_METADATA) != expected_identities[name].encode():
                 raise ValueError(
-                    f"baseline embedding field {column!r} cannot be reproduced by the "
-                    "configured checkpoint"
+                    f"baseline embedding field {column!r} does not match the frozen artifact"
                 )
+    if expected_identities != baseline_identities:
+        raise ValueError("baseline embedding artifacts do not match the frozen generation policy")
     return policy
 
 

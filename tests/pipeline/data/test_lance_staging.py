@@ -198,6 +198,9 @@ def _embedding_spec() -> DatasetSpec:
     values = tiny_lance_spec().model_dump(mode="json")
     values["embedding_generation"] = {
         "embeddings": ["clap"],
+        "artifact_identities": {
+            "clap": f"test-clap:{EMBEDDING_REGISTRY['clap'].default_checkpoint}"
+        },
         "device": "cuda",
         "lance_batch_size": 1,
     }
@@ -260,6 +263,9 @@ def test_generation_runtime_preserves_co_resident_output_order_and_metadata(
 ) -> None:
     values = _embedding_spec().model_dump(mode="json")
     values["embedding_generation"]["embeddings"] = ["clap", "ssondo"]
+    values["embedding_generation"]["artifact_identities"]["ssondo"] = (
+        f"test-ssondo:{EMBEDDING_REGISTRY['ssondo'].default_checkpoint}"
+    )
     spec = DatasetSpec.model_validate(values)
     _install_test_clap(monkeypatch)
 
@@ -297,6 +303,26 @@ def test_generation_runtime_preserves_co_resident_output_order_and_metadata(
     audio = batch.column(AUDIO_FIELD).to_numpy_ndarray()
     ssondo = np.asarray(augmented.column(SSONDO_FIELD).to_pylist(), dtype=np.float32)
     np.testing.assert_allclose(ssondo[:, 0], audio.mean(axis=(1, 2)) + 1.0)
+
+
+def test_generation_runtime_rejects_artifact_identity_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _embedding_spec()
+    _install_test_clap(monkeypatch)
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "clap",
+        replace(
+            EMBEDDING_REGISTRY["clap"],
+            resolve_artifact_identity=lambda checkpoint: f"drifted:{checkpoint}",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="frozen generation policy"):
+        GenerationEmbeddingRuntime(
+            spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
+        )
 
 
 def test_generation_runtime_rejects_encoder_row_count_mismatch(

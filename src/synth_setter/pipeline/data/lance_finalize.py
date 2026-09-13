@@ -367,12 +367,11 @@ def _expected_fragment_schema(spec: DatasetSpec, shard_id: int, physical: pa.Sch
         _EMBEDDING_ARTIFACT_METADATA,
         _EMBEDDING_NAME_METADATA,
         _output_columns,
-        generation_embedding_identities,
     )
 
-    expected_identities = generation_embedding_identities(
-        policy, param_spec_name=str(spec.render.param_spec_name)
-    )
+    expected_identities = dict(policy.artifact_identities)
+    if not expected_identities:
+        raise ValueError("generation embedding policy lacks frozen artifact identities")
     expected_embeddings = [
         column
         for name in policy.embeddings

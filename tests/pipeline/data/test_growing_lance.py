@@ -225,7 +225,7 @@ def test_schema_fingerprint_accepts_legacy_augmented_snapshot(
     assert growing_lance._schema_fingerprint_matches(dataset, legacy)
 
 
-def test_initialize_augmented_baseline_rejects_unreproducible_checkpoint(
+def test_initialize_augmented_baseline_rejects_unreproducible_default_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

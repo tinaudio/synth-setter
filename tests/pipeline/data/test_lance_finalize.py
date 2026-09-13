@@ -138,16 +138,21 @@ def test_finalize_skips_stale_embedding_attempt_for_later_configured_artifact(
 ) -> None:
     _install_test_clap(monkeypatch)
     spec = _embedding_spec()
+    assert spec.embedding_generation is not None
+    stale_policy = spec.embedding_generation.model_copy(
+        update={"artifact_identities": (("clap", "stale:artifact"),)}
+    )
+    stale_spec = spec.model_copy(update={"embedding_generation": stale_policy})
     monkeypatch.setitem(
         EMBEDDING_REGISTRY,
         "clap",
         replace(
             EMBEDDING_REGISTRY["clap"],
-            resolve_artifact_identity=lambda checkpoint: f"stale:{checkpoint}",
+            resolve_artifact_identity=lambda checkpoint: "stale:artifact",
         ),
     )
     _reset_generation_embedding_runtime()
-    stage_all_shards(spec, tmp_path / "stale", worker_id="worker-a")
+    stage_all_shards(stale_spec, tmp_path / "stale", worker_id="worker-a")
     _install_test_clap(monkeypatch)
     stage_all_shards(spec, tmp_path / "current", worker_id="worker-b")
 
@@ -158,12 +163,11 @@ def test_finalize_skips_stale_embedding_attempt_for_later_configured_artifact(
     assert all(attempt.attempt.startswith("worker-b-") for attempt in card.selected_attempts)
 
 
-def test_finalize_rejects_uniform_embedding_identity_not_matching_policy(
+def test_finalize_uses_frozen_identity_when_resolver_becomes_unavailable(
     fake_r2_remote: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del fake_r2_remote
     _install_test_clap(monkeypatch)
     spec = _embedding_spec()
     stage_all_shards(spec, tmp_path)
@@ -172,11 +176,40 @@ def test_finalize_rejects_uniform_embedding_identity_not_matching_policy(
         "clap",
         replace(
             EMBEDDING_REGISTRY["clap"],
-            resolve_artifact_identity=lambda checkpoint: f"unexpected:{checkpoint}",
+            resolve_artifact_identity=lambda checkpoint: (_ for _ in ()).throw(
+                FileNotFoundError(checkpoint)
+            ),
         ),
     )
 
-    with pytest.raises(ValueError, match="configured artifact provenance"):
+    finalize_from_spec(spec, tmp_path / "work")
+
+    train = lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train")))
+    assert train.count_rows() == 4
+
+
+def test_finalize_rejects_cross_winner_embedding_nullability_drift(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_test_clap(monkeypatch)
+    spec = _embedding_spec()
+    stage_all_shards(spec, tmp_path)
+    target = fragment_data_file(fake_r2_remote, spec, shard_id=1)
+    table = LanceFileReader(str(target)).read_all().to_table()
+    index = table.schema.get_field_index(CLAP_FIELD)
+    field = table.schema.field(index)
+    drifted = table.set_column(
+        index,
+        pa.field(field.name, field.type, nullable=True, metadata=field.metadata),
+        table.column(index),
+    )
+    bad_dataset = tmp_path / "nullable-embedding.lance"
+    lance.write_dataset(drifted, bad_dataset)
+    shutil.copyfile(next((bad_dataset / "data").iterdir()), target)
+
+    with pytest.raises(ValueError, match="embedding types or metadata differ"):
         finalize_from_spec(spec, tmp_path / "work")
 
 
