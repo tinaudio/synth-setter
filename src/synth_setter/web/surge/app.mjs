@@ -1,0 +1,233 @@
+import { gaussianNoise } from "../fdn/noise.mjs";
+import { audioMetrics, decodeStereo, encodeStereoWav } from "./audio.mjs";
+import { spectrogramCanvas } from "./spectrogram.mjs";
+
+const element = (id) => document.getElementById(id);
+const number = (id) => Number(element(id).value);
+const worker = new Worker(new URL("./worker.mjs", import.meta.url), {
+  type: "module",
+});
+let contract, content, sketchAudio, runSettings, previousRun;
+let urls = [];
+
+function table(title, entries) {
+  const section = document.createElement("section");
+  const heading = document.createElement("h2");
+  heading.textContent = title;
+  const table = document.createElement("table");
+  for (const [name, value] of entries) {
+    const row = table.insertRow();
+    row.insertCell().textContent = name;
+    row.insertCell().textContent =
+      typeof value === "number" ? value.toPrecision(7) : JSON.stringify(value);
+  }
+  section.append(heading, table);
+  element("results").append(section);
+  return section;
+}
+
+function playback(title, channels, filename) {
+  const section = document.createElement("section");
+  const heading = document.createElement("h2");
+  heading.textContent = title;
+  const url = URL.createObjectURL(
+    new Blob([encodeStereoWav(channels, contract.sampleRate)], {
+      type: "audio/wav",
+    }),
+  );
+  urls.push(url);
+  const player = document.createElement("audio");
+  player.controls = true;
+  player.src = url;
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.textContent = `Download ${filename}`;
+  section.append(heading, player, link, spectrogramCanvas(channels, title, contract.sampleRate));
+  element("results").append(section);
+}
+
+function showSketch(controls) {
+  const canvas = document.createElement("canvas");
+  const { numFrames, numControls } = contract.sketch;
+  canvas.width = numFrames;
+  canvas.height = numControls;
+  canvas.setAttribute(
+    "aria-label",
+    "Loudness, centroid and MIDI pitch activation heatmap",
+  );
+  const context = canvas.getContext("2d");
+  for (let row = 0; row < numControls; row++) {
+    for (let frame = 0; frame < numFrames; frame++) {
+      const value = controls[row * numFrames + frame];
+      const level = Math.round(
+        255 * Math.max(0, Math.min(1, row < 2 ? (value + 1) / 2 : value)),
+      );
+      context.fillStyle = `rgb(${level},${level},${255 - level})`;
+      context.fillRect(frame, row, 1, 1);
+    }
+  }
+  const section = document.createElement("section");
+  const heading = document.createElement("h2");
+  heading.textContent = "Music-sketch controls (not a spectrogram)";
+  section.append(heading, canvas);
+  element("results").append(section);
+}
+
+function comparePrevious(record) {
+  if (!previousRun) return null;
+  for (const key of ["mode", "contentCfg", "sketchCfg", "steps", "seed", "checkpointSha256", "statsSha256"]) {
+    if (record[key] !== previousRun[key]) return null;
+  }
+  for (const key of ["noise", "mel", "sketch"]) {
+    if (record[key].length !== previousRun[key].length || !record[key].every((value, index) => value === previousRun[key][index])) return null;
+  }
+  return {
+    previousRunId: previousRun.runId,
+    previousNeuralBackend: previousRun.neuralBackend,
+    previousNeuralInferenceMs: previousRun.neuralInferenceMs,
+    parameterMaxAbsDifference: Math.max(...record.params.map((value, index) => Math.abs(value - previousRun.params[index]))),
+  };
+}
+
+function fail(message) {
+  window.surgeEval = { state: "error", message };
+  element("status").textContent = `Error: ${message}`;
+  element("run").disabled = !contract;
+}
+
+worker.onmessage = ({ data }) => {
+  if (data.type === "ready") {
+    contract = data.manifest;
+    element("steps").value = String(contract.sampling.steps);
+    element("contentCfg").value = String(contract.sampling.contentCfg);
+    element("sketchCfg").value = String(contract.sampling.sketchCfg);
+    element("status").textContent = "Ready — choose content and sketch inputs";
+    element("run").disabled = false;
+  } else if (data.type === "progress") {
+    element("status").textContent = data.message;
+  } else if (data.type === "error") {
+    fail(data.message);
+  } else if (data.type === "complete") {
+    try {
+      const target = [
+        content.slice(0, contract.frames),
+        content.slice(contract.frames),
+      ];
+      const record = { ...data.record, ...runSettings, state: "complete" };
+      record.comparisonToPrevious = comparePrevious(record);
+      record.metrics = {
+        normalizedMelMae: record.normalizedMelMae,
+        ...audioMetrics(target, record.audio),
+      };
+      table(
+        "Mel and signal comparison (not a perceptual quality score)",
+        Object.entries(record.metrics),
+      );
+      const parameters = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "Predicted synth parameters";
+      parameters.append(summary, table("Predicted parameters", Object.entries(record.patch.synth)));
+      element("results").append(parameters);
+      table("Predicted note", Object.entries(record.patch.note));
+      table("Run", Object.entries({
+        ...runSettings,
+        neuralInferenceMs: record.neuralInferenceMs,
+        gpuAdapter: record.gpuAdapter,
+        frontendBackend: record.frontendBackend,
+        rendererBackend: record.rendererBackend,
+      }));
+      if (record.comparisonToPrevious)
+        table("Neural comparison — previous matching inputs/settings (not audio parity)", Object.entries(record.comparisonToPrevious));
+      showSketch(record.sketch);
+      playback("Target", target, "target.wav");
+      if (runSettings.sketchSource === "extracted") {
+        playback("Sketch", [sketchAudio.slice(0, contract.frames), sketchAudio.slice(contract.frames)], "sketch.wav");
+      } else {
+        const note = document.createElement("p");
+        note.textContent = "Authored contour: no source sketch recording or audio spectrogram.";
+        element("results").append(note);
+      }
+      playback("Prediction", record.audio, "pred.wav");
+      window.surgeEval = record;
+      previousRun = record;
+      const link = document.createElement("a");
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(record)], { type: "application/json" }),
+      );
+      urls.push(url);
+      link.href = url;
+      link.download = `evaluation-${record.neuralBackend}.json`;
+      link.textContent = "Download evaluation record";
+      element("results").append(link);
+      element("status").textContent = "Evaluation complete";
+      element("run").disabled = false;
+    } catch (error) {
+      fail(error.message);
+    }
+  }
+};
+worker.onerror = (event) => fail(event.message);
+worker.postMessage({ type: "load" });
+
+element("sketchSource").addEventListener("change", () => {
+  const authored = element("sketchSource").value === "authored";
+  element("author").hidden = !authored;
+  element("sketchUpload").hidden = authored;
+});
+
+element("controls").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  element("run").disabled = true;
+  urls.forEach((url) => URL.revokeObjectURL(url));
+  urls = [];
+  element("results").replaceChildren();
+  window.surgeEval = { state: "running" };
+  try {
+    const contentFile = element("contentAudio").files[0];
+    const sketchFile = element("sketchAudio").files[0];
+    const authored = element("sketchSource").value === "authored";
+    if (!contentFile || (!authored && !sketchFile))
+      throw new Error("choose content and sketch audio");
+    element("status").textContent = "Decoding audio";
+    content = await decodeStereo(
+      await contentFile.arrayBuffer(),
+      contract.sampleRate,
+      contract.frames,
+    );
+    sketchAudio = authored
+      ? new Float32Array(content.length)
+      : await decodeStereo(
+          await sketchFile.arrayBuffer(),
+          contract.sampleRate,
+          contract.frames,
+        );
+    runSettings = {
+      mode: element("mode").value,
+      contentCfg: number("contentCfg"),
+      sketchCfg: number("sketchCfg"),
+      steps: number("steps"),
+      seed: number("seed"),
+      sketchSource: element("sketchSource").value,
+      neuralBackend: element("webgpu").checked ? "webgpu" : "wasm",
+    };
+    worker.postMessage({
+      type: "run",
+      ...runSettings,
+      content,
+      sketchAudio,
+      noise: gaussianNoise(runSettings.seed, contract.encodedWidth),
+      authored: authored
+        ? {
+            pitch: number("pitch"),
+            start: number("start"),
+            end: number("end"),
+            loudness: number("loudness"),
+            centroid: number("centroid"),
+          }
+        : null,
+    });
+  } catch (error) {
+    fail(error.message);
+  }
+});

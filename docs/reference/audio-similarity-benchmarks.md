@@ -194,6 +194,28 @@ seed, diagnostic-only green definition, and loudness override rationale. Consump
 recomputes every mel from its same-named WAV so a label swap cannot pass. Pull
 requests never receive R2 credentials.
 
+### SurgePy/WASM cross-version diagnostics
+
+[`test_surgepy_wasm_host_parity_e2e.py`](../../tests/data/vst/test_surgepy_wasm_host_parity_e2e.py)
+reuses the Surge suite's 30 repeated, eight diverse, and 30 seeded-random patches.
+Native SurgePy renders through the production Lance writer/reader; the WASM CLI
+renders the same normalized controls, baseline FXP, and requested MIDI events.
+Both WAV outputs feed the existing mel-RMSE, MSS, RMS-envelope cosine, SOT, and
+wMFCC comparisons. The artifacts retain paired audio, mel previews, parameters,
+version/preset provenance, and onset diagnostics.
+
+```bash
+SURGE_WASM_BUNDLE="$PWD/build/surge-engine" \
+  SURGE_PARITY_OUTPUT_DIR="$PWD/logs/surgepy-wasm" \
+  uv run pytest tests/data/vst/test_surgepy_wasm_host_parity_e2e.py -v
+```
+
+Build the engine using the [Surge WASM guide](../guides/surge-wasm-sketch-evaluation.md).
+These comparisons are diagnostic: native SurgePy is pinned to 1.3.4 while the
+unchanged WASM port is 1.4. The hosts also differ in sub-block onset alignment;
+recordings are not shifted to hide that difference. Structural checks do not
+assert cross-version sound parity or replace the existing three-host quality gates.
+
 ### Faust host parity
 
 [`test_faustwasm_dawdreamer_parity_e2e.py`](../../tests/data/vst/test_faustwasm_dawdreamer_parity_e2e.py)

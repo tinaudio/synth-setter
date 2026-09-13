@@ -1,0 +1,4 @@
+checkpoint_sha256: d20cd4c3c86ae062a206f05596072b230c8aa86334920c775c2b4fec04aefc9e
+checkpoint: r2://experiments/browser-evaluation/${checkpoint_sha256}/checkpoint.ckpt
+stats_sha256: c0c45d75a8b77004b3802c761bc77b5b34e7709a08343b2cf70fee04b7f52a19
+stats: r2://experiments/browser-evaluation/${stats_sha256}/stats.npz

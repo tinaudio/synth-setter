@@ -1,0 +1,161 @@
+name: Browser Surge WASM evaluation
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/browser-surge-wasm-e2e.yml"
+      - "src/synth_setter/surgewasm/**"
+      - "src/synth_setter/web/**"
+      - "src/synth_setter/models/music_frontend.py"
+      - "src/synth_setter/models/flow_onnx.py"
+      - "src/synth_setter/tools/export_browser_surge_bundle.py"
+      - "src/synth_setter/configs/browser_surge.yaml"
+      - "tests/infra/test_browser_surge_wasm_workflow.py"
+      - "tests/integration/test_browser_surge_wasm_e2e.py"
+      - "tests/data/vst/test_surgepy_host_parity_e2e.py"
+      - "tests/data/vst/test_surgepy_wasm_host_parity_e2e.py"
+      - "tests/data/vst/test_generate_vst_dataset.py"
+      - "src/synth_setter/data/vst/renderers.py"
+      - "src/synth_setter/data/vst/surge_xt_param_map.json"
+      - "presets/surge-base.fxp"
+      - "tests/models/test_music_frontend.py"
+      - "tests/tools/test_export_browser_surge_bundle.py"
+      - "pyproject.toml"
+      - "uv.lock"
+  push:
+    branches: [main]
+    paths:
+      - "src/synth_setter/surgewasm/**"
+      - "src/synth_setter/web/**"
+      - "src/synth_setter/models/music_frontend.py"
+      - "src/synth_setter/tools/export_browser_surge_bundle.py"
+      - "src/synth_setter/configs/browser_surge.yaml"
+      - "tests/infra/test_browser_surge_wasm_workflow.py"
+      - "tests/data/vst/test_surgepy_host_parity_e2e.py"
+      - "tests/data/vst/test_surgepy_wasm_host_parity_e2e.py"
+      - "tests/data/vst/test_generate_vst_dataset.py"
+      - "src/synth_setter/data/vst/renderers.py"
+      - "src/synth_setter/data/vst/surge_xt_param_map.json"
+      - "presets/surge-base.fxp"
+      - ".github/workflows/browser-surge-wasm-e2e.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-surge-wasm-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-surge-wasm:
+    name: Unchanged Surge WASM and real sketch evaluation
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      HYDRA_FULL_ERROR: "1"
+      SURGE_PARITY_OUTPUT_DIR: ${{ github.workspace }}/logs/surge-host-parity
+      SYNTH_SETTER_SURGE_WASM_BUNDLE: ${{ github.workspace }}/build/surge-engine
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - name: Install CPU dependencies
+        run: uv sync --frozen --python 3.12.13 --extra cpu --no-default-groups --group dev
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/synth_setter/web/package-lock.json
+      - name: Install browser
+        run: |
+          npm ci --prefix src/synth_setter/web
+          cd src/synth_setter/web
+          npx playwright install --with-deps chromium
+      - name: Install pinned Emscripten
+        run: |
+          git init build/emsdk
+          git -C build/emsdk remote add origin https://github.com/emscripten-core/emsdk.git
+          git -C build/emsdk fetch --depth 1 origin 5eb0bde7585670252e8ba05e9d361627bffd08b5
+          git -C build/emsdk checkout --detach FETCH_HEAD
+          build/emsdk/emsdk install 6.0.9
+          build/emsdk/emsdk activate 6.0.9
+      - name: Build exact upstream engine and separate host
+        run: |
+          source build/emsdk/emsdk_env.sh
+          node --test src/synth_setter/surgewasm/test-build.mjs
+          node src/synth_setter/surgewasm/build.mjs --cache build/surge-source --output build/surge-engine
+      - name: Configure real R2 artifacts
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: "true"
+      - name: Require real prerequisites
+        run: |
+          [[ -n "${RCLONE_CONFIG_R2_ACCESS_KEY_ID}" ]]
+          [[ -n "${RCLONE_CONFIG_R2_SECRET_ACCESS_KEY}" ]]
+          [[ -n "${RCLONE_CONFIG_R2_ENDPOINT}" ]]
+          uv run --extra cpu python -c "import surgepy; import onnxruntime"
+      - name: Run real engine and browser contracts
+        run: |
+          SURGE_WASM_BUNDLE="$SYNTH_SETTER_SURGE_WASM_BUNDLE" node --test src/synth_setter/surgewasm/test-runtime.mjs src/synth_setter/surgewasm/test-render.mjs
+          node --test src/synth_setter/web/surge/*.test.mjs
+      - name: Run real browser production path
+        run: |
+          mkdir -p logs
+          uv run --extra cpu pytest tests/infra/test_browser_surge_wasm_workflow.py \
+            tests/models/test_music_frontend.py \
+            tests/tools/test_export_browser_surge_bundle.py \
+            tests/integration/test_browser_surge_wasm_e2e.py \
+            tests/data/vst/test_surgepy_wasm_host_parity_e2e.py -v \
+            --basetemp=logs/browser-surge-wasm --junitxml=logs/browser-surge-wasm.xml \
+            --cov=synth_setter.models.music_frontend \
+            --cov=synth_setter.tools.export_browser_surge_bundle \
+            --cov-report=xml:coverage.xml
+      - name: Require executed browser E2E
+        run: |
+          uv run --extra cpu python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse("logs/browser-surge-wasm.xml").findall(".//testcase")
+          assert not any(case.find("skipped") is not None for case in cases), "All selected tests must execute"
+          browser = [case for case in cases
+                     if case.get("name") == "test_browser_surge_wasm_real_checkpoint_renders_predicted_patch"]
+          parity = [case for case in cases
+                    if case.get("name", "").startswith("test_surgepy_wasm_full_corpus_records_cross_version_diagnostics[")]
+          assert len(browser) == 1, "Expected the real WASM browser E2E"
+          assert len(parity) == 3, "Expected all three complete host-comparison workloads"
+          PY
+      - name: Upload browser coverage
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: ./.github/actions/upload-coverage
+        with:
+          flags: browser-surge-wasm
+          token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Retain audio and provenance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: browser-surge-wasm-${{ github.run_id }}
+          retention-days: 14
+          path: |
+            logs/browser-surge-wasm.xml
+            logs/browser-surge-wasm/**/*.wav
+            logs/browser-surge-wasm/**/*.png
+            logs/browser-surge-wasm/**/record*.json
+            logs/browser-surge-wasm/**/comparison.json
+            logs/browser-surge-wasm/**/model/manifest.json
+            build/surge-engine/manifest.json
+            logs/surge-host-parity/
