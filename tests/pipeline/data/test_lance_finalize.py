@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,16 +27,26 @@ from omegaconf import OmegaConf
 
 from synth_setter.cli.finalize_dataset import finalize, finalize_from_spec
 from synth_setter.data.normalization_stats import estimate_log_mel_statistics
+from synth_setter.conditioning import PYFDN_SKETCH_CONTROLS
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
+    CQT_FIELD,
     DATASET_FIELD_NAMES,
     MEL_SPEC_FIELD,
+    NUM_SKETCH_CONTROLS,
+    SKETCH_STRUCT_FIELD,
+    mel_n_frames_from_samples,
 )
 from synth_setter.models.components.spec_encoder import LogMelFrontend
 from synth_setter.pipeline.data.add_embeddings import CLAP_EMBEDDING_DIM, EMBEDDING_REGISTRY
+from synth_setter.pipeline.data.cqt import CQT_EMBEDDING_DIM, cqt_num_frames
 from synth_setter.pipeline.data.lance_finalize import finalize_lance_fragments
-from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
+from synth_setter.pipeline.data.lance_shard import (
+    iter_lance_column_rows,
+    read_shard_metadata,
+    tensor_array,
+)
 from synth_setter.pipeline.data.lance_staging import (
     _reset_generation_embedding_runtime,
     shard_has_complete_attempt,
@@ -210,6 +222,168 @@ def test_finalize_rejects_cross_winner_embedding_nullability_drift(
     shutil.copyfile(next((bad_dataset / "data").iterdir()), target)
 
     with pytest.raises(ValueError, match="embedding types or metadata differ"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def _struct_embedding_spec(embedding_name: str) -> DatasetSpec:
+    values = tiny_lance_spec().model_dump(mode="json")
+    values["render"]["channels"] = 1
+    values["embedding_generation"] = {
+        "embeddings": [embedding_name],
+        "artifact_identities": {embedding_name: f"test:{embedding_name}"},
+        "device": "cuda",
+    }
+    return DatasetSpec.model_validate(values)
+
+
+def _install_test_struct_embedding(
+    monkeypatch: pytest.MonkeyPatch, embedding_name: str
+) -> None:
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("torch.cuda.device_count", lambda: 1)
+    monkeypatch.setattr("torch.random.fork_rng", nullcontext)
+
+    def load_encoder(checkpoint: str, config: object) -> Callable[[np.ndarray, int], np.ndarray]:
+        del checkpoint, config
+
+        def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+            controls = (
+                NUM_SKETCH_CONTROLS
+                if embedding_name == "sketch"
+                else PYFDN_SKETCH_CONTROLS
+            )
+            frames = (
+                mel_n_frames_from_samples(audio.shape[-1], sample_rate)
+                if embedding_name == "sketch"
+                else 32
+            )
+            return np.zeros((len(audio), controls, frames), dtype=np.float32)
+
+        return encode
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        embedding_name,
+        replace(
+            EMBEDDING_REGISTRY[embedding_name],
+            load_encoder=load_encoder,
+            resolve_artifact_identity=lambda checkpoint: f"test:{embedding_name}",
+        ),
+    )
+    _reset_generation_embedding_runtime()
+
+
+@pytest.mark.parametrize("embedding_name", ["sketch", "pyfdn_sketch"])
+def test_finalize_accepts_canonical_struct_embedding_schema(
+    embedding_name: str,
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _struct_embedding_spec(embedding_name)
+    _install_test_struct_embedding(monkeypatch, embedding_name)
+    stage_all_shards(spec, tmp_path)
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    train = lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train")))
+    assert pa.types.is_struct(train.schema.field(EMBEDDING_REGISTRY[embedding_name].column).type)
+
+
+def test_finalize_rejects_wrong_struct_embedding_children(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _struct_embedding_spec("sketch")
+    _install_test_struct_embedding(monkeypatch, "sketch")
+    stage_all_shards(spec, tmp_path)
+    target = fragment_data_file(fake_r2_remote, spec, shard_id=0)
+    table = LanceFileReader(str(target)).read_all().to_table()
+    index = table.schema.get_field_index(SKETCH_STRUCT_FIELD)
+    field = table.schema.field(index)
+    junk = pa.StructArray.from_arrays(
+        [
+            pa.FixedSizeListArray.from_arrays(
+                pa.array(np.zeros(table.num_rows, dtype=np.float32)), 1
+            )
+        ],
+        names=["junk"],
+    )
+    drifted = table.set_column(
+        index,
+        pa.field(SKETCH_STRUCT_FIELD, junk.type, nullable=False, metadata=field.metadata),
+        junk,
+    )
+    bad_dataset = tmp_path / "bad-struct.lance"
+    lance.write_dataset(drifted, bad_dataset)
+    shutil.copyfile(next((bad_dataset / "data").iterdir()), target)
+
+    with pytest.raises(ValueError, match="embedding field 'sketch'"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_rejects_wrong_cqt_tensor_geometry(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = tiny_lance_spec().model_dump(mode="json")
+    values["embedding_generation"] = {
+        "embeddings": ["cqt"],
+        "artifact_identities": {"cqt": "test:cqt"},
+        "device": "cuda",
+    }
+    spec = DatasetSpec.model_validate(values)
+    monkeypatch.setattr("torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("torch.cuda.device_count", lambda: 1)
+    monkeypatch.setattr("torch.random.fork_rng", nullcontext)
+
+    def load_encoder(checkpoint: str, config: object) -> Callable[[np.ndarray, int], np.ndarray]:
+        del checkpoint, config
+
+        def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+            return np.zeros(
+                (
+                    len(audio),
+                    CQT_EMBEDDING_DIM,
+                    cqt_num_frames(audio.shape[-1], sample_rate),
+                ),
+                dtype=np.float32,
+            )
+
+        return encode
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "cqt",
+        replace(
+            EMBEDDING_REGISTRY["cqt"],
+            load_encoder=load_encoder,
+            resolve_artifact_identity=lambda checkpoint: "test:cqt",
+        ),
+    )
+    _reset_generation_embedding_runtime()
+    stage_all_shards(spec, tmp_path)
+    target = fragment_data_file(fake_r2_remote, spec, shard_id=0)
+    table = LanceFileReader(str(target)).read_all().to_table()
+    index = table.schema.get_field_index(CQT_FIELD)
+    field = table.schema.field(index)
+    wrong = tensor_array(
+        np.zeros((table.num_rows, 1, 1), dtype=np.float32),
+        np.dtype("float32"),
+        (1, 1),
+    )
+    drifted = table.set_column(
+        index,
+        pa.field(CQT_FIELD, wrong.type, nullable=False, metadata=field.metadata),
+        wrong,
+    )
+    bad_dataset = tmp_path / "bad-cqt.lance"
+    lance.write_dataset(drifted, bad_dataset)
+    shutil.copyfile(next((bad_dataset / "data").iterdir()), target)
+
+    with pytest.raises(ValueError, match="embedding field 'cqt'"):
         finalize_from_spec(spec, tmp_path / "work")
 
 

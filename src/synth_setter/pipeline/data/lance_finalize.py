@@ -285,13 +285,20 @@ def _load_welford_state(
 
 
 def _validate_embedding_field_type(
-    embedding: object, column: str, field: pa.Field
+    embedding: object,
+    column: str,
+    field: pa.Field,
+    *,
+    num_samples: int,
+    sample_rate: int,
 ) -> None:
     """Reject physical embedding types outside the registry's fixed float32 contract.
 
     :param embedding: Selected ``EmbeddingSpec`` registry entry.
     :param column: Top-level output column being validated.
     :param field: Physical Arrow field from the fragment.
+    :param num_samples: Stored waveform samples per row.
+    :param sample_rate: Stored waveform sample rate in Hz.
     :raises TypeError: The registry entry is not an ``EmbeddingSpec``.
     :raises ValueError: The field is variable-width, non-float32, or has a wrong static width.
     """
@@ -300,11 +307,16 @@ def _validate_embedding_field_type(
     if not isinstance(embedding, EmbeddingSpec):
         raise TypeError("embedding must be an EmbeddingSpec")
     column_type = field.type
+    if column == embedding.column and embedding.expected_output_type is not None:
+        expected_type = embedding.expected_output_type(num_samples, sample_rate)
+        if column_type != expected_type:
+            raise ValueError(
+                f"embedding field {column!r} must have type {expected_type}, got {column_type}"
+            )
+        return
     index = embedding.index
     expected_width = None
-    if index is not None and (
-        index.vector_column == column or (index.pool == "none" and embedding.column == column)
-    ):
+    if index is not None and (index.vector_column or embedding.column) == column:
         expected_width = index.vector_dim
     if expected_width is not None:
         if (
@@ -356,9 +368,14 @@ def _expected_fragment_schema(spec: DatasetSpec, shard_id: int, physical: pa.Sch
     :param shard_id: Shard whose base metadata is expected.
     :param physical: Schema read from one uncommitted fragment file.
     :returns: Logical schema suitable for the split manifest commit.
+    :raises TypeError: The base audio field lacks its fixed-shape tensor contract.
     :raises ValueError: Fields or embedding provenance differ from the frozen policy.
     """
     base = _shard_schema(spec, shard_id)
+    audio_type = base.field(AUDIO_FIELD).type
+    if not isinstance(audio_type, pa.FixedShapeTensorType):
+        raise TypeError(f"base audio field has unsupported type {audio_type}")
+    render = spec.render_for_shard(spec.shards[shard_id])
     policy = spec.embedding_generation
     if policy is None:
         return base
@@ -388,7 +405,13 @@ def _expected_fragment_schema(spec: DatasetSpec, shard_id: int, physical: pa.Sch
         embedding = EMBEDDING_REGISTRY[name]
         for column in _output_columns(embedding):
             field = logical.field(column)
-            _validate_embedding_field_type(embedding, column, field)
+            _validate_embedding_field_type(
+                embedding,
+                column,
+                field,
+                num_samples=audio_type.shape[-1],
+                sample_rate=render.sample_rate,
+            )
             metadata = field.metadata or {}
             if metadata.get(_EMBEDDING_NAME_METADATA) != name.encode():
                 raise ValueError(f"embedding field {column!r} has invalid registry-name metadata")
