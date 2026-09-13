@@ -13,6 +13,4 @@ model:
     max_seq_len: 256
 
 datamodule:
-  conditioning:
-    column: t5gemma
-    input_shape: [768, 256]
+  conditioning: ${model.conditioning}

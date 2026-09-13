@@ -12,6 +12,4 @@ model:
     input_dim: 960
 
 datamodule:
-  conditioning:
-    column: ssondo
-    input_shape: [960]
+  conditioning: ${model.conditioning}

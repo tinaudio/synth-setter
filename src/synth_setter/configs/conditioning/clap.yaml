@@ -13,6 +13,4 @@ model:
     input_dim: 512
 
 datamodule:
-  conditioning:
-    column: clap
-    input_shape: [512]
+  conditioning: ${model.conditioning}

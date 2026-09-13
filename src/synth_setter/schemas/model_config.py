@@ -14,6 +14,7 @@ from pydantic import (
     StrictBool,
 )
 
+from synth_setter.conditioning import ConditioningConfig
 from synth_setter.schemas._types import NonBlankStr, StrictAllowExtraModel
 
 __all__ = ["ModelConfig", "OptimizerConfig", "SchedulerConfig"]
@@ -96,6 +97,10 @@ class ModelConfig(StrictAllowExtraModel):
     .. attribute :: compile
 
         Whether to wrap the module in ``torch.compile`` at setup time.
+
+    .. attribute :: conditioning
+
+        Raw modality or cached embedding consumed by the model.
     """
 
     target_: NonBlankStr = Field(
@@ -118,4 +123,8 @@ class ModelConfig(StrictAllowExtraModel):
     compile: StrictBool = Field(
         default=True,
         description="Whether to wrap the module in ``torch.compile`` at setup time.",
+    )
+    conditioning: ConditioningConfig | None = Field(
+        default=None,
+        description="Raw modality or cached embedding consumed by the model.",
     )

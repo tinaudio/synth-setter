@@ -15,5 +15,5 @@ model:
 
 datamodule:
   conditioning:
-    column: cqt
+    column: ${model.conditioning.column}
     input_shape: ${model.conditioning.input_shape}

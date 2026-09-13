@@ -13,6 +13,4 @@ model:
     max_seq_len: ${model.conditioning.input_shape.1}
 
 datamodule:
-  conditioning:
-    column: pupujepa_tiny
-    input_shape: ${model.conditioning.input_shape}
+  conditioning: ${model.conditioning}
