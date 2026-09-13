@@ -1,0 +1,15 @@
+# @package _global_
+
+# Compute canonical CQT conditioning from raw waveforms inside the model.
+defaults:
+  - override /model/encoder: cqt_online
+
+model:
+  compile: false
+  conditioning: audio
+  encoder_output_dim: ${model.encoder.out_dim}
+  vector_field:
+    conditioning_dim: ${model.encoder.out_dim}
+
+datamodule:
+  conditioning: audio
