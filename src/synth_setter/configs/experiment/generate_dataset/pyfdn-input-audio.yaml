@@ -1,0 +1,28 @@
+# @package _global_
+
+# Run: WANDB_MODE=disabled synth-setter-generate-dataset experiment=generate_dataset/pyfdn-input-audio
+# Dataset: r2://intermediate-data/data/pyfdn-input-source-smoke/pyfdn-input-source-v1
+# Chosen because its finalized train rows are mono, 44.1 kHz, and exactly 176,400 frames.
+# Txid df550710-6c33-4597-ae17-4433ce9bb37c identifies train.lance version 1.
+
+defaults:
+  - override /datamodule: surge_simple
+  - override /synth: pyfdn_n8_mono_householder
+  - override /render: pyfdn
+  - _self_
+
+task_name: pyfdn-input-audio
+
+mask_degenerate_bins: true
+
+train_val_test_sizes: [2, 0, 0]
+
+render:
+  render_contract_version: 2
+  input_audio_source:
+    dataset_uri: r2://intermediate-data/data/pyfdn-input-source-smoke/pyfdn-input-source-v1
+    split: train
+    snapshot_txid: df550710-6c33-4597-ae17-4433ce9bb37c
+    sampling_seed: 3526
+  samples_per_render_batch: 1
+  samples_per_shard: 2

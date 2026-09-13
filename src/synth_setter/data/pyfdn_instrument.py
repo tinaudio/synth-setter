@@ -388,6 +388,96 @@ class PyFDNRenderer(AudioRenderer):
         """
         return self._source_provenance.copy()
 
+    def _plain_fdn(self, params: Mapping[str, ParameterValue]) -> FlamoFDN:
+        """Build the configured plain or derived-feedback FDN.
+
+        :param params: Native controls of a plain-family pyFDN topology.
+        :returns: Fresh native FDN state for one render.
+        """
+        if self._param_spec_name in _DERIVED_FEEDBACK:
+            params = _verified_plain_params(params, self._param_spec_name)
+        return FlamoFDN(params_to_fdn_build(params, sample_rate=_SAMPLE_RATE))
+
+    def _validated_output(self, output: np.ndarray) -> Float32[np.ndarray, "channels 176400"]:
+        """Enforce the pyFDN output shape, dtype, and finite-value contract.
+
+        :param output: Native topology output.
+        :returns: Contiguous finite channel-first float32 audio.
+        :raises ValueError: The rendered shape violates the fixed contract.
+        :raises NonFiniteAudioError: The rendered audio contains NaN or infinity.
+        """
+        expected_shape = (self.channels, _SIGNAL_LENGTH)
+        output_array = np.atleast_2d(output)
+        if output_array.shape != expected_shape:
+            raise ValueError(
+                f"pyFDN output must have shape {expected_shape}, got {output_array.shape}"
+            )
+        if not np.isfinite(output_array).all():
+            raise NonFiniteAudioError("pyFDN output must contain only finite values")
+        with np.errstate(over="ignore"):
+            audio = np.ascontiguousarray(output_array, dtype=np.float32)
+        if not np.isfinite(audio).all():
+            raise NonFiniteAudioError("float32 pyFDN output must contain only finite values")
+        return audio
+
+    def _render_source(
+        self,
+        params: Mapping[str, ParameterValue],
+        source: np.ndarray,
+    ) -> Float32[np.ndarray, "channels 176400"]:
+        """Process one validated mono source through the configured topology.
+
+        :param params: Native controls of the configured pyFDN topology.
+        :param source: Finite mono source shaped ``(176400,)``.
+        :returns: Contiguous finite channel-first float32 audio.
+        """
+        build = self._plain_fdn(params).build
+        post_delay = cast(np.ndarray, build.post_delay)
+        output_array = _process_source(build, source, SOSBank(post_delay))
+        return self._validated_output(output_array)
+
+    def _render_plain_impulse(
+        self, params: Mapping[str, ParameterValue]
+    ) -> Float32[np.ndarray, "channels 176400"]:
+        """Use native impulse-response generation for a plain-family topology.
+
+        :param params: Native controls of a plain-family pyFDN topology.
+        :returns: Contiguous finite channel-first float32 impulse response.
+        :raises ValueError: Native impulse-response geometry violates the fixed contract.
+        """
+        impulse_response = self._plain_fdn(params).impulse_response(_SIGNAL_LENGTH)
+        impulse_shape = (_SIGNAL_LENGTH, _CHANNELS, _CHANNELS)
+        if impulse_response.shape != impulse_shape:
+            raise ValueError(
+                f"pyFDN impulse response must have shape {impulse_shape}, "
+                f"got {impulse_response.shape}"
+            )
+        return self._validated_output(impulse_response[:, 0, 0])
+
+    def render_with_input(
+        self,
+        params: Mapping[str, ParameterValue],
+        mono_buffer: np.ndarray,
+    ) -> Float32[np.ndarray, "channels 176400"]:
+        """Render an external mono waveform through one patch with fresh recursion state.
+
+        :param params: Native controls of the configured pyFDN topology.
+        :param mono_buffer: Input waveform shaped ``(176400,)``.
+        :returns: Contiguous finite channel-first float32 audio.
+        :raises ValueError: The source shape or values violate the fixed contract.
+        """
+        source = np.asarray(mono_buffer)
+        if source.shape != (_SIGNAL_LENGTH,):
+            raise ValueError(
+                f"pyFDN input audio must have shape {(_SIGNAL_LENGTH,)}, got {source.shape}"
+            )
+        if not np.isfinite(source).all():
+            raise ValueError("pyFDN input audio must contain only finite values")
+        return self._render_source(
+            params,
+            np.ascontiguousarray(source, dtype=np.float32),
+        )
+
     def render(
         self,
         params: Mapping[str, ParameterValue],
@@ -406,36 +496,8 @@ class PyFDNRenderer(AudioRenderer):
         :param warmup: Ignored compatibility stub.
         :returns: Contiguous finite channel-first float32 audio shaped ``(channels, 176400)``;
             native amplitude is preserved without clipping or normalization.
-        :raises ValueError: The patch or rendered shape violates the fixed contract.
-        :raises NonFiniteAudioError: The rendered audio contains NaN or infinity.
         """
         del midi_note, velocity, note_start_and_end, warmup
-        if self._param_spec_name in _DERIVED_FEEDBACK:
-            params = _verified_plain_params(params, self._param_spec_name)
-        flamo_fdn = FlamoFDN(params_to_fdn_build(params, sample_rate=_SAMPLE_RATE))
-        build = flamo_fdn.build
         if self._excitation == "impulse":
-            impulse_response = flamo_fdn.impulse_response(_SIGNAL_LENGTH)
-            impulse_shape = (_SIGNAL_LENGTH, _CHANNELS, _CHANNELS)
-            if impulse_response.shape != impulse_shape:
-                raise ValueError(
-                    f"pyFDN impulse response must have shape {impulse_shape}, "
-                    f"got {impulse_response.shape}"
-                )
-            output_array = impulse_response[:, 0, 0]
-        else:
-            post_delay = cast(np.ndarray, build.post_delay)
-            output_array = _process_source(build, self._impulse_or_chirp(), SOSBank(post_delay))
-        expected_shape = (self.channels, _SIGNAL_LENGTH)
-        output_array = np.atleast_2d(output_array)
-        if output_array.shape != expected_shape:
-            raise ValueError(
-                f"pyFDN output must have shape {expected_shape}, got {output_array.shape}"
-            )
-        if not np.isfinite(output_array).all():
-            raise NonFiniteAudioError("pyFDN output must contain only finite values")
-        with np.errstate(over="ignore"):
-            audio = np.ascontiguousarray(output_array, dtype=np.float32)
-        if not np.isfinite(audio).all():
-            raise NonFiniteAudioError("float32 pyFDN output must contain only finite values")
-        return audio
+            return self._render_plain_impulse(params)
+        return self._render_source(params, self._impulse_or_chirp())

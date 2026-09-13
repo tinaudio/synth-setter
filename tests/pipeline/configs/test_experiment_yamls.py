@@ -36,6 +36,7 @@ DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/ci-materialize-test": "ci-materialize-test",
     "generate_dataset/faust-shimmer-fdn-lance-50k": "faust-shimmer-fdn-lance-50k",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
+    "generate_dataset/pyfdn-input-audio": "pyfdn-input-audio",
     "generate_dataset/smoke-shard": "smoke-shard",
     "generate_dataset/smoke-shard-lance": "smoke-shard-lance",
     "generate_dataset/surge-simple-480k-10k": "surge-simple-480k-10k",
@@ -121,6 +122,23 @@ def test_faust_shimmer_fdn_experiment_composes_fifty_thousand_impulse_responses(
     assert spec.render.plugin_reload_cadence == "render"
     assert spec.train_val_test_sizes == (50_000, 0, 0)
     assert spec.split_shard_ranges == {"train": (0, 5), "val": (5, 5), "test": (5, 5)}
+
+
+def test_pyfdn_input_audio_experiment_pins_compatible_source_snapshot() -> None:
+    """The pyFDN input smoke run consumes the finalized mono source snapshot."""
+    spec = _compose_dataset_spec("generate_dataset/pyfdn-input-audio")
+
+    assert spec.render.input_audio_source is not None
+    assert spec.render.input_audio_source.model_dump() == {
+        "dataset_uri": (
+            "r2://intermediate-data/data/pyfdn-input-source-smoke/pyfdn-input-source-v1"
+        ),
+        "split": "train",
+        "snapshot_txid": "df550710-6c33-4597-ae17-4433ce9bb37c",
+        "sampling_seed": 3526,
+    }
+    assert spec.train_val_test_sizes == (2, 0, 0)
+    assert spec.render.samples_per_shard == 2
 
 
 def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() -> None:

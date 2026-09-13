@@ -30,6 +30,7 @@ _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS = frozenset(
     {
         "audio_dtype",
         "block_size",
+        "input_audio_source",
         "mel_spec_dtype",
         "post_load_flush_blocks",
         "post_param_flush_blocks",

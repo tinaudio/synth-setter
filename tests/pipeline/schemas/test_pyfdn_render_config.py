@@ -13,7 +13,7 @@ from synth_setter.data.pyfdn_param_spec import (
     PYFDN_N8_MONO_KRONECKER_PARAM_SPEC,
     pyfdn_param_spec_sha256,
 )
-from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.pipeline.schemas.spec import InputAudioSource, RenderConfig
 
 
 def _pyfdn_render_kwargs(**overrides: object) -> dict[str, object]:
@@ -44,6 +44,43 @@ def _pyfdn_render_kwargs(**overrides: object) -> dict[str, object]:
     }
     values.update(overrides)
     return values
+
+
+def _input_audio_source(**overrides: object) -> dict[str, object]:
+    values: dict[str, object] = {
+        "dataset_uri": "source-dataset",
+        "split": "train",
+        "snapshot_txid": "txid-123",
+        "sampling_seed": 17,
+    }
+    values.update(overrides)
+    return values
+
+
+def test_input_audio_source_valid_values_are_frozen() -> None:
+    """Source identity cannot drift after config validation."""
+    source = InputAudioSource.model_validate(_input_audio_source())
+
+    with pytest.raises(ValidationError, match="frozen"):
+        source.sampling_seed = 18
+
+
+@pytest.mark.parametrize("field", ["dataset_uri", "snapshot_txid"])
+def test_input_audio_source_blank_identity_raises(field: str) -> None:
+    """Blank dataset and transaction identities fail closed.
+
+    :param field: Identity field replaced with whitespace.
+    """
+    with pytest.raises(ValidationError, match=field):
+        InputAudioSource.model_validate(_input_audio_source(**{field: "  "}))
+
+
+def test_input_audio_source_unsupported_uri_scheme_raises() -> None:
+    """Network schemes outside R2 cannot enter worker materialization."""
+    with pytest.raises(ValidationError, match="dataset_uri"):
+        InputAudioSource.model_validate(
+            _input_audio_source(dataset_uri="https://example.test/data")
+        )
 
 
 def test_pyfdn_render_config_uses_existing_renderer_stubs() -> None:
@@ -107,6 +144,95 @@ def test_pyfdn_render_contract_digest_includes_source_identity(
     monkeypatch.setattr(renderer_backend_contract, "PYFDN_CANONICAL_SOURCE_SHA256", "0" * 64)
 
     assert render.shard_metadata().render_contract_digest != original
+
+
+def test_pyfdn_dataset_input_requires_pyfdn_backend() -> None:
+    """Hosted renderers reject the pyFDN-only external input contract."""
+    with pytest.raises(
+        ValidationError, match="input_audio_source requires renderer_backend='pyfdn'"
+    ):
+        RenderConfig.model_validate(
+            _pyfdn_render_kwargs(
+                renderer_backend="pedalboard",
+                pyfdn_excitation=None,
+                input_audio_source=_input_audio_source(),
+            )
+        )
+
+
+def test_pyfdn_dataset_input_rejects_chirp_excitation() -> None:
+    """A dataset input cannot compete with the explicit chirp source."""
+    with pytest.raises(ValidationError, match="pyfdn_excitation='chirp'"):
+        RenderConfig.model_validate(
+            _pyfdn_render_kwargs(
+                pyfdn_excitation="chirp",
+                input_audio_source=_input_audio_source(),
+            )
+        )
+
+
+def test_pyfdn_dataset_input_rejects_legacy_contract() -> None:
+    """The v1 digest projection cannot silently omit dataset input identity."""
+    with pytest.raises(ValidationError, match="render_contract_version=1"):
+        RenderConfig.model_validate(
+            _pyfdn_render_kwargs(
+                render_contract_version=1,
+                input_audio_source=_input_audio_source(),
+            )
+        )
+
+
+def test_pyfdn_dataset_input_contract_digest_includes_source_identity() -> None:
+    """Distinct pinned snapshots cannot finalize into one output dataset."""
+    first = RenderConfig.model_validate(
+        _pyfdn_render_kwargs(render_contract_version=2, input_audio_source=_input_audio_source())
+    )
+    second = RenderConfig.model_validate(
+        _pyfdn_render_kwargs(
+            render_contract_version=2,
+            input_audio_source=_input_audio_source(snapshot_txid="txid-456"),
+        )
+    )
+
+    assert (
+        first.shard_metadata().render_contract_digest
+        != second.shard_metadata().render_contract_digest
+    )
+
+
+def test_pyfdn_dataset_input_projects_excitation_as_dataset() -> None:
+    """Dataset input and built-in impulse runs carry distinct contracts."""
+    dataset_input = RenderConfig.model_validate(
+        _pyfdn_render_kwargs(render_contract_version=2, input_audio_source=_input_audio_source())
+    )
+    impulse = RenderConfig.model_validate(_pyfdn_render_kwargs())
+
+    assert (
+        dataset_input.shard_metadata().render_contract_digest
+        != impulse.shard_metadata().render_contract_digest
+    )
+
+
+def test_pyfdn_dataset_input_digest_covers_adaptation_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rotating the adaptation policy must retire the dataset-input contract digest.
+
+    :param monkeypatch: Policy-token override fixture.
+    """
+    dataset_input = RenderConfig.model_validate(
+        _pyfdn_render_kwargs(render_contract_version=2, input_audio_source=_input_audio_source())
+    )
+    impulse = RenderConfig.model_validate(_pyfdn_render_kwargs())
+    before = dataset_input.shard_metadata().render_contract_digest
+    impulse_before = impulse.shard_metadata().render_contract_digest
+
+    monkeypatch.setattr(
+        renderer_backend_contract, "INPUT_AUDIO_ADAPTATION_POLICY", "test-policy-v2"
+    )
+
+    assert dataset_input.shard_metadata().render_contract_digest != before
+    assert impulse.shard_metadata().render_contract_digest == impulse_before
 
 
 def test_pyfdn_render_contract_digest_distinguishes_excitation() -> None:

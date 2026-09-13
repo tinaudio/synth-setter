@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from loguru import logger
@@ -24,6 +27,9 @@ from synth_setter.pipeline.schemas.spec import (
     OutputFormat,
     RenderConfig,
 )
+
+if TYPE_CHECKING:
+    from synth_setter.data.vst.input_audio import InputAudioPool
 
 # Loudness-gate retry ceiling when a caller does not override it (#884).
 DEFAULT_MAX_ATTEMPTS = DEFAULT_ATTEMPTS_PER_SAMPLE
@@ -112,6 +118,7 @@ def generate_sample(
     warmup: bool = False,
     seed: SampleSeed | None = None,
     audio_dtype: str = "float16",
+    input_audio_pool: InputAudioPool | None = None,
 ) -> VSTDataSample:
     """Render a single VST sample, retrying silent draws up to the attempt budget.
 
@@ -142,6 +149,7 @@ def generate_sample(
         retrying sample never exceeds the per-shard cadence budget (#714).
     :param seed: Per-sample seeding inputs; ``None`` samples non-deterministically.
     :param audio_dtype: Physical dtype used to derive previews from the persisted audio values.
+    :param input_audio_pool: Optional pinned dataset audio used instead of built-in excitation.
     :returns: The accepted sample, with ``attempt`` set to the winning retry.
     :raises ValueError: If the attempt budget is nonpositive, or a
         ``fixed_synth_params`` render fell below ``min_loudness``.
@@ -152,6 +160,8 @@ def generate_sample(
         attempt budget.
     """
     max_attempts = seed.max_attempts if seed is not None else DEFAULT_MAX_ATTEMPTS
+    if input_audio_pool is not None and seed is None:
+        raise ValueError("input_audio_pool requires deterministic SampleSeed inputs")
     if max_attempts < 1:
         raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
     clipped_rejections = 0
@@ -175,13 +185,22 @@ def generate_sample(
 
         midi_params = require_note_params(note_params)
         try:
-            output = renderer.render(
-                synth_params,
-                midi_params["pitch"],
-                velocity,
-                midi_params["note_start_and_end"],
-                warmup=warmup,
-            )
+            if input_audio_pool is None:
+                output = renderer.render(
+                    synth_params,
+                    midi_params["pitch"],
+                    velocity,
+                    midi_params["note_start_and_end"],
+                    warmup=warmup,
+                )
+            else:
+                assert seed is not None
+                input_row = input_audio_pool.row_index(
+                    seed.master_seed, seed.sample_idx, attempt
+                )
+                output = renderer.render_with_input(
+                    synth_params, input_audio_pool.take(input_row)
+                )
             _reject_clipped_audio(output)
         except AudioAmplitudeError:
             # Clipping is a property of the sampled patch: reject the draw like

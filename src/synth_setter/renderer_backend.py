@@ -33,6 +33,11 @@ PYFDN_CANONICAL_SOURCE_SHA256 = "5a215ebf9c4f8300774bee0f1e8e6ce5dd4052cb8c422ae
 PYFDN_SOURCE_CHANNELS = 1
 PYFDN_SOURCE_SAMPLE_RATE_HZ = 44_100
 PYFDN_SOURCE_TOTAL_FRAMES = 176_400
+# Versioned foreign-audio pinning applied by ``InputAudioPool.take``: librosa soxr_hq
+# resample to the renderer rate, mean downmix to mono, then first-N truncate with
+# zero-pad tail. Bump when the operations, their order, or the resampler changes so
+# contracted digests covering this token retire instead of colliding.
+INPUT_AUDIO_ADAPTATION_POLICY = "resample-downmix-pin-v1"
 
 
 @dataclass(frozen=True)
