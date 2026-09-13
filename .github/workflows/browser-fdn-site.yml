@@ -1,0 +1,71 @@
+name: Browser pyFDN site
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/browser-fdn-site.yml"
+      - "src/synth_setter/web/**"
+      - "src/synth_setter/faustwasm/**"
+      - "src/synth_setter/data/vst/faust_sources.py"
+      - "src/synth_setter/data/vst/faustwasm_*.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-fdn-site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-site:
+    name: Build the static evaluation site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - name: Install CPU dependencies
+        run: uv sync --frozen --python 3.12.13 --extra cpu --no-default-groups --group dev
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/synth_setter/web/package-lock.json
+      - name: Install browser dependencies
+        run: npm ci --prefix src/synth_setter/web
+      - name: Configure real R2 artifacts
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: "true"
+      # The pinned digest lives in one checked-in file shared by every browser FDN workflow.
+      - name: Fetch the exported model bundle
+        run: |
+          BUNDLE_SHA256=$(tr -d "[:space:]" < src/synth_setter/web/fdn/BUNDLE_SHA256)
+          mkdir -p build
+          rclone copy --checksum "r2:experiments/browser-fdn/${BUNDLE_SHA256}" build/fdn-bundle
+          echo "${BUNDLE_SHA256}  build/fdn-bundle/manifest.json" | sha256sum --check
+      - name: Export the Faust FDN artifact
+        run: uv run --extra cpu python -m synth_setter.tools.export_faustwasm --synth faust_fdn_n8_mono_householder --output build/fdn-faust
+      - name: Assemble the site
+        run: node src/synth_setter/web/fdn/export-site.mjs --model build/fdn-bundle --faust build/fdn-faust --output build/fdn-site
+      # The model graphs are a full export of a private checkpoint, so they never enter an
+      # Actions artifact of this public repository; deployers add build/fdn-bundle as model/.
+      - name: Upload the site without the model graphs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: browser-fdn-site
+          retention-days: 30
+          path: |
+            build/fdn-site
+            !build/fdn-site/model/**

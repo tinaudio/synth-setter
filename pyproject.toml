@@ -408,6 +408,7 @@ namespaces = true
   "web/*.mjs",
   "web/fdn/*.mjs",
   "web/fdn/fixtures/*.json",
+  "web/fdn/BUNDLE_SHA256",
   "web/package*.json",
 ]
 

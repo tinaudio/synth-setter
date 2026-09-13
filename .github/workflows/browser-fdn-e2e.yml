@@ -70,8 +70,10 @@ jobs:
           endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
           install-rclone: "true"
       # The model bundle is content-addressed by the SHA-256 of its manifest.
+      # The pinned digest lives in one checked-in file shared by every browser FDN workflow.
       - name: Fetch the exported model bundle
         run: |
+          BUNDLE_SHA256=$(tr -d "[:space:]" < src/synth_setter/web/fdn/BUNDLE_SHA256)
           mkdir -p logs
           rclone copy --checksum "r2:experiments/browser-fdn/${BUNDLE_SHA256}" logs/fdn-bundle
           echo "${BUNDLE_SHA256}  logs/fdn-bundle/manifest.json" | sha256sum --check
