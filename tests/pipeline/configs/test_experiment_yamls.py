@@ -33,6 +33,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # inherit ``smoke-shard``'s task_name via ``@_global_`` defaults chaining.
 DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/10-1k-shards": "10-1k-shards",
+    "generate_dataset/faust-bilateral-syrinx-wasm-200": "faust-bilateral-syrinx-wasm-200",
+    "generate_dataset/faust-single-syrinx-wasm-200": "faust-single-syrinx-wasm-200",
     "generate_dataset/ci-materialize-test": "ci-materialize-test",
     "generate_dataset/faust-shimmer-fdn-lance-50k": "faust-shimmer-fdn-lance-50k",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
@@ -131,6 +133,32 @@ def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() ->
     assert spec.render.param_spec_name == "surge_xt"
     assert spec.render.samples_per_shard == 1
     assert spec.train_val_test_sizes == (1, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("faust-bilateral-syrinx-wasm-200", "faust_bilateral_syrinx", 100, 100),
+        ("faust-single-syrinx-wasm-200", "faust_single_syrinx", 74, 200),
+    ],
+)
+def test_birdsong_wasm_experiment_renders_one_200_row_mono_shard(
+    case: tuple[str, str, int, int],
+) -> None:
+    """Birdsong experiments compose the requested local inspection datasets.
+
+    :param case: Experiment, identity, encoded width, and attempt budget.
+    """
+    experiment, identity, num_params, attempts_per_sample = case
+    spec = _compose_dataset_spec(f"generate_dataset/{experiment}")
+
+    assert spec.render.synth.name == identity
+    assert spec.render.renderer_backend == "faustwasm"
+    assert spec.render.channels == 1
+    assert spec.render.samples_per_shard == 200
+    assert spec.render.attempts_per_sample == attempts_per_sample
+    assert spec.train_val_test_sizes == (200, 0, 0)
+    assert spec.num_params == num_params
 
 
 def test_ultramaster_kr106_single_note_smoke_uses_curated_fresh_identity() -> None:

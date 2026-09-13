@@ -1,0 +1,20 @@
+# @package _global_
+
+# Local WASM validation dataset for the autonomous single-syrinx avian-phonation model.
+defaults:
+  - override /datamodule: vst
+  - override /synth: faust_single_syrinx
+  - override /render: faustwasm
+  - _self_
+
+task_name: faust-single-syrinx-wasm-200
+
+train_val_test_sizes: [200, 0, 0]
+mask_degenerate_bins: true
+finalize_inline: true
+
+render:
+  channels: 1
+  attempts_per_sample: 200
+  samples_per_render_batch: 1
+  samples_per_shard: 200
