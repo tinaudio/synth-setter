@@ -480,6 +480,10 @@ def _generation_policy_for_baseline(
     for name in policy.embeddings:
         for column in _output_columns(EMBEDDING_REGISTRY[name]):
             metadata = baseline_schema.field(column).metadata or {}
+            if metadata.get(_EMBEDDING_NAME_METADATA) != name.encode():
+                raise ValueError(
+                    f"baseline embedding field {column!r} has invalid registry-name metadata"
+                )
             if metadata.get(_EMBEDDING_ARTIFACT_METADATA) != expected_identities[name].encode():
                 raise ValueError(
                     f"baseline embedding field {column!r} cannot be reproduced by the "

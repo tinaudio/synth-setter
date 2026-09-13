@@ -13,12 +13,14 @@ import shutil
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import lance
 import numpy as np
 import pyarrow as pa
 import pytest
 import torch
+from lance.file import LanceFileReader
 from omegaconf import OmegaConf
 
 from synth_setter.cli.finalize_dataset import finalize, finalize_from_spec
@@ -30,7 +32,7 @@ from synth_setter.data.vst.shapes import (
     MEL_SPEC_FIELD,
 )
 from synth_setter.models.components.spec_encoder import LogMelFrontend
-from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
+from synth_setter.pipeline.data.add_embeddings import CLAP_EMBEDDING_DIM, EMBEDDING_REGISTRY
 from synth_setter.pipeline.data.lance_finalize import finalize_lance_fragments
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows, read_shard_metadata
 from synth_setter.pipeline.data.lance_staging import (
@@ -129,37 +131,31 @@ def test_finalize_commits_augmented_fragments_with_identical_embedding_schema(
     )
 
 
-def test_finalize_rejects_embedding_identity_drift_across_splits(
+def test_finalize_skips_stale_embedding_attempt_for_later_configured_artifact(
     fake_r2_remote: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del fake_r2_remote
     _install_test_clap(monkeypatch)
     spec = _embedding_spec()
-    for shard in spec.shards[:2]:
-        local = write_local_shard(spec, shard.shard_id, tmp_path / f"a-{shard.shard_id}")
-        stage_lance_shard_attempt(
-            spec, shard, local, worker_id="pod-a", attempt_uuid=f"a{shard.shard_id}"
-        )
     monkeypatch.setitem(
         EMBEDDING_REGISTRY,
         "clap",
         replace(
             EMBEDDING_REGISTRY["clap"],
-            resolve_artifact_identity=lambda checkpoint: f"other-clap:{checkpoint}",
+            resolve_artifact_identity=lambda checkpoint: f"stale:{checkpoint}",
         ),
     )
     _reset_generation_embedding_runtime()
-    for shard in spec.shards[2:]:
-        local = write_local_shard(spec, shard.shard_id, tmp_path / f"b-{shard.shard_id}")
-        stage_lance_shard_attempt(
-            spec, shard, local, worker_id="pod-b", attempt_uuid=f"b{shard.shard_id}"
-        )
+    stage_all_shards(spec, tmp_path / "stale", worker_id="worker-a")
     _install_test_clap(monkeypatch)
+    stage_all_shards(spec, tmp_path / "current", worker_id="worker-b")
 
-    with pytest.raises(ValueError, match="embedding types or metadata differ"):
-        finalize_from_spec(spec, tmp_path / "work")
+    finalize_from_spec(spec, tmp_path / "work")
+
+    card_path = fake_r2_remote / spec.r2.bucket / spec.r2.prefix / "dataset.json"
+    card = LanceDatasetCard.model_validate_json(card_path.read_text())
+    assert all(attempt.attempt.startswith("worker-b-") for attempt in card.selected_attempts)
 
 
 def test_finalize_rejects_uniform_embedding_identity_not_matching_policy(
@@ -1152,6 +1148,38 @@ def test_finalize_rejects_fragment_path_outside_split_data(
     sidecar_path.write_text(json.dumps(payload))
 
     with pytest.raises(ValueError, match="unsafe fragment data path"):
+        finalize_from_spec(spec, tmp_path / "work")
+
+
+def test_finalize_rejects_wrong_embedding_width(
+    fake_r2_remote: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_test_clap(monkeypatch)
+    spec = _embedding_spec()
+    stage_all_shards(spec, tmp_path)
+    target_file = fragment_data_file(fake_r2_remote, spec)
+    table = LanceFileReader(str(target_file)).read_all().to_table()
+    wrong = pa.FixedSizeListArray.from_arrays(
+        pa.array(np.zeros(table.num_rows * (CLAP_EMBEDDING_DIM - 1), dtype=np.float32)),
+        CLAP_EMBEDDING_DIM - 1,
+    )
+    bad_table = table.set_column(
+        table.schema.get_field_index(CLAP_FIELD),
+        pa.field(
+            CLAP_FIELD,
+            wrong.type,
+            nullable=False,
+            metadata=table.schema.field(CLAP_FIELD).metadata,
+        ),
+        wrong,
+    )
+    bad_dataset = tmp_path / "bad-embedding.lance"
+    lance.write_dataset(bad_table, bad_dataset)
+    shutil.copyfile(next((bad_dataset / "data").iterdir()), target_file)
+
+    with pytest.raises(ValueError, match=r"fixed_size_list<float32, 512>"):
         finalize_from_spec(spec, tmp_path / "work")
 
 

@@ -23,13 +23,16 @@ from synth_setter.data.vst.shapes import (
     CLAP_FIELD,
     DATASET_FIELD_DTYPES,
     DATASET_FIELD_NAMES,
+    SSONDO_FIELD,
     dataset_field_shapes,
 )
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     EMBEDDING_REGISTRY,
+    SSONDO_EMBEDDING_DIM,
     GenerationEmbeddingRuntime,
+    _EMBEDDING_NAME_METADATA,
 )
 from synth_setter.pipeline.data.lance_shard import (
     lance_schema,
@@ -249,6 +252,51 @@ def test_generation_runtime_preserves_row_association_and_vector_width(
     np.testing.assert_allclose(
         embeddings[:, 0], audio.mean(axis=tuple(range(1, audio.ndim)))
     )
+
+
+def test_generation_runtime_preserves_co_resident_output_order_and_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = _embedding_spec().model_dump(mode="json")
+    values["embedding_generation"]["embeddings"] = ["clap", "ssondo"]
+    spec = DatasetSpec.model_validate(values)
+    _install_test_clap(monkeypatch)
+
+    def load_ssondo_encoder(
+        checkpoint: str, config: object
+    ) -> Callable[[np.ndarray, int], np.ndarray]:
+        del checkpoint, config
+
+        def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
+            del sample_rate
+            means = audio.mean(axis=(1, 2), keepdims=False, dtype=np.float32)[:, None]
+            return np.repeat(means + 1.0, SSONDO_EMBEDDING_DIM, axis=1)
+
+        return encode
+
+    monkeypatch.setitem(
+        EMBEDDING_REGISTRY,
+        "ssondo",
+        replace(
+            EMBEDDING_REGISTRY["ssondo"],
+            load_encoder=load_ssondo_encoder,
+            resolve_artifact_identity=lambda checkpoint: f"test-ssondo:{checkpoint}",
+        ),
+    )
+    batch = next(lance.dataset(write_local_shard(spec, 0, tmp_path)).to_batches())
+    runtime = GenerationEmbeddingRuntime(
+        spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
+    )
+
+    augmented = runtime.augment_batch(batch, spec.render.sample_rate)
+
+    assert augmented.schema.names[-2:] == [CLAP_FIELD, SSONDO_FIELD]
+    assert augmented.schema.field(CLAP_FIELD).metadata[_EMBEDDING_NAME_METADATA] == b"clap"
+    assert augmented.schema.field(SSONDO_FIELD).metadata[_EMBEDDING_NAME_METADATA] == b"ssondo"
+    audio = batch.column(AUDIO_FIELD).to_numpy_ndarray()
+    ssondo = np.asarray(augmented.column(SSONDO_FIELD).to_pylist(), dtype=np.float32)
+    np.testing.assert_allclose(ssondo[:, 0], audio.mean(axis=(1, 2)) + 1.0)
 
 
 def test_generation_runtime_rejects_encoder_row_count_mismatch(

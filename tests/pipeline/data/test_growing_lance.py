@@ -10,7 +10,12 @@ import lance
 import numpy as np
 import pytest
 
-from synth_setter.data.vst.shapes import DATASET_FIELD_NAMES, MEL_SPEC_FIELD, dataset_field_shapes
+from synth_setter.data.vst.shapes import (
+    CLAP_FIELD,
+    DATASET_FIELD_NAMES,
+    MEL_SPEC_FIELD,
+    dataset_field_shapes,
+)
 from synth_setter.pipeline.data import growing_lance
 from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, _write_columns
 from synth_setter.pipeline.data.growing_lance import (
@@ -173,6 +178,32 @@ def test_initialize_widened_baseline_rejects_post_finalize_columns(tmp_path: Pat
             num_extra_shards=2,
         )
     assert "growing" not in lance.dataset(str(train_uri)).branches.list()
+
+
+def test_baseline_policy_rejects_wrong_embedding_name_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_test_clap(monkeypatch)
+    _, train_uri, _ = _baseline_dataset(tmp_path)
+    dataset = lance.dataset(str(train_uri))
+    config = AddEmbeddingsConfig(
+        lance_uri=str(train_uri),
+        embeddings=("clap",),
+        device="cpu",
+        build_index=False,
+    )
+    _write_columns(dataset, [EMBEDDING_REGISTRY["clap"]], 8000, config)
+    index = dataset.schema.get_field_index(CLAP_FIELD)
+    field = dataset.schema.field(index)
+    metadata = dict(field.metadata or {})
+    metadata[b"synth_setter.embedding.name"] = b"ssondo"
+    bad_schema = dataset.schema.set(index, field.with_metadata(metadata))
+
+    with pytest.raises(ValueError, match="invalid registry-name metadata"):
+        growing_lance._generation_policy_for_baseline(
+            _embedding_spec(), bad_schema, [CLAP_FIELD]
+        )
 
 
 def test_schema_fingerprint_accepts_legacy_augmented_snapshot(
