@@ -3,6 +3,7 @@
 import fcntl
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -69,6 +70,9 @@ register_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)
 
 _MAX_EVALUATION_SEED = 2**32 - 1
+
+# URI schemes served from R2-backed object storage (single-sourced predicate).
+_REMOTE_CHECKPOINT_PREFIXES = ("r2://", "s3://")
 
 
 class _CheckpointChangedDuringDownloadError(RuntimeError):
@@ -312,6 +316,37 @@ def _normalize_checkpoint_sha256(expected_sha256: str | None) -> str | None:
     return normalized
 
 
+def _resolve_checkpoint_sha256(
+    checkpoint: str | None,
+    expected_sha256: str | None,
+    *,
+    validate_chekpoint_sha: bool,
+) -> str | None:
+    """Resolve the configured or filename-derived checkpoint digest.
+
+    :param checkpoint: Local path or remote object URI.
+    :param expected_sha256: Optional separately configured digest.
+    :param validate_chekpoint_sha: Whether to require and trust the filename digest.
+    :returns: Lowercase SHA-256 digest, or ``None`` when validation stays unpinned.
+    :raises ValueError: The flag, filename, or separate digest is invalid or contradictory.
+    """
+    if not isinstance(validate_chekpoint_sha, bool):
+        raise ValueError("validate_chekpoint_sha must be a boolean")
+    normalized = _normalize_checkpoint_sha256(expected_sha256)
+    if not validate_chekpoint_sha:
+        return normalized
+    if not isinstance(checkpoint, str):
+        raise ValueError("validate_chekpoint_sha requires ckpt_path")
+    filename = checkpoint.rsplit("/", 1)[-1]
+    match = re.fullmatch(r".+-([0-9a-fA-F]{64})\.ckpt", filename)
+    if match is None:
+        raise ValueError("checkpoint filename must end with -<sha256>.ckpt")
+    filename_digest = match.group(1).lower()
+    if normalized is not None and normalized != filename_digest:
+        raise ValueError("ckpt_sha256 does not match the checkpoint filename digest")
+    return filename_digest
+
+
 @retry_external_io(retry_exceptions=(_CheckpointChangedDuringDownloadError,))
 def _download_checkpoint(r2_uri: str, expected_sha256: str | None, cached: Path) -> None:
     """Stage and atomically publish one remote checkpoint.
@@ -455,7 +490,7 @@ def _localize_eval_checkpoint(
     if not isinstance(checkpoint, str):
         raise ValueError("ckpt_path must be a string or null")
     digest = _normalize_checkpoint_sha256(expected_sha256)
-    is_remote = checkpoint.startswith(("r2://", "s3://"))
+    is_remote = checkpoint.startswith(_REMOTE_CHECKPOINT_PREFIXES)
     if not is_remote:
         if digest is None:
             return checkpoint
@@ -551,17 +586,26 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, logger=logger, callbacks=callbacks)
 
     configured_checkpoint = cfg.ckpt_path
+    validate_chekpoint_sha = cfg.get("validate_chekpoint_sha", False)
+    expected_checkpoint_sha256 = _resolve_checkpoint_sha256(
+        configured_checkpoint,
+        cfg.get("ckpt_sha256"),
+        validate_chekpoint_sha=validate_chekpoint_sha,
+    )
     is_unpinned_remote = (
-        cfg.get("ckpt_sha256") is None
+        expected_checkpoint_sha256 is None
         and isinstance(configured_checkpoint, str)
-        and configured_checkpoint.startswith(("r2://", "s3://"))
+        and configured_checkpoint.startswith(_REMOTE_CHECKPOINT_PREFIXES)
     )
     checkpoint_path = _localize_eval_checkpoint(
-        configured_checkpoint, cfg.get("ckpt_sha256"), trainer.world_size
+        configured_checkpoint, expected_checkpoint_sha256, trainer.world_size
     )
+    resolved_checkpoint_sha256 = expected_checkpoint_sha256
     if is_unpinned_remote and checkpoint_path is not None:
+        resolved_checkpoint_sha256 = _checkpoint_sha256(Path(checkpoint_path))
+    if cfg.get("ckpt_sha256") is None and resolved_checkpoint_sha256 is not None:
         with open_dict(cfg):
-            cfg.ckpt_sha256 = _checkpoint_sha256(Path(checkpoint_path))
+            cfg.ckpt_sha256 = resolved_checkpoint_sha256
 
     object_dict = {
         "cfg": cfg,
