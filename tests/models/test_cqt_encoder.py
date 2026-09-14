@@ -77,19 +77,42 @@ def test_cqt_audio_encoder_device_transition_clears_transform_cache() -> None:
     assert not encoder._transforms
 
 
-@pytest.mark.parametrize("max_batch_size", [1, -1])
-def test_cqt_audio_encoder_batch_limit_matches_single_pass(max_batch_size: int) -> None:
-    """Chunked and unlimited extraction preserve single-pass features.
-
-    :param max_batch_size: Finite cap or unlimited sentinel under test.
-    """
+def test_cqt_audio_encoder_chunked_batch_matches_single_pass() -> None:
+    """Chunking bounds transform batches without changing their features."""
     sample_rate = 16_000
     audio = _tones(rows=3, channels=1, samples=4_000, sample_rate=sample_rate)
 
-    encoded = CqtAudioEncoder(sample_rate=sample_rate, max_batch_size=max_batch_size)(audio)
+    chunked = CqtAudioEncoder(sample_rate=sample_rate, max_batch_size=1)(audio)
     single_pass = CqtAudioEncoder(sample_rate=sample_rate, max_batch_size=3)(audio)
 
-    torch.testing.assert_close(encoded, single_pass)
+    torch.testing.assert_close(chunked, single_pass)
+
+
+def test_cqt_audio_encoder_unlimited_batch_runs_one_transform_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The unlimited sentinel sends the complete batch to the real transform.
+
+    :param monkeypatch: Fixture instrumenting the real transform call.
+    """
+    sample_rate = 16_000
+    samples = 4_000
+    audio = _tones(rows=3, channels=1, samples=samples, sample_rate=sample_rate)
+    encoder = CqtAudioEncoder(sample_rate=sample_rate, max_batch_size=-1)
+    transform = encoder._transform(audio.device, samples)
+    original_forward = transform.fwd
+    batch_sizes: list[int] = []
+
+    def record_forward(waveform: torch.Tensor) -> object:
+        batch_sizes.append(len(waveform))
+        return original_forward(waveform)
+
+    monkeypatch.setattr(transform, "fwd", record_forward)
+    unlimited = encoder(audio)
+    single_pass = CqtAudioEncoder(sample_rate=sample_rate, max_batch_size=3)(audio)
+
+    torch.testing.assert_close(unlimited, single_pass)
+    assert batch_sizes == [3]
 
 
 def test_cqt_audio_encoder_channel_mean_matches_mono_input() -> None:
