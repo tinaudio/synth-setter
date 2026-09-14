@@ -2797,7 +2797,8 @@ def _assert_conditioning_train_validate_finite(
     _, train_objects = train(cfg_train)
 
     train_model = train_objects["model"]
-    assert train_model.encoder.n_conditioning_outputs == len(train_model.vector_field.layers)
+    train_pool = getattr(train_model.encoder, "head", train_model.encoder)
+    assert train_pool.n_conditioning_outputs == len(train_model.vector_field.layers)
     assert "last.ckpt" in os.listdir(tmp_path / "checkpoints")
 
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
@@ -2836,10 +2837,31 @@ def _assert_conditioning_train_validate_finite(
         GlobalHydra.instance().clear()
 
     eval_model = eval_objects["model"]
-    assert eval_model.encoder.n_conditioning_outputs == len(eval_model.vector_field.layers)
+    eval_pool = getattr(eval_model.encoder, "head", eval_model.encoder)
+    assert eval_pool.n_conditioning_outputs == len(eval_model.vector_field.layers)
     validation_mse = val_metric_dict["val/param_mse"].item()
     assert math.isfinite(validation_mse)
     return validation_mse
+
+
+@pytest.mark.slow
+def test_train_eval_cqt_online_conditioning_returns_finite_metric(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train and validate through the unlimited online CQT encoder batch.
+
+    :param tmp_path: Shared train/eval output directory.
+    :param fake_surge_smoke_datasets: Tiny production-format Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    _assert_conditioning_train_validate_finite(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        param_spec_name,
+        "cqt_online",
+    )
 
 
 @pytest.mark.requires_vst
@@ -3076,9 +3098,9 @@ def test_train_eval_pupujepa_tiny_scratch_restores_trained_backbone(
     cfg_train = cfg_torchsynth_pupujepa_tiny_scratch_train
     HydraConfig().set_config(cfg_train)
     _, train_objects = train(cfg_train)
-    trained_patch_embed = train_objects[
-        "model"
-    ].encoder.backbone.teacher_model.patch_embed.proj.weight.detach()
+    train_backbone = train_objects["model"].encoder.backbone
+    assert train_backbone.max_batch_size == -1
+    trained_patch_embed = train_backbone.teacher_model.patch_embed.proj.weight.detach()
     checkpoint_path = tmp_path / "pupujepa-tiny-scratch.ckpt"
     train_objects["trainer"].save_checkpoint(checkpoint_path)
 
@@ -3093,9 +3115,9 @@ def test_train_eval_pupujepa_tiny_scratch_restores_trained_backbone(
     finally:
         GlobalHydra.instance().clear()
 
-    restored_patch_embed = eval_objects[
-        "model"
-    ].encoder.backbone.teacher_model.patch_embed.proj.weight.detach()
+    eval_backbone = eval_objects["model"].encoder.backbone
+    assert eval_backbone.max_batch_size == -1
+    restored_patch_embed = eval_backbone.teacher_model.patch_embed.proj.weight.detach()
     assert torch.equal(restored_patch_embed, trained_patch_embed)
     assert math.isfinite(metric_dict["val/param_mse"].item())
 

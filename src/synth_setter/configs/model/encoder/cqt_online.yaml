@@ -3,7 +3,7 @@ out_dim: 512
 backbone:
   _target_: synth_setter.models.components.cqt_encoder.CqtAudioEncoder
   sample_rate: ${oc.select:datamodule.sample_rate,44100}
-  max_batch_size: 32
+  max_batch_size: -1
 head:
   _target_: synth_setter.models.components.embed_pool.EmbeddingPool
   embed_dim: 256

@@ -88,6 +88,33 @@ def test_cqt_audio_encoder_chunked_batch_matches_single_pass() -> None:
     torch.testing.assert_close(chunked, single_pass)
 
 
+def test_cqt_audio_encoder_unlimited_batch_runs_one_transform_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The unlimited sentinel sends the complete batch to the real transform.
+
+    :param monkeypatch: Fixture instrumenting the real transform call.
+    """
+    sample_rate = 16_000
+    samples = 4_000
+    audio = _tones(rows=3, channels=1, samples=samples, sample_rate=sample_rate)
+    encoder = CqtAudioEncoder(sample_rate=sample_rate, max_batch_size=-1)
+    transform = encoder._transform(audio.device, samples)
+    original_forward = transform.fwd
+    batch_sizes: list[int] = []
+
+    def record_forward(waveform: torch.Tensor) -> object:
+        batch_sizes.append(len(waveform))
+        return original_forward(waveform)
+
+    monkeypatch.setattr(transform, "fwd", record_forward)
+    unlimited = encoder(audio)
+    single_pass = CqtAudioEncoder(sample_rate=sample_rate, max_batch_size=3)(audio)
+
+    torch.testing.assert_close(unlimited, single_pass)
+    assert batch_sizes == [3]
+
+
 def test_cqt_audio_encoder_channel_mean_matches_mono_input() -> None:
     """Stereo conditioning follows the cached CQT channel-mean policy."""
     sample_rate = 16_000
@@ -120,13 +147,21 @@ def test_cqt_audio_encoder_invalid_waveform_raises(audio: torch.Tensor, message:
         encoder(audio)
 
 
-@pytest.mark.parametrize("field", ["sample_rate", "max_batch_size"])
-def test_cqt_audio_encoder_nonpositive_configuration_raises(field: str) -> None:
-    """Nonpositive extraction configuration is rejected.
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"sample_rate": 0, "max_batch_size": 32}, "sample_rate"),
+        ({"sample_rate": 16_000, "max_batch_size": 0}, "max_batch_size"),
+        ({"sample_rate": 16_000, "max_batch_size": -2}, "max_batch_size"),
+    ],
+)
+def test_cqt_audio_encoder_invalid_configuration_raises(
+    kwargs: dict[str, int], message: str
+) -> None:
+    """Invalid extraction configuration is rejected.
 
-    :param field: Constructor argument set to zero.
+    :param kwargs: Constructor values containing one invalid field.
+    :param message: Expected invalid field name.
     """
-    kwargs = {"sample_rate": 16_000, "max_batch_size": 32, field: 0}
-
-    with pytest.raises(ValueError, match=field):
+    with pytest.raises(ValueError, match=message):
         CqtAudioEncoder(**kwargs)
