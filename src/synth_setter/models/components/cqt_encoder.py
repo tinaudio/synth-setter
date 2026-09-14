@@ -52,14 +52,14 @@ class CqtAudioEncoder(nn.Module):
         """Configure fixed-rate, memory-bounded CQT extraction.
 
         :param sample_rate: Input waveform sample rate in Hz.
-        :param max_batch_size: Maximum rows processed by one upstream transform call.
-        :raises ValueError: Either configuration value is not positive.
+        :param max_batch_size: Maximum rows per transform call, or ``-1`` for the full batch.
+        :raises ValueError: The sample rate is not positive or the batch cap is invalid.
         """
         super().__init__()
         if sample_rate <= 0:
             raise ValueError(f"sample_rate must be positive, got {sample_rate}")
-        if max_batch_size <= 0:
-            raise ValueError(f"max_batch_size must be positive, got {max_batch_size}")
+        if max_batch_size != -1 and max_batch_size <= 0:
+            raise ValueError(f"max_batch_size must be positive or -1, got {max_batch_size}")
         self.sample_rate = sample_rate
         self.max_batch_size = max_batch_size
         self._transforms: dict[tuple[torch.device, int], _CqtTransform] = {}
@@ -130,8 +130,9 @@ class CqtAudioEncoder(nn.Module):
         channel_audio = audio.unsqueeze(1) if audio.ndim == 2 else audio
         output_frames = cqt_num_frames(channel_audio.shape[-1], self.sample_rate)
         chunks = []
+        batch_size = len(channel_audio) if self.max_batch_size == -1 else self.max_batch_size
         with torch.no_grad():
-            for chunk in channel_audio.split(self.max_batch_size):
+            for chunk in channel_audio.split(batch_size):
                 waveform = chunk.detach().to(dtype=torch.float32).mean(dim=1, keepdim=True)
                 coefficients = self._transform(chunk.device, chunk.shape[-1]).fwd(waveform)
                 if not isinstance(coefficients, Tensor):

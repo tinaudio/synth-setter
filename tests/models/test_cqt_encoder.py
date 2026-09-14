@@ -77,15 +77,19 @@ def test_cqt_audio_encoder_device_transition_clears_transform_cache() -> None:
     assert not encoder._transforms
 
 
-def test_cqt_audio_encoder_chunked_batch_matches_single_pass() -> None:
-    """Chunking bounds transform batches without changing their features."""
+@pytest.mark.parametrize("max_batch_size", [1, -1])
+def test_cqt_audio_encoder_batch_limit_matches_single_pass(max_batch_size: int) -> None:
+    """Chunked and unlimited extraction preserve single-pass features.
+
+    :param max_batch_size: Finite cap or unlimited sentinel under test.
+    """
     sample_rate = 16_000
     audio = _tones(rows=3, channels=1, samples=4_000, sample_rate=sample_rate)
 
-    chunked = CqtAudioEncoder(sample_rate=sample_rate, max_batch_size=1)(audio)
+    encoded = CqtAudioEncoder(sample_rate=sample_rate, max_batch_size=max_batch_size)(audio)
     single_pass = CqtAudioEncoder(sample_rate=sample_rate, max_batch_size=3)(audio)
 
-    torch.testing.assert_close(chunked, single_pass)
+    torch.testing.assert_close(encoded, single_pass)
 
 
 def test_cqt_audio_encoder_channel_mean_matches_mono_input() -> None:
@@ -120,13 +124,18 @@ def test_cqt_audio_encoder_invalid_waveform_raises(audio: torch.Tensor, message:
         encoder(audio)
 
 
-@pytest.mark.parametrize("field", ["sample_rate", "max_batch_size"])
-def test_cqt_audio_encoder_nonpositive_configuration_raises(field: str) -> None:
-    """Nonpositive extraction configuration is rejected.
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"sample_rate": 0, "max_batch_size": 32},
+        {"sample_rate": 16_000, "max_batch_size": 0},
+        {"sample_rate": 16_000, "max_batch_size": -2},
+    ],
+)
+def test_cqt_audio_encoder_invalid_configuration_raises(kwargs: dict[str, int]) -> None:
+    """Invalid extraction configuration is rejected.
 
-    :param field: Constructor argument set to zero.
+    :param kwargs: Constructor values containing one invalid field.
     """
-    kwargs = {"sample_rate": 16_000, "max_batch_size": 32, field: 0}
-
-    with pytest.raises(ValueError, match=field):
+    with pytest.raises(ValueError):
         CqtAudioEncoder(**kwargs)

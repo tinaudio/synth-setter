@@ -392,6 +392,37 @@ def test_encoder_splits_teacher_forwards_at_configured_batch_cap() -> None:
     assert batch_sizes == [1, 1]
 
 
+def test_encoder_invalid_batch_limit_raises_value_error() -> None:
+    """Batch limits below the unlimited sentinel are rejected."""
+    config = _tiny_config()
+
+    with pytest.raises(ValueError, match="max_batch_size"):
+        PupuJepaAudioEncoder(
+            sample_rate=config.sample_rate,
+            config=config,
+            max_batch_size=-2,
+        )
+
+
+def test_encoder_unlimited_batch_runs_single_teacher_forward() -> None:
+    """The unlimited sentinel sends the complete batch through the teacher."""
+    config = _tiny_config()
+    encoder = PupuJepaAudioEncoder(
+        sample_rate=config.sample_rate,
+        config=config,
+        max_batch_size=-1,
+    )
+    batch_sizes: list[int] = []
+    hook = encoder.teacher_model.register_forward_pre_hook(
+        lambda _module, args: batch_sizes.append(len(args[0]))
+    )
+
+    encoder(torch.zeros(2, 256))
+    hook.remove()
+
+    assert batch_sizes == [2]
+
+
 def test_encoder_nonfinite_waveform_raises_value_error() -> None:
     """Online waveforms reject non-finite values before teacher inference."""
     config = _tiny_config()
