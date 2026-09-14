@@ -43,6 +43,7 @@ from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.audio_distance import MultichannelAudioDistance
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
+from synth_setter.models.components.cqt_encoder import CqtAudioEncoder
 from synth_setter.models.components.differentiable_renderer import (
     FlamoFDNDifferentiableRenderer,
     TorchSynthDifferentiableRenderer,
@@ -3542,6 +3543,7 @@ def test_train_pupujepa_tiny_scratch_conditioning_trains_backbone_and_checkpoint
     assert_finite_train_loss(metric_dict)
     model = object_dict["model"]
     assert isinstance(model.encoder, PupuJepaConditioningEncoder)
+    assert model.encoder.backbone.max_batch_size == -1
     assert all(parameter.requires_grad for parameter in model.encoder.backbone.parameters())
     checkpoint_path = tmp_path / "scratch.ckpt"
     object_dict["trainer"].save_checkpoint(checkpoint_path)
@@ -3611,6 +3613,9 @@ def test_train_cqt_online_conditioning_returns_finite_loss(
 
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
+    backbone = object_dict["model"].encoder.backbone
+    assert isinstance(backbone, CqtAudioEncoder)
+    assert backbone.max_batch_size == -1
     _assert_conditioning_checkpoint_validates(cfg, tmp_path)
 
 

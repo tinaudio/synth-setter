@@ -125,17 +125,20 @@ def test_cqt_audio_encoder_invalid_waveform_raises(audio: torch.Tensor, message:
 
 
 @pytest.mark.parametrize(
-    "kwargs",
+    ("kwargs", "message"),
     [
-        {"sample_rate": 0, "max_batch_size": 32},
-        {"sample_rate": 16_000, "max_batch_size": 0},
-        {"sample_rate": 16_000, "max_batch_size": -2},
+        ({"sample_rate": 0, "max_batch_size": 32}, "sample_rate"),
+        ({"sample_rate": 16_000, "max_batch_size": 0}, "max_batch_size"),
+        ({"sample_rate": 16_000, "max_batch_size": -2}, "max_batch_size"),
     ],
 )
-def test_cqt_audio_encoder_invalid_configuration_raises(kwargs: dict[str, int]) -> None:
+def test_cqt_audio_encoder_invalid_configuration_raises(
+    kwargs: dict[str, int], message: str
+) -> None:
     """Invalid extraction configuration is rejected.
 
     :param kwargs: Constructor values containing one invalid field.
+    :param message: Expected invalid field name.
     """
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=message):
         CqtAudioEncoder(**kwargs)
