@@ -34,6 +34,28 @@ source directly with DawDreamer before atomically publishing the destination. Th
 must not already exist. This standalone artifact export does not register the DSP as a synth or
 route it through the registry-backed Faust renderer.
 
+## Export a pyFDN sketch checkpoint as a browser bundle
+
+Publish the three ONNX graphs a browser needs to run a `pyfdn/flow_sketch` checkpoint without
+Python: a librosa-parity mel front end (`frontend.onnx`, waveform `(1, 176400)` to normalized mel
+`(1, 1, 128, 401)`), the conditioning encoder, and the four-branch velocity field.
+
+```bash
+synth-setter-export-browser-fdn-bundle \
+  --checkpoint "$CHECKPOINT" --checkpoint-sha256 "$CHECKPOINT_SHA" \
+  --stats "$STATS" --stats-sha256 "$STATS_SHA" \
+  --output build/fdn-sketch-bundle
+```
+
+Checkpoint and statistics accept local paths or R2 URIs and are digest-verified before the
+checkpoint is deserialized. The destination must not exist and is published atomically with a
+`manifest.json` recording the parameter spec, sketch contract, sampling defaults, per-file
+digests, and the producing revision. The velocity graph takes `branch_weights` over the
+unconditional, sketch-only, content-only, and full branches; `branch_weights(mode, content, sketch)`
+in `synth_setter.models.flow_onnx` (mirrored by `guidance.mjs`) maps a conditioning mode and two
+CFG strengths onto them. The sketch input is the `pyfdn_reverb` profile: `(1, 10, 32)` controls
+from `extract_reverb_sketch`.
+
 ## Generate a dataset
 
 Select a checked-in dataset experiment and run it locally:
