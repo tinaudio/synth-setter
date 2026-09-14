@@ -1,0 +1,25 @@
+# @package _global_
+
+defaults:
+  - override /datamodule: vst
+  - _self_
+
+task_name: ???
+
+output_format: lance
+
+train_val_test_sizes: [2000000, 40000, 10000]
+
+r2:
+  bucket: experiments
+
+use_shard_queue: true
+
+render:
+  samples_per_shard: 2500
+  samples_per_render_batch: 32
+  parallel: true
+  retain_local_shards: false
+  max_retries: 20
+  plugin_reload_cadence: render
+  gui_toggle_cadence: never
