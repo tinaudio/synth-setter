@@ -150,7 +150,7 @@ torch = [
   # rides on transformers (>=5: ClapProcessor takes `audio=`, not `audios=`);
   # music2latent ships its own torch-backed encoder.
   "transformers>=5.0.0",
-  "music2latent>=0.1.8",
+  "music2latent==0.1.8",
   # Commit-pinned: PyPI is stale and upstream has no Git tags.
   "cqt-nsgt-pytorch @ git+https://github.com/eloimoliner/CQT_pytorch@2404597d0ccef74a93cad05d0619cb42728f987b",
   "ssondo==0.3.1",

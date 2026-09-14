@@ -346,13 +346,21 @@ def test_gpu_workflow_pins_external_actions_to_commit_shas(project_root: Path) -
 
 
 @pytest.mark.infra
-def test_gpu_workflow_triggers_on_schedule_and_dispatch_only(project_root: Path) -> None:
-    """GPU validation stays post-merge/manual because every run spends RunPod credit.
+def test_gpu_workflow_runs_for_relevant_trusted_pull_requests(project_root: Path) -> None:
+    """Embedding-generation changes receive GPU coverage without exposing fork secrets.
 
     :param project_root: Repo root supplied by the infra test fixtures.
     """
-    workflow_text = (project_root / ".github" / "workflows" / _WORKFLOW).read_text()
+    workflow = cast(dict[object, object], load_workflow(project_root, _WORKFLOW))
+    triggers = cast(dict[str, object], workflow[True])
+    pull_request = cast(dict[str, list[str]], triggers["pull_request"])
+    jobs = cast(dict[str, dict[str, object]], workflow["jobs"])
 
-    assert "\n  schedule:\n" in workflow_text
-    assert "\n  workflow_dispatch:\n" in workflow_text
-    assert "\n  pull_request:\n" not in workflow_text
+    assert "src/synth_setter/**" in pull_request["paths"]
+    assert "tests/**" in pull_request["paths"]
+    assert jobs["run_tests"]["if"] == (
+        "github.event_name != 'pull_request' || "
+        "github.event.pull_request.head.repo.full_name == github.repository"
+    )
+    assert "schedule" in triggers
+    assert "workflow_dispatch" in triggers

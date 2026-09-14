@@ -19,11 +19,11 @@ from synth_setter.pipeline.schemas.spec import (
 from synth_setter.pipeline.spec_io import read_spec_text
 from synth_setter.synth_spec import SynthSpec
 
-# Optional language metadata may be absent in otherwise complete materialized specs.
+# Backward-compatible optional metadata may be absent from materialized specs.
 _REQUIRED_TOP_LEVEL_FIELDS: tuple[str, ...] = tuple(
     sorted(
         (set(DatasetSpec.model_fields) | set(DatasetSpec.model_computed_fields))
-        - {"param_language_dimension"}
+        - {"embedding_generation", "param_language_dimension"}
     )
 )
 _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS = frozenset(
