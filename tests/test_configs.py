@@ -672,6 +672,7 @@ _WAVEFORM_CONDITIONING_PROFILES = frozenset(
         "ast_online",
         "cepstrum_online",
         "clap_online",
+        "cqt_online",
         "log_mel",
         "pupujepa_large_online",
         "pupujepa_large_scratch",
@@ -743,6 +744,32 @@ def test_eval_config_conditioning_profile_composes(profile: str) -> None:
         column = cfg.model.conditioning.column
         assert column
         assert cfg.datamodule.conditioning.column == column
+
+
+def test_cqt_online_profile_routes_audio_through_canonical_temporal_pool() -> None:
+    """Online CQT composes raw audio into the cached CQT feature geometry."""
+    cfg = _compose(
+        "train.yaml",
+        ["experiment=surge/flow_simple", "conditioning=cqt_online", "trainer=cpu"],
+    )
+
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.compile is False
+    assert cfg.model.conditioning == "audio"
+    assert (
+        cfg.model.encoder.backbone._target_
+        == "synth_setter.models.components.cqt_encoder.CqtAudioEncoder"
+    )
+    assert cfg.model.encoder.backbone.sample_rate == 44_100
+    assert cfg.model.encoder.backbone.max_batch_size == 32
+    assert cfg.model.encoder.head.embed_dim == 256
+    assert cfg.model.encoder.head.max_seq_len == 401
+
+    OmegaConf.update(cfg, "datamodule.sample_rate", 16_000, force_add=True)
+    OmegaConf.update(cfg, "datamodule.signal_length", 16_000, force_add=True)
+
+    assert cfg.model.encoder.backbone.sample_rate == 16_000
+    assert cfg.model.encoder.head.max_seq_len == 101
 
 
 def test_clap_online_profile_matches_training_checkpoint_identity() -> None:

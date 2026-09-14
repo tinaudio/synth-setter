@@ -1,0 +1,14 @@
+_target_: synth_setter.models.components.pretrained_encoder.PretrainedConditioningEncoder
+out_dim: 512
+backbone:
+  _target_: synth_setter.models.components.cqt_encoder.CqtAudioEncoder
+  sample_rate: ${oc.select:datamodule.sample_rate,44100}
+  max_batch_size: 32
+head:
+  _target_: synth_setter.models.components.embed_pool.EmbeddingPool
+  embed_dim: 256
+  d_model: ${model.encoder.out_dim}
+  num_heads: ${model.encoder_num_heads}
+  n_conditioning_outputs: ${oc.select:model.vector_field.num_layers,1}
+  pos_enc: sin
+  max_seq_len: ${cqt_n_frames:${oc.select:datamodule.signal_length,176400},${oc.select:datamodule.sample_rate,44100}}
