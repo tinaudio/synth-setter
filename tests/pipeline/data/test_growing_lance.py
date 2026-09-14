@@ -201,7 +201,7 @@ def test_baseline_policy_rejects_wrong_embedding_name_metadata(
     bad_schema = dataset.schema.set(index, field.with_metadata(metadata))
 
     with pytest.raises(ValueError, match="invalid registry-name metadata"):
-        growing_lance._generation_policy_for_baseline(
+        growing_lance._embedding_policy_for_growing_parent(
             _embedding_spec(), bad_schema, [CLAP_FIELD]
         )
 

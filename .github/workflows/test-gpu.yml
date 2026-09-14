@@ -5,6 +5,16 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 6 * * 1,4" # Mon + Thu 06:00 UTC
+  pull_request:
+    paths:
+      - ".github/actions/setup-r2/**"
+      - ".github/actions/upload-coverage/**"
+      - ".github/workflows/test-gpu.yml"
+      - "scripts/ci/gpu_tests.sh"
+      - "src/synth_setter/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
 
 permissions:
   contents: read
@@ -19,6 +29,7 @@ env:
 
 jobs:
   run_tests:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 120
 

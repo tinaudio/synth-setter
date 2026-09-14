@@ -75,6 +75,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     SAME_LATENT_FRAMES,
     SKETCH_INDEX_SUB_VECTORS,
     SKETCH_VEC_COLUMN,
+    EmbeddingOutputGeometry,
     EmbeddingSpec,
     Encoder,
     IndexSpec,
@@ -88,6 +89,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_t5gemma_spec_encoder,
     _matching_index_exists,
     _missing_embedding_specs,
+    _output_columns,
     _prepare_resume_cache,
     _resolve_artifact_identity,
     _resolve_clap_checkpoint,
@@ -103,7 +105,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     same_l_num_latent_frames,
     same_s_num_latent_frames,
 )
-from synth_setter.pipeline.data.lance_finalize import _validate_embedding_field_type
 from synth_setter.pipeline.data.matpac_plus import (
     MATPAC_PLUS_FRONTEND,
     matpac_plus_num_latent_frames,
@@ -535,36 +536,30 @@ def test_pupujepa_registry_artifact_identity_threads_variant(
     assert "digest" in identity
 
 
-@pytest.mark.parametrize("embedding_name", ["cqt", "sketch", "pyfdn_sketch"])
-def test_registry_exact_output_type_accepts_its_declared_primary_field(
+@pytest.mark.parametrize(
+    "embedding_name",
+    [name for name, spec in EMBEDDING_REGISTRY.items() if not spec.rerenders],
+)
+def test_registry_declares_every_generation_output_before_encoding(
     embedding_name: str,
 ) -> None:
-    embedding = EMBEDDING_REGISTRY[embedding_name]
-    expected_output_type = embedding.expected_output_type
-    assert expected_output_type is not None
-    field_type = expected_output_type(_FIXTURE_SAMPLES, _SAMPLE_RATE)
+    """Each generation-eligible registry entry owns its complete field contract.
 
-    _validate_embedding_field_type(
-        embedding,
-        embedding.column,
-        pa.field(embedding.column, field_type, nullable=False),
-        num_samples=_FIXTURE_SAMPLES,
-        sample_rate=_SAMPLE_RATE,
+    :param embedding_name: Registry entry under test.
+    """
+    embedding = EMBEDDING_REGISTRY[embedding_name]
+    assert embedding.output_fields is not None
+
+    fields = embedding.output_fields(
+        EmbeddingOutputGeometry(
+            channels=2,
+            num_samples=176_400,
+            sample_rate=44_100,
+        )
     )
 
-
-def test_registry_exact_cqt_output_type_rejects_wrong_geometry() -> None:
-    embedding = EMBEDDING_REGISTRY["cqt"]
-    wrong = pa.fixed_shape_tensor(pa.float32(), (1, 1))
-
-    with pytest.raises(ValueError, match="embedding field 'cqt' must have type"):
-        _validate_embedding_field_type(
-            embedding,
-            embedding.column,
-            pa.field(embedding.column, wrong, nullable=False),
-            num_samples=_FIXTURE_SAMPLES,
-            sample_rate=_SAMPLE_RATE,
-        )
+    assert tuple(field.name for field in fields) == _output_columns(embedding)
+    assert all(not field.nullable for field in fields)
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:

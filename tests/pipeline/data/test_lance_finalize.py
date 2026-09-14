@@ -15,7 +15,6 @@ from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
 
 import lance
 import numpy as np
@@ -26,8 +25,8 @@ from lance.file import LanceFileReader
 from omegaconf import OmegaConf
 
 from synth_setter.cli.finalize_dataset import finalize, finalize_from_spec
-from synth_setter.data.normalization_stats import estimate_log_mel_statistics
 from synth_setter.conditioning import PYFDN_SKETCH_CONTROLS
+from synth_setter.data.normalization_stats import estimate_log_mel_statistics
 from synth_setter.data.vst.shapes import (
     AUDIO_FIELD,
     CLAP_FIELD,
@@ -48,7 +47,7 @@ from synth_setter.pipeline.data.lance_shard import (
     tensor_array,
 )
 from synth_setter.pipeline.data.lance_staging import (
-    _reset_generation_embedding_runtime,
+    _reset_worker_embedding_encoder,
     shard_has_complete_attempt,
     stage_lance_shard_attempt,
 )
@@ -163,7 +162,7 @@ def test_finalize_skips_stale_embedding_attempt_for_later_configured_artifact(
             resolve_artifact_identity=lambda checkpoint: "stale:artifact",
         ),
     )
-    _reset_generation_embedding_runtime()
+    _reset_worker_embedding_encoder()
     stage_all_shards(stale_spec, tmp_path / "stale", worker_id="worker-a")
     _install_test_clap(monkeypatch)
     stage_all_shards(spec, tmp_path / "current", worker_id="worker-b")
@@ -221,7 +220,7 @@ def test_finalize_rejects_cross_winner_embedding_nullability_drift(
     lance.write_dataset(drifted, bad_dataset)
     shutil.copyfile(next((bad_dataset / "data").iterdir()), target)
 
-    with pytest.raises(ValueError, match="embedding types or metadata differ"):
+    with pytest.raises(ValueError, match="fields differ in order or nullability"):
         finalize_from_spec(spec, tmp_path / "work")
 
 
@@ -270,7 +269,7 @@ def _install_test_struct_embedding(
             resolve_artifact_identity=lambda checkpoint: f"test:{embedding_name}",
         ),
     )
-    _reset_generation_embedding_runtime()
+    _reset_worker_embedding_encoder()
 
 
 @pytest.mark.parametrize("embedding_name", ["sketch", "pyfdn_sketch"])
@@ -319,7 +318,7 @@ def test_finalize_rejects_wrong_struct_embedding_children(
     lance.write_dataset(drifted, bad_dataset)
     shutil.copyfile(next((bad_dataset / "data").iterdir()), target)
 
-    with pytest.raises(ValueError, match="embedding field 'sketch'"):
+    with pytest.raises(ValueError, match="field types differ: sketch"):
         finalize_from_spec(spec, tmp_path / "work")
 
 
@@ -363,7 +362,7 @@ def test_finalize_rejects_wrong_cqt_tensor_geometry(
             resolve_artifact_identity=lambda checkpoint: "test:cqt",
         ),
     )
-    _reset_generation_embedding_runtime()
+    _reset_worker_embedding_encoder()
     stage_all_shards(spec, tmp_path)
     target = fragment_data_file(fake_r2_remote, spec, shard_id=0)
     table = LanceFileReader(str(target)).read_all().to_table()
@@ -383,7 +382,7 @@ def test_finalize_rejects_wrong_cqt_tensor_geometry(
     lance.write_dataset(drifted, bad_dataset)
     shutil.copyfile(next((bad_dataset / "data").iterdir()), target)
 
-    with pytest.raises(ValueError, match="embedding field 'cqt'"):
+    with pytest.raises(ValueError, match="field types differ: cqt"):
         finalize_from_spec(spec, tmp_path / "work")
 
 
@@ -1386,7 +1385,7 @@ def test_finalize_rejects_wrong_embedding_width(
     lance.write_dataset(bad_table, bad_dataset)
     shutil.copyfile(next((bad_dataset / "data").iterdir()), target_file)
 
-    with pytest.raises(ValueError, match=r"fixed_size_list<float32, 512>"):
+    with pytest.raises(ValueError, match="field types differ: clap"):
         finalize_from_spec(spec, tmp_path / "work")
 
 

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import lance
 import numpy as np
+import pyarrow as pa
 import pytest
 
 from synth_setter.data.vst.shapes import (
@@ -28,11 +29,11 @@ from synth_setter.data.vst.shapes import (
 )
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.add_embeddings import (
+    _EMBEDDING_NAME_METADATA,
     CLAP_EMBEDDING_DIM,
     EMBEDDING_REGISTRY,
     SSONDO_EMBEDDING_DIM,
-    GenerationEmbeddingRuntime,
-    _EMBEDDING_NAME_METADATA,
+    WorkerEmbeddingEncoder,
 )
 from synth_setter.pipeline.data.lance_shard import (
     lance_schema,
@@ -40,7 +41,8 @@ from synth_setter.pipeline.data.lance_shard import (
     write_lance_dataset,
 )
 from synth_setter.pipeline.data.lance_staging import (
-    _reset_generation_embedding_runtime,
+    _prepare_fragment_batches,
+    _reset_worker_embedding_encoder,
     complete_attempt_names,
     shard_has_complete_attempt,
     split_for_shard,
@@ -207,6 +209,19 @@ def _embedding_spec() -> DatasetSpec:
     return DatasetSpec.model_validate(values)
 
 
+def _worker_encoder(spec: DatasetSpec) -> WorkerEmbeddingEncoder:
+    render = spec.render
+    source_schema = lance_schema(
+        dataset_field_shapes(render, spec.num_params), render.shard_metadata()
+    )
+    return WorkerEmbeddingEncoder(
+        spec.embedding_generation,
+        param_spec_name=str(render.param_spec_name),
+        source_schema=source_schema,
+        sample_rate=render.sample_rate,
+    )
+
+
 def _install_test_clap(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("torch.cuda.is_available", lambda: True)
     monkeypatch.setattr("torch.cuda.device_count", lambda: 1)
@@ -233,19 +248,48 @@ def _install_test_clap(monkeypatch: pytest.MonkeyPatch) -> None:
             resolve_artifact_identity=lambda checkpoint: f"test-clap:{checkpoint}",
         ),
     )
-    _reset_generation_embedding_runtime()
+    _reset_worker_embedding_encoder()
 
 
-def test_generation_runtime_preserves_row_association_and_vector_width(
+def test_prepare_fragment_batches_declares_schema_without_encoding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preparation remains lazy while returning the exact fragment schema.
+
+    :param tmp_path: Local shard workspace.
+    :param monkeypatch: Fixture installing the dependency-free CLAP encoder.
+    """
+    spec = _embedding_spec()
+    _install_test_clap(monkeypatch)
+    dataset = lance.dataset(write_local_shard(spec, 0, tmp_path))
+    calls: list[int] = []
+    original = WorkerEmbeddingEncoder.augment_batch
+
+    def record_call(
+        encoder: WorkerEmbeddingEncoder, batch: pa.RecordBatch, sample_rate: int
+    ) -> pa.RecordBatch:
+        calls.append(batch.num_rows)
+        return original(encoder, batch, sample_rate)
+
+    monkeypatch.setattr(WorkerEmbeddingEncoder, "augment_batch", record_call)
+
+    schema, batches = _prepare_fragment_batches(spec, dataset, branch_schema=None)
+
+    assert schema.names[-1] == CLAP_FIELD
+    assert calls == []
+    assert sum(batch.num_rows for batch in batches) == spec.render.samples_per_shard
+    assert calls == [1, 1]
+
+
+def test_worker_embedding_encoder_preserves_row_association_and_vector_width(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = _embedding_spec()
     _install_test_clap(monkeypatch)
     batch = next(lance.dataset(write_local_shard(spec, 0, tmp_path)).to_batches())
-    runtime = GenerationEmbeddingRuntime(
-        spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
-    )
+    runtime = _worker_encoder(spec)
 
     augmented = runtime.augment_batch(batch, spec.render.sample_rate)
 
@@ -257,7 +301,7 @@ def test_generation_runtime_preserves_row_association_and_vector_width(
     )
 
 
-def test_generation_runtime_preserves_co_resident_output_order_and_metadata(
+def test_worker_embedding_encoder_preserves_co_resident_output_order_and_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -291,9 +335,7 @@ def test_generation_runtime_preserves_co_resident_output_order_and_metadata(
         ),
     )
     batch = next(lance.dataset(write_local_shard(spec, 0, tmp_path)).to_batches())
-    runtime = GenerationEmbeddingRuntime(
-        spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
-    )
+    runtime = _worker_encoder(spec)
 
     augmented = runtime.augment_batch(batch, spec.render.sample_rate)
 
@@ -305,7 +347,7 @@ def test_generation_runtime_preserves_co_resident_output_order_and_metadata(
     np.testing.assert_allclose(ssondo[:, 0], audio.mean(axis=(1, 2)) + 1.0)
 
 
-def test_generation_runtime_rejects_artifact_identity_drift(
+def test_worker_embedding_encoder_rejects_artifact_identity_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = _embedding_spec()
@@ -320,12 +362,10 @@ def test_generation_runtime_rejects_artifact_identity_drift(
     )
 
     with pytest.raises(ValueError, match="frozen generation policy"):
-        GenerationEmbeddingRuntime(
-            spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
-        )
+        _worker_encoder(spec)
 
 
-def test_generation_runtime_rejects_encoder_row_count_mismatch(
+def test_worker_embedding_encoder_rejects_encoder_row_count_mismatch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -348,16 +388,14 @@ def test_generation_runtime_rejects_encoder_row_count_mismatch(
         "clap",
         replace(EMBEDDING_REGISTRY["clap"], load_encoder=load_short_encoder),
     )
-    runtime = GenerationEmbeddingRuntime(
-        spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
-    )
+    runtime = _worker_encoder(spec)
     batch = next(lance.dataset(write_local_shard(spec, 0, tmp_path)).to_batches())
 
     with pytest.raises(ValueError, match="produced shape"):
         runtime.augment_batch(batch, spec.render.sample_rate)
 
 
-def test_generation_runtime_rejects_cross_batch_output_shape_drift(
+def test_worker_embedding_encoder_rejects_cross_batch_output_shape_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -384,9 +422,7 @@ def test_generation_runtime_rejects_cross_batch_output_shape_drift(
         "clap",
         replace(EMBEDDING_REGISTRY["clap"], load_encoder=load_drifting_encoder),
     )
-    runtime = GenerationEmbeddingRuntime(
-        spec.embedding_generation, param_spec_name=str(spec.render.param_spec_name)
-    )
+    runtime = _worker_encoder(spec)
     batch = next(lance.dataset(write_local_shard(spec, 0, tmp_path)).to_batches())
     runtime.augment_batch(batch, spec.render.sample_rate)
 
@@ -402,7 +438,7 @@ def test_stage_attempt_cuda_unavailable_withholds_valid_marker(
     spec = _embedding_spec()
     local_shard = write_local_shard(spec, 0, tmp_path)
     monkeypatch.setattr("torch.cuda.is_available", lambda: False)
-    _reset_generation_embedding_runtime()
+    _reset_worker_embedding_encoder()
 
     with pytest.raises(RuntimeError, match="CUDA"):
         stage_lance_shard_attempt(

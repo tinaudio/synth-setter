@@ -18,12 +18,12 @@ from __future__ import annotations
 import json
 import tempfile
 import threading
-from collections.abc import Sequence
-from itertools import chain
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pyarrow as pa
 
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.constants import (
@@ -37,7 +37,9 @@ from synth_setter.pipeline.constants import (
 from synth_setter.pipeline.schemas.lance_attempt import LanceFragmentSidecar
 
 if TYPE_CHECKING:
-    from synth_setter.pipeline.data.add_embeddings import GenerationEmbeddingRuntime
+    import lance
+
+    from synth_setter.pipeline.data.add_embeddings import WorkerEmbeddingEncoder
     from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec, Split
 
 # Suffixes that must all exist for an attempt to be staged-valid (design §7.2).
@@ -48,48 +50,116 @@ COMPLETE_ATTEMPT_SUFFIXES: tuple[str, ...] = (
 )
 
 _GENERATION_RUNTIME_GUARD = threading.Lock()
-_generation_runtime: GenerationEmbeddingRuntime | None = None
-_generation_runtime_policy: object | None = None
+_worker_embedding_encoder: WorkerEmbeddingEncoder | None = None
+_worker_embedding_contract: object | None = None
 
 
-def _reset_generation_embedding_runtime() -> None:
+def _reset_worker_embedding_encoder() -> None:
     """Release the process-local generation encoder runtime, primarily at worker shutdown."""
     with _GENERATION_RUNTIME_GUARD:
-        _reset_generation_embedding_runtime_unlocked()
+        _reset_worker_embedding_encoder_unlocked()
 
 
-def _runtime_for_spec(spec: DatasetSpec) -> GenerationEmbeddingRuntime | None:
-    """Return the one process-local encoder runtime shared by staging threads.
+def _encoder_for_spec(
+    spec: DatasetSpec, source_schema: pa.Schema
+) -> WorkerEmbeddingEncoder | None:
+    """Return the process-local encoder for one frozen shard contract.
 
-    :param spec: Frozen dataset spec carrying the optional generation policy.
-    :returns: Shared runtime, or ``None`` when shard embeddings are disabled.
+    :param spec: Frozen dataset specification.
+    :param source_schema: Canonical rendered-shard schema.
+    :returns: Shared encoder, or ``None`` when generation embeddings are disabled.
     """
-    global _generation_runtime, _generation_runtime_policy
+    global _worker_embedding_encoder, _worker_embedding_contract
     policy = spec.embedding_generation
     if policy is None:
         return None
-    runtime_policy = (policy, spec.render.param_spec_name)
+    contract = (
+        policy,
+        spec.render.param_spec_name,
+        source_schema.serialize().to_pybytes(),
+        spec.render.sample_rate,
+    )
     with _GENERATION_RUNTIME_GUARD:
-        if _generation_runtime is not None and _generation_runtime_policy == runtime_policy:
-            return _generation_runtime
-        _reset_generation_embedding_runtime_unlocked()
-        from synth_setter.pipeline.data.add_embeddings import GenerationEmbeddingRuntime
+        if (
+            _worker_embedding_encoder is not None
+            and _worker_embedding_contract == contract
+        ):
+            return _worker_embedding_encoder
+        _reset_worker_embedding_encoder_unlocked()
+        from synth_setter.pipeline.data.add_embeddings import WorkerEmbeddingEncoder
 
-        _generation_runtime = GenerationEmbeddingRuntime(
-            policy, param_spec_name=str(spec.render.param_spec_name)
+        _worker_embedding_encoder = WorkerEmbeddingEncoder(
+            policy,
+            param_spec_name=str(spec.render.param_spec_name),
+            source_schema=source_schema,
+            sample_rate=spec.render.sample_rate,
         )
-        _generation_runtime_policy = runtime_policy
-        return _generation_runtime
+        _worker_embedding_contract = contract
+        return _worker_embedding_encoder
 
 
-def _reset_generation_embedding_runtime_unlocked() -> None:
-    """Reset the runtime while the caller holds ``_GENERATION_RUNTIME_GUARD``."""
-    global _generation_runtime, _generation_runtime_policy
-    closer = getattr(_generation_runtime, "close", None)
-    if callable(closer):
-        closer()
-    _generation_runtime = None
-    _generation_runtime_policy = None
+def _reset_worker_embedding_encoder_unlocked() -> None:
+    """Reset the encoder while the caller holds ``_GENERATION_RUNTIME_GUARD``."""
+    global _worker_embedding_encoder, _worker_embedding_contract
+    if _worker_embedding_encoder is not None:
+        _worker_embedding_encoder.close()
+    _worker_embedding_encoder = None
+    _worker_embedding_contract = None
+
+
+def _prepare_fragment_batches(
+    spec: DatasetSpec,
+    dataset: lance.LanceDataset,
+    *,
+    branch_schema: pa.Schema | None,
+) -> tuple[pa.Schema, Iterable[pa.RecordBatch]]:
+    """Return the fragment contract and a lazy source-to-output batch stream.
+
+    :param spec: Frozen dataset specification.
+    :param dataset: Validated local rendered shard.
+    :param branch_schema: Growing-parent schema, or ``None`` for baseline staging.
+    :returns: Exact fragment schema and lazy batch stream.
+    :raises ValueError: A growing parent differs from the generated-field contract.
+    """
+    encoder = _encoder_for_spec(spec, dataset.schema)
+    generated_schema = pa.schema([]) if encoder is None else encoder.output_schema
+    fragment_schema = pa.schema(
+        [*dataset.schema, *generated_schema], metadata=dataset.schema.metadata
+    )
+    if branch_schema is not None:
+        expected_names = fragment_schema.names
+        branch_base = pa.schema(
+            [branch_schema.field(name) for name in dataset.schema.names],
+            metadata=branch_schema.metadata,
+        )
+        if branch_schema.names != expected_names or not dataset.schema.equals(
+            branch_base, check_metadata=False
+        ):
+            raise ValueError(
+                f"growing shard fields {expected_names} do not match branch schema "
+                f"{branch_schema.names}"
+            )
+        for field in generated_schema:
+            parent = branch_schema.field(field.name)
+            if field.type != parent.type or field.metadata != parent.metadata:
+                raise ValueError(
+                    "generated embedding types or provenance do not match the growing branch"
+                )
+        fragment_schema = branch_schema
+
+    batches: Iterable[pa.RecordBatch] = dataset.to_batches(
+        batch_size=None if encoder is None else encoder.batch_size
+    )
+    if encoder is not None:
+        batches = (
+            encoder.augment_batch(batch, spec.render.sample_rate) for batch in batches
+        )
+    if branch_schema is not None:
+        batches = (
+            pa.RecordBatch.from_arrays(batch.columns, schema=fragment_schema)
+            for batch in batches
+        )
+    return fragment_schema, batches
 
 
 def split_for_shard(spec: DatasetSpec, shard_id: int) -> Split:
@@ -180,7 +250,6 @@ def stage_lance_shard_attempt(
     # Function-local so importing this module (e.g. from the launcher) never
     # pays the `lance` import cost.
     import lance
-    import pyarrow as pa
 
     from synth_setter.data.vst.shapes import dataset_field_dtypes, dataset_field_shapes
     from synth_setter.pipeline.data.lance_shard import (
@@ -217,9 +286,7 @@ def stage_lance_shard_attempt(
         storage_options = (
             r2_io.r2_storage_options() if target_lance_uri.startswith("s3://") else None
         )
-    runtime = _runtime_for_spec(spec)
-    output_columns = () if runtime is None else runtime.output_columns
-    fragment_schema = dataset.schema
+    branch_schema = None
     if growing_target:
         from synth_setter.pipeline.data.lance_materialize import retry_lance_read
 
@@ -227,43 +294,9 @@ def stage_lance_shard_attempt(
             "growing_branch_schema_read",
             lambda: lance.dataset(split_target, storage_options=storage_options).schema,
         )
-        expected_names = [*dataset.schema.names, *output_columns]
-        branch_base = pa.schema(
-            [branch_schema.field(name) for name in dataset.schema.names],
-            metadata=branch_schema.metadata,
-        )
-        if branch_schema.names != expected_names or not dataset.schema.equals(
-            branch_base, check_metadata=False
-        ):
-            raise ValueError(
-                f"growing shard fields {expected_names} do not match branch schema "
-                f"{branch_schema.names}"
-            )
-        fragment_schema = branch_schema
-    batches = dataset.to_batches(
-        batch_size=None if runtime is None else runtime.batch_size
+    fragment_schema, batches = _prepare_fragment_batches(
+        spec, dataset, branch_schema=branch_schema
     )
-    if runtime is not None:
-        batches = (
-            runtime.augment_batch(batch, spec.render.sample_rate) for batch in batches
-        )
-        first_batch = next(batches)
-        if growing_target:
-            for name in output_columns:
-                generated = first_batch.schema.field(name)
-                branch = fragment_schema.field(name)
-                if generated.type != branch.type or generated.metadata != branch.metadata:
-                    raise ValueError(
-                        "generated embedding types or provenance do not match the growing branch"
-                    )
-        else:
-            fragment_schema = first_batch.schema
-        batches = chain((first_batch,), batches)
-        if growing_target:
-            batches = (
-                pa.RecordBatch.from_arrays(batch.columns, schema=fragment_schema)
-                for batch in batches
-            )
     fragment = lance_fragment(
         split_target,
         fragment_schema,

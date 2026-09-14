@@ -5,12 +5,12 @@ from __future__ import annotations
 import fcntl
 import json
 import shutil
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
 import lance
 import numpy as np
@@ -426,32 +426,26 @@ def _transaction(dataset: lance.LanceDataset, version: int) -> lance.Transaction
     return transaction
 
 
-def _generation_policy_for_baseline(
-    spec: DatasetSpec,
-    baseline_schema: pa.Schema,
-    extra_columns: Sequence[str],
-) -> GenerationEmbeddingPolicy | None:
-    """Freeze the policy needed to reproduce a baseline's embedding fields.
+def _inspect_parent_embedding_provenance(
+    parent_schema: pa.Schema, parent_extra_columns: Sequence[str]
+) -> tuple[tuple[str, ...], dict[str, str]]:
+    """Read ordered registry names and artifact identities from parent fields.
 
-    :param spec: Frozen producer specification, optionally carrying an explicit policy.
-    :param baseline_schema: Checked-out baseline schema.
-    :param extra_columns: Baseline fields absent from the render schema.
-    :returns: Explicit or metadata-inferred generation policy, or ``None`` without extras.
-    :raises ValueError: Extra fields are not a complete registry-backed embedding selection.
+    :param parent_schema: Checked-out parent schema.
+    :param parent_extra_columns: Parent fields absent from the render schema.
+    :returns: Ordered registry names and artifact identities.
+    :raises ValueError: An extra field lacks supported, consistent provenance.
     """
-    if not extra_columns and spec.embedding_generation is None:
-        return None
     from synth_setter.pipeline.data.add_embeddings import (
-        EMBEDDING_REGISTRY,
         _EMBEDDING_ARTIFACT_METADATA,
         _EMBEDDING_NAME_METADATA,
-        _output_columns,
+        EMBEDDING_REGISTRY,
     )
 
     names: list[str] = []
-    baseline_identities: dict[str, str] = {}
-    for column in extra_columns:
-        metadata = baseline_schema.field(column).metadata or {}
+    identities: dict[str, str] = {}
+    for column in parent_extra_columns:
+        metadata = parent_schema.field(column).metadata or {}
         encoded_name = metadata.get(_EMBEDDING_NAME_METADATA)
         encoded_identity = metadata.get(_EMBEDDING_ARTIFACT_METADATA)
         if encoded_name is None or not encoded_identity:
@@ -460,49 +454,128 @@ def _generation_policy_for_baseline(
         identity = encoded_identity.decode()
         if name not in EMBEDDING_REGISTRY or EMBEDDING_REGISTRY[name].rerenders:
             raise ValueError(f"baseline extra field {column!r} has unsupported embedding {name!r}")
-        if name in baseline_identities and baseline_identities[name] != identity:
+        if name in identities and identities[name] != identity:
             raise ValueError(f"baseline embedding {name!r} has inconsistent artifact provenance")
-        baseline_identities[name] = identity
+        identities[name] = identity
         if name not in names:
             names.append(name)
-    policy = spec.embedding_generation
-    if policy is None:
-        policy = GenerationEmbeddingPolicy(
-            embeddings=tuple(names),
-            artifact_identities=tuple(sorted(baseline_identities.items())),
-            device="cuda",
-        )
-        from synth_setter.pipeline.data.add_embeddings import generation_embedding_identities
+    return tuple(names), identities
 
-        reproducible = generation_embedding_identities(
-            policy, param_spec_name=str(spec.render.param_spec_name)
-        )
-        if reproducible != baseline_identities:
-            raise ValueError("baseline embeddings cannot be reproduced by default checkpoints")
-    configured_columns = [
+
+def _infer_legacy_parent_embedding_policy(
+    names: tuple[str, ...], identities: dict[str, str]
+) -> GenerationEmbeddingPolicy:
+    """Build the compatibility policy absent from legacy parent specs.
+
+    :param names: Registry names in parent field order.
+    :param identities: Parent artifact identities.
+    :returns: Inferred immutable generation policy.
+    """
+    return GenerationEmbeddingPolicy(
+        embeddings=names,
+        artifact_identities=tuple(sorted(identities.items())),
+        device="cuda",
+    )
+
+
+def _validate_inferred_policy_reproducibility(
+    policy: GenerationEmbeddingPolicy,
+    observed_identities: dict[str, str],
+    *,
+    param_spec_name: str,
+) -> None:
+    """Require current registry defaults to reproduce a legacy parent.
+
+    :param policy: Inferred legacy policy.
+    :param observed_identities: Parent artifact identities.
+    :param param_spec_name: Param registry key for parameter-sourced encoders.
+    :raises ValueError: Current defaults do not reproduce the parent artifacts.
+    """
+    from synth_setter.pipeline.data.add_embeddings import generation_embedding_identities
+
+    if generation_embedding_identities(
+        policy, param_spec_name=param_spec_name
+    ) != observed_identities:
+        raise ValueError("baseline embeddings cannot be reproduced by default checkpoints")
+
+
+def _validate_embedding_policy_matches_parent(
+    policy: GenerationEmbeddingPolicy,
+    parent_schema: pa.Schema,
+    parent_extra_columns: Sequence[str],
+    observed_identities: dict[str, str],
+) -> None:
+    """Validate exact columns and frozen provenance against the parent schema.
+
+    :param policy: Explicit or inferred generation policy.
+    :param parent_schema: Checked-out parent schema.
+    :param parent_extra_columns: Parent fields absent from the render schema.
+    :param observed_identities: Artifact identities read from the parent fields.
+    :raises ValueError: Columns or provenance differ from the policy.
+    """
+    from synth_setter.pipeline.data.add_embeddings import (
+        _EMBEDDING_ARTIFACT_METADATA,
+        _EMBEDDING_NAME_METADATA,
+        EMBEDDING_REGISTRY,
+        _output_columns,
+    )
+
+    policy_columns = [
         column
         for name in policy.embeddings
         for column in _output_columns(EMBEDDING_REGISTRY[name])
     ]
-    if list(extra_columns) != configured_columns:
+    if list(parent_extra_columns) != policy_columns:
         raise ValueError(
-            f"baseline embedding columns {list(extra_columns)} do not match configured "
-            f"generation columns {configured_columns}"
+            f"baseline embedding columns {list(parent_extra_columns)} do not match configured "
+            f"generation columns {policy_columns}"
         )
-    expected_identities = dict(policy.artifact_identities)
+    policy_identities = dict(policy.artifact_identities)
+    if set(policy_identities) != set(policy.embeddings):
+        raise ValueError("generation embedding policy lacks frozen artifact identities")
     for name in policy.embeddings:
         for column in _output_columns(EMBEDDING_REGISTRY[name]):
-            metadata = baseline_schema.field(column).metadata or {}
+            metadata = parent_schema.field(column).metadata or {}
             if metadata.get(_EMBEDDING_NAME_METADATA) != name.encode():
                 raise ValueError(
                     f"baseline embedding field {column!r} has invalid registry-name metadata"
                 )
-            if metadata.get(_EMBEDDING_ARTIFACT_METADATA) != expected_identities[name].encode():
+            if metadata.get(_EMBEDDING_ARTIFACT_METADATA) != policy_identities[name].encode():
                 raise ValueError(
                     f"baseline embedding field {column!r} does not match the frozen artifact"
                 )
-    if expected_identities != baseline_identities:
+    if policy_identities != observed_identities:
         raise ValueError("baseline embedding artifacts do not match the frozen generation policy")
+
+
+def _embedding_policy_for_growing_parent(
+    spec: DatasetSpec,
+    parent_schema: pa.Schema,
+    parent_extra_columns: Sequence[str],
+) -> GenerationEmbeddingPolicy | None:
+    """Freeze the policy needed to reproduce an immutable parent version.
+
+    :param spec: Frozen producer specification.
+    :param parent_schema: Checked-out parent schema.
+    :param parent_extra_columns: Parent fields absent from the render schema.
+    :returns: Explicit or inferred policy, or ``None`` without embedding fields.
+    """
+    if not parent_extra_columns and spec.embedding_generation is None:
+        return None
+    names, identities = _inspect_parent_embedding_provenance(
+        parent_schema, parent_extra_columns
+    )
+    policy = spec.embedding_generation
+    if policy is None:
+        policy = _infer_legacy_parent_embedding_policy(names, identities)
+        _validate_inferred_policy_reproducibility(
+            policy,
+            identities,
+            param_spec_name=str(spec.render.param_spec_name),
+        )
+    _validate_embedding_policy_matches_parent(
+        policy, parent_schema, parent_extra_columns, identities
+    )
     return policy
 
 
@@ -682,26 +755,28 @@ def initialize_growing_branch(
     :raises ValueError: Baseline artifacts or immutable contract are invalid.
     """
     dataset = _open_train(train_uri)
-    baseline = dataset.checkout_version(baseline_version)
+    parent_dataset = dataset.checkout_version(baseline_version)
     spec_fields = lance_schema(
         dataset_field_shapes(spec.render, spec.num_params), spec.render.shard_metadata()
     ).names
-    extra_columns = [name for name in baseline.schema.names if name not in spec_fields]
-    embedding_generation = _generation_policy_for_baseline(
-        spec, baseline.schema, extra_columns
+    parent_extra_columns = [
+        name for name in parent_dataset.schema.names if name not in spec_fields
+    ]
+    parent_embedding_policy = _embedding_policy_for_growing_parent(
+        spec, parent_dataset.schema, parent_extra_columns
     )
-    effective_spec = spec.model_copy(
-        update={"embedding_generation": embedding_generation}
+    branch_spec = spec.model_copy(
+        update={"embedding_generation": parent_embedding_policy}
     )
     baseline_transaction = _transaction(dataset, baseline_version)
-    baseline_train_shards = len(baseline.get_fragments())
+    baseline_train_shards = len(parent_dataset.get_fragments())
     expected_train_shards = spec.train_val_test_sizes[0] // spec.render.samples_per_shard
     if baseline_train_shards != expected_train_shards:
         raise ValueError(
             f"baseline train fragments {baseline_train_shards} do not match spec "
             f"{expected_train_shards}"
         )
-    if baseline.count_rows() != spec.train_val_test_sizes[0]:
+    if parent_dataset.count_rows() != spec.train_val_test_sizes[0]:
         raise ValueError("baseline train row count does not match the frozen specification")
     GrowingPlan(
         baseline_train_shards,
@@ -715,7 +790,7 @@ def initialize_growing_branch(
     if not stats_path.is_file() or not welford_path.is_file():
         raise ValueError("baseline stats.npz and welford.npz are required")
     load_welford(welford_path, expected_shape=_expected_mel_shape(spec))
-    fingerprint = dataset_spec_fingerprint(effective_spec)
+    fingerprint = dataset_spec_fingerprint(branch_spec)
     contract = {
         "synth_setter.growing_baseline_train_shards": str(baseline_train_shards),
         "synth_setter.growing_baseline_transaction": baseline_transaction.uuid,
@@ -724,9 +799,9 @@ def initialize_growing_branch(
         "synth_setter.growing_max_train_shards": str(max_train_shards),
         "synth_setter.growing_num_extra_shards": str(num_extra_shards),
     }
-    if embedding_generation is not None:
+    if parent_embedding_policy is not None:
         contract["synth_setter.growing_embedding_generation"] = (
-            embedding_generation.model_dump_json()
+            parent_embedding_policy.model_dump_json()
         )
     checked_out = _create_or_resume_branch(dataset, branch, baseline_version, contract)
     snapshot = GrowingSnapshot(
@@ -740,11 +815,11 @@ def initialize_growing_branch(
         max_train_shards=max_train_shards,
         num_extra_shards=num_extra_shards,
         high_watermark=baseline_train_shards,
-        embedding_generation=embedding_generation,
+        embedding_generation=parent_embedding_policy,
         dataset_spec_fingerprint=fingerprint,
-        row_count=baseline.count_rows(),
+        row_count=parent_dataset.count_rows(),
         fragment_count=baseline_train_shards,
-        schema_fingerprint=_schema_fingerprint(baseline),
+        schema_fingerprint=_schema_fingerprint(parent_dataset),
         stats_sha256=_file_sha256(stats_path),
         welford_sha256=_file_sha256(welford_path),
     )
