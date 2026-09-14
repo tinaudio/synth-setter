@@ -15,6 +15,7 @@ artifact landed on the live run.
 from __future__ import annotations
 
 import glob
+import json
 import os
 import shutil
 from pathlib import Path
@@ -163,7 +164,10 @@ def test_evaluate_preserves_wandb_id_and_logs_eval_results_artifact(
     )
 
     artifact_name = f"eval-{_CONFIG_ID}"
-    s3_ref = "s3://eval-artifacts/eval-run-1"
+    pointer = json.loads(
+        (remote_root / "eval-artifacts" / "eval-run-1" / "latest.json").read_text()
+    )
+    s3_ref = pointer["payload_uri"].replace("r2://", "s3://", 1)
     payload = read_run_binary(
         Path(binary_files[0]),
         until=lambda data: artifact_name.encode() in data and s3_ref.encode() in data,
