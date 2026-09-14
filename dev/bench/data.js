@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789423613699,
+  "lastUpdate": 1789423617213,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -45311,6 +45311,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/diverse-patches/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.00018352270126342773,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8e4365eb6be3e589647fe451334bd8f8cf81d52a",
+          "message": "internal-feat(evaluation): export pyFDN sketch flow as a browser bundle (#3490)\n\n* internal-fix(training): revert #3388 patch padding for #3483 validation\n\nThe flow_sketch pyFDN checkpoint under browser validation (#3483) was\ntrained before #3388 with the swapped padding axes and carries a\n488-token positional encoding. Restore the pre-#3388 axis order so the\ncheckpoint loads; both #3388 regression tests are strict xfail until a\nproper compatibility path lands. This commit must not merge as-is.\n\nRefs #3483\n\n* internal-feat(evaluation): export pyFDN sketch flow as a browser bundle\n\nAdd `synth-setter-export-browser-fdn-bundle`, which publishes a\ndigest-pinned pyFDN sketch checkpoint as three ONNX graphs plus a\nprovenance manifest so a browser can run inference without Python:\n\n- `frontend.onnx`: a librosa-parity mel front end (`NormalizedMelFrontend`)\n  whose STFT is a strided DFT convolution, so it exports without an STFT\n  operator and runs on ONNX Runtime Web. Parity with `make_spectrogram` plus\n  statistics normalization holds at 1e-3 on a real pyFDN render.\n- The velocity graph now evaluates all four conditioning branches and takes\n  `branch_weights[4]`; `branch_weights(mode, content, sketch)` (Python and\n  `guidance.mjs`) maps `both`, `mel_only`, `sketch_only`, and\n  `unconditional` onto them, with `both` reproducing the existing\n  three-branch guidance exactly. The SurgePy browser path now passes\n  `both` weights.\n- `extract_profile_controls` dispatches offline sketch extraction on the\n  checkpoint's profile so the sketch CLI accepts `pyfdn_reverb` checkpoints\n  alongside the 386-row music profile.\n\nRefs #3483\n\n* internal-fix(evaluation): drop unused conditioning-mode alias\n\nThe type alias was never referenced; callers pass the mode string\nthrough the boundary and branch_weights validates it.\n\nRefs #3483\n\n* internal-fix(evaluation): log staging cleanup and test the bundle CLI\n\nReview follow-ups on #3490: staging-directory removal failures are now\nlogged instead of silently ignored, and the exporter entrypoint has a\nfast happy-path test that saves the tiny model through Lightning's\ncheckpoint writer, runs `main()`, and drives the published graphs on\nonnxruntime.\n\nRefs #3483",
+          "timestamp": "2026-09-14T16:04:13-04:00",
+          "tree_id": "60e74ec43e034c0ce3931c31bd67500ccee93a1c",
+          "url": "https://github.com/tinaudio/synth-setter/commit/8e4365eb6be3e589647fe451334bd8f8cf81d52a"
+        },
+        "date": 1789423616341,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/diverse-patches/render-count",
+            "value": 8,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard/dataset-seconds-per-render",
+            "value": 9.769595189624994,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard/dataset-realtime-factor",
+            "value": 2.4423987974062484,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer/dataset-seconds-per-render",
+            "value": 4.6277243077500145,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer/dataset-realtime-factor",
+            "value": 1.1569310769375036,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/surgepy/dataset-seconds-per-render",
+            "value": 0.2494629550000127,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/surgepy/dataset-realtime-factor",
+            "value": 0.062365738750003175,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 2.925523281097412,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-dawdreamer/mss-max",
+            "value": 0.6693875193595886,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.006268645636737347,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 1.4143796068600931,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.0009762048721313477,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 2.9558520317077637,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-surgepy/mss-max",
+            "value": 0.6174938678741455,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-surgepy/sot-max",
+            "value": 0.005951257888227701,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 1.4171854993200395,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.0006300806999206543,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 2.694519281387329,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer-vs-surgepy/mss-max",
+            "value": 0.6056169867515564,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.005887052975594997,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 1.3330597086739726,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/diverse-patches/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.0003775358200073242,
             "unit": "1-cos"
           }
         ]
