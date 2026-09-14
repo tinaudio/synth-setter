@@ -65,6 +65,11 @@ _EXPECTED_PARAMETER_ADDRESSES: Mapping[str, list[str]] = {
         "/churchOrgan/noise_gain",
         "/churchOrgan/gate",
     ],
+    "faust_fdn_effect": [
+        "/fdnEffect/damping",
+        "/fdnEffect/decay",
+        "/fdnEffect/dryWet",
+    ],
     "faust_filter_osc": [
         "/SINE_WAVE_OSCILLATOR_oscrs/Amplitude",
         "/SINE_WAVE_OSCILLATOR_oscrs/Frequency",
@@ -338,6 +343,7 @@ def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
         ("faust_bright_organ", 13),
         ("faust_bubble", 10),
         ("faust_church_organ", 16),
+        ("faust_fdn_effect", 6),
         ("faust_filter_osc", 6),
         ("faust_kronecker_fdn", 39),
         ("faust_shimmer_fdn", 27),
@@ -548,7 +554,7 @@ def test_faust_compiled_parameter_domains_match_specs(param_spec_name: str) -> N
         assert description["isDiscrete"] is is_discrete
 
 
-@pytest.mark.parametrize("param_spec_name", _EXPECTED_PARAMETER_ADDRESSES)
+@pytest.mark.parametrize("param_spec_name", _EXPECTED_OUTPUT_CHANNELS)
 def test_faust_source_renders_real_audio(param_spec_name: str) -> None:
     """One compiled source emits finite, audible, bounded audio of its native shape.
 

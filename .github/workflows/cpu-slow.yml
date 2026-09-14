@@ -58,11 +58,24 @@ jobs:
           version: "0.11.28"
           enable-cache: true
 
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Verify Node.js
+        run: node --version
+
+      - name: Install Node dependencies
+        run: npm ci
+
       - name: Install CPU test dependencies
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
 
-      - name: Run pyFDN dataset-input E2E
-        run: uv run pytest tests/integration/test_pyfdn_dataset_input_e2e.py -v
+      - name: Run effect-input E2Es
+        run: |
+          uv run pytest tests/integration/test_pyfdn_dataset_input_e2e.py -v
+          uv run pytest tests/integration/test_faustwasm_fdn_effect_input_e2e.py -v
 
   run_slow_tests:
     # Skip fork-PR runs: forks can't see `secrets.RCLONE_CONFIG_R2_*` and the

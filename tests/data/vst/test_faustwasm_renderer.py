@@ -18,7 +18,7 @@ from synth_setter.data.vst.generate_vst_dataset import (
 )
 from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.pipeline.schemas.spec import InputAudioSource, RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 from synth_setter.synth_spec import SYNTHS, SynthName
 
@@ -57,6 +57,11 @@ _EXPECTED_PARAMETER_ADDRESSES = {
         ("/churchOrgan/gain_lower_octave", "/churchOrgan/gain_lower_octave"),
         ("/churchOrgan/noise_gain", "/churchOrgan/noise_gain"),
         ("/churchOrgan/gate", "/churchOrgan/gate"),
+    ),
+    "faust_fdn_effect": (
+        ("/fdnEffect/damping", "/fdnEffect/damping"),
+        ("/fdnEffect/decay", "/fdnEffect/decay"),
+        ("/fdnEffect/dryWet", "/fdnEffect/dryWet"),
     ),
     "faust_filter_osc": (
         ("/SINE_WAVE_OSCILLATOR_oscrs/Amplitude", "/SINE_WAVE_OSCILLATOR_oscrs/Amplitude"),
@@ -170,6 +175,19 @@ def test_faustwasm_backend_version_reads_packaged_metadata() -> None:
     assert extract_backend_version("faustwasm") == _configured_backend_version()
 
 
+def test_faustwasm_effect_accepts_pinned_input_audio_source() -> None:
+    config = _config("faust_fdn_effect").model_copy(
+        update={
+            "input_audio_source": InputAudioSource(
+                dataset_uri="/tmp/finalized-source",
+                snapshot_txid="finalized-snapshot-txid",
+            )
+        }
+    )
+
+    assert RenderConfig.model_validate(config.model_dump()).input_audio_source is not None
+
+
 def test_faustwasm_legacy_digest_projection_is_rejected() -> None:
     """FaustWasm rejects the legacy plugin-oriented render contract."""
     values = _config().model_dump()
@@ -215,6 +233,33 @@ def test_faustwasm_factory_renders_real_source(identity: str, channels: int) -> 
     assert audio.dtype == np.float32
     assert np.isfinite(audio).all()
     assert float(np.max(np.abs(audio))) > 1e-4
+
+
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
+def test_faustwasm_fdn_effect_stereo_input_renders_real_audio() -> None:
+    renderer = make_audio_renderer(_config("faust_fdn_effect"))
+    params = _midpoint_patch("faust_fdn_effect")
+    source = np.zeros((2, 176_400), dtype=np.float32)
+    source[0, 0] = 0.1
+    source[1, 100] = -0.1
+
+    audio = renderer.render_with_input(params, source)
+
+    assert audio.shape == source.shape
+    assert audio.dtype == np.float32
+    assert np.isfinite(audio).all()
+    assert not np.array_equal(audio, source)
+
+
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
+def test_faustwasm_fdn_effect_mono_input_raises() -> None:
+    renderer = make_audio_renderer(_config("faust_fdn_effect"))
+
+    with pytest.raises(ValueError, match=r"input audio shape .* expected \(2, 176400\)"):
+        renderer.render_with_input(
+            _midpoint_patch("faust_fdn_effect"),
+            np.zeros(176_400, dtype=np.float32),
+        )
 
 
 @pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")

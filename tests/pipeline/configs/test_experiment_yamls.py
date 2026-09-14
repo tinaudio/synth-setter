@@ -34,6 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/10-1k-shards": "10-1k-shards",
     "generate_dataset/ci-materialize-test": "ci-materialize-test",
+    "generate_dataset/faust-fdn-effect-input": "faust-fdn-effect-input",
     "generate_dataset/faust-shimmer-fdn-lance-50k": "faust-shimmer-fdn-lance-50k",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
     "generate_dataset/pyfdn-input-audio": "pyfdn-input-audio",

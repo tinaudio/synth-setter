@@ -68,6 +68,16 @@ export const compileFaustArtifact = async (request, outputDir) => {
     if (!dspFactory?.code) throw new Error('Faust compiler returned no DSP bytecode');
     const dspMeta = JSON.parse(dspFactory.json);
     const compiledMeta = generator.getMeta();
+    const nativeInputs = compiledMeta.inputs;
+    if (!Number.isInteger(nativeInputs) || nativeInputs < 0) {
+        throw new Error('compiled input count must be a non-negative integer');
+    }
+    if (!Number.isInteger(request.expectedInputs) || request.expectedInputs < 0) {
+        throw new Error('expectedInputs must be a non-negative integer');
+    }
+    if (nativeInputs !== request.expectedInputs) {
+        throw new Error('compiled input count differs');
+    }
     const nativeOutputs = compiledMeta.outputs;
     if (!Number.isInteger(nativeOutputs) || nativeOutputs < 1) {
         throw new Error('compiled output count must be a positive integer');
@@ -132,6 +142,7 @@ export const compileFaustArtifact = async (request, outputDir) => {
         sourceSha256: sha256(request.source),
         mode: request.mode,
         voices: request.voices,
+        inputs: nativeInputs,
         outputs: nativeOutputs,
         parameters: request.parameters,
         files,

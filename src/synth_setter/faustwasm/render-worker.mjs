@@ -5,6 +5,7 @@ import {
     applyCanonicalPatch,
     createOfflineSynth,
     loadFaustArtifact,
+    renderAudioInput,
     renderNote,
 } from './runtime.mjs';
 import { readFaustWasmPackageVersion } from './package-version.mjs';
@@ -30,7 +31,26 @@ export const main = async () => {
     );
     const synth = await createOfflineSynth(artifact, request);
     applyCanonicalPatch(synth, manifest, request.params);
-    const channels = renderNote(synth, request);
+    let channels;
+    if (request.inputFile) {
+        const inputBytes = await readFile(join(dirname(resolve(requestPath)), request.inputFile));
+        const expectedBytes = manifest.inputs * request.frames * Float32Array.BYTES_PER_ELEMENT;
+        if (inputBytes.byteLength !== expectedBytes) {
+            throw new Error(`input audio has ${inputBytes.byteLength} bytes; expected ${expectedBytes}`);
+        }
+        const values = new Float32Array(
+            inputBytes.buffer,
+            inputBytes.byteOffset,
+            inputBytes.byteLength / Float32Array.BYTES_PER_ELEMENT,
+        );
+        const input = Array.from(
+            { length: manifest.inputs },
+            (_, channel) => values.subarray(channel * request.frames, (channel + 1) * request.frames),
+        );
+        channels = renderAudioInput(synth, input, request);
+    } else {
+        channels = renderNote(synth, request);
+    }
     const bytes = Buffer.concat(
         channels.map((channel) => Buffer.from(channel.buffer, channel.byteOffset, channel.byteLength)),
     );
