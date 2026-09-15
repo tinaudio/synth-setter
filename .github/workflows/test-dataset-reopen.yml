@@ -1,0 +1,97 @@
+name: Test Dataset Reopen
+
+# PR-presubmit no-mock validation for dataset reopen (#2862). Generates and
+# finalizes a real Faust dataset with non-zero val/test against Cloudflare R2,
+# reopens it at a larger train size, re-runs the production generate + finalize
+# CLIs against the reopened root, and pins that preserved shards are skipped
+# rather than re-rendered and that their rows survive byte-identical.
+#
+# Faust rather than a VST synth so the job needs no plugin binaries; the render
+# volume is 3 shards before the reopen and 4 after.
+#
+# Required secrets (same R2 set the sibling dataset workflows use):
+#   RCLONE_CONFIG_R2_ACCESS_KEY_ID, RCLONE_CONFIG_R2_SECRET_ACCESS_KEY,
+#   RCLONE_CONFIG_R2_ENDPOINT.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/actions/install-rclone/**"
+      - ".github/actions/setup-r2/**"
+      - ".github/actions/upload-coverage/**"
+      - ".github/workflows/test-dataset-reopen.yml"
+      - "src/synth_setter/cli/finalize_dataset.py"
+      - "src/synth_setter/cli/generate_dataset.py"
+      - "src/synth_setter/configs/experiment/generate_dataset/**"
+      - "src/synth_setter/configs/render/faust.yaml"
+      - "src/synth_setter/configs/synth/faust_bright_organ.yaml"
+      - "src/synth_setter/data/vst/**"
+      - "src/synth_setter/pipeline/data/dataset_reopen.py"
+      - "src/synth_setter/pipeline/data/lance_shard.py"
+      - "src/synth_setter/pipeline/data/lance_finalize.py"
+      - "src/synth_setter/pipeline/data/lance_staging.py"
+      - "src/synth_setter/pipeline/partitioning.py"
+      - "src/synth_setter/pipeline/r2_io.py"
+      - "src/synth_setter/pipeline/schemas/**"
+      - "src/synth_setter/pipeline/shard_claims.py"
+      - "src/synth_setter/pipeline/spec_io.py"
+      - "src/synth_setter/renderer_factory.py"
+      - "tests/integration/test_dataset_reopen_e2e.py"
+      - "uv.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reopen-production-e2e:
+    name: Dataset reopen production E2E
+    # Forked PRs cannot read the R2 secrets, so the job would fail on the
+    # prerequisite probe rather than on anything it is meant to validate.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Set up R2
+        uses: ./.github/actions/setup-r2
+        with:
+          access-key-id: ${{ secrets.RCLONE_CONFIG_R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.RCLONE_CONFIG_R2_SECRET_ACCESS_KEY }}
+          endpoint: ${{ secrets.RCLONE_CONFIG_R2_ENDPOINT }}
+          install-rclone: "true"
+
+      - name: Install project CPU and development dependencies
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
+
+      - name: Run dataset reopen production E2E
+        run: |
+          set -euo pipefail
+          uv run pytest tests/integration/test_dataset_reopen_e2e.py \
+            -m "slow and r2 and integration_r2" \
+            --cov=src --cov-branch --cov-report=xml \
+            -vv -s
+
+      - name: Upload coverage to Codecov
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: ./.github/actions/upload-coverage
+        with:
+          flags: integration-r2-reopen
+          token: ${{ secrets.CODECOV_TOKEN }}

@@ -42,6 +42,9 @@ flag_management:
       paths:
         - src/synth_setter/
         - scripts/ci/
+    - name: integration-r2-reopen
+      paths:
+        - src/synth_setter/pipeline/
     # Real-weight SA3 parity lane for independently selected SAME-S and SAME-L.
     - name: same-e2e
       paths:
