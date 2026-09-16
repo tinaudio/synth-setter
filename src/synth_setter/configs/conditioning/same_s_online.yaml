@@ -1,6 +1,6 @@
 # @package _global_
 
-# Online SAME-S conditioning pools frozen latents computed from the waveform.
+# Online SAME-S conditioning treats frozen temporal latents as AST patches.
 defaults:
   - override /model/encoder: same_online
 
