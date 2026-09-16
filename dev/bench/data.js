@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789529874650,
+  "lastUpdate": 1789529878261,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -29779,6 +29779,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.8487697077,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "efa18f6fa3bd389bbfca0786aa50c9a71436b685",
+          "message": "internal-feat(data-pipeline): add synth-agnostic 2M VST dataset template (#3584)\n\nThe per-synth 2M configs duplicate scale-dependent render knobs and\ndisagree on them. The template pins the knobs that follow from scale\n(per-render plugin reload, no GUI toggling, 32-sample flush cadence,\nno local shard retention) and leaves synth, render, and task_name\nmandatory so an incomplete selection fails at composition.\n\nThe render group stays unset instead of overriding render.renderer_backend\nwith ???: OmegaConf merges MISSING over a concrete value as a no-op, so\nthat spelling would silently resolve to pedalboard.\n\nCloses #3579",
+          "timestamp": "2026-09-15T20:55:43-04:00",
+          "tree_id": "41b5013784701aef09e65a826f8d472da18e0f08",
+          "url": "https://github.com/tinaudio/synth-setter/commit/efa18f6fa3bd389bbfca0786aa50c9a71436b685"
+        },
+        "date": 1789529877836,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.32015323638916,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.14439259044826,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08834587782621384,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.002286195755004883,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2682464122772217,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.856144425000002,
             "unit": "seconds"
           }
         ]
