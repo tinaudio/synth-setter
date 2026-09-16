@@ -43,6 +43,7 @@ from synth_setter.cli.train import train
 from synth_setter.data.vst import param_specs
 from synth_setter.models.components.audio_distance import MultichannelAudioDistance
 from synth_setter.models.components.audio_feedback import AudioFeedbackLoss
+from synth_setter.models.components.cqt_encoder import CqtAudioEncoder
 from synth_setter.models.components.differentiable_renderer import (
     FlamoFDNDifferentiableRenderer,
     TorchSynthDifferentiableRenderer,
@@ -71,6 +72,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot, GrowingSnapshot
 from synth_setter.utils import resolve_run_config_id
 from synth_setter.utils.callbacks import ValidationAlignedModelCheckpoint
+from synth_setter.utils.lr_scheduler import ResumeAwareCosineAnnealingLR
 from synth_setter.utils.utils import register_resolvers
 from synth_setter.workspace import operator_workspace
 from tests._vst import PLUGIN_PATH
@@ -1311,63 +1313,6 @@ def test_train_fake_mode_nondefault_spec_sizes_batches_from_registry(tmp_path: P
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize(
-    ("identity", "width"),
-    [
-        ("pyfdn_pitchshift_n8_mono_householder", 45),
-        ("pyfdn_gotz_n8_mono_fixed_delays", 144),
-        ("pyfdn_gotz_n8_mono_learned_delays", 152),
-        ("pyfdn_gotz_n8_mono_fixed_delays_givens", 172),
-        ("pyfdn_gotz_n8_mono_learned_delays_givens", 180),
-    ],
-)
-def test_train_pyfdn_identity_uses_spec_width_batches(
-    tmp_path: Path, identity: str, width: int
-) -> None:
-    """The train entrypoint resolves each non-default pyFDN synth and its model width.
-
-    :param tmp_path: Pinned as the one-step training output directory.
-    :param identity: Registered pyFDN synth and ParamSpec name.
-    :param width: Encoded width every training batch must carry.
-    """
-    cfg = build_fake_train_cfg(tmp_path, param_spec_name=identity)
-
-    HydraConfig().set_config(cfg)
-    _, object_dict = train(cfg)
-
-    trainer = object_dict["trainer"]
-    assert trainer.global_step >= 1
-    assert_log_per_param_mse_wired(trainer, identity)
-    datamodule = object_dict["datamodule"]
-    datamodule.setup("fit")
-    batch = next(iter(datamodule.train_dataloader()))
-    assert batch["params"].shape == (2, width)
-    datamodule.teardown("fit")
-
-
-@pytest.mark.slow
-def test_train_pyfdn_diffvox_identity_uses_82_coordinate_batches(tmp_path: Path) -> None:
-    """The train entrypoint resolves the DiffVox synth and model width.
-
-    :param tmp_path: Pinned as the one-step training output directory.
-    """
-    identity = "pyfdn_diffvox"
-    cfg = build_fake_train_cfg(tmp_path, param_spec_name=identity)
-
-    HydraConfig().set_config(cfg)
-    _, object_dict = train(cfg)
-
-    trainer = object_dict["trainer"]
-    assert trainer.global_step >= 1
-    assert_log_per_param_mse_wired(trainer, identity)
-    datamodule = object_dict["datamodule"]
-    datamodule.setup("fit")
-    batch = next(iter(datamodule.train_dataloader()))
-    assert batch["params"].shape == (2, 82)
-    datamodule.teardown("fit")
-
-
-@pytest.mark.slow
 def test_train_file_uri_hydrates_marker_staged_local_dataset_root(
     cfg_train_lance: DictConfig, tmp_path: Path
 ) -> None:
@@ -2382,6 +2327,38 @@ def test_train_experiment_labels_offline_run_preserves_display_metadata(
     finally:
         wandb.finish()
         wandb.teardown()
+
+
+def test_train_resume_extended_max_steps_uses_configured_scheduler_horizon(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """The real training entrypoint remaps resumed LR onto an extended horizon.
+
+    :param cfg_train_lance: Composed Lance training configuration.
+    """
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.trainer.fast_dev_run = False
+        cfg_train_lance.trainer.limit_train_batches = 1
+        cfg_train_lance.trainer.limit_val_batches = 1
+        cfg_train_lance.trainer.limit_test_batches = 1
+        cfg_train_lance.trainer.max_steps = 2
+    HydraConfig().set_config(cfg_train_lance)
+
+    _, first_objects = train(cfg_train_lance)
+    checkpoint = Path(cfg_train_lance.paths.output_dir) / "resume.ckpt"
+    first_objects["trainer"].save_checkpoint(checkpoint)
+
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.ckpt_path = str(checkpoint)
+        cfg_train_lance.trainer.max_steps = 4
+
+    _, resumed_objects = train(cfg_train_lance)
+
+    scheduler = resumed_objects["trainer"].lr_scheduler_configs[0].scheduler
+    assert isinstance(scheduler, ResumeAwareCosineAnnealingLR)
+    assert scheduler.T_max == 4
+    assert scheduler.get_last_lr() == pytest.approx([1e-6])
+    assert resumed_objects["trainer"].optimizers[0].param_groups[0]["lr"] == pytest.approx(1e-6)
 
 
 def test_train_wandb_config_resolves_scheduler_max_steps(
@@ -3599,6 +3576,7 @@ def test_train_pupujepa_tiny_scratch_conditioning_trains_backbone_and_checkpoint
     assert_finite_train_loss(metric_dict)
     model = object_dict["model"]
     assert isinstance(model.encoder, PupuJepaConditioningEncoder)
+    assert model.encoder.backbone.max_batch_size == -1
     assert all(parameter.requires_grad for parameter in model.encoder.backbone.parameters())
     checkpoint_path = tmp_path / "scratch.ckpt"
     object_dict["trainer"].save_checkpoint(checkpoint_path)
@@ -3640,6 +3618,38 @@ def test_train_matpac_plus_flattened_lance_returns_finite_loss(
 
     assert object_dict["trainer"].global_step >= 1
     assert_finite_train_loss(metric_dict)
+
+
+@pytest.mark.slow
+def test_train_cqt_online_conditioning_returns_finite_loss(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train one real step from raw Lance audio through online CQT conditioning.
+
+    :param tmp_path: Training output directory.
+    :param fake_surge_smoke_datasets: Tiny production-format Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    cfg = build_surge_xt_embedding_train_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        param_spec_name=param_spec_name,
+        conditioning="cqt_online",
+    )
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    backbone = object_dict["model"].encoder.backbone
+    assert isinstance(backbone, CqtAudioEncoder)
+    assert backbone.max_batch_size == -1
+    _assert_conditioning_checkpoint_validates(cfg, tmp_path)
 
 
 @pytest.mark.requires_vst

@@ -47,6 +47,15 @@ _TARGET_RECIPE = {"seed": 7, "samples": 4 * SAMPLE_RATE, "decay_seconds": 0.6}
 _PRED_RECIPE = {"seed": 11, "samples": 4 * SAMPLE_RATE, "decay_seconds": 0.9}
 
 
+def _stable_metric(value: float) -> float:
+    """Discard platform-level floating-point noise from golden scalar metrics.
+
+    :param value: Metric produced by the Python reference implementation.
+    :returns: Metric rounded beyond the precision used by browser comparisons.
+    """
+    return round(float(value), 12)
+
+
 def synthetic_impulse_response(*, seed: int, samples: int, decay_seconds: float) -> np.ndarray:
     """Build a unit-peak exponentially decaying noise burst from a 32-bit LCG.
 
@@ -128,15 +137,15 @@ def build_fixtures() -> dict[str, dict[str, Any]]:
                 "sketch": extract_reverb_sketch(pred, SAMPLE_RATE).tolist(),
             },
             "metrics": {
-                "mss": compute_mss(target_pair, pred_pair, SAMPLE_RATE),
-                "octave_edc_rmse_db": compute_octave_edc_rmse_db_mono_only(
-                    target_pair, pred_pair, SAMPLE_RATE
+                "mss": _stable_metric(compute_mss(target_pair, pred_pair, SAMPLE_RATE)),
+                "octave_edc_rmse_db": _stable_metric(
+                    compute_octave_edc_rmse_db_mono_only(target_pair, pred_pair, SAMPLE_RATE)
                 ),
-                "octave_rt60_log_rmse": compute_octave_rt60_log_rmse_mono_only(
-                    target_pair, pred_pair, SAMPLE_RATE
+                "octave_rt60_log_rmse": _stable_metric(
+                    compute_octave_rt60_log_rmse_mono_only(target_pair, pred_pair, SAMPLE_RATE)
                 ),
-                "t30_mape": acoustic["t30_mape"],
-                "c50_mae_db": acoustic["c50_mae_db"],
+                "t30_mape": _stable_metric(acoustic["t30_mape"]),
+                "c50_mae_db": _stable_metric(acoustic["c50_mae_db"]),
             },
             "decode": _decode_fixture(),
         },

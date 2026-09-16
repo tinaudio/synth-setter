@@ -85,7 +85,8 @@ _EXPECTED_PARAMETER_ADDRESSES: Mapping[str, list[str]] = {
         "/augmentor/source/gain",
     ],
     "faust_kronecker_fdn": [
-        "/kroneckerFDN/Decay/t60",
+        "/kroneckerFDN/Decay/t60_dc",
+        "/kroneckerFDN/Decay/t60_nyquist",
         "/kroneckerFDN/Delays/d0",
         "/kroneckerFDN/Delays/d1",
         "/kroneckerFDN/Delays/d2",
@@ -350,12 +351,12 @@ def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
 @pytest.mark.parametrize(
     ("param_spec_name", "encoded_width"),
     [
+        ("faust_augmentor", 16),
         ("faust_bright_organ", 13),
         ("faust_bubble", 10),
         ("faust_church_organ", 16),
         ("faust_filter_osc", 6),
-        ("faust_augmentor", 16),
-        ("faust_kronecker_fdn", 38),
+        ("faust_kronecker_fdn", 39),
         ("faust_shimmer_fdn", 27),
     ],
 )

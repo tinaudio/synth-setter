@@ -28,6 +28,25 @@ def seed_for_sample(master_seed: int, sample_idx: int, attempt: int = 0) -> int:
     return int.from_bytes(digest[:_SEED_BYTES], "big")
 
 
+def seed_for_input_audio(
+    base_seed: int,
+    sampling_seed: int,
+    sample_idx: int,
+    attempt: int,
+) -> int:
+    """Derive a source-row selection seed without consuming the parameter RNG.
+
+    :param base_seed: Dataset or split master seed.
+    :param sampling_seed: Input-source-specific seed.
+    :param sample_idx: Stable logical output row index.
+    :param attempt: Loudness-gate retry attempt for the row.
+    :returns: A stable seed in ``[0, 2**64)``.
+    """
+    wire = f"input-audio:v1:{base_seed}:{sampling_seed}:{sample_idx}:{attempt}"
+    digest = hashlib.sha256(wire.encode()).digest()
+    return int.from_bytes(digest[:_SEED_BYTES], "big")
+
+
 def rng_for_sample(master_seed: int, sample_idx: int, attempt: int = 0) -> np.random.Generator:
     """Build a ``numpy`` ``Generator`` seeded by :func:`seed_for_sample`.
 

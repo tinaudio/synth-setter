@@ -67,16 +67,16 @@ def test_build_fixtures_metrics_match_public_metric_functions() -> None:
     pred = synthetic_impulse_response(**golden["pred"]["recipe"])[None, :]
 
     metrics = golden["metrics"]
-    assert metrics["mss"] == compute_mss(target, pred, SAMPLE_RATE)
-    assert metrics["octave_edc_rmse_db"] == compute_octave_edc_rmse_db_mono_only(
-        target, pred, SAMPLE_RATE
+    assert metrics["mss"] == pytest.approx(compute_mss(target, pred, SAMPLE_RATE), abs=1e-12)
+    assert metrics["octave_edc_rmse_db"] == pytest.approx(
+        compute_octave_edc_rmse_db_mono_only(target, pred, SAMPLE_RATE), abs=1e-12
     )
-    assert metrics["octave_rt60_log_rmse"] == compute_octave_rt60_log_rmse_mono_only(
-        target, pred, SAMPLE_RATE
+    assert metrics["octave_rt60_log_rmse"] == pytest.approx(
+        compute_octave_rt60_log_rmse_mono_only(target, pred, SAMPLE_RATE), abs=1e-12
     )
     acoustic = compute_acoustic_parameter_metrics_mono_only(target, pred, SAMPLE_RATE)
-    assert metrics["t30_mape"] == acoustic["t30_mape"]
-    assert metrics["c50_mae_db"] == acoustic["c50_mae_db"]
+    assert metrics["t30_mape"] == pytest.approx(acoustic["t30_mape"], abs=1e-12)
+    assert metrics["c50_mae_db"] == pytest.approx(acoustic["c50_mae_db"], abs=1e-12)
 
 
 def test_build_fixtures_decode_matches_public_decoder() -> None:

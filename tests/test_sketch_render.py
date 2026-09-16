@@ -22,6 +22,7 @@ from synth_setter.cli.sketch_render import cfg_arm_name, cfg_grid, load_audio_fi
 from synth_setter.conditioning import SketchControlSpec
 from synth_setter.data.third_party_datamodule import AudioDecodeError, decode_clip
 from synth_setter.data.vst.core import write_wav
+from synth_setter.features import profile_controls
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
 _CLI_HELP_TIMEOUT_SECONDS = 120
@@ -512,14 +513,11 @@ def test_prepare_inputs_normalizes_mel_and_zeros_weak_pitch(
     controls = torch.full((386, 401), 0.05)
     controls[0] = 0.25
     controls[1] = 0.5
-    controls[2, 0] = 0.1
-    controls[2, 13] = 0.11
+    # Unit spikes whose 13- and 14-frame window means clear the 0.1 threshold.
+    controls[2, 0] = 1.0
+    controls[2, 13] = 1.0
     monkeypatch.setattr(sketch_render, "make_spectrogram", lambda *args: np.full(shape, 4.0))
-    monkeypatch.setattr(
-        sketch_render,
-        "extract_sketch_controls",
-        lambda *args: controls,
-    )
+    monkeypatch.setattr(profile_controls, "extract_sketch_controls", lambda *args: controls)
     model = cast(
         VSTFlowMatchingModule,
         SimpleNamespace(
@@ -543,8 +541,8 @@ def test_prepare_inputs_normalizes_mel_and_zeros_weak_pitch(
     assert batch["sketch_ctrl"].dtype is torch.float32
     assert torch.equal(batch["sketch_ctrl"][:, 0], torch.full((1, 32), 0.25))
     assert torch.equal(batch["sketch_ctrl"][:, 1], torch.full((1, 32), 0.5))
-    assert batch["sketch_ctrl"][0, 2, 0] == pytest.approx(0.1)
-    assert batch["sketch_ctrl"][0, 2, 1] == pytest.approx(0.11)
+    assert batch["sketch_ctrl"][0, 2, 0] == pytest.approx(0.12307687)
+    assert batch["sketch_ctrl"][0, 2, 1] == pytest.approx(0.11785709)
     assert torch.count_nonzero(batch["sketch_ctrl"][:, 2:, 2:]) == 0
 
 

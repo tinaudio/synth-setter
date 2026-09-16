@@ -32,10 +32,10 @@ from agent._shared.pi_review_routing import (
 AVAILABLE_MODELS = """\
 openai-codex  gpt-5.6-sol    372K  128K  yes  yes
 openai-codex  gpt-5.6-terra  372K  128K  yes  yes
-meta        muse-spark-1.3-contributor  1M  131.1K  yes  yes
+openrouter    meta/muse-spark-1.3-contributor  1M  131.1K  yes  yes
 """
 
-SECONDARY_REVIEW_MODELS = ("meta/muse-spark-1.3-contributor",)
+SECONDARY_REVIEW_MODELS = ("openrouter/meta/muse-spark-1.3-contributor",)
 
 
 def test_parse_available_models_joins_provider_and_model_id() -> None:
@@ -43,7 +43,7 @@ def test_parse_available_models_joins_provider_and_model_id() -> None:
     assert parse_available_models(AVAILABLE_MODELS) == {
         "openai-codex/gpt-5.6-sol",
         "openai-codex/gpt-5.6-terra",
-        "meta/muse-spark-1.3-contributor",
+        "openrouter/meta/muse-spark-1.3-contributor",
     }
 
 
@@ -258,12 +258,12 @@ def test_build_review_plan_missing_secondary_model_raises_provider_error() -> No
         )
 
 
-def test_build_review_plan_secondary_pass_requires_meta() -> None:
-    """Require Meta for the secondary review pass."""
+def test_build_review_plan_secondary_pass_requires_openrouter() -> None:
+    """Require OpenRouter for the secondary review pass."""
     available = {
         model
         for model in parse_available_models(AVAILABLE_MODELS)
-        if not model.startswith("meta/")
+        if not model.startswith("openrouter/")
     }
 
     with pytest.raises(ValueError, match=r"secondary-review.*code-health") as error:
@@ -274,7 +274,7 @@ def test_build_review_plan_secondary_pass_requires_meta() -> None:
             available_models=available,
         )
 
-    assert "/login meta" in str(error.value)
+    assert "/login openrouter" in str(error.value)
 
 
 def test_build_review_plan_missing_codex_raises_actionable_error() -> None:
@@ -322,7 +322,7 @@ def test_build_review_plan_invalid_input_raises(
 def test_provenance_for_model_uses_effective_provider() -> None:
     """Attribute pinned review models to the provider that produced the report."""
     assert provenance_for_model("openai-codex/gpt-5.6-sol") == "codex"
-    assert provenance_for_model("meta/muse-spark-1.3-contributor") == "meta"
+    assert provenance_for_model("openrouter/meta/muse-spark-1.3-contributor") == "openrouter"
 
 
 @pytest.mark.parametrize(
@@ -330,7 +330,7 @@ def test_provenance_for_model_uses_effective_provider() -> None:
     [
         "kimi-coding/k3",
         "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-        "meta/unpinned-model",
+        "openrouter/paid-model",
     ],
 )
 def test_provenance_for_model_unpinned_secondary_model_raises(model: str) -> None:
@@ -1252,11 +1252,13 @@ def test_report_cli_real_process_extracts_and_validates_transcript(tmp_path: Pat
     )
 
     stats = json.loads(str(python(script, "transcript-stats", transcript)))
-    provenance = str(python(script, "provenance", "meta/muse-spark-1.3-contributor")).strip()
+    provenance = str(
+        python(script, "provenance", "openrouter/meta/muse-spark-1.3-contributor")
+    ).strip()
 
     assert json.loads(report.read_text()) == result
     assert stats["turns"] == 1
-    assert provenance == "meta"
+    assert provenance == "openrouter"
 
 
 def test_plan_cli_real_process_surfaces_pi_registry_failure(tmp_path: Path) -> None:
@@ -1307,7 +1309,7 @@ def test_plan_cli_real_process_missing_secondary_model_fails_once(tmp_path: Path
 
     stderr = error.value.stderr.decode()
     assert stderr.count("No secondary-review model available") == 1
-    assert "meta/muse-spark-1.3-contributor" not in stderr
+    assert "openrouter/meta/muse-spark-1.3-contributor" not in stderr
 
 
 def test_plan_cli_real_process_uses_fake_pi_registry(tmp_path: Path) -> None:

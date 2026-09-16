@@ -1,14 +1,14 @@
 # PR readiness loop
 
-After every push to a PR branch, drive the readiness loop until the PR clears
-the four gates below. **Do not stop after the first push.** "I pushed the fix"
-is not the same as "the PR is ready." The summary line in the project's
+After every push to a PR branch, drive the readiness loop through the four
+gates below. **Do not stop after the first push.** "I pushed the fix" is not
+the same as "the PR is ready." The summary line in the project's
 `AGENTS.md` (under `## PRs`) points here for the full procedure.
 
 ## The four gates
 
-A PR is **not** ready — for review, merge, or hand-off — until **all four**
-hold. They are AND-ed; failing any one means not ready.
+Gates 1–3 are mandatory and AND-ed. Gate 4 is advisory but must be evaluated
+and reported before declaring the readiness loop complete.
 
 1. **CI is fully green** — every required AND optional check passing. Pending,
    errored, or failing all count as not ready.
@@ -21,7 +21,9 @@ hold. They are AND-ed; failing any one means not ready.
    Drive this with `/pr-review-resolver`.
 4. **Copilot has produced no new comments since the last push** — Copilot
    re-reviews after every push, usually within ~60s. Both the inline-comments
-   endpoint and the top-level reviews endpoint must be clear.
+   endpoint and the top-level reviews endpoint must be clear. An explicit
+   current-head quota denial means review is unavailable, not complete; Gate 4
+   remains advisory, but that denial does not satisfy auto-approval Condition 3.
 
 ## The probe
 
@@ -37,7 +39,9 @@ and gate-3 failures listing each unresolved thread. Its final state is:
   `mergeable=UNKNOWN`.
 
 Action takes precedence over waiting when both exist. Merged/closed PRs
-short-circuit to `READY`. `--gates-only` skips gate 4. `--loop` is exclusively
+short-circuit to `READY`. A current-head quota denial produces an advisory
+`unavailable` line without retry guidance and does not alter the gates 1–3 exit
+status. `--gates-only` skips gate 4. `--loop` is exclusively
 a polling adapter: it retries `WAIT` and stops on `READY`, `ACTION_REQUIRED`,
 or `ERROR`, preserving the printed state. The Stop hook runs the normal probe,
 so hook and loop classifications cannot disagree.
@@ -98,8 +102,12 @@ or `ERROR`.
    If Copilot left new unaddressed inline comments **or** a new top-level
    review with actionable content (`state=COMMENTED` / `CHANGES_REQUESTED`
    with a body that isn't just a "no findings" note), return to step 5 and
-   address them the same way as human comments. If 15 minutes elapse with no
-   Copilot activity at all, the auto-review didn't fire — go to 6a.
+   address them the same way as human comments. A current-head response saying
+   Copilot could not review because the requester reached a quota or premium-
+   request limit is **unavailable**, not a completed review: record the
+   limitation and do not re-request or push an empty retry commit until quota is
+   restored. If 15 minutes elapse with no Copilot activity at all, the
+   auto-review didn't fire — go to 6a.
 
    **6a. Manually re-request Copilot** when the 15-minute window elapses with
    no activity. Try in this order, stopping at the first that succeeds:
@@ -130,9 +138,11 @@ or `ERROR`.
    Copilot's comments. Repeat at most once; if Copilot still produces nothing
    after a manual re-request, record that in the PR thread and move on.
 
-7. **Done** only when all four gates hold: CI green ∧ `mergeable=MERGEABLE`
-   ∧ every review comment has an inline reply ∧ Copilot has produced no new
-   comments since the last push (or has been confirmed silent via 6a).
+7. **Done** when gates 1–3 hold and Gate 4 has been checked: CI green ∧
+   `mergeable=MERGEABLE` ∧ every review comment has an inline reply ∧ Copilot
+   has produced no new comments since the last push, has been confirmed silent
+   via 6a, or is explicitly unavailable because of a current-head quota denial.
+   Auto-approval still waits for a genuine current-head Copilot review.
 
 This applies whether the PR is yours or one you were asked to drive across
 the finish line.
@@ -147,3 +157,6 @@ the finish line.
 - **A "no findings" Copilot review counts as silence, not a comment.** Only
   `state=COMMENTED` / `CHANGES_REQUESTED` with substantive body content
   blocks gate 4.
+- **A Copilot quota denial is not a review.** When it targets the current head,
+  report review as unavailable and do not follow the no-activity retry path.
+  Denials attached to older commits do not affect current-head classification.

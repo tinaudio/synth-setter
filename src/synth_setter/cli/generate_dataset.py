@@ -378,6 +378,14 @@ def generate(spec: DatasetSpec, work_dir: Path, loggers: list[Logger]) -> None: 
             )
 
         work_dir.mkdir(parents=True, exist_ok=True)
+        if render.input_audio_source is not None:
+            from synth_setter.data.vst.input_audio import InputAudioPool
+
+            InputAudioPool(
+                render.input_audio_source,
+                sample_rate=render.sample_rate,
+                frames=int(render.sample_rate * render.signal_duration_seconds),
+            )
 
         # ``start`` brackets only the dispatch call so the rate still includes the
         # in-loop R2 skip probes (observable cost of the resumability MVP, #750).

@@ -15,7 +15,7 @@ from pyFDN import (
 
 
 @dataclass(frozen=True)
-class BasicFDN:
+class FlamoFDN:
     """Own a validated FDN build with no processing outside its declared fields.
 
     .. attribute :: build
@@ -29,10 +29,10 @@ class BasicFDN:
         """Reject unsupported build contents before either renderer is constructed.
 
         :raises TypeError: The input is not a pyFDN build or contains nonnumeric hooks.
-        :raises ValueError: Geometry or SOS coefficients violate the basic FDN contract.
+        :raises ValueError: Geometry or SOS coefficients violate the FLAMO FDN contract.
         """
         if not isinstance(self.build, FDNBuild):
-            raise TypeError("BasicFDN requires a constructed pyFDN.FDNBuild")
+            raise TypeError("FlamoFDN requires a constructed pyFDN.FDNBuild")
         build = fdn_build_from_dict(fdn_build_to_dict(self.build))
         if any(dimension == 0 for array in (build.A, build.B, build.C) for dimension in array.shape):
             raise ValueError("FDN matrices must have nonempty channel dimensions")

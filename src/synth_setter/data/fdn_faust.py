@@ -13,7 +13,7 @@ from dawdreamer.dawdreamer import RenderEngine
 from pydantic import BaseModel, ConfigDict
 from pyFDN import fdn_build_from_dict
 
-from synth_setter.data.basic_fdn import BasicFDN
+from synth_setter.data.flamo_fdn import FlamoFDN
 
 _BLOCK_SIZE = 128
 
@@ -88,24 +88,24 @@ class _FDNBuildDocument(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
 
 
-def _load_basic_fdn(path: Path) -> BasicFDN:
-    """Parse one strict v2 document into the canonical BasicFDN boundary.
+def _load_flamo_fdn(path: Path) -> FlamoFDN:
+    """Parse one strict v2 document into the canonical FlamoFDN boundary.
 
     :param path: Existing pyFDN build JSON path.
-    :returns: Validated basic FDN.
+    :returns: Validated FLAMO FDN.
     """
     document = _FDNBuildDocument.model_validate_json(path.read_text(encoding="utf-8"))
-    return BasicFDN(fdn_build_from_dict(document.model_dump()))
+    return FlamoFDN(fdn_build_from_dict(document.model_dump()))
 
 
-def _fixed_faust_source(fdn: BasicFDN) -> str:
-    """Convert one BasicFDN through FLAMO and ADAC without controls.
+def _fixed_faust_source(fdn: FlamoFDN) -> str:
+    """Convert one FlamoFDN through FLAMO and ADAC without controls.
 
     :param fdn: Validated FDN using its declared sample rate.
     :returns: Complete fixed-value Faust source.
     """
     model = fdn.to_flamo(device="cpu", dtype=torch.float32)
-    config = adac.flamo_to_json(model, fs=fdn.build.fs, name="BasicFDN")
+    config = adac.flamo_to_json(model, fs=fdn.build.fs, name="FlamoFDN")
     return adac.json_to_faust(config)
 
 
@@ -154,7 +154,7 @@ def export_fdn_faust(input_path: Path, output_path: Path) -> None:
     """
     if output_path.exists():
         raise FileExistsError(output_path)
-    fdn = _load_basic_fdn(input_path)
+    fdn = _load_flamo_fdn(input_path)
     source = _fixed_faust_source(fdn)
     _compile_source(source, fdn.build.fs)
     _publish_new_file(output_path, source)

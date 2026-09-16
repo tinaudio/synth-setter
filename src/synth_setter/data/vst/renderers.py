@@ -303,6 +303,23 @@ class AudioRenderer(ABC):
         :returns: Rendered audio with channels on the first axis.
         """
 
+    def render_with_input(
+        self,
+        params: Mapping[str, ParameterValue],
+        mono_buffer: np.ndarray,
+    ) -> np.ndarray:
+        """Render a caller-provided mono source through an effect backend.
+
+        :param params: Renderer-native parameter values keyed by renderer identity.
+        :param mono_buffer: Mono input waveform with one value per output frame.
+        :returns: Rendered audio with channels on the first axis.
+        :raises NotImplementedError: The backend does not accept external audio.
+        """
+        del params, mono_buffer
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support caller-provided input audio"
+        )
+
 
 @dataclass(kw_only=True)
 class PedalboardRenderer(AudioRenderer):

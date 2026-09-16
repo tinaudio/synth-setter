@@ -1,4 +1,4 @@
-"""Real offline/FLAMO parity for the canonical basic FDN boundary."""
+"""Real offline/FLAMO parity for the canonical FLAMO FDN boundary."""
 
 import subprocess
 import sys
@@ -11,7 +11,7 @@ import pytest
 import torch
 from pyFDN import FDNBuild
 
-from synth_setter.data.basic_fdn import BasicFDN
+from synth_setter.data.flamo_fdn import FlamoFDN
 
 _TORCHSYNTH_IMPORT_TIMEOUT_SECONDS = 30
 
@@ -75,7 +75,7 @@ def test_torchsynth_loader_preserves_flamo_float64_parity_in_fresh_process() -> 
         import torch
         import torchsynth.util
         from pyFDN import FDNBuild
-        from synth_setter.data.basic_fdn import BasicFDN
+        from synth_setter.data.flamo_fdn import FlamoFDN
         from synth_setter.data.torchsynth_datamodule import _torchsynth_types
 
         _torchsynth_types()
@@ -87,7 +87,7 @@ def test_torchsynth_loader_preserves_flamo_float64_parity_in_fresh_process() -> 
             delays=np.array([17, 29]),
             fs=48_000.0,
         )
-        fdn = BasicFDN(build)
+        fdn = FlamoFDN(build)
         expected = fdn.impulse_response(512)
         model = fdn.to_flamo(nfft=4096, device="cpu", dtype=torch.float64)
         impulse = torch.zeros(2, 4096, 2, dtype=torch.float64)
@@ -127,7 +127,7 @@ def build() -> FDNBuild:
 
 
 @pytest.mark.parametrize("with_hooks", [False, True])
-def test_basic_fdn_same_build_offline_and_flamo_responses_agree(
+def test_flamo_fdn_same_build_offline_and_flamo_responses_agree(
     build: FDNBuild, with_hooks: bool
 ) -> None:
     """Both real consumers preserve MIMO gains, delays and optional filter placement.
@@ -137,7 +137,7 @@ def test_basic_fdn_same_build_offline_and_flamo_responses_agree(
     """
     if not with_hooks:
         build = replace(build, post_delay=None, post_matrix=None, post_output=None)
-    fdn = BasicFDN(build)
+    fdn = FlamoFDN(build)
     offline = fdn.impulse_response(512)
     model = fdn.to_flamo(nfft=4096, device="cpu", dtype=torch.float64)
     impulse = torch.zeros(2, 4096, 2, dtype=torch.float64)
@@ -150,12 +150,12 @@ def test_basic_fdn_same_build_offline_and_flamo_responses_agree(
     np.testing.assert_allclose(online[:512], offline, atol=1e-9, rtol=1e-7)
 
 
-def test_basic_fdn_source_build_mutation_does_not_change_render(build: FDNBuild) -> None:
+def test_flamo_fdn_source_build_mutation_does_not_change_render(build: FDNBuild) -> None:
     """The canonical build is independent of the caller's mutable NumPy arrays.
 
     :param build: Source build whose input matrix will be changed.
     """
-    fdn = BasicFDN(build)
+    fdn = FlamoFDN(build)
     expected = fdn.impulse_response(128)
     build.B[:] = 0.0
 
@@ -163,20 +163,20 @@ def test_basic_fdn_source_build_mutation_does_not_change_render(build: FDNBuild)
 
 
 @pytest.mark.parametrize("nfft", [0, -1])
-def test_basic_fdn_nonpositive_fft_period_rejected(build: FDNBuild, nfft: int) -> None:
+def test_flamo_fdn_nonpositive_fft_period_rejected(build: FDNBuild, nfft: int) -> None:
     """Invalid graph geometry fails before FLAMO allocation.
 
     :param build: Valid FDN.
     :param nfft: Invalid FFT period.
     """
     with pytest.raises(ValueError, match="positive"):
-        BasicFDN(build).to_flamo(nfft=nfft)
+        FlamoFDN(build).to_flamo(nfft=nfft)
 
 
-def test_basic_fdn_nonbuild_input_rejected_at_construction() -> None:
+def test_flamo_fdn_nonbuild_input_rejected_at_construction() -> None:
     """A custom renderer cannot masquerade as the basic build contract."""
     with pytest.raises(TypeError, match="FDNBuild"):
-        BasicFDN(cast(FDNBuild, object()))
+        FlamoFDN(cast(FDNBuild, object()))
 
 
 @pytest.mark.parametrize(
@@ -190,7 +190,7 @@ def test_basic_fdn_nonbuild_input_rejected_at_construction() -> None:
         ({"post_matrix": np.zeros((1, 6, 2))}, "normalized"),
     ],
 )
-def test_basic_fdn_invalid_build_rejected_at_construction(
+def test_flamo_fdn_invalid_build_rejected_at_construction(
     build: FDNBuild, changes: dict, message: str
 ) -> None:
     """Malformed matrices or hooks fail before a training graph can be attached.
@@ -200,11 +200,11 @@ def test_basic_fdn_invalid_build_rejected_at_construction(
     :param message: Diagnostic identifying the violated contract.
     """
     with pytest.raises(ValueError, match=message):
-        BasicFDN(replace(build, **changes))
+        FlamoFDN(replace(build, **changes))
 
 
 @pytest.mark.parametrize("hook_name", ["post_delay", "post_matrix", "post_output"])
-def test_basic_fdn_nonnormalized_filter_hook_rejected(
+def test_flamo_fdn_nonnormalized_filter_hook_rejected(
     build: FDNBuild, hook_name: str
 ) -> None:
     """Every optional filter hook requires a unit denominator coefficient.
@@ -216,15 +216,15 @@ def test_basic_fdn_nonnormalized_filter_hook_rejected(
     hook[:, 3, :] = 2.0
 
     with pytest.raises(ValueError, match="normalized"):
-        BasicFDN(replace(build, **{hook_name: hook}))
+        FlamoFDN(replace(build, **{hook_name: hook}))
 
 
 @pytest.mark.parametrize("length", [0, -1])
-def test_basic_fdn_nonpositive_render_length_rejected(build: FDNBuild, length: int) -> None:
+def test_flamo_fdn_nonpositive_render_length_rejected(build: FDNBuild, length: int) -> None:
     """Invalid render geometry fails before upstream allocation.
 
     :param build: Valid FDN.
     :param length: Invalid number of output samples.
     """
     with pytest.raises(ValueError, match="positive"):
-        BasicFDN(build).impulse_response(length)
+        FlamoFDN(build).impulse_response(length)

@@ -15,6 +15,7 @@ from lightning import LightningModule
 from lightning.pytorch.loggers import Logger, WandbLogger
 from omegaconf import DictConfig, OmegaConf
 
+from synth_setter.cqt import cqt_num_frames
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec_width
 from synth_setter.data.vst.shapes import mel_n_frames_from_samples, stft_n_frames_from_samples
 from synth_setter.synth_spec import validate_synth_identity
@@ -41,6 +42,8 @@ def register_resolvers() -> None:
         OmegaConf.register_new_resolver("mul", lambda x, y: x * y)
     if not OmegaConf.has_resolver("div"):
         OmegaConf.register_new_resolver("div", lambda x, y: int(x) // int(y))
+    if not OmegaConf.has_resolver("cqt_n_frames"):
+        OmegaConf.register_new_resolver("cqt_n_frames", cqt_num_frames)
     if not OmegaConf.has_resolver("mel_n_frames"):
         OmegaConf.register_new_resolver("mel_n_frames", mel_n_frames_from_samples)
     if not OmegaConf.has_resolver("stft_n_frames"):

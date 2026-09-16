@@ -1154,8 +1154,12 @@ artifact and input-policy identities so retries reject incompatible output.
 It downmixes channels on-device, stores 8 octaves × 32 bins of float32 `log1p` magnitude on
 the canonical 100 Hz frame grid, and runs in a solo encoder pass to bound transform memory.
 For four-second 44.1 kHz rows the stored shape is `(256, 401)`, consumed by
-`conditioning=cqt` through `EmbeddingPool`. CQT has no checkpoint override; its field identity
-records the immutable source commit and preprocessing policy.
+`conditioning=cqt` through `EmbeddingPool`. `conditioning=cqt_online` instead
+projects raw audio and runs the same checkpoint-free policy inside the model in
+bounded row chunks before the trainable pool. The online profile disables model
+compilation because compiled frozen waveform encoders do not yet support this
+path. CQT has no checkpoint override; its field identity records the immutable
+source commit and preprocessing policy.
 
 The default CLAP, SAME, and S-SONDO sources hydrate under
 `${XDG_CACHE_HOME:-$HOME/.cache}/synth-setter/models/embeddings/`; keyed
@@ -1165,7 +1169,7 @@ The default CLAP, SAME, and S-SONDO sources hydrate under
 loudness, spectral-centroid, and PESTO pitch tracks
 (`features/sketch_controls.py`) from `audio` on the mel frame grid, then stores
 32-frame model-ready controls in a `sketch` struct column (#2707). Loudness and
-centroid use adaptive average pooling; pitch uses adaptive maximum pooling and
+centroid use adaptive average pooling; pitch uses adaptive average pooling and
 remains unthresholded. The `vec` child stores the pooled frame mean for
 contour-similarity search. The struct is an atomic write unit — refreshing
 one child means rewriting the whole column (requires Lance data storage 2.2).
@@ -1357,7 +1361,7 @@ DawDreamer host. Faust render groups recompile per row so DSP and voice state
 cannot cross sample boundaries. Existing v2 specs with a blank Faust plugin path
 remain accepted; external files and other URIs are not supported by the registry
 renderer. The standalone `synth-setter-export-fdn-faust` command instead emits a
-fixed-value BasicFDN `.dsp` artifact and verifies direct DawDreamer compilation
+fixed-value FlamoFDN `.dsp` artifact and verifies direct DawDreamer compilation
 without adding a registry identity. `pyfdn` uses the same `AudioRenderer` and
 accepted-sample path with
 fixed zero-valued MIDI compatibility inputs. It samples complete 91-coordinate

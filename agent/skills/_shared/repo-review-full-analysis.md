@@ -216,7 +216,7 @@ error; never launch a worker without the validated path.
 
 Both model passes share that immutable file. The manifest-compatible `free-pool`
 pass name denotes the secondary review pass; it uses the paid
-`meta/muse-spark-1.3-contributor` model rather than a free model pool. Their
+`openrouter/meta/muse-spark-1.3-contributor` model rather than a free model pool. Their
 `Agent` prompt is only:
 `Read and execute the complete review assignment at <absolute-assignment-path>.`
 Do not make the host model reproduce the diff metadata, checklist contract, or
@@ -347,11 +347,11 @@ but never change the model tier:
 - **Smart model tier:** `correctness-review`, `lance-review`,
   `ml-data-pipeline`, `ml-test`, and `synth-setter-project-standards`. The Codex
   pass starts with Sol and may fall back to Terra; the independent pass uses
-  Meta Muse-Spark-1.3.
+  OpenRouter Muse-Spark-1.3.
 - **Mechanical model tier:** `code-health`, `comment-hygiene`,
   `gha-workflow-validator`, `python-style`, `shell-style`,
   `tdd-implementation`, and `tdd-refactor`. The Codex pass uses Terra only; the
-  independent pass uses Meta Muse-Spark-1.3. Never spend Sol on a
+  independent pass uses OpenRouter Muse-Spark-1.3. Never spend Sol on a
   mechanical checklist, including fallback.
 
 Codex and the secondary OpenRouter model must both be registered with Pi. If
@@ -364,7 +364,7 @@ Start each pass with its first candidate. If `Agent` reports HTTP `429`,
 `no endpoints available`, `provider unavailable`, or `Model not found`, record
 the failure and launch a fresh worker with the next candidate in the pass.
 Codex-pass candidates are always `openai-codex/*`. The secondary pass uses only
-`meta/muse-spark-1.3-contributor`. Exhaust the pass's returned `candidates` in
+`openrouter/meta/muse-spark-1.3-contributor`. Exhaust the pass's returned `candidates` in
 order before attempting any Codex fallback. If the secondary attempt fails
 authentication, record it and stop that pass; authentication never triggers
 Codex fallback. If the secondary candidate exhausts quota/capacity, move the
@@ -464,7 +464,7 @@ those it can reproduce from the diff. This model has already passed availability
 preflight; if the original Codex pass used a fallback, verification uses that
 same effective fallback rather than a hard-coded selector.
 Extract and validate that verification report through the same helper commands.
-A confirmed candidate is tagged `secondary meta; verified by: codex`; a
+A confirmed candidate is tagged `secondary openrouter; verified by: codex`; a
 rejected candidate is omitted
 and recorded in the audit. If verification fails or is malformed, stop rather
 than posting unverified free-pool output. Add every
@@ -615,7 +615,7 @@ affected attempt in attempt order:
 ```markdown
 ## Provider incidents
 
-- **authentication** — meta/example-model: exact provider diagnostic
+- **authentication** — openrouter/example-model: exact provider diagnostic
 - **quota/capacity** — openai-codex/example-model: exact provider diagnostic
 ```
 

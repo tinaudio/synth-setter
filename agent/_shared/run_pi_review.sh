@@ -94,6 +94,19 @@ main() {
       fi
       target_instruction="Review PR #${open_pr_number}."
     else
+      local local_head public_head
+      local_head="$(git rev-parse --verify HEAD)"
+      if ! public_head="$(
+        git ls-remote --exit-code origin "refs/heads/${branch}" \
+          | awk 'NR == 1 {print $1}'
+      )" || [[ -z "${public_head}" || "${public_head}" != "${local_head}" ]]; then
+        local refusal
+        refusal="Push ${branch} to origin before requesting pre-PR approval; "
+        refusal+="the public branch must match HEAD ${local_head}."
+        printf '%s\n' "${refusal}" >&2
+        return 2
+      fi
+
       local attempt claim_output limit
       if claim_output="$(
         "${review_python}" agent/_shared/review_sentinel.py claim "${branch}"

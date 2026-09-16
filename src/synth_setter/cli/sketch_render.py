@@ -39,13 +39,12 @@ from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst.shapes import make_spectrogram
 from synth_setter.evaluation.compute_audio_metrics import compute_metrics_on_dir
 from synth_setter.evaluation.predict_vst_audio import params_to_csv
-from synth_setter.features.sketch_controls import extract_sketch_controls
+from synth_setter.features.profile_controls import extract_profile_controls
 from synth_setter.model_cache import synth_setter_cache_dir
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import anchor_render_preset
-from synth_setter.sketch import pool_sketch_controls
 from synth_setter.workspace import operator_workspace
 
 _DeviceSetting = Literal["auto", "cpu", "cuda", "mps"]
@@ -370,7 +369,7 @@ def _prepare_inputs(
     render: RenderConfig,
     device: torch.device,
 ) -> dict[str, torch.Tensor]:
-    """Prepare normalized content mel and pooled sketch controls.
+    """Prepare normalized content mel and profile-specific sketch controls.
 
     :param sketch_audio: Channel-first sketch waveform.
     :param content_audio: Channel-first content waveform.
@@ -399,13 +398,7 @@ def _prepare_inputs(
     sketch_spec = resolve_sketch_controls(model.hparams["sketch_controls"])
     if sketch_spec is None:
         raise ValueError("checkpoint must configure sketch_controls")
-    controls = extract_sketch_controls(
-        torch.from_numpy(sketch_audio), render.sample_rate
-    ).unsqueeze(0)
-    controls = pool_sketch_controls(controls, sketch_spec.num_frames).to(dtype=torch.float32)
-    controls = controls.clone()
-    pitch = controls[:, 2:]
-    controls[:, 2:] = pitch.where(pitch >= sketch_spec.pitch_zero_threshold, 0.0)
+    controls = extract_profile_controls(sketch_audio, render.sample_rate, sketch_spec)
     return {
         _EXPECTED_CONDITIONING: torch.from_numpy(normalized).unsqueeze(0).to(device),
         "sketch_ctrl": controls.to(device),

@@ -177,6 +177,7 @@ class TestValidateStructure:
         assert set(_REQUIRED_RENDER_FIELDS) == set(RenderConfig.model_fields) - {
             "audio_dtype",
             "block_size",
+            "input_audio_source",
             "mel_spec_dtype",
             "post_load_flush_blocks",
             "post_param_flush_blocks",

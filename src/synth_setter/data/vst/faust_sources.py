@@ -189,7 +189,12 @@ process = dm.oscrs_demo;
 _KRONECKER_FDN_SOURCE = r'''import("stdfaust.lib");
 declare name "kroneckerFDN";
 
-t60 = hslider("Decay/t60 [unit:s]", 1.5, 0.1, 4.0, 0.01);
+t60_dc = hslider("Decay/t60_dc [unit:s]", 1.5, 0.1, 4.0, 0.01);
+t60_nyquist = hslider("Decay/t60_nyquist [unit:s]", 1.5, 0.1, 4.0, 0.01);
+
+// Shelf crossover mirrors the 6 kHz pyFDN build target.
+sh_fc = min(6000, ma.SR / 5);
+sh_t = tan(sh_fc / ma.SR * 2 * ma.PI);
 
 d0 = hslider("Delays/d0 [unit:samp]", 601, 400, 1200, 1);
 d1 = hslider("Delays/d1 [unit:samp]", 773, 400, 1200, 1);
@@ -236,40 +241,107 @@ k1y(x1, x2) = (1 - r1) * (sA1 * x1 + cA1 * x2) + r1 * (sA1 * x1 - cA1 * x2);
 k2x(x1, x2) = (1 - r2) * (cA2 * x1 - sA2 * x2) + r2 * (cA2 * x1 + sA2 * x2);
 k2y(x1, x2) = (1 - r2) * (sA2 * x1 + cA2 * x2) + r2 * (sA2 * x1 - cA2 * x2);
 
-g0 = pow(0.001, d0 / (t60 * ma.SR));
-g1 = pow(0.001, d1 / (t60 * ma.SR));
-g2 = pow(0.001, d2 / (t60 * ma.SR));
-g3 = pow(0.001, d3 / (t60 * ma.SR));
-g4 = pow(0.001, d4 / (t60 * ma.SR));
-g5 = pow(0.001, d5 / (t60 * ma.SR));
-g6 = pow(0.001, d6 / (t60 * ma.SR));
-g7 = pow(0.001, d7 / (t60 * ma.SR));
+// Per-line first-order shelf: same endpoint math as the pyFDN build.
+gdc0 = pow(0.001, d0 / (t60_dc * ma.SR));
+gny0 = pow(0.001, d0 / (t60_nyquist * ma.SR));
+shsq0 = sqrt(gdc0 / gny0);
+shn0 = sh_t / shsq0 + 1;
+shb0_0 = (sh_t * shsq0 + 1) * gny0 / shn0;
+shb1_0 = (sh_t * shsq0 - 1) * gny0 / shn0;
+sha1_0 = (sh_t / shsq0 - 1) / shn0;
+gdc1 = pow(0.001, d1 / (t60_dc * ma.SR));
+gny1 = pow(0.001, d1 / (t60_nyquist * ma.SR));
+shsq1 = sqrt(gdc1 / gny1);
+shn1 = sh_t / shsq1 + 1;
+shb0_1 = (sh_t * shsq1 + 1) * gny1 / shn1;
+shb1_1 = (sh_t * shsq1 - 1) * gny1 / shn1;
+sha1_1 = (sh_t / shsq1 - 1) / shn1;
+gdc2 = pow(0.001, d2 / (t60_dc * ma.SR));
+gny2 = pow(0.001, d2 / (t60_nyquist * ma.SR));
+shsq2 = sqrt(gdc2 / gny2);
+shn2 = sh_t / shsq2 + 1;
+shb0_2 = (sh_t * shsq2 + 1) * gny2 / shn2;
+shb1_2 = (sh_t * shsq2 - 1) * gny2 / shn2;
+sha1_2 = (sh_t / shsq2 - 1) / shn2;
+gdc3 = pow(0.001, d3 / (t60_dc * ma.SR));
+gny3 = pow(0.001, d3 / (t60_nyquist * ma.SR));
+shsq3 = sqrt(gdc3 / gny3);
+shn3 = sh_t / shsq3 + 1;
+shb0_3 = (sh_t * shsq3 + 1) * gny3 / shn3;
+shb1_3 = (sh_t * shsq3 - 1) * gny3 / shn3;
+sha1_3 = (sh_t / shsq3 - 1) / shn3;
+gdc4 = pow(0.001, d4 / (t60_dc * ma.SR));
+gny4 = pow(0.001, d4 / (t60_nyquist * ma.SR));
+shsq4 = sqrt(gdc4 / gny4);
+shn4 = sh_t / shsq4 + 1;
+shb0_4 = (sh_t * shsq4 + 1) * gny4 / shn4;
+shb1_4 = (sh_t * shsq4 - 1) * gny4 / shn4;
+sha1_4 = (sh_t / shsq4 - 1) / shn4;
+gdc5 = pow(0.001, d5 / (t60_dc * ma.SR));
+gny5 = pow(0.001, d5 / (t60_nyquist * ma.SR));
+shsq5 = sqrt(gdc5 / gny5);
+shn5 = sh_t / shsq5 + 1;
+shb0_5 = (sh_t * shsq5 + 1) * gny5 / shn5;
+shb1_5 = (sh_t * shsq5 - 1) * gny5 / shn5;
+sha1_5 = (sh_t / shsq5 - 1) / shn5;
+gdc6 = pow(0.001, d6 / (t60_dc * ma.SR));
+gny6 = pow(0.001, d6 / (t60_nyquist * ma.SR));
+shsq6 = sqrt(gdc6 / gny6);
+shn6 = sh_t / shsq6 + 1;
+shb0_6 = (sh_t * shsq6 + 1) * gny6 / shn6;
+shb1_6 = (sh_t * shsq6 - 1) * gny6 / shn6;
+sha1_6 = (sh_t / shsq6 - 1) / shn6;
+gdc7 = pow(0.001, d7 / (t60_dc * ma.SR));
+gny7 = pow(0.001, d7 / (t60_nyquist * ma.SR));
+shsq7 = sqrt(gdc7 / gny7);
+shn7 = sh_t / shsq7 + 1;
+shb0_7 = (sh_t * shsq7 + 1) * gny7 / shn7;
+shb1_7 = (sh_t * shsq7 - 1) * gny7 / shn7;
+sha1_7 = (sh_t / shsq7 - 1) / shn7;
 
 // Feedback ports lead: Faust connects `~` outputs to the first inputs.
-F(f0, f1, f2, f3, f4, f5, f6, f7, x) = s0, s1, s2, s3, s4, s5, s6, s7 with {
-  s0 = de.delay(2048, int(d0), b0 * x + g0 * f0);
-  s1 = de.delay(2048, int(d1), b1 * x + g1 * f1);
-  s2 = de.delay(2048, int(d2), b2 * x + g2 * f2);
-  s3 = de.delay(2048, int(d3), b3 * x + g3 * f3);
-  s4 = de.delay(2048, int(d4), b4 * x + g4 * f4);
-  s5 = de.delay(2048, int(d5), b5 * x + g5 * f5);
-  s6 = de.delay(2048, int(d6), b6 * x + g6 * f6);
-  s7 = de.delay(2048, int(d7), b7 * x + g7 * f7);
+// Input and delay lines are offset by one sample each way so the
+// implicit `~` sample lands exactly on the pyFDN recirculation grid.
+F(f0, f1, f2, f3, f4, f5, f6, f7, x) = z0, z1, z2, z3, z4, z5, z6, z7 with {
+  u0 = b0 * x' + f0;
+  s0 = de.delay(2048, int(d0) - 1, u0);
+  z0 = s0 : fi.tf1(shb0_0, shb1_0, sha1_0);
+  u1 = b1 * x' + f1;
+  s1 = de.delay(2048, int(d1) - 1, u1);
+  z1 = s1 : fi.tf1(shb0_1, shb1_1, sha1_1);
+  u2 = b2 * x' + f2;
+  s2 = de.delay(2048, int(d2) - 1, u2);
+  z2 = s2 : fi.tf1(shb0_2, shb1_2, sha1_2);
+  u3 = b3 * x' + f3;
+  s3 = de.delay(2048, int(d3) - 1, u3);
+  z3 = s3 : fi.tf1(shb0_3, shb1_3, sha1_3);
+  u4 = b4 * x' + f4;
+  s4 = de.delay(2048, int(d4) - 1, u4);
+  z4 = s4 : fi.tf1(shb0_4, shb1_4, sha1_4);
+  u5 = b5 * x' + f5;
+  s5 = de.delay(2048, int(d5) - 1, u5);
+  z5 = s5 : fi.tf1(shb0_5, shb1_5, sha1_5);
+  u6 = b6 * x' + f6;
+  s6 = de.delay(2048, int(d6) - 1, u6);
+  z6 = s6 : fi.tf1(shb0_6, shb1_6, sha1_6);
+  u7 = b7 * x' + f7;
+  s7 = de.delay(2048, int(d7) - 1, u7);
+  z7 = s7 : fi.tf1(shb0_7, shb1_7, sha1_7);
 };
 
-B(s0, s1, s2, s3, s4, s5, s6, s7) = z0, z1, z2, z3, z4, z5, z6, z7 with {
-  m0 = k0x(s0, s1); m1 = k0y(s0, s1);
-  m2 = k0x(s2, s3); m3 = k0y(s2, s3);
-  m4 = k0x(s4, s5); m5 = k0y(s4, s5);
-  m6 = k0x(s6, s7); m7 = k0y(s6, s7);
+B(z0, z1, z2, z3, z4, z5, z6, z7) = w0, w1, w2, w3, w4, w5, w6, w7 with {
+  m0 = k0x(z0, z1); m1 = k0y(z0, z1);
+  m2 = k0x(z2, z3); m3 = k0y(z2, z3);
+  m4 = k0x(z4, z5); m5 = k0y(z4, z5);
+  m6 = k0x(z6, z7); m7 = k0y(z6, z7);
   n0 = k1x(m0, m2); n2 = k1y(m0, m2);
   n1 = k1x(m1, m3); n3 = k1y(m1, m3);
   n4 = k1x(m4, m6); n6 = k1y(m4, m6);
   n5 = k1x(m5, m7); n7 = k1y(m5, m7);
-  z0 = k2x(n0, n4); z4 = k2y(n0, n4);
-  z1 = k2x(n1, n5); z5 = k2y(n1, n5);
-  z2 = k2x(n2, n6); z6 = k2y(n2, n6);
-  z3 = k2x(n3, n7); z7 = k2y(n3, n7);
+  w0 = k2x(n0, n4); w4 = k2y(n0, n4);
+  w1 = k2x(n1, n5); w5 = k2y(n1, n5);
+  w2 = k2x(n2, n6); w6 = k2y(n2, n6);
+  w3 = k2x(n3, n7); w7 = k2y(n3, n7);
 };
 
 // `~` contributes one implicit sample of delay on the feedback path.

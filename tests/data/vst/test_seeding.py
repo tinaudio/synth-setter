@@ -2,7 +2,11 @@
 
 import numpy as np
 
-from synth_setter.data.vst.seeding import rng_for_sample, seed_for_sample
+from synth_setter.data.vst.seeding import (
+    rng_for_sample,
+    seed_for_input_audio,
+    seed_for_sample,
+)
 
 
 def test_seed_for_sample_same_inputs_returns_same_seed() -> None:
@@ -40,6 +44,14 @@ def test_seed_for_sample_in_uint64_domain() -> None:
 
 def test_seed_for_sample_default_attempt_is_zero() -> None:
     assert seed_for_sample(42, 12345) == seed_for_sample(42, 12345, 0)
+
+
+def test_seed_for_input_audio_wire_format_golden_value_is_stable() -> None:
+    assert seed_for_input_audio(0, 0, 0, 0) == 7966578711789144379
+
+
+def test_seed_for_input_audio_distinct_attempt_gives_distinct_seed() -> None:
+    assert seed_for_input_audio(42, 17, 12345, 0) != seed_for_input_audio(42, 17, 12345, 1)
 
 
 def test_rng_for_sample_same_inputs_produce_identical_draw_sequence() -> None:

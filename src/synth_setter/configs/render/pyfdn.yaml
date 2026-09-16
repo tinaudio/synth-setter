@@ -1,5 +1,6 @@
 renderer_backend: pyfdn
 pyfdn_excitation: impulse
+input_audio_source: null
 sample_rate: 44_100
 channels: 1
 velocity: 0
