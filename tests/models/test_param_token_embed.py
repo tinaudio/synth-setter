@@ -59,11 +59,17 @@ def test_temporal_patch_embed_preserves_frame_order() -> None:
     assert torch.equal(tokens, torch.tensor([[[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]]))
 
 
-def test_temporal_patch_embed_accepts_fewer_frames_than_position_capacity() -> None:
+def test_temporal_ast_accepts_fewer_frames_than_position_capacity() -> None:
     """Allow shorter waveforms to use the prefix of the AST position grid."""
-    embed = TemporalPatchEmbed(input_dim=2, d_model=4, num_tokens=3)
+    ast = AudioSpectrogramTransformer(
+        d_model=4,
+        n_heads=1,
+        n_layers=1,
+        n_conditioning_outputs=2,
+        token_embed=TemporalPatchEmbed(input_dim=2, d_model=4, num_tokens=3),
+    )
 
-    assert embed(torch.randn(1, 2, 2)).shape == (1, 2, 4)
+    assert ast(torch.randn(1, 2, 2)).shape == (1, 2, 4)
 
 
 def test_temporal_patch_embed_too_many_frames_raises_error() -> None:
@@ -80,6 +86,14 @@ def test_temporal_patch_embed_wrong_feature_width_raises_error() -> None:
 
     with pytest.raises(ValueError, match="expected temporal features shaped"):
         embed(torch.randn(1, 1, 3))
+
+
+def test_temporal_patch_embed_zero_frames_raises_error() -> None:
+    """Reject an empty temporal sequence instead of returning content-free conditioning."""
+    embed = TemporalPatchEmbed(input_dim=2, d_model=4, num_tokens=3)
+
+    with pytest.raises(ValueError, match="expected temporal features shaped"):
+        embed(torch.empty(1, 2, 0))
 
 
 def test_param_token_embed_freezes_decoder_half_and_trains_encoder_half() -> None:
