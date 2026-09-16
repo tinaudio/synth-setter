@@ -79,6 +79,12 @@ class VqtAudioEncoder(nn.Module):
         for name, value in positive_values.items():
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive, got {value}")
+        highest_bin_hz = fmin * 2 ** ((n_bins - 1) / bins_per_octave)
+        if highest_bin_hz >= sample_rate / 2:
+            raise ValueError(
+                f"highest VQT bin {highest_bin_hz:.2f} Hz must be below the "
+                f"{sample_rate / 2:.2f} Hz Nyquist frequency"
+            )
         if max_batch_size != -1 and max_batch_size <= 0:
             raise ValueError(f"max_batch_size must be positive or -1, got {max_batch_size}")
         if pad_mode not in _SUPPORTED_PAD_MODES:
@@ -149,7 +155,7 @@ class VqtAudioEncoder(nn.Module):
         :param audio: Waveforms shaped ``(batch, samples)`` or
             ``(batch, channels, samples)``; channels are averaged.
         :returns: Features shaped ``(batch, n_bins, frames)`` on the input device.
-        :raises ValueError: Audio has invalid rank or an empty dimension.
+        :raises ValueError: Audio has invalid rank, geometry, or duration.
         :raises TypeError: nnAudio2 returns an unsupported value.
         """
         if audio.ndim not in (2, 3):
@@ -160,13 +166,18 @@ class VqtAudioEncoder(nn.Module):
             raise ValueError("audio channels cannot be empty")
         if audio.shape[-1] == 0:
             raise ValueError("audio samples cannot be empty")
+        if audio.shape[-1] < self.hop_length:
+            raise ValueError(
+                f"audio samples must span at least one hop_length ({self.hop_length}), "
+                f"got {audio.shape[-1]}"
+            )
 
         channel_audio = audio.unsqueeze(1) if audio.ndim == 2 else audio
         output_frames = 1 + channel_audio.shape[-1] // self.hop_length
-        batch_size = len(channel_audio) if self.max_batch_size == -1 else self.max_batch_size
+        chunk_size = len(channel_audio) if self.max_batch_size == -1 else self.max_batch_size
         chunks = []
-        with torch.no_grad():
-            for chunk in channel_audio.split(batch_size):
+        with torch.no_grad(), torch.autocast(device_type=audio.device.type, enabled=False):
+            for chunk in channel_audio.split(chunk_size):
                 waveform = chunk.detach().to(dtype=torch.float32).mean(dim=1)
                 coefficients = self._transform(chunk.device)(
                     waveform,

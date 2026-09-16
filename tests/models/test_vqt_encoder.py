@@ -1,6 +1,6 @@
 """Behavior tests for online nnAudio2 VQT conditioning."""
 
-from typing import Any
+from typing import TypedDict, cast
 
 import pytest
 import torch
@@ -8,6 +8,17 @@ import torch
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 from synth_setter.models.components.vqt_encoder import VqtAudioEncoder
+
+
+class _VqtEncoderKwargs(TypedDict):
+    sample_rate: int
+    hop_length: int
+    fmin: float
+    n_bins: int
+    bins_per_octave: int
+    gamma: float
+    max_batch_size: int
+    pad_mode: str
 
 
 def _tones(*, rows: int, channels: int, samples: int, sample_rate: int) -> torch.Tensor:
@@ -80,6 +91,26 @@ def test_vqt_audio_encoder_cuda_returns_features_on_cuda() -> None:
     assert torch.isfinite(features).all()
 
 
+def test_vqt_audio_encoder_disables_ambient_autocast() -> None:
+    """Mixed-precision training preserves the float32 extraction policy."""
+    audio = _tones(rows=1, channels=1, samples=4_000, sample_rate=16_000)
+    encoder = VqtAudioEncoder(
+        sample_rate=16_000,
+        hop_length=160,
+        fmin=55.0,
+        n_bins=24,
+        bins_per_octave=12,
+        gamma=20.0,
+    )
+    expected = encoder(audio)
+
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        actual = encoder(audio)
+
+    assert actual.dtype == torch.float32
+    torch.testing.assert_close(actual, expected)
+
+
 def test_vqt_audio_encoder_low_precision_matches_input_dtype() -> None:
     """Float32 extraction casts features back for low-precision heads."""
     audio = _tones(rows=1, channels=1, samples=4_000, sample_rate=16_000).bfloat16()
@@ -118,6 +149,7 @@ def test_vqt_conditioning_backpropagates_only_through_trainable_pool() -> None:
     for parameter in head.parameters():
         assert parameter.grad is not None
         assert torch.isfinite(parameter.grad).all()
+        assert torch.count_nonzero(parameter.grad) > 0
 
 
 def test_vqt_audio_encoder_distinct_tones_shift_peak_frequency() -> None:
@@ -207,6 +239,7 @@ def test_vqt_audio_encoder_channel_mean_matches_mono_input() -> None:
         (torch.empty(0, 400), "batch"),
         (torch.empty(1, 0, 400), "channels"),
         (torch.empty(1, 1, 0), "samples"),
+        (torch.empty(1, 1, 159), "hop_length"),
         (torch.empty(1, 1, 1, 400), "shape"),
     ],
 )
@@ -233,6 +266,7 @@ def test_vqt_audio_encoder_invalid_waveform_raises(audio: torch.Tensor, message:
     ("kwargs", "message"),
     [
         ({"sample_rate": 0}, "sample_rate"),
+        ({"sample_rate": 100}, "Nyquist"),
         ({"hop_length": 0}, "hop_length"),
         ({"fmin": 0.0}, "fmin"),
         ({"n_bins": 0}, "n_bins"),
@@ -246,14 +280,14 @@ def test_vqt_audio_encoder_invalid_waveform_raises(audio: torch.Tensor, message:
     ],
 )
 def test_vqt_audio_encoder_invalid_configuration_raises(
-    kwargs: dict[str, Any], message: str
+    kwargs: dict[str, float | int | str], message: str
 ) -> None:
     """Invalid extraction configuration is rejected.
 
     :param kwargs: Constructor values containing one invalid field.
     :param message: Expected invalid field name.
     """
-    values: dict[str, Any] = {
+    values: dict[str, object] = {
         "sample_rate": 16_000,
         "hop_length": 160,
         "fmin": 55.0,
@@ -261,8 +295,9 @@ def test_vqt_audio_encoder_invalid_configuration_raises(
         "bins_per_octave": 12,
         "gamma": 20.0,
         "max_batch_size": 32,
+        "pad_mode": "reflect",
     }
     values.update(kwargs)
 
     with pytest.raises(ValueError, match=message):
-        VqtAudioEncoder(**values)
+        VqtAudioEncoder(**cast(_VqtEncoderKwargs, values))
