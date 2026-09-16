@@ -386,10 +386,8 @@ def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
     :param remote_indexed_lance_dataset_uri: Fixture-provided ``r2://`` URI of a
         dataset with enough rows to train the index.
     """
-    # num_partitions=4 / num_sub_vectors=16 (512 % 16 == 0) train cleanly at 256
-    # rows; the partition count stays well under the row floor PQ needs. No
-    # --batch-size: exercise the default path, since the encoders self-bound their
-    # GPU memory (CLAP_ENCODE_MAX_BATCH / M2L_ENCODE_MAX_BATCH).
+    # The index settings train cleanly at 256 rows; an explicit encoder batch
+    # bounds peak memory while this test exercises both CLAP and M2L.
     result = subprocess.run(  # noqa: S603 — literal cmd + a validated r2:// URI
         [
             _ADD_EMBEDDINGS_CMD,
@@ -398,6 +396,7 @@ def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
             "build_index=true",
             "num_partitions=4",
             "num_sub_vectors=16",
+            "encode_batch_size=16",
         ],
         check=False,
         capture_output=True,

@@ -266,15 +266,14 @@ class PupuJepaAudioEncoder(nn.Module):
         *,
         sample_rate: int,
         config: PupuJepaConfig = PUPUJEPA_TINY_CONFIG,
-        max_batch_size: int | None = None,
+        max_batch_size: int = -1,
         trainable: bool = False,
     ) -> None:
         """Build a teacher for waveforms arriving at ``sample_rate``.
 
         :param sample_rate: Default source waveform rate in Hz.
         :param config: Explicit PupuJEPA frontend and teacher geometry.
-        :param max_batch_size: Maximum waveforms per teacher forward, ``-1`` for the full batch,
-            or the released variant cap when omitted.
+        :param max_batch_size: Maximum waveforms per teacher forward, or ``-1`` for the full batch.
         :param trainable: Leave the teacher's parameters trainable and its train mode under the
             parent's control instead of freezing it in eval mode.
         :raises ValueError: The source rate is non-positive or the batch cap is invalid.
@@ -282,15 +281,6 @@ class PupuJepaAudioEncoder(nn.Module):
         super().__init__()
         if sample_rate < 1:
             raise ValueError(f"PupuJEPA needs a positive sample_rate, got {sample_rate}")
-        if max_batch_size is None:
-            max_batch_size = next(
-                (
-                    spec.encode_max_batch
-                    for spec in PUPUJEPA_CHECKPOINT_SPECS.values()
-                    if spec.config == config
-                ),
-                PUPUJEPA_CHECKPOINT_SPECS["tiny"].encode_max_batch,
-            )
         if max_batch_size != -1 and max_batch_size < 1:
             raise ValueError(
                 f"PupuJEPA needs a positive max_batch_size or -1, got {max_batch_size}"
@@ -313,14 +303,13 @@ class PupuJepaAudioEncoder(nn.Module):
         *,
         sample_rate: int,
         variant: PupuJepaVariant = "tiny",
-        max_batch_size: int | None = None,
+        max_batch_size: int = -1,
     ) -> PupuJepaAudioEncoder:
         """Build a randomly initialised trainable teacher with a released variant's geometry.
 
         :param sample_rate: Default source waveform rate in Hz.
         :param variant: Released teacher size whose architecture is reused.
-        :param max_batch_size: Maximum waveforms per teacher forward, ``-1`` for the full batch,
-            or the released variant cap when omitted.
+        :param max_batch_size: Maximum waveforms per teacher forward, or ``-1`` for the full batch.
         :returns: Trainable PupuJEPA audio encoder without checkpoint weights.
         """
         return cls(
@@ -339,7 +328,6 @@ class PupuJepaAudioEncoder(nn.Module):
         checkpoint: str = DEFAULT_PUPUJEPA_CHECKPOINT,
         revision: str = PUPUJEPA_CHECKPOINT_REVISION,
         variant: PupuJepaVariant = "tiny",
-        max_batch_size: int | None = None,
     ) -> PupuJepaAudioEncoder:
         """Load only the patch embed and teacher from the pinned safetensors file.
 
@@ -347,7 +335,6 @@ class PupuJepaAudioEncoder(nn.Module):
         :param checkpoint: Canonical Hugging Face repo id or local checkpoint directory.
         :param revision: Immutable Hugging Face commit required for remote loading.
         :param variant: Released teacher size to load.
-        :param max_batch_size: Maximum waveforms per teacher call, or the variant default.
         :returns: Frozen eval-mode PupuJEPA audio encoder.
         :raises RuntimeError: Teacher state is missing, unexpected, or shape-incompatible.
         :raises ValueError: Checkpoint geometry differs from the selected variant.
@@ -361,11 +348,7 @@ class PupuJepaAudioEncoder(nn.Module):
             raise ValueError(
                 f"checkpoint is not the pinned PupuJEPA {variant} architecture: {config}"
             )
-        encoder = cls(
-            sample_rate=sample_rate,
-            config=config,
-            max_batch_size=max_batch_size,
-        )
+        encoder = cls(sample_rate=sample_rate, config=config)
         _, weights_path = pupujepa_checkpoint_files(checkpoint_dir, variant)
         with safe_open(weights_path, framework="pt", device="cpu") as checkpoint_file:
             state = {

@@ -9,7 +9,6 @@ import numpy as np
 from synth_setter.cqt import (
     CQT_BINS_PER_OCTAVE,
     CQT_EMBEDDING_DIM,
-    CQT_ENCODE_MAX_BATCH,
     CQT_MODE,
     CQT_NUM_OCTAVES,
     CQT_PACKAGE_COMMIT,
@@ -35,12 +34,12 @@ def cqt_artifact_digest(checkpoint: str) -> str:
 def load_cqt_audio_encoder(
     device: str,
     *,
-    max_batch_size: int = CQT_ENCODE_MAX_BATCH,
+    batch_size: int = -1,
 ) -> CQTEncodeFn:
     """Build an adapter returning canonical CQT features as NumPy arrays.
 
     :param device: Torch device used for transform construction and extraction.
-    :param max_batch_size: Rows per transform call, or ``-1`` for the full input.
+    :param batch_size: Rows per transform call, or ``-1`` for the full input.
     :returns: Encoder from ``(B, C, T)`` waveforms to float32 CQT features.
     """
     import torch
@@ -64,7 +63,7 @@ def load_cqt_audio_encoder(
         if encoder is None:
             encoder = CqtAudioEncoder(
                 sample_rate=sample_rate,
-                max_batch_size=max_batch_size,
+                max_batch_size=batch_size,
             )
             encoders[sample_rate] = encoder
         waveform = torch.as_tensor(np.ascontiguousarray(audio), device=torch_device)
@@ -76,7 +75,6 @@ def load_cqt_audio_encoder(
 __all__ = [
     "CQT_BINS_PER_OCTAVE",
     "CQT_EMBEDDING_DIM",
-    "CQT_ENCODE_MAX_BATCH",
     "CQT_MODE",
     "CQT_NUM_OCTAVES",
     "CQT_PACKAGE_COMMIT",

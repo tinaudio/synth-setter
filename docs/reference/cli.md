@@ -143,9 +143,9 @@ synth-setter-add-embeddings \
   num_workers=4
 ```
 
-The selected columns must not already exist. Tune an encoder independently with, for example,
-`encode_batch_sizes.cqt=64`; `-1` processes the complete current Lance batch. Registry keys,
-safe defaults, indexing, and resume-cache settings are authoritative in
+The selected columns must not already exist. Set `encode_batch_size=64` to chunk every selected
+offline encoder; the default `-1` processes each complete non-empty current Lance batch. Registry
+keys, indexing, and resume-cache settings are authoritative in
 [`add_embeddings.yaml`](../../src/synth_setter/configs/add_embeddings.yaml) and the
 `EMBEDDING_REGISTRY` used by its entrypoint.
 

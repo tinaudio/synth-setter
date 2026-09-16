@@ -1182,11 +1182,10 @@ leaves `num_sub_vectors` null to let each spec's default apply.
 Sketch extraction is batch-vectorized torch and runs on the configured device
 (auto-CUDA, ~6.5× CPU on a consumer GPU; the CPU path already saturates
 multiple cores via torch intra-op threading, so a process pool would add
-contention, not throughput). `encode_batch_sizes.<registry-key>` controls rows
-per internal encoder call; `-1` sends the complete current Lance batch. Safe
-defaults preserve the measured memory caps, including 32 sketch rows for CPU
-RSS (#2707); benchmark per #3131 before raising a cap for a large backfill.
-Resolved batches are logged at encoder load. Because co-resident encoders share
+contention, not throughput). The global `encode_batch_size` controls rows per
+offline encoder call; its default `-1` sends the complete non-empty current
+Lance batch. Smaller values trade throughput for lower peak memory and are
+recorded in resume-cache identity and run logs. Because co-resident encoders share
 one Lance UDF pass and run serially per batch, launch CPU-bound and GPU-bound
 encoders as separate `add-embeddings` runs so neither idles while the other
 works.

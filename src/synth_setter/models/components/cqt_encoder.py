@@ -14,7 +14,6 @@ from torch import Tensor, nn
 from synth_setter.cqt import (
     CQT_BINS_PER_OCTAVE,
     CQT_EMBEDDING_DIM,
-    CQT_ENCODE_MAX_BATCH,
     CQT_MODE,
     CQT_NUM_OCTAVES,
     cqt_num_frames,
@@ -49,12 +48,7 @@ class CqtAudioEncoder(nn.Module):
     out_dim: Final = CQT_EMBEDDING_DIM
 
     @jaxtyped(typechecker=beartype)
-    def __init__(
-        self,
-        *,
-        sample_rate: int,
-        max_batch_size: int = CQT_ENCODE_MAX_BATCH,
-    ) -> None:
+    def __init__(self, *, sample_rate: int, max_batch_size: int = 32) -> None:
         """Configure fixed-rate, memory-bounded CQT extraction.
 
         :param sample_rate: Input waveform sample rate in Hz.

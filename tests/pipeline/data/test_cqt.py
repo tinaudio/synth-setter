@@ -156,7 +156,7 @@ def test_cqt_loader_threads_configured_batch_to_online_encoder(
     monkeypatch.setattr(
         "synth_setter.models.components.cqt_encoder.CqtAudioEncoder", Encoder
     )
-    encode = load_cqt_audio_encoder("cpu", max_batch_size=-1)
+    encode = load_cqt_audio_encoder("cpu", batch_size=-1)
 
     features = encode(np.zeros((3, 1, 160), dtype=np.float32), 16_000)
 

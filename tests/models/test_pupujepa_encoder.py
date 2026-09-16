@@ -352,10 +352,10 @@ def test_pupujepa_large_pool_overfits_fixed_teacher_states() -> None:
     assert loss.item() < 0.01
 
 
-def test_large_direct_construction_defaults_to_single_row_teacher_batches(
+def test_large_direct_construction_defaults_to_full_teacher_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Released Large geometry retains its safe runtime batch cap.
+    """Released Large geometry does not impose an architecture-level batch cap.
 
     :param monkeypatch: Fixture replacing the expensive teacher construction.
     """
@@ -370,7 +370,7 @@ def test_large_direct_construction_defaults_to_single_row_teacher_batches(
         config=PUPUJEPA_LARGE_CONFIG,
     )
 
-    assert encoder.max_batch_size == 1
+    assert encoder.max_batch_size == -1
 
 
 def test_encoder_splits_teacher_forwards_at_configured_batch_cap() -> None:

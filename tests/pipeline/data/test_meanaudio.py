@@ -242,7 +242,7 @@ def test_encode_meanaudio_chunks_respects_configured_batch_limit() -> None:
         cast("meanaudio_module._MeanAudioVAE", vae),
         np.zeros((9, _FOUR_SECONDS), dtype=np.float32),
         device="cpu",
-        max_batch_size=3,
+        batch_size=3,
     )
 
     assert vae.batch_sizes == [3, 3, 3]

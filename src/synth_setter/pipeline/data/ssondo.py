@@ -28,7 +28,6 @@ SSONDO_EMBEDDING_DIM = 960
 SSONDO_SAMPLE_RATE = 32_000
 SSONDO_WINDOW_SECONDS = 10
 SSONDO_INPUT_SAMPLES = SSONDO_SAMPLE_RATE * SSONDO_WINDOW_SECONDS
-SSONDO_ENCODE_MAX_BATCH = 16
 
 type SSONDOEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 
@@ -147,13 +146,13 @@ def load_ssondo_audio_encoder(
     checkpoint: str = DEFAULT_SSONDO_CHECKPOINT,
     device: str = "cpu",
     *,
-    max_batch_size: int = SSONDO_ENCODE_MAX_BATCH,
+    batch_size: int = -1,
 ) -> SSONDOEncodeFn:
     """Load S-SONDO and return an encoder over source audio batches.
 
     :param checkpoint: Pinned Hugging Face repo id or a hash-identical local file.
     :param device: Explicit Torch device.
-    :param max_batch_size: Prepared rows per model call, or ``-1`` for the full input.
+    :param batch_size: Prepared rows per model call, or ``-1`` for the full input.
     :returns: Encoder producing ``(B, 960)`` float32 vectors.
     """
     import torch
@@ -190,10 +189,10 @@ def load_ssondo_audio_encoder(
 
     def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
         prepared = ssondo_encoder_input(audio, sample_rate)
-        batch_size = resolve_encode_batch_size(max_batch_size, len(prepared))
+        resolved_batch_size = resolve_encode_batch_size(batch_size, len(prepared))
         chunks = [
-            _encode_chunk(prepared[start : start + batch_size])
-            for start in range(0, len(prepared), batch_size)
+            _encode_chunk(prepared[start : start + resolved_batch_size])
+            for start in range(0, len(prepared), resolved_batch_size)
         ]
         return np.concatenate(chunks, axis=0)
 

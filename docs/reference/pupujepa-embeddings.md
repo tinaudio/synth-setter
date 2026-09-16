@@ -37,16 +37,17 @@ Both teachers patch four mel frames by 16 frequency bins. Four-second audio prod
 frames and 100 time patches. Other nonempty lengths are accepted when they contain at least one
 complete four-frame patch.
 
-| Variant | Teacher                        | Sequence shape                | Mean-pooled vector   | Offline batch cap |
-| ------- | ------------------------------ | ----------------------------- | -------------------- | ----------------- |
-| Tiny    | width 192, depth 12, 3 heads   | `(batch, 1536, time_patches)` | `pupujepa_tiny_vec`  | 16                |
-| Large   | width 1024, depth 24, 16 heads | `(batch, 8192, time_patches)` | `pupujepa_large_vec` | 1                 |
+| Variant | Teacher                        | Sequence shape                | Mean-pooled vector   |
+| ------- | ------------------------------ | ----------------------------- | -------------------- |
+| Tiny    | width 192, depth 12, 3 heads   | `(batch, 1536, time_patches)` | `pupujepa_tiny_vec`  |
+| Large   | width 1024, depth 24, 16 heads | `(batch, 8192, time_patches)` | `pupujepa_large_vec` |
 
 Values, rank, orientation, and frame geometry are validated before Lance persistence. Both vectors
-use the registry's cosine IVF_PQ policy, and both encoders run alone (`co_resident=False`). Large's
-one-row cap limits attention memory. Its monolithic checkpoint is about 3.13 GiB, the loaded
-teacher subset is about 1.50 GiB in float32, and one four-second sequence occupies about 3.125 MiB
-before Lance overhead.
+use the registry's cosine IVF_PQ policy, and both encoders run alone (`co_resident=False`). The
+global `encode_batch_size` setting controls offline teacher forwards; smaller values lower peak
+attention memory. Large's monolithic checkpoint is about 3.13 GiB, the loaded teacher subset is
+about 1.50 GiB in float32, and one four-second sequence occupies about 3.125 MiB before Lance
+overhead.
 
 ## Usage
 
@@ -73,5 +74,4 @@ and leaves every parameter trainable with train mode following the parent module
 the frozen `PretrainedConditioningEncoder`, so Lightning checkpoints keep the learned backbone
 instead of stripping `encoder.backbone.*` state. A trainable teacher runs at the trainer's
 precision; only the STFT frontend stays in float32. Because chunking cannot bound activation memory
-under autograd, `max_batch_size` merely sets the forward chunk size and defaults to the variant
-cap.
+under autograd, the scratch profiles process the complete training batch.

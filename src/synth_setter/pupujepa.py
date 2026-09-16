@@ -226,17 +226,12 @@ class PupuJepaCheckpointSpec:
     .. attribute :: config
 
         Expected frontend and teacher geometry.
-
-    .. attribute :: encode_max_batch
-
-        Maximum waveforms per teacher forward.
     """
 
     args_file: str
     weights_file: str
     checkpoint_sha256: str
     config: PupuJepaConfig
-    encode_max_batch: int
 
 
 PUPUJEPA_CHECKPOINT_SPECS: Mapping[PupuJepaVariant, PupuJepaCheckpointSpec] = MappingProxyType(
@@ -246,14 +241,12 @@ PUPUJEPA_CHECKPOINT_SPECS: Mapping[PupuJepaVariant, PupuJepaCheckpointSpec] = Ma
             weights_file=PUPUJEPA_TINY_WEIGHTS_FILE,
             checkpoint_sha256=PUPUJEPA_TINY_CHECKPOINT_SHA256,
             config=PUPUJEPA_TINY_CONFIG,
-            encode_max_batch=16,
         ),
         "large": PupuJepaCheckpointSpec(
             args_file=PUPUJEPA_LARGE_ARGS_FILE,
             weights_file=PUPUJEPA_LARGE_WEIGHTS_FILE,
             checkpoint_sha256=PUPUJEPA_LARGE_CHECKPOINT_SHA256,
             config=PUPUJEPA_LARGE_CONFIG,
-            encode_max_batch=1,
         ),
     }
 )

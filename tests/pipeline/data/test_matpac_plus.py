@@ -591,7 +591,7 @@ def test_load_matpac_plus_audio_encoder_batches_and_preserves_row_order(
     )
 
     encode = matpac_plus_module.load_matpac_plus_audio_encoder(
-        "local-checkpoint", device="cpu", max_batch_size=6
+        "local-checkpoint", device="cpu", batch_size=6
     )
     encoded = encode(audio, 16_000)
 
@@ -610,9 +610,9 @@ def test_matpac_plus_registry_loader_returns_package_encoder(
     seen: list[tuple[str, str, int]] = []
 
     def load(
-        checkpoint: str, *, device: str, max_batch_size: int
+        checkpoint: str, *, device: str, batch_size: int
     ) -> matpac_plus_module.MatpacPlusEncodeFn:
-        seen.append((checkpoint, device, max_batch_size))
+        seen.append((checkpoint, device, batch_size))
 
         def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
             del sample_rate
@@ -637,13 +637,7 @@ def test_matpac_plus_registry_loader_returns_package_encoder(
     )
     encoded = encoder(np.zeros((2, 1, 16_000), dtype=np.float32), 16_000)
 
-    assert seen == [
-        (
-            "checkpoint.pt",
-            "cpu",
-            matpac_plus_module.MATPAC_PLUS_ENCODE_MAX_BATCH,
-        )
-    ]
+    assert seen == [("checkpoint.pt", "cpu", -1)]
     assert encoded.shape == (2, MATPAC_PLUS_FRONTEND.embedding_dim, 7)
     assert np.all(encoded == 0.5)
 

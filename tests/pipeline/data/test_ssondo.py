@@ -198,7 +198,7 @@ def test_load_ssondo_audio_encoder_more_than_one_chunk_preserves_row_order(
     row_values = np.arange(17, dtype=np.float32) / 16
     audio = np.broadcast_to(row_values[:, None, None], (17, 1, 32_000)).copy()
 
-    vectors = load_ssondo_audio_encoder(device="cpu", max_batch_size=6)(
+    vectors = load_ssondo_audio_encoder(device="cpu", batch_size=6)(
         audio, SSONDO_SAMPLE_RATE
     )
 
