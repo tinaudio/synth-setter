@@ -359,10 +359,12 @@ def test_load_pupujepa_audio_encoder_bounds_chunks_and_preserves_rows(
         [np.full((1, 960), row / rows, dtype=np.float32) for row in range(rows)]
     )
 
-    encode = pupujepa_module.load_pupujepa_audio_encoder(device="cpu")
+    encode = pupujepa_module.load_pupujepa_audio_encoder(
+        device="cpu", max_batch_size=5
+    )
     embeddings = encode(audio, PUPUJEPA_SAMPLE_RATE)
 
-    assert model.batch_sizes == [PUPUJEPA_ENCODE_MAX_BATCH, 1]
+    assert model.batch_sizes == [5, 5, 5, 2]
     assert embeddings.shape == (rows, PUPUJEPA_EMBEDDING_DIM, 1)
     np.testing.assert_allclose(embeddings[:, 0, 0], np.arange(rows) / rows)
 

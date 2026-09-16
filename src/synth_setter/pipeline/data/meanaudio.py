@@ -18,6 +18,7 @@ import structlog
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MEANAUDIO_16K_FIELD
+from synth_setter.pipeline.data.embedding_batches import resolve_encode_batch_size
 from synth_setter.utils.logging_utils import resolve_git_sha
 
 if TYPE_CHECKING:
@@ -372,6 +373,7 @@ def _encode_meanaudio_chunks(
     prepared: np.ndarray,
     *,
     device: str,
+    max_batch_size: int = MEANAUDIO_ENCODE_MAX_BATCH,
 ) -> np.ndarray:
     """Encode prepared rows in bounded large-model batches.
 
@@ -379,16 +381,18 @@ def _encode_meanaudio_chunks(
     :param vae: Frozen encoder-only MeanAudio VAE.
     :param prepared: ``(B, T_16k)`` finite normalized mono audio.
     :param device: Torch inference device.
+    :param max_batch_size: Prepared rows per model call, or ``-1`` for the full input.
     :returns: Contiguous float32 ``(B, 20, F)`` posterior means.
     """
+    batch_size = resolve_encode_batch_size(max_batch_size, len(prepared))
     chunks = [
         _encode_meanaudio_chunk(
             mel_converter,
             vae,
-            prepared[start : start + MEANAUDIO_ENCODE_MAX_BATCH],
+            prepared[start : start + batch_size],
             device=device,
         )
-        for start in range(0, len(prepared), MEANAUDIO_ENCODE_MAX_BATCH)
+        for start in range(0, len(prepared), batch_size)
     ]
     return np.ascontiguousarray(np.concatenate(chunks, axis=0), dtype=np.float32)
 
@@ -397,11 +401,13 @@ def load_meanaudio_audio_encoder(
     checkpoint: str = DEFAULT_MEANAUDIO_CHECKPOINT,
     *,
     device: str = "cpu",
+    max_batch_size: int = MEANAUDIO_ENCODE_MAX_BATCH,
 ) -> MeanAudioEncodeFn:
     """Load the frozen upstream MeanAudio mel frontend and encoder-only VAE.
 
     :param checkpoint: Pinned Hugging Face repo or a SHA-identical local checkpoint.
     :param device: Explicit Torch inference device.
+    :param max_batch_size: Prepared rows per model call, or ``-1`` for the full input.
     :returns: Encoder accepting ``(B, C, T)`` audio and returning contiguous float32
         ``(B, 20, F)`` posterior means.
     """
@@ -436,6 +442,7 @@ def load_meanaudio_audio_encoder(
             vae,
             prepared,
             device=device,
+            max_batch_size=max_batch_size,
         )
 
     return encode

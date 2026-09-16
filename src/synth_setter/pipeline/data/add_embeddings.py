@@ -63,13 +63,16 @@ from synth_setter.model_cache import checkpoint_tree_sha256
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.cqt import (
     CQT_EMBEDDING_DIM,
+    CQT_ENCODE_MAX_BATCH,
     CQTEncodeFn,
     cqt_artifact_digest,
     cqt_num_frames,
     load_cqt_audio_encoder,
 )
+from synth_setter.pipeline.data.embedding_batches import resolve_encode_batch_size
 from synth_setter.pipeline.data.matpac_plus import (
     DEFAULT_MATPAC_PLUS_CHECKPOINT,
+    MATPAC_PLUS_ENCODE_MAX_BATCH,
     MATPAC_PLUS_FRONTEND,
     encode_matpac_plus_column,
     load_matpac_plus_audio_encoder,
@@ -78,6 +81,7 @@ from synth_setter.pipeline.data.matpac_plus import (
 from synth_setter.pipeline.data.meanaudio import (
     DEFAULT_MEANAUDIO_CHECKPOINT,
     MEANAUDIO_EMBEDDING_DIM,
+    MEANAUDIO_ENCODE_MAX_BATCH,
     MEANAUDIO_INDEX_SUB_VECTORS,
     encode_meanaudio_column,
     load_meanaudio_audio_encoder,
@@ -92,6 +96,8 @@ from synth_setter.pipeline.data.param_shift import (
     param_shift_policy_values,
 )
 from synth_setter.pipeline.data.pupujepa import (
+    PUPUJEPA_ENCODE_MAX_BATCH,
+    PUPUJEPA_LARGE_ENCODE_MAX_BATCH,
     PupuJepaEncodeFn,
     encode_pupujepa_column,
     encode_pupujepa_large_column,
@@ -101,6 +107,7 @@ from synth_setter.pipeline.data.ssondo import (
     DEFAULT_SSONDO_CHECKPOINT,
     SSONDO_CHECKPOINT_SHA256,
     SSONDO_EMBEDDING_DIM,
+    SSONDO_ENCODE_MAX_BATCH,
     SSONDO_SOURCE_REVISION,
     SSONDOEncodeFn,
     load_ssondo_audio_encoder,
@@ -255,6 +262,11 @@ class EmbeddingSpec:
 
         Dataset columns supplying this embedding's encoder input.
 
+    .. attribute :: default_encode_batch_size
+
+        Safe default for internal inference batches, or ``None`` when the encoder does
+        not expose batching.
+
     .. attribute :: rerenders
 
         Whether the encoder re-renders audio, making the run's render config and seed
@@ -270,6 +282,7 @@ class EmbeddingSpec:
     encode_column: EncodeColumnFn
     resolve_artifact_identity: ResolveArtifactIdentityFn
     input_fields: tuple[str, ...] = (AUDIO_FIELD,)
+    default_encode_batch_size: int | None = None
     rerenders: bool = False
 
 
@@ -683,7 +696,10 @@ def _load_m2l_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enco
     :returns: m2l encoder.
     """
     del checkpoint
-    return load_m2l_audio_encoder(config.device)
+    return load_m2l_audio_encoder(
+        config.device,
+        max_batch_size=config.encode_batch_size("m2l"),
+    )
 
 
 def _load_clap_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -693,7 +709,11 @@ def _load_clap_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enc
     :param config: Run config supplying the device.
     :returns: CLAP encoder.
     """
-    return load_clap_audio_encoder(checkpoint, config.device)
+    return load_clap_audio_encoder(
+        checkpoint,
+        config.device,
+        max_batch_size=config.encode_batch_size("clap"),
+    )
 
 
 def _load_cqt_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -704,7 +724,10 @@ def _load_cqt_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enco
     :returns: CQT encoder over source audio.
     """
     cqt_artifact_digest(checkpoint)
-    return load_cqt_audio_encoder(_resolve_torch_device(config.device))
+    return load_cqt_audio_encoder(
+        _resolve_torch_device(config.device),
+        max_batch_size=config.encode_batch_size("cqt"),
+    )
 
 
 def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -714,7 +737,25 @@ def _load_same_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Enc
     :param config: Run config supplying the device.
     :returns: SAME encoder.
     """
-    return load_same_audio_encoder(checkpoint, config.device)
+    return load_same_audio_encoder(
+        checkpoint,
+        config.device,
+        max_batch_size=config.encode_batch_size("same_s"),
+    )
+
+
+def _load_same_l_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load SAME-L with its independently tunable inference batch.
+
+    :param checkpoint: SAME-L checkpoint source.
+    :param config: Run config supplying device and encode-batch policy.
+    :returns: SAME-L encoder.
+    """
+    return load_same_audio_encoder(
+        checkpoint,
+        config.device,
+        max_batch_size=config.encode_batch_size("same_l"),
+    )
 
 
 def _load_ssondo_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -724,7 +765,11 @@ def _load_ssondo_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
     :param config: Run config supplying the device.
     :returns: S-SONDO encoder over source audio.
     """
-    return load_ssondo_audio_encoder(checkpoint, _resolve_torch_device(config.device))
+    return load_ssondo_audio_encoder(
+        checkpoint,
+        _resolve_torch_device(config.device),
+        max_batch_size=config.encode_batch_size("ssondo"),
+    )
 
 
 def _load_matpac_plus_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -737,6 +782,7 @@ def _load_matpac_plus_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig)
     return load_matpac_plus_audio_encoder(
         checkpoint,
         device=_resolve_torch_device(config.device),
+        max_batch_size=config.encode_batch_size("matpac_plus"),
     )
 
 
@@ -750,6 +796,7 @@ def _load_meanaudio_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -
     return load_meanaudio_audio_encoder(
         checkpoint,
         device=_resolve_torch_device(config.device),
+        max_batch_size=config.encode_batch_size("meanaudio_16k"),
     )
 
 
@@ -766,6 +813,7 @@ def _load_pupujepa_tiny_spec_encoder(
         checkpoint,
         device=_resolve_torch_device(config.device),
         variant="tiny",
+        max_batch_size=config.encode_batch_size("pupujepa_tiny"),
     )
 
 
@@ -782,6 +830,7 @@ def _load_pupujepa_large_spec_encoder(
         checkpoint,
         device=_resolve_torch_device(config.device),
         variant="large",
+        max_batch_size=config.encode_batch_size("pupujepa_large"),
     )
 
 
@@ -1001,8 +1050,8 @@ def _sketch_encode(
     :param audio: ``(B, C, T)`` audio batch.
     :param sample_rate: Source sample rate deciding the control frame grid.
     :param device: Torch device the extractor runs on.
-    :param max_batch: Rows per extractor invocation; sizes memory, and on CUDA also
-        GPU utilization (#3131).
+    :param max_batch: Rows per extractor invocation, or ``-1`` for the full input;
+        sizes memory and GPU utilization (#3131).
     :returns: ``(B, NUM_SKETCH_CONTROLS, F)`` float32 controls.
     """
     import torch
@@ -1010,11 +1059,12 @@ def _sketch_encode(
     from synth_setter.features.sketch_controls import extract_sketch_controls_batch
 
     batch = torch.from_numpy(np.ascontiguousarray(audio, dtype=np.float32))
+    batch_size = resolve_encode_batch_size(max_batch, len(batch))
     chunks = [
-        extract_sketch_controls_batch(batch[start : start + max_batch], sample_rate, device=device)
+        extract_sketch_controls_batch(batch[start : start + batch_size], sample_rate, device=device)
         .cpu()
         .numpy()
-        for start in range(0, len(batch), max_batch)
+        for start in range(0, len(batch), batch_size)
     ]
     return np.concatenate(chunks, axis=0)
 
@@ -1033,11 +1083,12 @@ def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
 
     device = _resolve_torch_device(config.device)
     # Surfaces a silently-CPU run in the first log lines (#3131).
+    max_batch_size = config.encode_batch_size("sketch")
     logger.info(
-        "sketch_encoder_loaded", device=device, encode_batch=config.sketch_encode_batch
+        "sketch_encoder_loaded", device=device, encode_batch=max_batch_size
     )
     load_pesto_model(checkpoint, device=device)
-    return functools.partial(_sketch_encode, device=device, max_batch=config.sketch_encode_batch)
+    return functools.partial(_sketch_encode, device=device, max_batch=max_batch_size)
 
 
 def _encode_sketch_column(
@@ -1088,6 +1139,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_clap_spec_encoder,
         encode_column=_encode_clap_column,
         resolve_artifact_identity=_clap_artifact_identity,
+        default_encode_batch_size=CLAP_ENCODE_MAX_BATCH,
     ),
     "cqt": EmbeddingSpec(
         name="cqt",
@@ -1102,6 +1154,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_cqt_spec_encoder,
         encode_column=_encode_cqt_column,
         resolve_artifact_identity=_cqt_artifact_identity,
+        default_encode_batch_size=CQT_ENCODE_MAX_BATCH,
     ),
     "m2l": EmbeddingSpec(
         name="m2l",
@@ -1112,6 +1165,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_m2l_spec_encoder,
         encode_column=_encode_m2l_column,
         resolve_artifact_identity=_m2l_artifact_identity,
+        default_encode_batch_size=M2L_ENCODE_MAX_BATCH,
     ),
     "pupujepa_tiny": EmbeddingSpec(
         name="pupujepa_tiny",
@@ -1126,6 +1180,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_pupujepa_tiny_spec_encoder,
         encode_column=encode_pupujepa_column,
         resolve_artifact_identity=_pupujepa_tiny_artifact_identity,
+        default_encode_batch_size=PUPUJEPA_ENCODE_MAX_BATCH,
     ),
     "pupujepa_large": EmbeddingSpec(
         name="pupujepa_large",
@@ -1140,6 +1195,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_pupujepa_large_spec_encoder,
         encode_column=encode_pupujepa_large_column,
         resolve_artifact_identity=_pupujepa_large_artifact_identity,
+        default_encode_batch_size=PUPUJEPA_LARGE_ENCODE_MAX_BATCH,
     ),
     "pyfdn_sketch": EmbeddingSpec(
         name="pyfdn_sketch",
@@ -1160,6 +1216,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_same_spec_encoder,
         encode_column=_encode_same_s_column,
         resolve_artifact_identity=_same_artifact_identity,
+        default_encode_batch_size=SAME_ENCODE_MAX_BATCH,
     ),
     "same_l": EmbeddingSpec(
         name="same_l",
@@ -1167,9 +1224,10 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         default_checkpoint=DEFAULT_SAME_L_CHECKPOINT,
         co_resident=False,
         index=IndexSpec(pool="mean", vector_column=f"{SAME_L_FIELD}_vec"),
-        load_encoder=_load_same_spec_encoder,
+        load_encoder=_load_same_l_spec_encoder,
         encode_column=_encode_same_l_column,
         resolve_artifact_identity=_same_artifact_identity,
+        default_encode_batch_size=SAME_ENCODE_MAX_BATCH,
     ),
     # PQ sub-vectors must divide the control-vector width. The companion vec
     # is a struct child written by the encoder, so pooling is "none" (#2707).
@@ -1187,6 +1245,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_sketch_spec_encoder,
         encode_column=_encode_sketch_column,
         resolve_artifact_identity=_sketch_artifact_identity,
+        default_encode_batch_size=SKETCH_ENCODE_MAX_BATCH,
     ),
     "ssondo": EmbeddingSpec(
         name="ssondo",
@@ -1197,6 +1256,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_ssondo_spec_encoder,
         encode_column=_encode_ssondo_column,
         resolve_artifact_identity=_ssondo_artifact_identity,
+        default_encode_batch_size=SSONDO_ENCODE_MAX_BATCH,
     ),
     # Rows share one caption per param spec today, so an index over identical
     # vectors would be degenerate; revisit when a values-aware normalizer lands.
@@ -1238,6 +1298,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_matpac_plus_spec_encoder,
         encode_column=encode_matpac_plus_column,
         resolve_artifact_identity=_matpac_plus_artifact_identity,
+        default_encode_batch_size=MATPAC_PLUS_ENCODE_MAX_BATCH,
     ),
     "meanaudio_16k": EmbeddingSpec(
         name="meanaudio_16k",
@@ -1253,6 +1314,7 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         load_encoder=_load_meanaudio_spec_encoder,
         encode_column=cast("EncodeColumnFn", encode_meanaudio_column),
         resolve_artifact_identity=_meanaudio_artifact_identity,
+        default_encode_batch_size=MEANAUDIO_ENCODE_MAX_BATCH,
     ),
 }
 
@@ -1346,6 +1408,7 @@ def _resume_source_identity(
     sample_rate: int,
     batch_size: int,
     input_fields: Sequence[str],
+    encode_batch_sizes: Mapping[str, int],
 ) -> str:
     """Identify the exact source and batching contract behind cached UDF outputs.
 
@@ -1353,6 +1416,7 @@ def _resume_source_identity(
     :param sample_rate: Dataset sample rate in Hz.
     :param batch_size: Rows passed to each UDF invocation.
     :param input_fields: Ordered source columns read by the UDF.
+    :param encode_batch_sizes: Effective internal batches keyed by embedding.
     :returns: Stable source-policy identity.
     """
     digest = hashlib.sha256()
@@ -1364,6 +1428,9 @@ def _resume_source_identity(
         *input_fields,
     ):
         _update_framed_digest(digest, value.encode())
+    for name, limit in sorted(encode_batch_sizes.items()):
+        _update_framed_digest(digest, name.encode())
+        _update_framed_digest(digest, str(limit).encode())
     _update_framed_digest(digest, dataset.schema.serialize().to_pybytes())
     fragments = sorted(dataset.get_fragments(), key=lambda fragment: fragment.fragment_id)
     for fragment in fragments:
@@ -1483,6 +1550,12 @@ def _load_encoders(specs: Sequence[EmbeddingSpec], config: AddEmbeddingsConfig) 
     for spec in specs:
         checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
         encoders.append(spec.load_encoder(checkpoint, config))
+        if spec.default_encode_batch_size is not None:
+            logger.info(
+                "embedding_encode_batch_resolved",
+                embedding=spec.name,
+                encode_batch=config.encode_batch_size(spec.name),
+            )
     return encoders
 
 
@@ -1597,6 +1670,11 @@ def _write_columns(
             sample_rate=sample_rate,
             batch_size=config.lance_batch_size,
             input_fields=input_fields,
+            encode_batch_sizes={
+                spec.name: config.encode_batch_size(spec.name)
+                for spec in specs
+                if spec.default_encode_batch_size is not None
+            },
         )
         _prepare_resume_cache(resume_cache, identities, source_identity)
         output_columns = [column for spec in specs for column in _output_columns(spec)]
@@ -1986,10 +2064,15 @@ def _resolve_torch_device(device: str | None) -> str:
     return "cpu"
 
 
-def load_m2l_audio_encoder(device: str | None = None) -> M2LEncodeFn:
+def load_m2l_audio_encoder(
+    device: str | None = None,
+    *,
+    max_batch_size: int = M2L_ENCODE_MAX_BATCH,
+) -> M2LEncodeFn:
     """Load music2latent and return an encoder over ``(B, C, T)`` audio.
 
     :param device: Torch device, or ``None`` for automatic selection.
+    :param max_batch_size: Flattened channel rows per package call, or ``-1`` for all rows.
     :returns: Encoder producing ``(B, C*D, T_lat)`` float32 latents.
     """
     from music2latent import EncoderDecoder
@@ -2001,7 +2084,8 @@ def load_m2l_audio_encoder(device: str | None = None) -> M2LEncodeFn:
     def encode(audio: np.ndarray) -> np.ndarray:
         batch, channels = audio.shape[:2]
         flat = np.ascontiguousarray(rearrange(audio, "b c t -> (b c) t"), dtype=np.float32)
-        latents = encoder.encode(flat, max_batch_size=M2L_ENCODE_MAX_BATCH)
+        encode_batch_size = resolve_encode_batch_size(max_batch_size, len(flat))
+        latents = encoder.encode(flat, max_batch_size=encode_batch_size)
         latents = rearrange(latents, "(b c) d t -> b (c d) t", b=batch, c=channels)
         return latents.cpu().numpy()
 
@@ -2015,11 +2099,14 @@ _resolve_clap_checkpoint = resolve_clap_checkpoint
 def load_clap_audio_encoder(
     checkpoint: str = DEFAULT_CLAP_CHECKPOINT,
     device: str | None = None,
+    *,
+    max_batch_size: int = CLAP_ENCODE_MAX_BATCH,
 ) -> ClapEncodeFn:
     """Load CLAP and return an encoder over mono audio.
 
     :param checkpoint: Local directory, R2 prefix, or Hugging Face CLAP model id.
     :param device: Torch device, or ``None`` for automatic selection.
+    :param max_batch_size: Mono rows per model call, or ``-1`` for the full input.
     :returns: Encoder producing ``(B, CLAP_EMBEDDING_DIM)`` vectors.
     """
     import torch
@@ -2054,20 +2141,27 @@ def load_clap_audio_encoder(
         return features.pooler_output.cpu().numpy()  # pyright: ignore
 
     def encode(mono: np.ndarray, sample_rate: int) -> np.ndarray:
+        batch_size = resolve_encode_batch_size(max_batch_size, len(mono))
         chunks = [
-            _encode_chunk(mono[start : start + CLAP_ENCODE_MAX_BATCH], sample_rate)
-            for start in range(0, len(mono), CLAP_ENCODE_MAX_BATCH)
+            _encode_chunk(mono[start : start + batch_size], sample_rate)
+            for start in range(0, len(mono), batch_size)
         ]
         return np.concatenate(chunks, axis=0)
 
     return encode
 
 
-def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameEncodeFn:
+def load_same_audio_encoder(
+    checkpoint: str,
+    device: str | None = None,
+    *,
+    max_batch_size: int = SAME_ENCODE_MAX_BATCH,
+) -> SameEncodeFn:
     """Load SAME and return an encoder over prepared stereo 44.1 kHz audio.
 
     :param checkpoint: Local directory, R2 mirror, or HuggingFace repo id.
     :param device: Torch device, or ``None`` for automatic selection.
+    :param max_batch_size: Stereo rows per model call, or ``-1`` for the full input.
     :returns: Encoder producing ``(B, SAME_EMBEDDING_DIM, T_lat)`` latents.
     """
     import torch
@@ -2084,9 +2178,10 @@ def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameE
         return latents.float().cpu().numpy()
 
     def encode(stereo: np.ndarray) -> np.ndarray:
+        batch_size = resolve_encode_batch_size(max_batch_size, len(stereo))
         chunks = [
-            _encode_chunk(stereo[start : start + SAME_ENCODE_MAX_BATCH])
-            for start in range(0, len(stereo), SAME_ENCODE_MAX_BATCH)
+            _encode_chunk(stereo[start : start + batch_size])
+            for start in range(0, len(stereo), batch_size)
         ]
         return np.concatenate(chunks, axis=0)
 

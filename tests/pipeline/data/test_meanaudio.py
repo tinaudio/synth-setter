@@ -234,17 +234,18 @@ def test_encode_meanaudio_chunk_selects_deterministic_posterior_mean() -> None:
     np.testing.assert_array_equal(encoded[:, 0, 0], [0.25, 0.75])
 
 
-def test_encode_meanaudio_chunks_bounds_large_model_batches() -> None:
-    """Large-model inference never exceeds the declared four-row chunk bound."""
+def test_encode_meanaudio_chunks_respects_configured_batch_limit() -> None:
+    """Large-model inference never exceeds the configured batch limit."""
     vae = _ChunkVAE()
     encoded = meanaudio_module._encode_meanaudio_chunks(
         cast("meanaudio_module._MelConverter", _ChunkMel()),
         cast("meanaudio_module._MeanAudioVAE", vae),
         np.zeros((9, _FOUR_SECONDS), dtype=np.float32),
         device="cpu",
+        max_batch_size=3,
     )
 
-    assert vae.batch_sizes == [4, 4, 1]
+    assert vae.batch_sizes == [3, 3, 3]
     assert encoded.shape == (9, MEANAUDIO_EMBEDDING_DIM, 125)
 
 

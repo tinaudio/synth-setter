@@ -136,6 +136,34 @@ def test_cqt_encoder_with_invalid_audio_rank_raises() -> None:
         encoder(np.zeros((2, 4_000), dtype=np.float32), 16_000)
 
 
+def test_cqt_loader_threads_configured_batch_to_online_encoder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cached extraction uses the configured CQT transform batch.
+
+    :param monkeypatch: Fixture replacing the already-tested online encoder.
+    """
+    seen_limits: list[int] = []
+
+    class Encoder:
+        def __init__(self, *, sample_rate: int, max_batch_size: int) -> None:
+            del sample_rate
+            seen_limits.append(max_batch_size)
+
+        def __call__(self, waveform: torch.Tensor) -> torch.Tensor:
+            return torch.zeros(len(waveform), CQT_EMBEDDING_DIM, 1)
+
+    monkeypatch.setattr(
+        "synth_setter.models.components.cqt_encoder.CqtAudioEncoder", Encoder
+    )
+    encode = load_cqt_audio_encoder("cpu", max_batch_size=-1)
+
+    features = encode(np.zeros((3, 1, 160), dtype=np.float32), 16_000)
+
+    assert seen_limits == [-1]
+    assert features.shape == (3, CQT_EMBEDDING_DIM, 1)
+
+
 @RunIf(min_gpus=1)
 @pytest.mark.gpu
 def test_cqt_encoder_on_cuda_matches_cpu_and_allocates_gpu_memory() -> None:

@@ -339,6 +339,7 @@ class PupuJepaAudioEncoder(nn.Module):
         checkpoint: str = DEFAULT_PUPUJEPA_CHECKPOINT,
         revision: str = PUPUJEPA_CHECKPOINT_REVISION,
         variant: PupuJepaVariant = "tiny",
+        max_batch_size: int | None = None,
     ) -> PupuJepaAudioEncoder:
         """Load only the patch embed and teacher from the pinned safetensors file.
 
@@ -346,6 +347,7 @@ class PupuJepaAudioEncoder(nn.Module):
         :param checkpoint: Canonical Hugging Face repo id or local checkpoint directory.
         :param revision: Immutable Hugging Face commit required for remote loading.
         :param variant: Released teacher size to load.
+        :param max_batch_size: Maximum waveforms per teacher call, or the variant default.
         :returns: Frozen eval-mode PupuJEPA audio encoder.
         :raises RuntimeError: Teacher state is missing, unexpected, or shape-incompatible.
         :raises ValueError: Checkpoint geometry differs from the selected variant.
@@ -362,7 +364,7 @@ class PupuJepaAudioEncoder(nn.Module):
         encoder = cls(
             sample_rate=sample_rate,
             config=config,
-            max_batch_size=PUPUJEPA_CHECKPOINT_SPECS[variant].encode_max_batch,
+            max_batch_size=max_batch_size,
         )
         _, weights_path = pupujepa_checkpoint_files(checkpoint_dir, variant)
         with safe_open(weights_path, framework="pt", device="cpu") as checkpoint_file:

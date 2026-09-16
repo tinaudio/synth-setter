@@ -17,7 +17,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
     EMBEDDING_REGISTRY,
-    SKETCH_ENCODE_MAX_BATCH,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -25,6 +24,18 @@ if TYPE_CHECKING:
     from omegaconf import DictConfig
 
 __all__ = ["AddEmbeddingsConfig"]
+
+
+def _default_encode_batch_sizes() -> dict[str, int]:
+    """Return every registry encoder's conservative inference default.
+
+    :returns: Batch limits keyed by configurable embedding name.
+    """
+    return {
+        name: spec.default_encode_batch_size
+        for name, spec in EMBEDDING_REGISTRY.items()
+        if spec.default_encode_batch_size is not None
+    }
 
 
 class AddEmbeddingsConfig(BaseModel):
@@ -58,9 +69,9 @@ class AddEmbeddingsConfig(BaseModel):
 
         Worker processes for CPU-bound registry encoders; ``1`` keeps them in-process.
 
-    .. attribute :: sketch_encode_batch
+    .. attribute :: encode_batch_sizes
 
-        Rows per sketch extractor invocation.
+        Per-embedding inference-batch overrides; ``-1`` processes the current Lance batch.
 
     .. attribute :: build_index
 
@@ -122,10 +133,9 @@ class AddEmbeddingsConfig(BaseModel):
         ge=1,
         description="Worker processes for CPU-bound encoders; torch/GPU encoders ignore it.",
     )
-    sketch_encode_batch: int = Field(
-        default=SKETCH_ENCODE_MAX_BATCH,
-        ge=1,
-        description="Rows per sketch extractor invocation; sizes memory and GPU utilization.",
+    encode_batch_sizes: dict[str, int] = Field(
+        default_factory=_default_encode_batch_sizes,
+        description="Per-embedding inference batches; -1 processes the current Lance batch.",
     )
     build_index: bool = Field(
         default=True, description="Build indexes declared by selected embedding specs."
@@ -179,6 +189,30 @@ class AddEmbeddingsConfig(BaseModel):
             raise ValueError(f"embeddings {list(embeddings)} has duplicate entries")
         return embeddings
 
+    @field_validator("encode_batch_sizes")
+    @classmethod
+    def _check_encode_batch_sizes(cls, value: dict[str, int]) -> dict[str, int]:
+        """Reject unknown encoders and limits outside positive integers or ``-1``.
+
+        :param value: Per-embedding inference-batch overrides.
+        :returns: Validated overrides unchanged.
+        :raises ValueError: A key has no batching policy or a limit is invalid.
+        """
+        batchable = {
+            name
+            for name, spec in EMBEDDING_REGISTRY.items()
+            if spec.default_encode_batch_size is not None
+        }
+        unknown = sorted(set(value) - batchable)
+        if unknown:
+            raise ValueError(
+                f"encode_batch_sizes keys {unknown} must each be one of {sorted(batchable)}"
+            )
+        invalid = {name: limit for name, limit in value.items() if limit != -1 and limit < 1}
+        if invalid:
+            raise ValueError(f"encode_batch_sizes values must be positive or -1, got {invalid}")
+        return value
+
     @field_validator("checkpoints")
     @classmethod
     def _check_checkpoint_keys(cls, value: dict[str, str]) -> dict[str, str]:
@@ -200,6 +234,18 @@ class AddEmbeddingsConfig(BaseModel):
         if "pyfdn_sketch" in value:
             raise ValueError("pyfdn_sketch is checkpoint-free and rejects checkpoint overrides")
         return value
+
+    def encode_batch_size(self, name: str) -> int:
+        """Resolve one encoder's override or registry default.
+
+        :param name: Batch-configurable embedding registry key.
+        :returns: Positive batch limit or ``-1``.
+        :raises ValueError: The registry entry has no internal batching policy.
+        """
+        default = EMBEDDING_REGISTRY[name].default_encode_batch_size
+        if default is None:
+            raise ValueError(f"embedding {name!r} has no configurable encode batch")
+        return self.encode_batch_sizes.get(name, default)
 
     @field_validator("resume_cache", mode="before")
     @classmethod

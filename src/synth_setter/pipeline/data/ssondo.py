@@ -15,6 +15,7 @@ import numpy as np
 import structlog
 
 from synth_setter.model_cache import embedding_model_dir
+from synth_setter.pipeline.data.embedding_batches import resolve_encode_batch_size
 
 logger = structlog.get_logger(__name__)
 
@@ -145,11 +146,14 @@ def ssondo_encoder_input(audio: np.ndarray, sample_rate: int) -> np.ndarray:
 def load_ssondo_audio_encoder(
     checkpoint: str = DEFAULT_SSONDO_CHECKPOINT,
     device: str = "cpu",
+    *,
+    max_batch_size: int = SSONDO_ENCODE_MAX_BATCH,
 ) -> SSONDOEncodeFn:
     """Load S-SONDO and return an encoder over source audio batches.
 
     :param checkpoint: Pinned Hugging Face repo id or a hash-identical local file.
     :param device: Explicit Torch device.
+    :param max_batch_size: Prepared rows per model call, or ``-1`` for the full input.
     :returns: Encoder producing ``(B, 960)`` float32 vectors.
     """
     import torch
@@ -186,9 +190,10 @@ def load_ssondo_audio_encoder(
 
     def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
         prepared = ssondo_encoder_input(audio, sample_rate)
+        batch_size = resolve_encode_batch_size(max_batch_size, len(prepared))
         chunks = [
-            _encode_chunk(prepared[start : start + SSONDO_ENCODE_MAX_BATCH])
-            for start in range(0, len(prepared), SSONDO_ENCODE_MAX_BATCH)
+            _encode_chunk(prepared[start : start + batch_size])
+            for start in range(0, len(prepared), batch_size)
         ]
         return np.concatenate(chunks, axis=0)
 
