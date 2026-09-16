@@ -761,7 +761,7 @@ def test_cqt_online_profile_routes_audio_through_canonical_temporal_pool() -> No
         == "synth_setter.models.components.cqt_encoder.CqtAudioEncoder"
     )
     assert cfg.model.encoder.backbone.sample_rate == 44_100
-    assert cfg.model.encoder.backbone.max_batch_size == 32
+    assert cfg.model.encoder.backbone.max_batch_size == -1
     assert cfg.model.encoder.head.embed_dim == 256
     assert cfg.model.encoder.head.max_seq_len == 401
 
@@ -877,6 +877,7 @@ def test_pupujepa_scratch_profile_builds_trainable_variant_without_checkpoint(
     assert cfg.model.encoder._target_.endswith("PupuJepaConditioningEncoder")
     assert cfg.model.encoder.backbone._target_.endswith("PupuJepaAudioEncoder.from_scratch")
     assert cfg.model.encoder.backbone.variant == variant
+    assert cfg.model.encoder.backbone.max_batch_size == -1
     assert "checkpoint" not in cfg.model.encoder.backbone
     assert cfg.model.encoder.head.embed_dim == embed_dim
     assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
