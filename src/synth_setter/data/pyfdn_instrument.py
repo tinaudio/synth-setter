@@ -301,7 +301,7 @@ def _validate_version(synth_version: str) -> None:
 
 
 class PyFDNRenderer(AudioRenderer):
-    """Render a pyFDN topology's impulse response or an explicitly selected custom source."""
+    """Render a pyFDN topology with built-in or external excitation."""
 
     def __init__(
         self,
@@ -317,7 +317,8 @@ class PyFDNRenderer(AudioRenderer):
     ) -> None:
         """Configure impulse-response rendering or the optional canonical chirp.
 
-        :param excitation: ``"impulse"`` for the native IR or ``"chirp"`` for the custom source.
+        :param excitation: ``"impulse"`` for the native IR or ``"chirp"`` for the canonical
+            built-in chirp; external audio is supplied to :meth:`render_with_input`.
         :param param_spec_name: Registered complete FLAMO FDN topology.
         :param synth_version: Required installed pyFDN version.
         :param plugin_path: Required in-process backend sentinel.

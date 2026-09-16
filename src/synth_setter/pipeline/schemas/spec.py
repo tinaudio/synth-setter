@@ -401,13 +401,13 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     pyfdn_excitation: PyFDNExcitation | None = Field(
         default=None,
         description=(
-            "Input used by pyFDN: its impulse response by default, or the canonical "
-            "chirp when explicitly selected."
+            "Built-in pyFDN input used when input_audio_source is unset: its impulse "
+            "response by default, or the canonical chirp when explicitly selected."
         ),
     )
     input_audio_source: InputAudioSource | None = Field(
         default=None,
-        description="Pinned dataset split supplying per-sample pyFDN input audio.",
+        description="Pinned dataset split supplying deterministic per-sample pyFDN input audio.",
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
     channels: int = Field(description="Audio channel count.")
