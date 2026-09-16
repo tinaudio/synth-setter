@@ -46,7 +46,6 @@ from synth_setter.data.vst.shapes import (
     MATPAC_PLUS_FIELD,
     MEANAUDIO_16K_FIELD,
     NUM_SKETCH_CONTROLS,
-    PARAM_ARRAY_FIELD,
     PUPUJEPA_LARGE_FIELD,
     PUPUJEPA_TINY_FIELD,
     SAME_L_FIELD,
