@@ -48,7 +48,6 @@ from synth_setter.models.components.differentiable_renderer import (
     FlamoFDNDifferentiableRenderer,
     TorchSynthDifferentiableRenderer,
 )
-from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
 from synth_setter.models.components.pretrained_encoder import (
     ClapAudioEncoder,
@@ -60,8 +59,10 @@ from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
 from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
+    AudioSpectrogramTransformer,
     GroupedParameterProjection,
     LearntProjection,
+    TemporalPatchEmbed,
 )
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
@@ -800,8 +801,9 @@ def test_train_torchsynth_same_online_advances_one_cpu_step(
     assert isinstance(model.audio_loss, AudioFeedbackLoss)
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, SameAudioEncoder)
-    assert isinstance(encoder.head, EmbeddingPool)
-    assert encoder.head.n_conditioning_outputs == len(model.vector_field.layers) == 2
+    assert isinstance(encoder.head, AudioSpectrogramTransformer)
+    assert isinstance(encoder.head.patch_embed, TemporalPatchEmbed)
+    assert encoder.head.embed_tokens.shape[1] == len(model.vector_field.layers) == 2
     assert not encoder.backbone.autoencoder.training
     assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
     assert any(parameter.requires_grad for parameter in encoder.head.parameters())
@@ -852,9 +854,10 @@ def test_generic_launcher_runs_workflow_default_train_entrypoint(
             "model.encoder.out_dim=8",
             f"model.encoder.backbone.checkpoint={cfg.model.encoder.backbone.checkpoint}",
             "model.encoder.backbone.checkpoint_sha256=null",
-            "model.encoder.head.embed_dim=8",
-            "model.encoder.head.max_seq_len=8",
-            "model.encoder.head.num_heads=1",
+            "model.encoder.head.n_heads=1",
+            "model.encoder.head.n_layers=1",
+            "model.encoder.head.token_embed.input_dim=8",
+            "model.encoder.head.token_embed.num_tokens=8",
             "model.audio_loss.t_min=0.0",
             "model.audio_loss.distance.encoder.checkpoint="
             f"{cfg.model.audio_loss.distance.encoder.checkpoint}",

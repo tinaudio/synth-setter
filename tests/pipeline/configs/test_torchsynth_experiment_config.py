@@ -423,10 +423,10 @@ def test_ast_online_conditioning_predicts_from_online_audio() -> None:
         ),
     ],
 )
-def test_same_online_conditioning_composes_frozen_backbone_and_temporal_pool(
+def test_same_online_conditioning_composes_frozen_backbone_and_temporal_ast(
     profile: str, checkpoint: str, checkpoint_sha256: str
 ) -> None:
-    """Online SAME profiles pool frozen waveform latents into flow conditioning.
+    """Online SAME profiles preserve frozen waveform latents as AST patches.
 
     :param profile: SAME conditioning profile under test.
     :param checkpoint: Expected pretrained SAME checkpoint.
@@ -453,10 +453,14 @@ def test_same_online_conditioning_composes_frozen_backbone_and_temporal_pool(
     assert cfg.model.encoder.backbone.checkpoint_sha256 == checkpoint_sha256
     assert (
         cfg.model.encoder.head._target_
-        == "synth_setter.models.components.embed_pool.EmbeddingPool"
+        == "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
     )
-    assert cfg.model.encoder.head.embed_dim == 256
-    assert cfg.model.encoder.head.max_seq_len == 44
+    assert (
+        cfg.model.encoder.head.token_embed._target_
+        == "synth_setter.models.components.transformer.TemporalPatchEmbed"
+    )
+    assert cfg.model.encoder.head.token_embed.input_dim == 256
+    assert cfg.model.encoder.head.token_embed.num_tokens == 44
     assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
 
 
@@ -664,5 +668,9 @@ def test_same_audio_loss_experiment_conditions_on_online_same_s() -> None:
     assert cfg.model.encoder.backbone.checkpoint_sha256 == DEFAULT_SAME_S_CHECKPOINT_SHA256
     assert (
         cfg.model.encoder.head._target_
-        == "synth_setter.models.components.embed_pool.EmbeddingPool"
+        == "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
+    )
+    assert (
+        cfg.model.encoder.head.token_embed._target_
+        == "synth_setter.models.components.transformer.TemporalPatchEmbed"
     )

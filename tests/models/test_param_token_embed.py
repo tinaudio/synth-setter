@@ -10,6 +10,7 @@ from synth_setter.models.components.transformer import (
     GroupedParameterProjection,
     LearntProjection,
     ParamTokenEmbed,
+    TemporalPatchEmbed,
 )
 from synth_setter.param_spec_name import ParamSpecName
 
@@ -44,6 +45,26 @@ def test_param_token_embed_maps_flat_params_to_token_sequence() -> None:
     assert embed.num_tokens == 16
     assert tokens.shape == (3, 16, 32)
     assert torch.isfinite(tokens).all()
+
+
+def test_temporal_patch_embed_preserves_frame_order() -> None:
+    """Project each temporal feature vector without collapsing the sequence."""
+    embed = TemporalPatchEmbed(input_dim=2, d_model=2, num_tokens=3)
+    with torch.no_grad():
+        embed.projection.weight.copy_(torch.eye(2))
+        embed.projection.bias.zero_()
+
+    tokens = embed(torch.tensor([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]))
+
+    assert torch.equal(tokens, torch.tensor([[[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]]))
+
+
+def test_temporal_patch_embed_wrong_frame_count_raises_error() -> None:
+    """Reject a latent sequence that cannot match the AST position grid."""
+    embed = TemporalPatchEmbed(input_dim=2, d_model=4, num_tokens=3)
+
+    with pytest.raises(ValueError, match="expected temporal features shaped"):
+        embed(torch.randn(1, 2, 4))
 
 
 def test_param_token_embed_freezes_decoder_half_and_trains_encoder_half() -> None:
