@@ -30,9 +30,10 @@ from synth_setter.cli.eval import evaluate
 from synth_setter.workspace import operator_workspace
 from tests.helpers.wandb_offline import read_run_binary
 
+_ATTEMPT_ID = "0123456789abcdef0123456789abcdef"
 _CONFIG_ID = "test-mps-fake-oracle"
 _RUN_ID = "shared-generation-run"
-_UPLOAD_URI = "r2://eval-artifacts/eval-run-1"
+_UPLOAD_URI = "r2://eval-artifacts/oracle-suite"
 
 
 def _compose_offline_wandb_eval_cfg(
@@ -66,6 +67,7 @@ def _compose_offline_wandb_eval_cfg(
             ],
         )
     with open_dict(cfg):
+        cfg.eval_attempt_id = _ATTEMPT_ID
         cfg.paths.root_dir = str(operator_workspace())
         cfg.paths.output_dir = str(tmp_path)
         cfg.paths.log_dir = str(tmp_path)
@@ -163,7 +165,7 @@ def test_evaluate_preserves_wandb_id_and_logs_eval_results_artifact(
     )
 
     artifact_name = f"eval-{_CONFIG_ID}"
-    s3_ref = "s3://eval-artifacts/eval-run-1"
+    s3_ref = f"s3://eval-artifacts/oracle-suite/{_ATTEMPT_ID}"
     payload = read_run_binary(
         Path(binary_files[0]),
         until=lambda data: artifact_name.encode() in data and s3_ref.encode() in data,

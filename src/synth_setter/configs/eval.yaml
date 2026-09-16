@@ -8,7 +8,7 @@ defaults:
   - trainer: gpu
   - paths: default
   - extras: default
-  - hydra: default
+  - hydra: eval
   - callbacks: none
   # synth identity consumed by VST datamodules, models, and callbacks via
   # ${synth.param_spec_name}; VST experiments override it (e.g. `synth=surge_xt`)
@@ -24,6 +24,8 @@ defaults:
   - experiment: null
 
 task_name: "eval"
+# The CLI sets this once before Hydra composition; DDP children inherit it.
+eval_attempt_id: ${oc.env:SYNTH_SETTER_EVAL_ATTEMPT_ID,null}
 
 tags: ["dev"]
 # Integer IDs resolved through the runtime feature-flag registry.
@@ -41,7 +43,7 @@ evaluation:
   # so target audio comes from the dataset instead of a re-render.
   no_params: false
   num_workers: 1
-  # Opt-in: an `r2://bucket/prefix` mirror of the whole run dir, copied after eval.
+  # Optional suite root; the CLI appends this invocation's UUID before upload.
   upload_output_dir_uri: null
 
 # Local path or R2-backed r2:// / s3:// object URI.

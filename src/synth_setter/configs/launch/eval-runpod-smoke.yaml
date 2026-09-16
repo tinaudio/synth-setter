@@ -17,4 +17,3 @@ cmd: >-
   experiment=surge/ffn_simple
   "ckpt_path=\${wandb:tinaudio/synth-setter/model-ffn_simple:latest}"
   trainer.limit_test_batches=2
-  hydra.run.dir=/home/build/synth-setter/eval-run

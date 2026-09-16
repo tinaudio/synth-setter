@@ -157,7 +157,7 @@ def test_eval_workflow_dispatches_hydra_launcher_with_generic_command(
     assert '"synth-setter-eval "' in run
     assert '"experiment=$EXPERIMENT "' in run
     assert r"ckpt_path=\047\\\${wandb:$CHECKPOINT_REF}\047" in run
-    assert "hydra.run.dir=/home/build/synth-setter/eval-run" in run
+    assert "hydra.run.dir=/home/build/synth-setter/eval-run" not in run
     assert "src/synth_setter/configs/launch" not in run
 
 

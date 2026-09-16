@@ -20,4 +20,3 @@ cmd: >-
   "experiment=${EXPERIMENT:-surge/ffn_simple}"
   "ckpt_path=\${wandb:${CHECKPOINT_REF:-tinaudio/synth-setter/model-ffn_simple:latest}}"
   "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI:-r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/}"
-  hydra.run.dir=/home/build/synth-setter/eval-run
