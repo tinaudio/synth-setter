@@ -3,7 +3,6 @@
 import fcntl
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -11,8 +10,8 @@ import tempfile
 from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any
-from uuid import UUID, uuid4
+from typing import Any, cast
+from uuid import uuid4
 
 import hydra
 import pandas as pd
@@ -70,7 +69,6 @@ register_resolvers()
 
 log = RankedLogger(__name__, rank_zero_only=True)
 
-_EVAL_ATTEMPT_ID_ENV = "SYNTH_SETTER_EVAL_ATTEMPT_ID"
 _MAX_EVALUATION_SEED = 2**32 - 1
 _SUPPORTED_EVALUATION_MODES = frozenset(("predict", "test", "val", "validate"))
 
@@ -770,33 +768,16 @@ def _upload_output_dir_uri(cfg: DictConfig) -> str | None:
     return OmegaConf.select(cfg, "evaluation.upload_output_dir_uri")
 
 
-def _canonical_attempt_id(value: object) -> str:
-    """Validate one attempt ID before it enters local or remote paths.
-
-    :param value: Candidate UUID hex.
-    :returns: Lowercase 32-character UUID hex.
-    :raises ValueError: The value is not canonical UUID hex.
-    """
-    if isinstance(value, str):
-        try:
-            if UUID(value).hex == value:
-                return value
-        except ValueError:
-            pass
-    raise ValueError(f"eval_attempt_id must be canonical UUID hex; got {value!r}")
-
-
 def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> str | None:
     """Publish one invocation beneath its configured R2 suite root.
 
-    Each CLI invocation owns a unique local directory and remote UUID prefix.
-    Publication runs only after evaluation succeeds, so failed local work remains
-    available for debugging without entering a later retry's payload.
+    Each successful publication receives a unique remote UUID prefix. Publication
+    runs only after evaluation succeeds, so failed work cannot enter a retry's payload.
 
-    :param cfg: Reads the optional suite root, attempt ID, and local output directory.
+    :param cfg: Reads the optional suite root and local output directory.
     :param is_global_zero: Whether this is the sole rank allowed to publish.
     :returns: Exact immutable attempt URI, or ``None`` when publication is disabled.
-    :raises ValueError: The suite root or attempt identity is invalid.
+    :raises ValueError: The suite root is invalid.
     """
     if not is_global_zero:
         return None
@@ -807,8 +788,7 @@ def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> str | Non
         raise ValueError(
             f"evaluation.upload_output_dir_uri must be an r2:// URI; got {suite_root_uri!r}."
         )
-    attempt_id = _canonical_attempt_id(OmegaConf.select(cfg, "eval_attempt_id"))
-    attempt_uri = f"{suite_root_uri.rstrip('/')}/{attempt_id}"
+    attempt_uri = f"{suite_root_uri.rstrip('/')}/{uuid4().hex}"
     output_dir = Path(cfg.paths.output_dir)
     log.info(f"Uploading eval attempt {output_dir} to {attempt_uri}")
     r2_io.ensure_r2_env_loaded()
@@ -817,7 +797,7 @@ def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> str | Non
 
 
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="eval.yaml")
-def _hydra_main(cfg: DictConfig) -> None:
+def main(cfg: DictConfig) -> None:
     """Run the Hydra-composed evaluation entrypoint.
 
     :param cfg: DictConfig configuration composed by Hydra.
@@ -835,17 +815,7 @@ def _hydra_main(cfg: DictConfig) -> None:
     evaluate(cfg)
 
 
-def main() -> None:
-    """Run one evaluation invocation with an automatically generated identity."""
-    inherited_attempt_id = os.environ.get(_EVAL_ATTEMPT_ID_ENV)
-    attempt_id = uuid4().hex if inherited_attempt_id is None else inherited_attempt_id
-    os.environ[_EVAL_ATTEMPT_ID_ENV] = _canonical_attempt_id(attempt_id)
-    try:
-        _hydra_main()
-    finally:
-        if inherited_attempt_id is None:
-            os.environ.pop(_EVAL_ATTEMPT_ID_ENV, None)
-
-
 if __name__ == "__main__":
-    main()
+    # hydra.main types its wrapper as Any, so pyright sees the undecorated
+    # one-arg signature; the wrapper itself takes no positional args.
+    cast("Callable[[], None]", main)()

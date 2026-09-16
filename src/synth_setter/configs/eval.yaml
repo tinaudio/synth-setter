@@ -8,7 +8,7 @@ defaults:
   - trainer: gpu
   - paths: default
   - extras: default
-  - hydra: eval
+  - hydra: default
   - callbacks: none
   # synth identity consumed by VST datamodules, models, and callbacks via
   # ${synth.param_spec_name}; VST experiments override it (e.g. `synth=surge_xt`)
@@ -24,8 +24,6 @@ defaults:
   - experiment: null
 
 task_name: "eval"
-# The CLI sets this once before Hydra composition; DDP children inherit it.
-eval_attempt_id: ${oc.env:SYNTH_SETTER_EVAL_ATTEMPT_ID,null}
 
 tags: ["dev"]
 # Integer IDs resolved through the runtime feature-flag registry.

@@ -426,7 +426,7 @@ docs:
     description: Evaluation pipeline design — predict, render, metrics, R2 integration
     sources:
       - pattern: "src/synth_setter/cli/eval.py"
-        covers: "Evaluation entry point, attempt identity, checkpoint loading, and immutable publication"
+        covers: "Evaluation entry point, publication identity, checkpoint loading, and immutable publication"
       - pattern: "src/synth_setter/cli/migrate_checkpoint.py"
         covers: "synth-setter-migrate-checkpoint console script (strips legacy _orig_mod key parts; refuses overwrites, aborts on collisions/no-op) and checkpoint_migration_hint wrapping train/eval Trainer calls"
       - pattern: "src/synth_setter/evaluation/predict_vst_audio.py"
@@ -442,9 +442,7 @@ docs:
       - pattern: "renderscript.sh"
         covers: "Cross-platform rendering script, Xvfb auto-detection"
       - pattern: "src/synth_setter/configs/eval.yaml"
-        covers: "Evaluation config entry point, attempt identity, evaluation gates, and render composition"
-      - pattern: "src/synth_setter/configs/hydra/eval.yaml"
-        covers: "Default UUID-scoped local run directory"
+        covers: "Evaluation config entry point, publication gate, and render composition"
       - pattern: "src/synth_setter/utils/utils.py"
         covers: "`${wandb:...}` OmegaConf resolver `_resolve_wandb_checkpoint` — lazily downloads a `model-{config_id}` artifact to `$PROJECT_ROOT/.cache/checkpoints/` and returns the local ckpt path"
       - pattern: "jobs/predict/*.sh"

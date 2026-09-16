@@ -1,7 +1,0 @@
-# Eval invocations retain independent workspaces so a failed run remains debuggable.
-defaults:
-  - default
-  - _self_
-
-run:
-  dir: ${paths.log_dir}/${task_name}/${oc.select:experiment_name,runs}/${run_name}-${now:%Y-%m-%d}_${now:%H-%M-%S}/${eval_attempt_id}

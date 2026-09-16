@@ -460,24 +460,19 @@ The R2 eval path follows the [storage-provenance-spec](storage-provenance-spec.m
 eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
 ```
 
-Every `synth-setter-eval` invocation generates one UUID before Hydra composes the job.
-The default local output path ends in that UUID, so a failed run remains intact and a retry
-cannot reuse its predictions, audio, metrics, logs, or W&B state:
-
-```text
-logs/eval/<experiment>/<run-name>-<timestamp>/<attempt_id>/
-```
+Managed launchers leave `hydra.run.dir` unset, so local output uses Hydra's standard
+run-name and timestamp path rather than a shared fixed directory.
 
 When `evaluation.upload_output_dir_uri` is configured, it names a suite root rather than an
-attempt destination. A successful invocation appends its UUID and uploads the complete run
-directory with immutable checksum semantics:
+attempt destination. After evaluation succeeds, the publication step generates a UUID, appends
+it to the suite root, and uploads the complete run directory with immutable checksum semantics:
 
 ```text
 <upload_output_dir_uri>/<attempt_id>/
 ```
 
-Publication runs after metric serialization. Evaluation failures therefore remain local for
-debugging, while an interrupted upload can leave only an unreferenced UUID prefix. The W&B
+Publication runs after metric serialization. Evaluation failures are not published, while an
+interrupted upload can leave only an unreferenced UUID prefix. The W&B
 `eval-results` artifact is logged after upload and references the exact immutable attempt URI;
 there is no mutable suite-level `latest` pointer.
 
