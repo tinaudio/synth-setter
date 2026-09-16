@@ -17,6 +17,35 @@ from torch import nn
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
 _OPSET_VERSION = 18
+# Velocity-graph branch order: unconditional, sketch-only, content-only, full.
+_MODES: frozenset[str] = frozenset({"both", "mel_only", "sketch_only", "unconditional"})
+
+
+@jaxtyped(typechecker=beartype)
+def branch_weights(
+    mode: str, content_cfg_strength: float, sketch_cfg_strength: float
+) -> tuple[float, float, float, float]:
+    """Return velocity-branch weights implementing classifier-free guidance for ``mode``.
+
+    ``both`` reproduces the three-branch content/sketch guidance of training-time sampling;
+    the other modes drop the unused branch so its tokens never influence the sample.
+
+    :param mode: ``both``, ``mel_only``, ``sketch_only``, or ``unconditional``.
+    :param content_cfg_strength: Content guidance scale.
+    :param sketch_cfg_strength: Sketch guidance scale.
+    :returns: Weights over the unconditional, sketch-only, content-only, and full branches.
+    :raises ValueError: The mode is unknown.
+    """
+    if mode not in _MODES:
+        raise ValueError(f"unknown conditioning mode {mode!r}; expected one of {sorted(_MODES)}")
+    content, sketch = float(content_cfg_strength), float(sketch_cfg_strength)
+    if mode == "both":
+        return (1.0 - sketch, sketch - content, 0.0, content)
+    if mode == "mel_only":
+        return (1.0 - content, 0.0, content, 0.0)
+    if mode == "sketch_only":
+        return (1.0 - sketch, sketch, 0.0, 0.0)
+    return (1.0, 0.0, 0.0, 0.0)
 
 
 class FlowConditioning(nn.Module):
@@ -55,7 +84,7 @@ class FlowConditioning(nn.Module):
 
 
 class FlowVelocity(nn.Module):
-    """Keep guidance strengths and trajectory state as graph inputs."""
+    """Keep branch weights and trajectory state as graph inputs."""
 
     @jaxtyped(typechecker=beartype)
     def __init__(self, model: VSTFlowMatchingModule) -> None:
@@ -75,24 +104,28 @@ class FlowVelocity(nn.Module):
         conditioning: Float[torch.Tensor, "batch slots dim"],
         controls: Float[torch.Tensor, "batch tokens dim"],
         null_controls: Float[torch.Tensor, "batch tokens dim"],
-        guidance: Float[torch.Tensor, "2"],
+        branch_weights: Float[torch.Tensor, "4"],
     ) -> Float[torch.Tensor, "batch params"]:
-        """Evaluate independent content and sketch classifier-free guidance.
+        """Combine the four conditioning branches with host-supplied weights.
 
         :param x: Current model-space parameter state.
         :param t: Flow time in the closed unit interval.
         :param conditioning: Encoded content from the conditioning graph.
         :param controls: Conditional sketch tokens.
         :param null_controls: PE-only unconditional sketch tokens.
-        :param guidance: Content and sketch strengths, in that order.
+        :param branch_weights: Weights over the unconditional, sketch-only, content-only,
+            and full branches, from :func:`branch_weights`.
         :returns: Guided velocity at the supplied state and time.
         """
-        unconditional = self.field(x, t, None, control_tokens=null_controls)
-        sketch = self.field(x, t, None, control_tokens=controls)
-        full = self.field(x, t, conditioning, control_tokens=controls)
-        return (
-            unconditional + guidance[1] * (sketch - unconditional) + guidance[0] * (full - sketch)
+        branches = torch.stack(
+            (
+                self.field(x, t, None, control_tokens=null_controls),
+                self.field(x, t, None, control_tokens=controls),
+                self.field(x, t, conditioning, control_tokens=null_controls),
+                self.field(x, t, conditioning, control_tokens=controls),
+            )
         )
+        return torch.einsum("b,b...->...", branch_weights, branches)
 
 
 @jaxtyped(typechecker=beartype)
@@ -177,9 +210,9 @@ def _export_graphs(
                 "conditioning": encoded[0],
                 "controls": encoded[1],
                 "null_controls": encoded[2],
-                "guidance": inputs[0].new_ones(2),
+                "branch_weights": inputs[0].new_ones(4),
             },
-            input_names=["x", "t", "conditioning", "controls", "null_controls", "guidance"],
+            input_names=["x", "t", "conditioning", "controls", "null_controls", "branch_weights"],
             output_names=["velocity"],
             opset_version=_OPSET_VERSION,
             dynamo=True,

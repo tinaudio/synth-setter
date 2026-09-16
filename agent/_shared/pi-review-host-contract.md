@@ -16,8 +16,10 @@ review work in the host harness.
    agent/_shared/run_pi_review.sh <skill>
    ```
 
-   The launcher permits at most three local pre-PR
-   `repo-review-full-no-comments` requests per branch. If it refuses a later
+   For a local pre-PR `repo-review-full-no-comments` request, the launcher
+   requires `origin/<current-branch>` to exist at the current HEAD. Commit and
+   push before review; do not bypass the public-branch check. The launcher then
+   permits at most three pre-PR requests per branch. If it refuses a later
    request, open the PR and continue with `repo-review-full`; never bypass or
    reset the local attempt state.
 

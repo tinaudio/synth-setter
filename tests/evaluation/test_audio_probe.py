@@ -21,7 +21,10 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
+from synth_setter.data.pyfdn_param_spec import (
+    PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC,
+    pyfdn_param_spec_sha256,
+)
 from synth_setter.evaluation import audio_probe
 from synth_setter.evaluation.audio_probe import _render_argv, _staged_sample_count, run_audio_probe
 from synth_setter.param_spec_name import ParamSpecName
@@ -35,6 +38,7 @@ _PYFDN_SETTINGS = RenderConfig(
         plugin_path="pyfdn",
         plugin_state_path="",
         synth_version="0.4.2",
+        source_sha256=pyfdn_param_spec_sha256(PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC),
     ),
     renderer_backend="pyfdn",
     pyfdn_excitation="impulse",

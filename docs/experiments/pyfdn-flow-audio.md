@@ -24,9 +24,9 @@ in PyTorch, not replaced with a fixed Householder matrix. Ordinary clipping uses
 an affine straight-through gradient so out-of-range flow predictions are not
 stranded at physical bounds; forward values still match offline decoding exactly.
 
-`BasicFDNParamSpec.to_basic_fdn()` converts a native template into a
-`BasicFDN(build: pyFDN.FDNBuild)` describing the **entire** effect. Offline
-rendering uses `BasicFDN.impulse_response()`; `BasicFDN.to_flamo()` delegates graph
+`FlamoFDNParamSpec.to_flamo_fdn()` converts a native template into a
+`FlamoFDN(build: pyFDN.FDNBuild)` describing the **entire** effect. Offline
+rendering uses `FlamoFDN.impulse_response()`; `FlamoFDN.to_flamo()` delegates graph
 construction directly to upstream `dss_to_flamo`, without topology reconstruction.
 Its NumPy boundary is used only during construction. Each forward pass binds the decoded tensors
 through FLAMO's external-parameter API; no predicted value crosses NumPy or becomes
@@ -36,12 +36,12 @@ stacking. The renderer is not a concurrent/shared-service interface.
 
 `PyFDNParameterDecoder.decode_build_fields()` converts the model-specific controls
 to tensor counterparts of the varying build fields, including pyFDN's
-first-order decay shelf. This encoding/binding layer is separate from `BasicFDN`.
+first-order decay shelf. This encoding/binding layer is separate from `FlamoFDN`.
 
 ## Build geometry and registered model encodings
 
 `FlamoFDNDifferentiableRenderer(fdn=..., decoder=..., parameter_width=...)`
-accepts a complete `BasicFDN` and a separate tensor-field decoder. Input/output
+accepts a complete `FlamoFDN` and a separate tensor-field decoder. Input/output
 counts and sample rate come from the build, not a mono assumption. Each input
 impulse is rendered separately; output shape is
 `(batch, outputs * inputs, samples)`, ordered by
@@ -70,13 +70,11 @@ Select the corresponding `synth=` configuration and a dataset generated with tha
 same identity. The renderer accepts that spec's width rather than assuming the
 fixed-Householder encoding.
 
-All other registered pyFDN effects are rejected at renderer construction, even
-though the tensor decoder can decode their native controls. Götz adds input tone
-correction and a delayed direct path outside its current build; pitch shifting is
-time-varying; DiffVox is a composite stereo effects chain. Possessing an FDN core
-does not make these complete `BasicFDN` effects, and no fallback graph is supplied.
-Integer delays and Kronecker reflection choices have zero gradients. Continuous
-gains, feedback coordinates, and filter controls retain gradients.
+Götz, pitch-shift, and DiffVox identities are not registered because their complete
+effects cannot be represented by `FlamoFDN`. Götz adds input tone correction and a
+delayed direct path, pitch shifting is time-varying, and DiffVox is a composite stereo
+effects chain. Integer delays and Kronecker reflection choices have zero gradients.
+Continuous gains, feedback coordinates, and filter controls retain gradients.
 
 ## Channel-aware consumers
 

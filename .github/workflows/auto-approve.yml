@@ -198,11 +198,29 @@ jobs:
           OWNER="${{ github.repository_owner }}"
           REPO_NAME=$(echo "$REPO" | cut -d/ -f2)
 
-          COPILOT_REVIEWS=$(gh api "repos/${REPO}/pulls/${PR}/reviews" \
-            --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]")] | length')
+          COPILOT_REVIEW_DATA=$(gh api "repos/${REPO}/pulls/${PR}/reviews")
+          read -r COPILOT_REVIEWS COPILOT_QUOTA_DENIALS < <(
+            echo "$COPILOT_REVIEW_DATA" | jq -r --arg head "$HEAD_SHA" '
+              def quota_denial:
+                ((.body // "") | ascii_downcase) as $body
+                | ($body | contains("unable to review this pull request"))
+                  and (($body | contains("quota"))
+                       or ($body | contains("premium request")));
+              [.[]
+                | select(.user.login == "copilot-pull-request-reviewer[bot]")
+                | select(.commit_id == $head)] as $current
+              | [($current | map(select(quota_denial | not)) | length),
+                 ($current | map(select(quota_denial)) | length)]
+              | @tsv
+            '
+          )
           if [ "$COPILOT_REVIEWS" -eq 0 ]; then
             echo "result=neutral" >> "$GITHUB_OUTPUT"
-            echo "reason=Copilot has not reviewed yet" >> "$GITHUB_OUTPUT"
+            if [ "$COPILOT_QUOTA_DENIALS" -gt 0 ]; then
+              echo "reason=Copilot review unavailable: quota limit reached" >> "$GITHUB_OUTPUT"
+            else
+              echo "reason=Copilot has not reviewed current head yet" >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
 

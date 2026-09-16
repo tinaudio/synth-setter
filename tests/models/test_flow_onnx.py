@@ -13,7 +13,7 @@ from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     LearntProjection,
 )
-from synth_setter.models.flow_onnx import export_flow_onnx
+from synth_setter.models.flow_onnx import branch_weights, export_flow_onnx
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
 
@@ -88,7 +88,7 @@ def test_exported_velocity_same_inputs_matches_production(
             "conditioning": encoded[0],
             "controls": encoded[1],
             "null_controls": encoded[2],
-            "guidance": np.array(strengths, dtype=np.float32),
+            "branch_weights": np.array(branch_weights("both", *strengths), dtype=np.float32),
         },
     )[0]
     with torch.no_grad():
@@ -345,3 +345,89 @@ def test_browser_export_missing_runtime_rejected_before_writing(
             output_dir=tmp_path / "bundle",
         )
     assert not (tmp_path / "bundle").exists()
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("both", (-2.0, 1.0, 0.0, 2.0)),
+        ("mel_only", (-1.0, 0.0, 2.0, 0.0)),
+        ("sketch_only", (-2.0, 3.0, 0.0, 0.0)),
+        ("unconditional", (1.0, 0.0, 0.0, 0.0)),
+    ],
+)
+def test_branch_weights_mode_selects_branches_and_sums_to_one(
+    mode: str, expected: tuple[float, float, float, float]
+) -> None:
+    """Every mode is a convex-style combination over the four velocity branches.
+
+    :param mode: Conditioning mode selected in the browser.
+    :param expected: Weights over unconditional, sketch-only, content-only, and full branches.
+    """
+    assert branch_weights(mode, 2.0, 3.0) == expected
+
+
+@pytest.mark.parametrize("mode", ["", "content", "MEL_ONLY"])
+def test_branch_weights_unknown_mode_rejected(mode: str) -> None:
+    """Unknown modes fail loudly rather than silently sampling unconditionally.
+
+    :param mode: Unsupported conditioning mode.
+    """
+    with pytest.raises(ValueError, match="mode"):
+        branch_weights(mode, 2.0, 3.0)
+
+
+def test_exported_velocity_mel_only_weights_ignore_sketch_tokens(
+    tmp_path: Path, flow_model: VSTFlowMatchingModule
+) -> None:
+    """Mel-only weights evaluate content against PE-only controls, so sketch content is inert.
+
+    :param tmp_path: Export directory.
+    :param flow_model: Small production architecture with nonzero sketch projections.
+    """
+    assert flow_model.sketch_tokens is not None
+    controls = flow_model.sketch_tokens.layout.num_controls
+    batch = {"mel": torch.randn(1, 2, 8, 8), "sketch_ctrl": torch.rand(1, controls, 4)}
+    export_flow_onnx(flow_model, batch, tmp_path)
+    encoder = ort.InferenceSession(str(tmp_path / "conditioning.onnx"))
+    field = ort.InferenceSession(str(tmp_path / "velocity.onnx"))
+    x, t = torch.randn(1, 92), torch.tensor([[0.3]])
+
+    def guided(sketch_ctrl: torch.Tensor) -> np.ndarray:
+        """Run the exported graphs for one sketch input under mel-only weights.
+
+        :param sketch_ctrl: Sketch controls fed to the conditioning graph.
+        :returns: Guided velocity row.
+        """
+        encoded = encoder.run(
+            None, {"mel": batch["mel"].numpy(), "sketch_ctrl": sketch_ctrl.numpy()}
+        )
+        (velocity,) = field.run(
+            None,
+            {
+                "x": x.numpy(),
+                "t": t.numpy(),
+                "conditioning": encoded[0],
+                "controls": encoded[1],
+                "null_controls": encoded[2],
+                "branch_weights": np.array(branch_weights("mel_only", 2.0, 3.0), dtype=np.float32),
+            },
+        )
+        assert isinstance(velocity, np.ndarray)
+        return velocity
+
+    with torch.no_grad():
+        expected = flow_model._velocity_field(
+            flow_model.encoder(batch["mel"]),
+            2.0,
+            flow_model._control_token_branches_from_batch(
+                {"sketch_ctrl": torch.zeros_like(batch["sketch_ctrl"])}
+            ),
+            sketch_cfg_strength=0.0,
+        )(x, t)
+    np.testing.assert_allclose(
+        guided(batch["sketch_ctrl"]), guided(torch.rand(1, controls, 4)), rtol=1e-6, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        guided(batch["sketch_ctrl"]), expected.numpy(), rtol=2e-5, atol=2e-5
+    )

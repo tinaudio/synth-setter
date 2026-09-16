@@ -18,7 +18,7 @@ URI; embedding augmentation takes one split `.lance` URI. The root layout comes 
 [`r2` config](../../src/synth_setter/configs/r2/default.yaml) and the selected
 [dataset experiment](../../src/synth_setter/configs/experiment/generate_dataset/).
 
-## Export a BasicFDN build to Faust
+## Export a FlamoFDN build to Faust
 
 Convert a pyFDN v2 build JSON into a fixed-value Faust program:
 
@@ -29,10 +29,32 @@ synth-setter-export-fdn-faust "$FDN_BUILD_JSON" "$FAUST_DSP"
 ```
 
 The command preserves the build's sample rate and MIMO topology while converting
-`BasicFDN` through FLAMO and ADAC. It exposes no runtime controls and compiles the generated
+`FlamoFDN` through FLAMO and ADAC. It exposes no runtime controls and compiles the generated
 source directly with DawDreamer before atomically publishing the destination. The output path
 must not already exist. This standalone artifact export does not register the DSP as a synth or
 route it through the registry-backed Faust renderer.
+
+## Export a pyFDN sketch checkpoint as a browser bundle
+
+Publish the three ONNX graphs a browser needs to run a `pyfdn/flow_sketch` checkpoint without
+Python: a librosa-parity mel front end (`frontend.onnx`, waveform `(1, 176400)` to normalized mel
+`(1, 1, 128, 401)`), the conditioning encoder, and the four-branch velocity field.
+
+```bash
+synth-setter-export-browser-fdn-bundle \
+  --checkpoint "$CHECKPOINT" --checkpoint-sha256 "$CHECKPOINT_SHA" \
+  --stats "$STATS" --stats-sha256 "$STATS_SHA" \
+  --output build/fdn-sketch-bundle
+```
+
+Checkpoint and statistics accept local paths or R2 URIs and are digest-verified before the
+checkpoint is deserialized. The destination must not exist and is published atomically with a
+`manifest.json` recording the parameter spec, sketch contract, sampling defaults, per-file
+digests, and the producing revision. The velocity graph takes `branch_weights` over the
+unconditional, sketch-only, content-only, and full branches; `branch_weights(mode, content, sketch)`
+in `synth_setter.models.flow_onnx` (mirrored by `guidance.mjs`) maps a conditioning mode and two
+CFG strengths onto them. The sketch input is the `pyfdn_reverb` profile: `(1, 10, 32)` controls
+from `extract_reverb_sketch`.
 
 ## Generate a dataset
 
@@ -143,6 +165,24 @@ Use a compatible experiment for the dataset and its columns; for example,
 [`train.yaml`](../../src/synth_setter/configs/train.yaml), the
 [training experiments](../../src/synth_setter/configs/experiment/), and the selected
 [datamodule config](../../src/synth_setter/configs/datamodule/).
+
+To compute CQT conditioning from each waveform instead of hydrating a stored
+`cqt` column:
+
+```bash
+DATASET_ROOT_URI='r2://BUCKET/data/TASK_NAME/RUN_ID/'
+synth-setter-train \
+  experiment=surge/flow_simple \
+  conditioning=cqt_online \
+  "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI}"
+```
+
+The online profile uses the same channel-mean, float32 `log1p`-magnitude policy
+and 256-by-401 geometry as cached CQT for canonical four-second, 44.1 kHz audio.
+It processes at most 32 rows per CQT call; override
+`model.encoder.backbone.max_batch_size` to trade throughput for peak device
+memory. Model compilation is disabled for this profile pending support for
+compiled frozen waveform encoders.
 
 To derive tonal interval vectors from each waveform during training instead of
 reading a stored sketch column:

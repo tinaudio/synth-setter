@@ -72,6 +72,7 @@ def _midpoint_patch(identity: str) -> dict[str, float]:
         ("faust_bubble", 2),
         ("faust_church_organ", 2),
         ("faust_filter_osc", 1),
+        ("faust_kronecker_fdn", 1),
     ],
 )
 def test_faustcpp_factory_renders_real_checked_in_source(
@@ -91,6 +92,10 @@ def test_faustcpp_factory_renders_real_checked_in_source(
     if identity == "faust_church_organ":
         patch["/churchOrgan/gate"] = 1.0
         patch["/churchOrgan/gain"] = 0.2
+    if identity == "faust_kronecker_fdn":
+        for line in range(8):
+            patch[f"/kroneckerFDN/Input/b{line}"] = 0.5
+            patch[f"/kroneckerFDN/Output/c{line}"] = 0.125
     audio = renderer.render(patch, 60, 100, (0.05, 0.3))
 
     assert isinstance(renderer, FaustCppRenderer)

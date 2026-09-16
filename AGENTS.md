@@ -38,7 +38,7 @@ Architecture: [docs/architecture.md](docs/architecture.md).
   `tinaudio/synth-setter`; existing upstream issues may be referenced only
   after verifying that they already exist.
 - **Pi provider policy:** project-local Pi sessions and Pi subagents use
-  `openai-codex` or the pinned Meta Muse-Spark-1.3 secondary-review model
+  `openai-codex` or the pinned OpenRouter Muse-Spark-1.3 secondary-review model
   only. Agent `model` arguments use a fully qualified
   `provider/model-id` selector; default to `openai-codex/gpt-5.6-sol`, never
   the provider-only `openai-codex`. Do not select Anthropic models or launch
@@ -210,10 +210,11 @@ unintended shell expansion. A `PreToolUse` hook
 - **PR titles stand alone.** Name the specific subject, not just the action:
   reviewers and `git log` readers don't open the issue. `/github-taxonomy`
   has the canonical title rule and examples.
-- **Pre-PR review is temporarily advisory.** Run
-  `/repo-review-full-no-comments` before `gh pr create` when the review
-  automation is healthy, and address every BLOCK/WARN (NIT findings are
-  advisory and gate nothing). The local
+- **Pre-PR review is temporarily advisory.** Commit and push the branch's
+  current HEAD to `origin`, then run `/repo-review-full-no-comments` before
+  `gh pr create` when the review automation is healthy. The review launcher
+  refuses unpublished or stale public branch tips. Address every BLOCK/WARN
+  (NIT findings are advisory and gate nothing). The local
   `pre-pr-review-gate.sh` implementation and tests remain available for repair,
   but its `PreToolUse` registration is suspended while [#2020](https://github.com/tinaudio/synth-setter/issues/2020)
   is unresolved. Server-side tests, metadata checks, branch protection, and

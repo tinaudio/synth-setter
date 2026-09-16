@@ -1,0 +1,5 @@
+defaults:
+  - faust
+  - _self_
+
+channels: 1

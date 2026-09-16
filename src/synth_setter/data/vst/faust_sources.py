@@ -186,6 +186,171 @@ import("stdfaust.lib");
 process = dm.oscrs_demo;
 """
 
+_KRONECKER_FDN_SOURCE = r'''import("stdfaust.lib");
+declare name "kroneckerFDN";
+
+t60_dc = hslider("Decay/t60_dc [unit:s]", 1.5, 0.1, 4.0, 0.01);
+t60_nyquist = hslider("Decay/t60_nyquist [unit:s]", 1.5, 0.1, 4.0, 0.01);
+
+// Shelf crossover mirrors the 6 kHz pyFDN build target.
+sh_fc = min(6000, ma.SR / 5);
+sh_t = tan(sh_fc / ma.SR * 2 * ma.PI);
+
+d0 = hslider("Delays/d0 [unit:samp]", 601, 400, 1200, 1);
+d1 = hslider("Delays/d1 [unit:samp]", 773, 400, 1200, 1);
+d2 = hslider("Delays/d2 [unit:samp]", 839, 400, 1200, 1);
+d3 = hslider("Delays/d3 [unit:samp]", 911, 400, 1200, 1);
+d4 = hslider("Delays/d4 [unit:samp]", 997, 400, 1200, 1);
+d5 = hslider("Delays/d5 [unit:samp]", 1063, 400, 1200, 1);
+d6 = hslider("Delays/d6 [unit:samp]", 1129, 400, 1200, 1);
+d7 = hslider("Delays/d7 [unit:samp]", 1181, 400, 1200, 1);
+
+b0 = hslider("Input/b0", 0.5, -1, 1, 0.001);
+b1 = hslider("Input/b1", 0.5, -1, 1, 0.001);
+b2 = hslider("Input/b2", 0.5, -1, 1, 0.001);
+b3 = hslider("Input/b3", 0.5, -1, 1, 0.001);
+b4 = hslider("Input/b4", 0.5, -1, 1, 0.001);
+b5 = hslider("Input/b5", 0.5, -1, 1, 0.001);
+b6 = hslider("Input/b6", 0.5, -1, 1, 0.001);
+b7 = hslider("Input/b7", 0.5, -1, 1, 0.001);
+
+c0 = hslider("Output/c0", 0.125, -1, 1, 0.001);
+c1 = hslider("Output/c1", 0.125, -1, 1, 0.001);
+c2 = hslider("Output/c2", 0.125, -1, 1, 0.001);
+c3 = hslider("Output/c3", 0.125, -1, 1, 0.001);
+c4 = hslider("Output/c4", 0.125, -1, 1, 0.001);
+c5 = hslider("Output/c5", 0.125, -1, 1, 0.001);
+c6 = hslider("Output/c6", 0.125, -1, 1, 0.001);
+c7 = hslider("Output/c7", 0.125, -1, 1, 0.001);
+dry = hslider("Output/dry", 0, -1, 1, 0.001);
+
+a0 = hslider("Kernel/a0 [unit:rad]", 0.7853982, -3.14159, 3.14159, 0.001);
+a1 = hslider("Kernel/a1 [unit:rad]", 0.7853982, -3.14159, 3.14159, 0.001);
+a2 = hslider("Kernel/a2 [unit:rad]", 0.7853982, -3.14159, 3.14159, 0.001);
+r0 = checkbox("Kernel/r0");
+r1 = checkbox("Kernel/r1");
+r2 = checkbox("Kernel/r2");
+
+cA0 = cos(a0); sA0 = sin(a0);
+cA1 = cos(a1); sA1 = sin(a1);
+cA2 = cos(a2); sA2 = sin(a2);
+k0x(x1, x2) = (1 - r0) * (cA0 * x1 - sA0 * x2) + r0 * (cA0 * x1 + sA0 * x2);
+k0y(x1, x2) = (1 - r0) * (sA0 * x1 + cA0 * x2) + r0 * (sA0 * x1 - cA0 * x2);
+k1x(x1, x2) = (1 - r1) * (cA1 * x1 - sA1 * x2) + r1 * (cA1 * x1 + sA1 * x2);
+k1y(x1, x2) = (1 - r1) * (sA1 * x1 + cA1 * x2) + r1 * (sA1 * x1 - cA1 * x2);
+k2x(x1, x2) = (1 - r2) * (cA2 * x1 - sA2 * x2) + r2 * (cA2 * x1 + sA2 * x2);
+k2y(x1, x2) = (1 - r2) * (sA2 * x1 + cA2 * x2) + r2 * (sA2 * x1 - cA2 * x2);
+
+// Per-line first-order shelf: same endpoint math as the pyFDN build.
+gdc0 = pow(0.001, d0 / (t60_dc * ma.SR));
+gny0 = pow(0.001, d0 / (t60_nyquist * ma.SR));
+shsq0 = sqrt(gdc0 / gny0);
+shn0 = sh_t / shsq0 + 1;
+shb0_0 = (sh_t * shsq0 + 1) * gny0 / shn0;
+shb1_0 = (sh_t * shsq0 - 1) * gny0 / shn0;
+sha1_0 = (sh_t / shsq0 - 1) / shn0;
+gdc1 = pow(0.001, d1 / (t60_dc * ma.SR));
+gny1 = pow(0.001, d1 / (t60_nyquist * ma.SR));
+shsq1 = sqrt(gdc1 / gny1);
+shn1 = sh_t / shsq1 + 1;
+shb0_1 = (sh_t * shsq1 + 1) * gny1 / shn1;
+shb1_1 = (sh_t * shsq1 - 1) * gny1 / shn1;
+sha1_1 = (sh_t / shsq1 - 1) / shn1;
+gdc2 = pow(0.001, d2 / (t60_dc * ma.SR));
+gny2 = pow(0.001, d2 / (t60_nyquist * ma.SR));
+shsq2 = sqrt(gdc2 / gny2);
+shn2 = sh_t / shsq2 + 1;
+shb0_2 = (sh_t * shsq2 + 1) * gny2 / shn2;
+shb1_2 = (sh_t * shsq2 - 1) * gny2 / shn2;
+sha1_2 = (sh_t / shsq2 - 1) / shn2;
+gdc3 = pow(0.001, d3 / (t60_dc * ma.SR));
+gny3 = pow(0.001, d3 / (t60_nyquist * ma.SR));
+shsq3 = sqrt(gdc3 / gny3);
+shn3 = sh_t / shsq3 + 1;
+shb0_3 = (sh_t * shsq3 + 1) * gny3 / shn3;
+shb1_3 = (sh_t * shsq3 - 1) * gny3 / shn3;
+sha1_3 = (sh_t / shsq3 - 1) / shn3;
+gdc4 = pow(0.001, d4 / (t60_dc * ma.SR));
+gny4 = pow(0.001, d4 / (t60_nyquist * ma.SR));
+shsq4 = sqrt(gdc4 / gny4);
+shn4 = sh_t / shsq4 + 1;
+shb0_4 = (sh_t * shsq4 + 1) * gny4 / shn4;
+shb1_4 = (sh_t * shsq4 - 1) * gny4 / shn4;
+sha1_4 = (sh_t / shsq4 - 1) / shn4;
+gdc5 = pow(0.001, d5 / (t60_dc * ma.SR));
+gny5 = pow(0.001, d5 / (t60_nyquist * ma.SR));
+shsq5 = sqrt(gdc5 / gny5);
+shn5 = sh_t / shsq5 + 1;
+shb0_5 = (sh_t * shsq5 + 1) * gny5 / shn5;
+shb1_5 = (sh_t * shsq5 - 1) * gny5 / shn5;
+sha1_5 = (sh_t / shsq5 - 1) / shn5;
+gdc6 = pow(0.001, d6 / (t60_dc * ma.SR));
+gny6 = pow(0.001, d6 / (t60_nyquist * ma.SR));
+shsq6 = sqrt(gdc6 / gny6);
+shn6 = sh_t / shsq6 + 1;
+shb0_6 = (sh_t * shsq6 + 1) * gny6 / shn6;
+shb1_6 = (sh_t * shsq6 - 1) * gny6 / shn6;
+sha1_6 = (sh_t / shsq6 - 1) / shn6;
+gdc7 = pow(0.001, d7 / (t60_dc * ma.SR));
+gny7 = pow(0.001, d7 / (t60_nyquist * ma.SR));
+shsq7 = sqrt(gdc7 / gny7);
+shn7 = sh_t / shsq7 + 1;
+shb0_7 = (sh_t * shsq7 + 1) * gny7 / shn7;
+shb1_7 = (sh_t * shsq7 - 1) * gny7 / shn7;
+sha1_7 = (sh_t / shsq7 - 1) / shn7;
+
+// Feedback ports lead: Faust connects `~` outputs to the first inputs.
+// Input and delay lines are offset by one sample each way so the
+// implicit `~` sample lands exactly on the pyFDN recirculation grid.
+F(f0, f1, f2, f3, f4, f5, f6, f7, x) = z0, z1, z2, z3, z4, z5, z6, z7 with {
+  u0 = b0 * x' + f0;
+  s0 = de.delay(2048, int(d0) - 1, u0);
+  z0 = s0 : fi.tf1(shb0_0, shb1_0, sha1_0);
+  u1 = b1 * x' + f1;
+  s1 = de.delay(2048, int(d1) - 1, u1);
+  z1 = s1 : fi.tf1(shb0_1, shb1_1, sha1_1);
+  u2 = b2 * x' + f2;
+  s2 = de.delay(2048, int(d2) - 1, u2);
+  z2 = s2 : fi.tf1(shb0_2, shb1_2, sha1_2);
+  u3 = b3 * x' + f3;
+  s3 = de.delay(2048, int(d3) - 1, u3);
+  z3 = s3 : fi.tf1(shb0_3, shb1_3, sha1_3);
+  u4 = b4 * x' + f4;
+  s4 = de.delay(2048, int(d4) - 1, u4);
+  z4 = s4 : fi.tf1(shb0_4, shb1_4, sha1_4);
+  u5 = b5 * x' + f5;
+  s5 = de.delay(2048, int(d5) - 1, u5);
+  z5 = s5 : fi.tf1(shb0_5, shb1_5, sha1_5);
+  u6 = b6 * x' + f6;
+  s6 = de.delay(2048, int(d6) - 1, u6);
+  z6 = s6 : fi.tf1(shb0_6, shb1_6, sha1_6);
+  u7 = b7 * x' + f7;
+  s7 = de.delay(2048, int(d7) - 1, u7);
+  z7 = s7 : fi.tf1(shb0_7, shb1_7, sha1_7);
+};
+
+B(z0, z1, z2, z3, z4, z5, z6, z7) = w0, w1, w2, w3, w4, w5, w6, w7 with {
+  m0 = k0x(z0, z1); m1 = k0y(z0, z1);
+  m2 = k0x(z2, z3); m3 = k0y(z2, z3);
+  m4 = k0x(z4, z5); m5 = k0y(z4, z5);
+  m6 = k0x(z6, z7); m7 = k0y(z6, z7);
+  n0 = k1x(m0, m2); n2 = k1y(m0, m2);
+  n1 = k1x(m1, m3); n3 = k1y(m1, m3);
+  n4 = k1x(m4, m6); n6 = k1y(m4, m6);
+  n5 = k1x(m5, m7); n7 = k1y(m5, m7);
+  w0 = k2x(n0, n4); w4 = k2y(n0, n4);
+  w1 = k2x(n1, n5); w5 = k2y(n1, n5);
+  w2 = k2x(n2, n6); w6 = k2y(n2, n6);
+  w3 = k2x(n3, n7); w7 = k2y(n3, n7);
+};
+
+// `~` contributes one implicit sample of delay on the feedback path.
+loop = F ~ B;
+pg = _ * c0, _ * c1, _ * c2, _ * c3, _ * c4, _ * c5, _ * c6, _ * c7;
+fdn = _ <: ((_ * dry), (loop : (pg :> _))) :> _;
+process = 1 - 1' : fdn;
+'''
+
 _BUBBLE_SOURCE = r"""declare name "bubble";
 declare description "Production of a water drop bubble sound.";
 declare license "MIT";
@@ -210,6 +375,9 @@ _faust_dsps: dict[ParamSpecName, FaustDsp] = {
     ParamSpecName("faust_bubble"): FaustDsp(_BUBBLE_SOURCE, num_voices=0, outputs=2),
     ParamSpecName("faust_church_organ"): FaustDsp(_CHURCH_ORGAN_SOURCE, num_voices=0, outputs=2),
     ParamSpecName("faust_filter_osc"): FaustDsp(_FILTER_OSC_SOURCE, num_voices=0, outputs=1),
+    ParamSpecName("faust_kronecker_fdn"): FaustDsp(
+        _KRONECKER_FDN_SOURCE, num_voices=0, outputs=1
+    ),
     ParamSpecName("faust_shimmer_fdn"): FaustDsp(SHIMMER_FDN_SOURCE, num_voices=0, outputs=2),
 }
 faust_dsps = cast(Mapping[str, FaustDsp], MappingProxyType(_faust_dsps))

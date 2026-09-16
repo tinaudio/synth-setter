@@ -38,6 +38,32 @@ permissions:
   contents: read
 
 jobs:
+  effect-input-train-e2e:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Python 3.12.13
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.2.0
+        with:
+          python-version: "3.12.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Install CPU test dependencies
+        run: uv sync --frozen --extra cpu --no-default-groups --group dev
+
+      - name: Run pyFDN dataset-input E2E
+        run: uv run pytest tests/integration/test_pyfdn_dataset_input_e2e.py -v
+
   run_slow_tests:
     # Skip fork-PR runs: forks can't see `secrets.RCLONE_CONFIG_R2_*` and the
     # 90-min suite would burn a runner with `integration_r2` skipping

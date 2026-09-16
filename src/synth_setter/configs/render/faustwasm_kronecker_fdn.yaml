@@ -1,0 +1,5 @@
+defaults:
+  - faustwasm
+  - _self_
+
+channels: 1

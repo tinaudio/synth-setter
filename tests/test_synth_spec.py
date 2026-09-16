@@ -192,8 +192,8 @@ class TestSynthSpecValidation:
         with pytest.raises(ValidationError, match="param_spec_name"):
             SynthSpec.model_validate(values)
 
-    def test_non_faust_format_rejects_source_digest(self) -> None:
-        """A VST identity cannot carry checked-in Faust source provenance."""
+    def test_vst_format_rejects_source_digest(self) -> None:
+        """A VST identity cannot carry checked-in source provenance."""
         values = SYNTHS[SynthName("surge_xt")].model_dump()
         values["source_sha256"] = "0" * 64
 
@@ -203,6 +203,22 @@ class TestSynthSpecValidation:
     def test_faust_format_rejects_unregistered_source_digest(self) -> None:
         """A Faust identity pins the digest registered for its checked-in source."""
         values = SYNTHS[SynthName("faust_bright_organ")].model_dump()
+        values["source_sha256"] = "0" * 64
+
+        with pytest.raises(ValidationError, match="registered source_sha256"):
+            SynthSpec.model_validate(values)
+
+    def test_pyfdn_format_requires_source_digest(self) -> None:
+        """A pyFDN identity requires its canonical parameter-spec JSON digest."""
+        values = SYNTHS[SynthName("pyfdn_n8_mono_householder")].model_dump()
+        values["source_sha256"] = None
+
+        with pytest.raises(ValidationError, match="registered source_sha256"):
+            SynthSpec.model_validate(values)
+
+    def test_pyfdn_format_rejects_unregistered_source_digest(self) -> None:
+        """A pyFDN identity pins the digest registered for its parameter specification."""
+        values = SYNTHS[SynthName("pyfdn_n8_mono_householder")].model_dump()
         values["source_sha256"] = "0" * 64
 
         with pytest.raises(ValidationError, match="registered source_sha256"):

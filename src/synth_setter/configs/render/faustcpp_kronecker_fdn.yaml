@@ -1,0 +1,5 @@
+defaults:
+  - faustcpp
+  - _self_
+
+channels: 1

@@ -65,11 +65,11 @@
   "rt_nyquist_seconds": 4.0
  },
  "metrics": {
-  "c50_mae_db": 2.290764436548783,
-  "mss": 9.480482287152808,
-  "octave_edc_rmse_db": 8.378234214109733,
-  "octave_rt60_log_rmse": 0.37147980135451325,
-  "t30_mape": 44.238279097614324
+  "c50_mae_db": 2.290764436549,
+  "mss": 9.480482287153,
+  "octave_edc_rmse_db": 8.37823421411,
+  "octave_rt60_log_rmse": 0.371479801355,
+  "t30_mape": 44.238279097614
  },
  "pred": {
   "recipe": {

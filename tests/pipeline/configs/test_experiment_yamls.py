@@ -12,6 +12,10 @@ train-side configs (such as the nested ``surge/`` and ``torchsynth/``
 subdirectories) that compose ``train.yaml``, not
 ``dataset.yaml``, and would not validate as ``DatasetSpec``. Add a new entry here when
 landing a new datagen experiment under ``configs/experiment/generate_dataset/``.
+
+Mandatory-field templates (such as ``vst-lance-2m-40k-10k``, which leaves ``synth``,
+``render``, and ``task_name`` as ``???``) are deliberately excluded: they do not compose
+standalone, so an allowlist entry would raise. Pin their contract in a dedicated test.
 """
 
 from __future__ import annotations
@@ -20,6 +24,9 @@ from pathlib import Path
 
 import pytest
 from hydra import compose, initialize_config_module
+from hydra.errors import ConfigCompositionException
+from omegaconf import DictConfig
+from omegaconf.errors import MissingMandatoryValue
 
 from synth_setter.cli.generate_dataset import spec_from_cfg
 from synth_setter.pipeline.schemas.spec import DatasetSpec, OutputFormat
@@ -36,6 +43,7 @@ DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/ci-materialize-test": "ci-materialize-test",
     "generate_dataset/faust-shimmer-fdn-lance-50k": "faust-shimmer-fdn-lance-50k",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
+    "generate_dataset/pyfdn-input-audio": "pyfdn-input-audio",
     "generate_dataset/smoke-shard": "smoke-shard",
     "generate_dataset/smoke-shard-lance": "smoke-shard-lance",
     "generate_dataset/surge-simple-480k-10k": "surge-simple-480k-10k",
@@ -53,10 +61,18 @@ DATASET_EXPERIMENTS: dict[str, str] = {
 }
 
 
-def _compose_dataset_spec(experiment: str) -> DatasetSpec:
-    """Compose ``configs/dataset.yaml`` with the named experiment override."""
+VST_2M_TEMPLATE = "generate_dataset/vst-lance-2m-40k-10k"
+
+
+def _compose_dataset_cfg(experiment: str, *overrides: str) -> DictConfig:
+    """Compose ``configs/dataset.yaml`` with the named experiment plus extra overrides.
+
+    :param experiment: Hydra experiment id under ``configs/experiment/generate_dataset/``.
+    :param *overrides: Additional Hydra overrides appended after the experiment.
+    :returns: Composed cfg with ``paths.*`` pinned to the checkout root.
+    """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
-        cfg = compose(config_name="dataset", overrides=[f"experiment={experiment}"])
+        cfg = compose(config_name="dataset", overrides=[f"experiment={experiment}", *overrides])
     # ``configs/paths/default.yaml`` interpolates ``${oc.env:PROJECT_ROOT}`` and
     # ``${hydra:runtime.output_dir}``; the latter is only set under @hydra.main,
     # not bare ``compose()``. Pin both so ``resolve=True`` doesn't trip in unit
@@ -64,7 +80,12 @@ def _compose_dataset_spec(experiment: str) -> DatasetSpec:
     cfg.paths.root_dir = str(REPO_ROOT)
     cfg.paths.output_dir = str(REPO_ROOT)
     cfg.paths.work_dir = str(REPO_ROOT)
-    return spec_from_cfg(cfg)
+    return cfg
+
+
+def _compose_dataset_spec(experiment: str) -> DatasetSpec:
+    """Compose ``configs/dataset.yaml`` with the named experiment and build its spec."""
+    return spec_from_cfg(_compose_dataset_cfg(experiment))
 
 
 @pytest.mark.parametrize(("experiment", "expected_task_name"), DATASET_EXPERIMENTS.items())
@@ -121,6 +142,23 @@ def test_faust_shimmer_fdn_experiment_composes_fifty_thousand_impulse_responses(
     assert spec.render.plugin_reload_cadence == "render"
     assert spec.train_val_test_sizes == (50_000, 0, 0)
     assert spec.split_shard_ranges == {"train": (0, 5), "val": (5, 5), "test": (5, 5)}
+
+
+def test_pyfdn_input_audio_experiment_pins_compatible_source_snapshot() -> None:
+    """The pyFDN input smoke run consumes the finalized mono source snapshot."""
+    spec = _compose_dataset_spec("generate_dataset/pyfdn-input-audio")
+
+    assert spec.render.input_audio_source is not None
+    assert spec.render.input_audio_source.model_dump() == {
+        "dataset_uri": (
+            "r2://intermediate-data/data/pyfdn-input-source-smoke/pyfdn-input-source-v1"
+        ),
+        "split": "train",
+        "snapshot_txid": "df550710-6c33-4597-ae17-4433ce9bb37c",
+        "sampling_seed": 3526,
+    }
+    assert spec.train_val_test_sizes == (2, 0, 0)
+    assert spec.render.samples_per_shard == 2
 
 
 def test_surge_xt_dawdreamer_smoke_experiment_selects_single_shard_renderer() -> None:
@@ -200,3 +238,45 @@ def test_ultramaster_kr106_full_scale_experiment_uses_distributed_queue() -> Non
     assert spec.render.parallel is True
     assert spec.render.retain_local_shards is False
     assert spec.use_shard_queue is True
+
+
+@pytest.mark.parametrize(
+    ("overrides", "missing_group"),
+    [
+        (("render=vst", "task_name=vst-2m"), "synth"),
+        (("synth=ultramaster_kr106", "task_name=vst-2m"), "render"),
+    ],
+)
+def test_vst_2m_template_without_identity_group_raises_composition_error(
+    overrides: tuple[str, ...], missing_group: str
+) -> None:
+    """The template refuses to compose until the caller selects both identity groups.
+
+    :param overrides: Every mandatory selection except ``missing_group``.
+    :param missing_group: The Hydra group the composition error must name.
+    """
+    with pytest.raises(ConfigCompositionException, match=f"specify '{missing_group}'"):
+        _compose_dataset_cfg(VST_2M_TEMPLATE, *overrides)
+
+
+def test_vst_2m_template_without_task_name_leaves_task_name_mandatory() -> None:
+    """An omitted ``task_name`` stays ``???`` and raises on access."""
+    cfg = _compose_dataset_cfg(VST_2M_TEMPLATE, "synth=ultramaster_kr106", "render=vst")
+
+    with pytest.raises(MissingMandatoryValue):
+        _ = cfg.task_name
+
+
+def test_vst_2m_template_with_identity_composes_scale_render_knobs() -> None:
+    """A KR-106 selection inherits the template's reload, GUI, flush, and shard settings."""
+    cfg = _compose_dataset_cfg(
+        VST_2M_TEMPLATE, "synth=ultramaster_kr106", "render=vst", "task_name=vst-2m"
+    )
+
+    spec = spec_from_cfg(cfg)
+
+    assert spec.render.plugin_reload_cadence == "render"
+    assert spec.render.gui_toggle_cadence == "never"
+    assert spec.render.retain_local_shards is False
+    assert spec.render.samples_per_render_batch == 32
+    assert spec.split_shard_ranges == {"train": (0, 800), "val": (800, 816), "test": (816, 820)}

@@ -173,30 +173,6 @@ def test_flamo_renderer_empty_batch_preserves_audio_geometry() -> None:
 @pytest.mark.parametrize(
     "param_spec",
     [
-        "pyfdn_pitchshift_n8_mono_householder",
-        "pyfdn_diffvox",
-        "pyfdn_gotz_n8_mono_fixed_delays",
-        "pyfdn_gotz_n8_mono_learned_delays",
-        "pyfdn_gotz_n8_mono_fixed_delays_givens",
-        "pyfdn_gotz_n8_mono_learned_delays_givens",
-    ],
-)
-def test_flamo_renderer_rejects_unsupported_topology(param_spec: str) -> None:
-    """An advanced effect cannot silently discard processing outside its FDN build.
-
-    :param param_spec: Advanced effect outside the complete BasicFDN contract.
-    """
-    with pytest.raises(ValueError, match="unsupported FLAMO topology"):
-        FlamoFDNDifferentiableRenderer.from_param_spec(
-            param_spec=param_spec,
-            sample_rate=44_100,
-            signal_length=4096,
-        )
-
-
-@pytest.mark.parametrize(
-    "param_spec",
-    [
         "pyfdn_n8_mono_householder",
         "pyfdn_n8_mono_householder_vector",
         "pyfdn_n8_mono_kronecker",

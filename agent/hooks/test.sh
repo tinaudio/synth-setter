@@ -1936,6 +1936,42 @@ T_probe_gate4_reports_copilot_reviewed_head() {
 }
 it "probe: Copilot has commented on head → Gate 4 advisory says head is reviewed" T_probe_gate4_reports_copilot_reviewed_head
 
+T_probe_gate4_reports_current_quota_denial_unavailable() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE GH_STUB_HEAD=abc1234def567890
+  export GH_STUB_PULL_REVIEWS='[{"user":{"login":"copilot-pull-request-reviewer[bot]"},"commit_id":"abc1234def567890","body":"Copilot was unable to review this pull request because the user who requested the review has reached their quota limit."}]'
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -qi "unavailable" <<<"$out" || {
+    echo "quota denial should report Copilot unavailable; got: $out"
+    return 1
+  }
+  if grep -q "step 6a\|wait ~60s" <<<"$out"; then
+    echo "explicit quota denial must not recommend a futile retry; got: $out"
+    return 1
+  fi
+}
+it "probe: current-head Copilot quota denial → advisory unavailable without retry guidance" \
+  T_probe_gate4_reports_current_quota_denial_unavailable
+
+T_probe_gate4_ignores_stale_quota_denial() {
+  local out
+  export GH_STUB_CHECKS_EXIT=0 GH_STUB_MERGEABLE=MERGEABLE GH_STUB_HEAD=abc1234def567890
+  export GH_STUB_PULL_REVIEWS='[{"user":{"login":"copilot-pull-request-reviewer[bot]"},"commit_id":"old567890abc1234","body":"Copilot was unable to review this pull request because the user who requested the review has reached their quota limit."}]'
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "no Copilot activity on head" <<<"$out" || {
+    echo "stale quota denial should be irrelevant to current-head status; got: $out"
+    return 1
+  }
+  grep -q "step 6a" <<<"$out" || {
+    echo "no current-head activity should retain normal retry guidance; got: $out"
+    return 1
+  }
+}
+it "probe: stale Copilot quota denial → normal no-current-head advisory" \
+  T_probe_gate4_ignores_stale_quota_denial
+
 T_probe_awaiting_thread_on_second_page_fails_gate3() {
   # >100 threads span pages; an awaiting thread on page 2 must still fail.
   local out
