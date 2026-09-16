@@ -77,6 +77,7 @@ def _render_config() -> RenderConfig:
         synth=SynthSpec(
             name=SynthName(_SYNTH),
             param_spec_name=ParamSpecName(_SYNTH),
+            note_timing_parameterization="onset_duration",
             plugin_path="torchsynth",
             plugin_state_path="",
             synth_version="1.0.2",
@@ -203,7 +204,7 @@ def test_param_shift_spreads_rows_evenly_across_the_param_spec(shifted_dataset: 
 
     :param shifted_dataset: Augmented Lance dataset.
     """
-    spec = resolve_param_spec(ParamSpecName(_SYNTH))
+    spec = resolve_param_spec(ParamSpecName(_SYNTH), "onset_duration")
     names = _subfield(lance.dataset(str(shifted_dataset)), SHIFT_PARAM_SUBFIELD).to_pylist()
 
     counts = Counter(names)
@@ -248,7 +249,7 @@ def test_param_shift_audio_is_the_patch_the_row_claims(shifted_dataset: Path) ->
     :param shifted_dataset: Augmented Lance dataset.
     """
     dataset = lance.dataset(str(shifted_dataset))
-    spec = resolve_param_spec(ParamSpecName(_SYNTH))
+    spec = resolve_param_spec(ParamSpecName(_SYNTH), "onset_duration")
     renderer = make_audio_renderer(_render_config())
 
     table = dataset.to_table(columns=[PARAM_ARRAY_FIELD, SHIFT_FIELD], with_row_id=True)

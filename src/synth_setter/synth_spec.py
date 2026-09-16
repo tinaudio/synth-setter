@@ -19,7 +19,13 @@ from typing import TYPE_CHECKING, Literal, NewType
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from synth_setter.param_spec_name import ParamSpecName, ValidatedParamSpecName
+from synth_setter.param_spec_name import (
+    CURRENT_NOTE_TIMING,
+    LEGACY_NOTE_TIMING,
+    NoteTimingParameterization,
+    ParamSpecName,
+    ValidatedParamSpecName,
+)
 from synth_setter.renderer_backend import FAUST_REGISTRY_PREFIX, TORCHSYNTH_PLUGIN_NAME
 
 if TYPE_CHECKING:
@@ -98,6 +104,10 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 
         Key into the ``ParamSpec`` registry; several synths may share one.
 
+    .. attribute :: note_timing_parameterization
+
+        Timing coordinates used by newly composed datasets and checkpoints.
+
     .. attribute :: plugin_path
 
         VST3 bundle path, in-process backend sentinel, or registered Faust source URI.
@@ -120,6 +130,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 
     name: SynthName
     param_spec_name: ValidatedParamSpecName
+    note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING
     format: SynthFormat = "vst3"
     plugin_path: str
     plugin_state_path: str
@@ -336,12 +347,12 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "2.5.13",
     ),
 }
-
 SYNTHS: Mapping[SynthName, SynthSpec] = MappingProxyType(
     {
         SynthName(name): SynthSpec(
             name=SynthName(name),
             param_spec_name=ParamSpecName(param_spec_name),
+            note_timing_parameterization=CURRENT_NOTE_TIMING,
             format=(
                 "faust" if name in _FAUST_SOURCE_SHA256 else _legacy_synth_format(plugin_path)
             ),
@@ -418,4 +429,14 @@ def validate_synth_identity(cfg: DictConfig) -> SynthSpec | None:
             f"datamodule.param_spec_name={datamodule_spec!r} disagrees with "
             f"synth={spec.name!r} (param_spec_name={spec.param_spec_name!r})"
         )
+    for node_name in ("datamodule", "model"):
+        node = cfg.get(node_name)
+        node_timing = None if node is None else node.get("note_timing_parameterization")
+        if node_timing is not None and str(node_timing) != spec.note_timing_parameterization:
+            raise ValueError(
+                f"{node_name}.note_timing_parameterization={node_timing!r} disagrees "
+                f"with synth={spec.name!r} "
+                "(note_timing_parameterization="
+                f"{spec.note_timing_parameterization!r})"
+            )
     return spec

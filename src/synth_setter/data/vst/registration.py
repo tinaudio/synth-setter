@@ -316,6 +316,7 @@ def identity_group_yaml(spec: SynthSpec) -> str:
         "# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.",
         f"name: {json.dumps(spec.name)}",
         f"param_spec_name: {json.dumps(spec.param_spec_name)}",
+        f"note_timing_parameterization: {json.dumps(spec.note_timing_parameterization)}",
     ]
     if spec.plugin_path:
         fields.append(f"plugin_path: {json.dumps(spec.plugin_path)}")

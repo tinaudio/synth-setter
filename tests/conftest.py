@@ -2,6 +2,7 @@
 
 import copy
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -29,7 +30,7 @@ from synth_setter.conditioning import (
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.models.components.pretrained_encoder import ClapAudioEncoder
-from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.param_spec_name import NoteTimingParameterization, ParamSpecName
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
@@ -1435,6 +1436,7 @@ def _render_smoke_train_subprocess(
         "src/synth_setter/data/vst/generate_vst_dataset.py",
         str(output_path),
         f"--synth.name={param_spec_name}",
+        "--synth.note_timing_parameterization=onset_duration",
         f"--synth.plugin_path={PLUGIN_PATH}",
         f"--synth.plugin_state_path={plugin_state_paths[param_spec_name]}",
         f"--synth.param_spec_name={param_spec_name}",
@@ -1491,6 +1493,7 @@ def _smoke_fake_render_cfg(param_spec_name: str) -> RenderConfig:
         synth=SynthSpec(
             name=SynthName(param_spec_name),
             param_spec_name=ParamSpecName(param_spec_name),
+            note_timing_parameterization="onset_duration",
             plugin_path=PLUGIN_PATH,
             plugin_state_path=str(plugin_state_paths[param_spec_name]),
             synth_version=_SURGE_FIXTURE_SYNTH_VERSION,
@@ -1524,6 +1527,7 @@ def _build_surge_smoke_lance_datasets(
     render_train_lance: Callable[[Path, str], None],
     *,
     num_samples: int = NUM_FIXTURE_SAMPLES,
+    note_timing_parameterization: NoteTimingParameterization,
 ) -> Path:
     """Render the N-sample Surge smoke dataset natively as single-file Lance shards.
 
@@ -1540,6 +1544,9 @@ def _build_surge_smoke_lance_datasets(
         :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
     :param render_train_lance: Renders ``train.lance`` given ``(train_lance, param_spec_name)``.
     :param num_samples: Expected rows in the rendered train split.
+    :param note_timing_parameterization: Timing coordinates the rows are rendered
+        with, recorded in ``input_spec.json`` so train/eval entrypoints validate
+        fixture rows through the production dataset-timing gate.
     :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
     """
     from synth_setter.pipeline.data.stats import finalize, fold_lance_shard_into_welford
@@ -1550,6 +1557,19 @@ def _build_surge_smoke_lance_datasets(
 
     render_train_lance(train_lance, param_spec_name)
     _validate_surge_dataset(train_lance, num_samples)
+    (smoke_dataset_dir / "input_spec.json").write_text(
+        json.dumps(
+            {
+                "render": {
+                    "synth": {
+                        "name": param_spec_name,
+                        "note_timing_parameterization": note_timing_parameterization,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
 
     # Sibling stats.npz folded straight from the Lance mel rows; mask degenerate
     # bins as the h5 path's --mask-degenerate-bins flag does for fake-plugin data.
@@ -1579,7 +1599,10 @@ def surge_xt_smoke_datasets(tmp_path: Path, param_spec_name: str) -> Path:
     :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
     """
     return _build_surge_smoke_lance_datasets(
-        tmp_path, param_spec_name, _render_smoke_train_subprocess
+        tmp_path,
+        param_spec_name,
+        _render_smoke_train_subprocess,
+        note_timing_parameterization="onset_duration",
     )
 
 
@@ -1657,6 +1680,7 @@ def surge_xt_embedding_smoke_datasets(
         param_spec_name,
         render_two_rows,
         num_samples=_EMBEDDING_E2E_ROWS,
+        note_timing_parameterization="onset_duration",
     )
 
 
@@ -1816,7 +1840,10 @@ def fake_surge_smoke_datasets(
     :return: Path to the directory holding ``{train,val,test}.lance`` and ``stats.npz``.
     """
     return _build_surge_smoke_lance_datasets(
-        tmp_path, param_spec_name, _render_smoke_train_lance_fake
+        tmp_path,
+        param_spec_name,
+        _render_smoke_train_lance_fake,
+        note_timing_parameterization="onset_duration",
     )
 
 
@@ -1892,6 +1919,7 @@ def _surge_smoke_render_config(param_spec_name: str, plugin_path: str) -> dict[s
             "synth": {
                 "name": param_spec_name,
                 "param_spec_name": param_spec_name,
+                "note_timing_parameterization": "onset_duration",
                 "plugin_path": plugin_path,
                 "plugin_state_path": plugin_state_paths[param_spec_name],
                 "synth_version": "1.3.4",

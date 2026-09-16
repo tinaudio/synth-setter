@@ -125,6 +125,7 @@ def test_register_writes_all_artifacts_into_the_checkout_layout(
     assert identity == {
         "name": "fake_synth",
         "param_spec_name": "fake_synth",
+        "note_timing_parameterization": "onset_duration",
         "plugin_path": "plugins/fake.vst3",
         "plugin_state_path": "presets/fake_synth-base.vstpreset",
         "synth_version": "9.9.9",

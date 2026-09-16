@@ -11,6 +11,10 @@ import json
 import sys
 from typing import Any
 
+from synth_setter.param_spec_name import (
+    CURRENT_NOTE_TIMING,
+    LEGACY_NOTE_TIMING,
+)
 from synth_setter.pipeline.schemas.spec import (
     DatasetSpec,
     OutputFormat,
@@ -45,7 +49,13 @@ _REQUIRED_RENDER_FIELDS: tuple[str, ...] = tuple(
         set(RenderConfig.model_fields) - _BACKWARD_COMPATIBLE_OPTIONAL_RENDER_FIELDS - {"synth"}
     )
 )
-_REQUIRED_SYNTH_FIELDS: tuple[str, ...] = tuple(sorted(SynthSpec.model_fields))
+# ``note_timing_parameterization`` is optional for backward compatibility: specs
+# materialized before the onset-duration migration carry no timing metadata and
+# decode as legacy endpoints.
+_BACKWARD_COMPATIBLE_OPTIONAL_SYNTH_FIELDS = frozenset({"note_timing_parameterization"})
+_REQUIRED_SYNTH_FIELDS: tuple[str, ...] = tuple(
+    sorted(set(SynthSpec.model_fields) - _BACKWARD_COMPATIBLE_OPTIONAL_SYNTH_FIELDS)
+)
 
 
 def _render_param_spec_name(render: dict[str, Any]) -> str | None:
@@ -109,6 +119,12 @@ def validate_structure(spec: dict[str, Any]) -> list[str]:
             not isinstance(synth_version, str) or not synth_version.strip()
         ):
             errors.append("render.synth.synth_version must be a non-empty string")
+        timing = synth.get("note_timing_parameterization")
+        if timing is not None and timing not in (LEGACY_NOTE_TIMING, CURRENT_NOTE_TIMING):
+            errors.append(
+                f"render.synth.note_timing_parameterization {timing!r} is not one of "
+                f"{sorted((LEGACY_NOTE_TIMING, CURRENT_NOTE_TIMING))}"
+            )
 
     cv = spec.get("git_sha", "")
     if not (len(cv) == 40 and all(c in "0123456789abcdef" for c in cv)):

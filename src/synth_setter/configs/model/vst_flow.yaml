@@ -44,6 +44,7 @@ vector_field:
 
 num_params: ${param_spec_width:${synth.param_spec_name}}
 param_spec: ${synth.param_spec_name}
+note_timing_parameterization: ${synth.note_timing_parameterization}
 
 # training
 cfg_dropout_rate: 0.1

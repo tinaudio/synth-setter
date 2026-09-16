@@ -2027,6 +2027,7 @@ def _compose_fake_oracle_eval_cfg(
                     "synth": {
                         "name": param_spec_name,
                         "param_spec_name": param_spec_name,
+                        "note_timing_parameterization": "onset_duration",
                         "plugin_state_path": str(plugin_state_paths[param_spec_name]),
                         "plugin_path": "plugins/fake.vst3",
                         "synth_version": "1.3.4",
@@ -2613,11 +2614,11 @@ def test_evaluate_loads_wandb_resolved_checkpoint_and_runs_inference(
 
 
 @pytest.mark.fake_vst
-def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
+def test_evaluate_validate_mode_onset_duration_runs_oracle(
     tmp_path: Path,
     fake_surge_smoke_datasets: Path,
 ) -> None:
-    """``datamodule=surge_lance`` drives ``evaluate`` end-to-end over Lance splits.
+    """The eval entrypoint consumes onset-duration rows from Lance splits.
 
     The oracle returns params verbatim, so ``val/param_mse`` is exactly zero,
     with every batch read from Lance.
@@ -2625,8 +2626,13 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
     :param fake_surge_smoke_datasets: Natively-generated Lance smoke dataset.
     """
+    identity = "surge_4"
     cfg = _compose_fake_oracle_eval_cfg(
-        tmp_path, fake_surge_smoke_datasets, mode="validate", datamodule="surge_lance"
+        tmp_path,
+        fake_surge_smoke_datasets,
+        mode="validate",
+        param_spec_name=identity,
+        datamodule="surge_lance",
     )
 
     HydraConfig().set_config(cfg)
@@ -2635,13 +2641,40 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     finally:
         GlobalHydra.instance().clear()
 
-    assert_log_per_param_mse_wired(object_dict["trainer"], "surge_4")
+    assert_log_per_param_mse_wired(object_dict["trainer"], identity)
+    assert object_dict["datamodule"].note_timing_parameterization == "onset_duration"
     assert object_dict["datamodule"].val_num_workers == 0
 
     param_mse = metric_dict["val/param_mse"]
     assert isinstance(param_mse, torch.Tensor)
     assert param_mse.item() == 0.0
     assert metric_dict["val/per_param_mse/a_amp_eg_attack"].item() == 0.0
+
+
+def test_evaluate_rejects_legacy_dataset_for_onset_duration_config(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+) -> None:
+    """Evaluation rejects equal-width dataset rows with legacy timing semantics.
+
+    :param tmp_path: Pinned Hydra output directory.
+    :param fake_surge_smoke_datasets: Natively-generated Lance smoke dataset.
+    """
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        mode="validate",
+        param_spec_name="surge_4",
+        datamodule="surge_lance",
+    )
+    input_spec_path = fake_surge_smoke_datasets / "input_spec.json"
+    input_spec_path.write_text(
+        json.dumps({"render": {"synth": {"name": "surge_4"}}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="note_timing_parameterization"):
+        evaluate(cfg)
 
 
 def test_evaluate_test_mode_partial_lance_root_returns_metric(

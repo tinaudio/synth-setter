@@ -450,6 +450,22 @@ class TestValidateSynthIdentity:
         with pytest.raises(ValueError, match="surge_4"):
             validate_synth_identity(cfg)
 
+    @pytest.mark.parametrize("node_name", ["datamodule", "model"])
+    def test_timing_parameterization_mismatch_raises(self, node_name: str) -> None:
+        """Every row consumer must use the synth's persisted timing coordinates.
+
+        :param node_name: Config node whose discriminator is forced out of sync.
+        """
+        cfg = OmegaConf.create(
+            {
+                "synth": _synth_node("surge_4"),
+                node_name: {"note_timing_parameterization": "legacy_endpoints"},
+            }
+        )
+
+        with pytest.raises(ValueError, match=rf"{node_name}\.note_timing_parameterization"):
+            validate_synth_identity(cfg)
+
     def test_datamodule_interpolated_spec_matches_and_passes(self) -> None:
         """The shipped rootward interpolation always agrees with the synth node."""
         cfg = OmegaConf.create(
