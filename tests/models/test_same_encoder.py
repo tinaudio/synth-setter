@@ -138,13 +138,17 @@ def test_same_conditioning_updates_ast_without_backbone_gradients(
 
     optimizer.zero_grad()
     encoder(torch.randn(_ROWS, _LENGTH).clamp(-1.0, 1.0)).square().mean().backward()
+    head_gradients = [parameter.grad for parameter in head.parameters()]
     optimizer.step()
 
     assert not torch.equal(head.embed_tokens, original_tokens)
-    assert isinstance(head.patch_embed, TemporalPatchEmbed)
-    projection_gradient = head.patch_embed.projection.weight.grad
-    assert projection_gradient is not None
-    assert torch.count_nonzero(projection_gradient)
+    assert all(gradient is not None for gradient in head_gradients)
+    assert all(
+        torch.isfinite(gradient).all() for gradient in head_gradients if gradient is not None
+    )
+    assert all(
+        torch.count_nonzero(gradient) > 0 for gradient in head_gradients if gradient is not None
+    )
     assert all(parameter.grad is None for parameter in backbone.parameters())
 
 

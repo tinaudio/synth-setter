@@ -59,12 +59,27 @@ def test_temporal_patch_embed_preserves_frame_order() -> None:
     assert torch.equal(tokens, torch.tensor([[[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]]))
 
 
-def test_temporal_patch_embed_wrong_frame_count_raises_error() -> None:
-    """Reject a latent sequence that cannot match the AST position grid."""
+def test_temporal_patch_embed_accepts_fewer_frames_than_position_capacity() -> None:
+    """Allow shorter waveforms to use the prefix of the AST position grid."""
+    embed = TemporalPatchEmbed(input_dim=2, d_model=4, num_tokens=3)
+
+    assert embed(torch.randn(1, 2, 2)).shape == (1, 2, 4)
+
+
+def test_temporal_patch_embed_too_many_frames_raises_error() -> None:
+    """Reject a latent sequence that exceeds the AST position grid."""
     embed = TemporalPatchEmbed(input_dim=2, d_model=4, num_tokens=3)
 
     with pytest.raises(ValueError, match="expected temporal features shaped"):
         embed(torch.randn(1, 2, 4))
+
+
+def test_temporal_patch_embed_wrong_feature_width_raises_error() -> None:
+    """Reject the wrong SAME latent width before the linear projection."""
+    embed = TemporalPatchEmbed(input_dim=2, d_model=4, num_tokens=3)
+
+    with pytest.raises(ValueError, match="expected temporal features shaped"):
+        embed(torch.randn(1, 1, 3))
 
 
 def test_param_token_embed_freezes_decoder_half_and_trains_encoder_half() -> None:
