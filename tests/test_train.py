@@ -3783,6 +3783,21 @@ def test_train_vqt_online_conditioning_overfits_fixed_batch(
     assert object_dict["trainer"].global_step == 100
     assert metric_dict["train/loss_step"].item() < 0.05
 
+    model = object_dict["model"]
+    datamodule = object_dict["datamodule"]
+    datamodule.setup("predict")
+    batch = next(iter(datamodule.predict_dataloader()))
+    params = torch.zeros((len(batch["audio"]), model.hparams.num_params))
+    time = torch.full((len(params), 1), 0.5)
+    with torch.no_grad():
+        prediction = model.vector_field(params, time, model.encoder(batch["audio"]))
+        ablated_prediction = model.vector_field(
+            params,
+            time,
+            model.encoder(torch.zeros_like(batch["audio"])),
+        )
+    assert not torch.allclose(prediction, ablated_prediction)
+
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
