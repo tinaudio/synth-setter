@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789524622088,
+  "lastUpdate": 1789529865096,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -17298,6 +17298,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04057574272155762,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "efa18f6fa3bd389bbfca0786aa50c9a71436b685",
+          "message": "internal-feat(data-pipeline): add synth-agnostic 2M VST dataset template (#3584)\n\nThe per-synth 2M configs duplicate scale-dependent render knobs and\ndisagree on them. The template pins the knobs that follow from scale\n(per-render plugin reload, no GUI toggling, 32-sample flush cadence,\nno local shard retention) and leaves synth, render, and task_name\nmandatory so an incomplete selection fails at composition.\n\nThe render group stays unset instead of overriding render.renderer_backend\nwith ???: OmegaConf merges MISSING over a concrete value as a no-op, so\nthat spelling would silently resolve to pedalboard.\n\nCloses #3579",
+          "timestamp": "2026-09-15T20:55:43-04:00",
+          "tree_id": "41b5013784701aef09e65a826f8d472da18e0f08",
+          "url": "https://github.com/tinaudio/synth-setter/commit/efa18f6fa3bd389bbfca0786aa50c9a71436b685"
+        },
+        "date": 1789529860811,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.04241943359375,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.591138212233782,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.030641090124845505,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.030025601387023926,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.8055288791656494,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.358868484833351,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.3272480964660645,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.636748834946193,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03066711127758026,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03558117151260376,
             "unit": "1-cos"
           },
           {
