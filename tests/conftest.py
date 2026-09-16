@@ -811,7 +811,6 @@ def cfg_torchsynth_same_online_train(tmp_path: Path) -> DictConfig:
         cfg.model.encoder.head.n_heads = 1
         cfg.model.encoder.head.n_layers = 1
         cfg.model.encoder.head.token_embed.input_dim = TINY_SAME_LATENT_DIM
-        cfg.model.encoder.head.token_embed.num_tokens = 8
         cfg.model.vector_field.num_layers = 2
     return cfg
 

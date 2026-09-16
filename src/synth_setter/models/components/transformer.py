@@ -245,7 +245,7 @@ class TemporalPatchEmbed(nn.Module):
 
         :param input_dim: Feature width of each input frame.
         :param d_model: Transformer token width.
-        :param num_tokens: Fixed number of temporal frames.
+        :param num_tokens: Maximum number of temporal frames and positional encodings.
         """
         super().__init__()
         self.input_dim = input_dim
@@ -258,15 +258,18 @@ class TemporalPatchEmbed(nn.Module):
     ) -> Float[Tensor, "batch num_tokens d_model"]:
         """Project temporal frames without collapsing their order.
 
-        :param features: Feature-major sequence ``(batch, input_dim, num_tokens)``.
-        :returns: Time-major patch tokens ``(batch, num_tokens, d_model)``.
-        :raises ValueError: The feature width or temporal length differs from configuration.
+        :param features: Feature-major sequence ``(batch, input_dim, frames)``.
+        :returns: Time-major patch tokens ``(batch, frames, d_model)``.
+        :raises ValueError: The feature width is wrong or the frame count exceeds capacity.
         """
-        expected_shape = (self.input_dim, self.num_tokens)
-        if features.shape[1:] != expected_shape:
+        if (
+            features.shape[1] != self.input_dim
+            or features.shape[2] == 0
+            or features.shape[2] > self.num_tokens
+        ):
             raise ValueError(
-                f"expected temporal features shaped (batch, {self.input_dim}, "
-                f"{self.num_tokens}), got {tuple(features.shape)}"
+                f"expected temporal features shaped (batch, {self.input_dim}, frames) "
+                f"with 1 <= frames <= {self.num_tokens}, got {tuple(features.shape)}"
             )
         return self.projection(features.transpose(1, 2))
 

@@ -857,7 +857,6 @@ def test_generic_launcher_runs_workflow_default_train_entrypoint(
             "model.encoder.head.n_heads=1",
             "model.encoder.head.n_layers=1",
             "model.encoder.head.token_embed.input_dim=8",
-            "model.encoder.head.token_embed.num_tokens=8",
             "model.audio_loss.t_min=0.0",
             "model.audio_loss.distance.encoder.checkpoint="
             f"{cfg.model.audio_loss.distance.encoder.checkpoint}",
