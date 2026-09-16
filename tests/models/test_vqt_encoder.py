@@ -120,6 +120,30 @@ def test_vqt_conditioning_backpropagates_only_through_trainable_pool() -> None:
         assert torch.isfinite(parameter.grad).all()
 
 
+def test_vqt_audio_encoder_distinct_tones_shift_peak_frequency() -> None:
+    """The VQT representation responds directionally to waveform pitch."""
+    sample_rate = 16_000
+    time = torch.arange(4_000, dtype=torch.float32) / sample_rate
+    audio = torch.stack(
+        [
+            torch.sin(2 * torch.pi * 220.0 * time),
+            torch.sin(2 * torch.pi * 440.0 * time),
+        ]
+    )
+    encoder = VqtAudioEncoder(
+        sample_rate=sample_rate,
+        hop_length=160,
+        fmin=55.0,
+        n_bins=48,
+        bins_per_octave=12,
+        gamma=20.0,
+    )
+
+    peak_bins = encoder(audio).mean(dim=-1).argmax(dim=-1)
+
+    assert peak_bins[1] > peak_bins[0]
+
+
 def test_vqt_audio_encoder_chunked_batch_matches_single_pass() -> None:
     """Chunking bounds transform batches without changing their features."""
     sample_rate = 16_000
@@ -137,6 +161,25 @@ def test_vqt_audio_encoder_chunked_batch_matches_single_pass() -> None:
     single_pass = VqtAudioEncoder(max_batch_size=3, **kwargs)(audio)
 
     torch.testing.assert_close(chunked, single_pass)
+
+
+def test_vqt_audio_encoder_unlimited_batch_matches_single_pass() -> None:
+    """The unlimited sentinel sends the complete batch through unchanged."""
+    sample_rate = 16_000
+    audio = _tones(rows=3, channels=1, samples=4_000, sample_rate=sample_rate)
+    kwargs = {
+        "sample_rate": sample_rate,
+        "hop_length": 160,
+        "fmin": 55.0,
+        "n_bins": 24,
+        "bins_per_octave": 12,
+        "gamma": 20.0,
+    }
+
+    unlimited = VqtAudioEncoder(max_batch_size=-1, **kwargs)(audio)
+    single_pass = VqtAudioEncoder(max_batch_size=3, **kwargs)(audio)
+
+    torch.testing.assert_close(unlimited, single_pass)
 
 
 def test_vqt_audio_encoder_channel_mean_matches_mono_input() -> None:
@@ -195,8 +238,11 @@ def test_vqt_audio_encoder_invalid_waveform_raises(audio: torch.Tensor, message:
         ({"n_bins": 0}, "n_bins"),
         ({"bins_per_octave": 0}, "bins_per_octave"),
         ({"gamma": 0.0}, "gamma"),
+        ({"gamma": float("nan")}, "gamma"),
+        ({"fmin": float("inf")}, "fmin"),
         ({"max_batch_size": 0}, "max_batch_size"),
         ({"max_batch_size": -2}, "max_batch_size"),
+        ({"pad_mode": "zeros"}, "pad_mode"),
     ],
 )
 def test_vqt_audio_encoder_invalid_configuration_raises(

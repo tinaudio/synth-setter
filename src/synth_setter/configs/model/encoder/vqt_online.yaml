@@ -3,7 +3,7 @@ out_dim: 512
 backbone:
   _target_: synth_setter.models.components.vqt_encoder.VqtAudioEncoder
   sample_rate: ${oc.select:datamodule.sample_rate,44100}
-  hop_length: 441
+  hop_length: ${div:${oc.select:datamodule.sample_rate,44100},100}
   fmin: 32.7
   n_bins: 256
   bins_per_octave: 32
@@ -17,4 +17,4 @@ head:
   num_heads: ${model.encoder_num_heads}
   n_conditioning_outputs: ${oc.select:model.vector_field.num_layers,1}
   pos_enc: sin
-  max_seq_len: ${cqt_n_frames:${oc.select:datamodule.signal_length,176400},${oc.select:datamodule.sample_rate,44100}}
+  max_seq_len: ${stft_n_frames:${oc.select:datamodule.signal_length,176400},${model.encoder.backbone.hop_length}}

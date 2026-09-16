@@ -2906,6 +2906,26 @@ def test_train_eval_cqt_online_conditioning_returns_finite_metric(
     )
 
 
+@pytest.mark.slow
+def test_train_eval_vqt_online_conditioning_returns_finite_metric(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train and validate a checkpoint through online VQT conditioning.
+
+    :param tmp_path: Shared train/eval output directory.
+    :param fake_surge_smoke_datasets: Tiny production-format Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    _assert_conditioning_train_validate_finite(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        param_spec_name,
+        "vqt_online",
+    )
+
+
 @pytest.mark.requires_vst
 @pytest.mark.slow
 @pytest.mark.network

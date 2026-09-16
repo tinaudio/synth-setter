@@ -797,6 +797,12 @@ def test_vqt_online_profile_routes_audio_through_nnaudio2_frontend() -> None:
     assert cfg.model.encoder.head.embed_dim == 256
     assert cfg.model.encoder.head.max_seq_len == 401
 
+    OmegaConf.update(cfg, "datamodule.sample_rate", 48_000, force_add=True)
+    OmegaConf.update(cfg, "datamodule.signal_length", 192_000, force_add=True)
+
+    assert cfg.model.encoder.backbone.hop_length == 480
+    assert cfg.model.encoder.head.max_seq_len == 401
+
 
 def test_clap_online_profile_matches_training_checkpoint_identity() -> None:
     """Online CLAP composition retains the shared production checkpoint identity."""

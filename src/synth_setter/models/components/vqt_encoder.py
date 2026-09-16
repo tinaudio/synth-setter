@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from typing import Protocol, cast, runtime_checkable
 
@@ -76,8 +77,8 @@ class VqtAudioEncoder(nn.Module):
             "gamma": gamma,
         }
         for name, value in positive_values.items():
-            if value <= 0:
-                raise ValueError(f"{name} must be positive, got {value}")
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive, got {value}")
         if max_batch_size != -1 and max_batch_size <= 0:
             raise ValueError(f"max_batch_size must be positive or -1, got {max_batch_size}")
         if pad_mode not in _SUPPORTED_PAD_MODES:
