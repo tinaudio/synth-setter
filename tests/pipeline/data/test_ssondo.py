@@ -100,9 +100,9 @@ def test_ssondo_registry_encoder_valid_output_returns_fixed_vector() -> None:
         assert sample_rate == SSONDO_SAMPLE_RATE
         return np.ones((2, SSONDO_EMBEDDING_DIM), dtype=np.float32)
 
-    encoded = EMBEDDING_REGISTRY["ssondo"].encode_column(
-        {AUDIO_FIELD: audio}, SSONDO_SAMPLE_RATE, encode
-    )
+    encode_column = EMBEDDING_REGISTRY["ssondo"].encode_column
+    assert encode_column is not None
+    encoded = encode_column({AUDIO_FIELD: audio}, SSONDO_SAMPLE_RATE, encode)
 
     assert encoded.type == pa.list_(pa.float32(), SSONDO_EMBEDDING_DIM)
     assert np.asarray(encoded.to_pylist()).shape == (2, SSONDO_EMBEDDING_DIM)
@@ -129,10 +129,10 @@ def test_ssondo_registry_encoder_invalid_output_raises(
         del source, sample_rate
         return output
 
+    encode_column = EMBEDDING_REGISTRY["ssondo"].encode_column
+    assert encode_column is not None
     with pytest.raises(ValueError, match=message):
-        EMBEDDING_REGISTRY["ssondo"].encode_column(
-            {AUDIO_FIELD: audio}, SSONDO_SAMPLE_RATE, encode
-        )
+        encode_column({AUDIO_FIELD: audio}, SSONDO_SAMPLE_RATE, encode)
 
 
 def test_ssondo_encoder_input_exact_ten_seconds_preserves_window() -> None:

@@ -58,7 +58,7 @@ from synth_setter.data.vst.shapes import (
     T5GEMMA_FIELD,
     mel_n_frames_from_samples,
 )
-from synth_setter.model_cache import checkpoint_tree_sha256
+from synth_setter.model_cache import checkpoint_tree_sha256, retry_external_io
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.matpac_plus import (
     DEFAULT_MATPAC_PLUS_CHECKPOINT,
@@ -74,6 +74,15 @@ from synth_setter.pipeline.data.meanaudio import (
     encode_meanaudio_column,
     load_meanaudio_audio_encoder,
     meanaudio_artifact_digest,
+)
+from synth_setter.pipeline.data.param_language import (
+    EMBEDDING_MODEL,
+    EMBEDDING_REVISION,
+    PARAM_DESCRIPTION_FIELD,
+    PARAM_NAME_EMBEDDING_FIELD,
+    PARAM_NAME_EMBEDDING_REGISTRY_KEY,
+    matryoshka_vectors,
+    param_name_dataset_metadata,
 )
 from synth_setter.pipeline.data.param_shift import (
     PARAM_SHIFT_INPUT_FIELDS,
@@ -171,6 +180,7 @@ type Encoder = (
 )
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[Mapping[str, np.ndarray], int, Encoder], pa.Array]
+type EncodeTextColumnFn = Callable[[Mapping[str, np.ndarray], Encoder], pa.Array]
 type ResolveArtifactIdentityFn = Callable[[str], str]
 
 
@@ -236,7 +246,7 @@ class EmbeddingSpec:
 
     .. attribute :: encode_column
 
-        Decoded source columns, sample rate, and encoder to one Arrow column.
+        Audio-aware column callback, or ``None`` for text-only input.
 
     .. attribute :: resolve_artifact_identity
 
@@ -245,6 +255,10 @@ class EmbeddingSpec:
     .. attribute :: input_fields
 
         Dataset columns supplying this embedding's encoder input.
+
+    .. attribute :: encode_text_column
+
+        Text-only encoder callback used without audio metadata, or ``None``.
 
     .. attribute :: rerenders
 
@@ -258,10 +272,19 @@ class EmbeddingSpec:
     co_resident: bool
     index: IndexSpec | None
     load_encoder: LoadEncoderFn
-    encode_column: EncodeColumnFn
+    encode_column: EncodeColumnFn | None
     resolve_artifact_identity: ResolveArtifactIdentityFn
     input_fields: tuple[str, ...] = (AUDIO_FIELD,)
+    encode_text_column: EncodeTextColumnFn | None = None
     rerenders: bool = False
+
+    def __post_init__(self) -> None:
+        """Require exactly one audio-aware or text-only encoding callback.
+
+        :raises ValueError: Both callback forms are set or both are absent.
+        """
+        if (self.encode_column is None) == (self.encode_text_column is None):
+            raise ValueError("embedding spec requires exactly one encoding callback")
 
 
 EMBEDDING_POLICY_VERSION = 1
@@ -350,10 +373,7 @@ def _sketch_artifact_identity(checkpoint: str) -> str:
     :returns: Versioned installed-package and checkpoint identity.
     """
     version = importlib.metadata.version("pesto-pitch")
-    identity = (
-        f"package:{version};checkpoint:{checkpoint};"
-        f"storage:avgmax{SKETCH_STORAGE_FRAMES}"
-    )
+    identity = f"package:{version};checkpoint:{checkpoint};storage:avgmax{SKETCH_STORAGE_FRAMES}"
     return _versioned_artifact_identity("sketch", identity)
 
 
@@ -696,9 +716,7 @@ def _load_meanaudio_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -
     )
 
 
-def _load_pupujepa_tiny_spec_encoder(
-    checkpoint: str, config: AddEmbeddingsConfig
-) -> Encoder:
+def _load_pupujepa_tiny_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Load PupuJEPA through the registry's uniform factory signature.
 
     :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
@@ -712,9 +730,7 @@ def _load_pupujepa_tiny_spec_encoder(
     )
 
 
-def _load_pupujepa_large_spec_encoder(
-    checkpoint: str, config: AddEmbeddingsConfig
-) -> Encoder:
+def _load_pupujepa_large_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Load PupuJEPA Large through the registry factory signature.
 
     :param checkpoint: Canonical Hugging Face repo or local checkpoint directory.
@@ -737,6 +753,79 @@ def _load_param_shift_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
     """
     del checkpoint
     return load_param_shifter(config)
+
+
+def _param_name_artifact_identity(checkpoint: str) -> str:
+    """Return the pinned EmbeddingGemma artifact identity.
+
+    :param checkpoint: Requested model identifier.
+    :returns: Immutable model and revision identity.
+    :raises ValueError: A checkpoint other than the pinned model is selected.
+    """
+    if checkpoint != EMBEDDING_MODEL:
+        raise ValueError(f"param_name checkpoint must be {EMBEDDING_MODEL!r}")
+    return f"huggingface:{EMBEDDING_MODEL}@{EMBEDDING_REVISION}"
+
+
+def _load_param_name_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
+    """Load the pinned document encoder for canonical field descriptions.
+
+    :param checkpoint: Pinned EmbeddingGemma model identifier.
+    :param config: Run config supplying device and Matryoshka width.
+    :returns: Batch encoder over canonical description strings.
+    """
+    from httpx import TransportError
+    from sentence_transformers import SentenceTransformer
+
+    _param_name_artifact_identity(checkpoint)
+
+    @retry_external_io(retry_exceptions=(OSError, TransportError))
+    def load_model() -> SentenceTransformer:
+        """Construct the pinned encoder with bounded transport retries.
+
+        :returns: Encoder loaded on the configured device.
+        """
+        return SentenceTransformer(
+            checkpoint, revision=EMBEDDING_REVISION, device=_resolve_torch_device(config.device)
+        )
+
+    model = load_model()
+    model.eval()
+    model.requires_grad_(False)
+
+    def encode(descriptions: np.ndarray) -> np.ndarray:
+        """Encode one Lance batch and select its configured Matryoshka prefix.
+
+        :param descriptions: Canonical JSON description strings.
+        :returns: Unit-normalized field vectors.
+        """
+        full = model.encode_document(
+            descriptions.tolist(), convert_to_numpy=True, show_progress_bar=False
+        )
+        return matryoshka_vectors(
+            np.asarray(full, dtype=np.float32), config.param_name_embedding_dimension
+        )
+
+    return encode
+
+
+def _encode_param_name_column(sources: Mapping[str, np.ndarray], encoder: Encoder) -> pa.Array:
+    """Encode canonical parameter descriptions as unit vectors.
+
+    :param sources: Decoded source carrying one description per logical field.
+    :param encoder: Pinned document encoder.
+    :returns: Fixed-size-list float32 embedding column.
+    :raises ValueError: The encoder returns wrong or nonfinite rows.
+    """
+    descriptions = sources[PARAM_DESCRIPTION_FIELD]
+    encode = cast("ParamTextEncodeFn", encoder)
+    embeddings = _finite_embedding(PARAM_NAME_EMBEDDING_FIELD, encode(descriptions))
+    if embeddings.ndim != 2 or len(embeddings) != len(descriptions):
+        raise ValueError(
+            f"{PARAM_NAME_EMBEDDING_FIELD} encoder produced shape {embeddings.shape}, expected "
+            f"{len(descriptions)} rows of vectors"
+        )
+    return _fixed_size_list(embeddings, embeddings.shape[1])
 
 
 def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
@@ -776,9 +865,7 @@ def _require_stored_mono(audio: np.ndarray) -> None:
     :raises ValueError: The batch is not ``(B, 1, T)`` mono.
     """
     if audio.ndim != 3 or audio.shape[1] != 1:
-        raise ValueError(
-            f"pyfdn_sketch requires stored mono (B, 1, T) audio, got {audio.shape}"
-        )
+        raise ValueError(f"pyfdn_sketch requires stored mono (B, 1, T) audio, got {audio.shape}")
 
 
 class PyFDNSketchPoolEncoder:
@@ -824,9 +911,7 @@ class PyFDNSketchPoolEncoder:
         self._pool.shutdown()
 
 
-def _load_pyfdn_sketch_encoder(
-    checkpoint: str, config: AddEmbeddingsConfig
-) -> Encoder:
+def _load_pyfdn_sketch_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
     """Bind the canonical checkpoint-free pyFDN sketch extractor.
 
     :param checkpoint: Empty registry placeholder.
@@ -845,9 +930,9 @@ def _load_pyfdn_sketch_encoder(
             pyfdn_controls.extract_reverb_sketch,
         )
         _require_stored_mono(audio)
-        return np.stack(
-            [extract(row[0], sample_rate) for row in audio]
-        ).astype(np.float32, copy=False)
+        return np.stack([extract(row[0], sample_rate) for row in audio]).astype(
+            np.float32, copy=False
+        )
 
     return encode
 
@@ -875,9 +960,7 @@ def _encode_pyfdn_sketch_column(
             f"expected {expected_shape}"
         )
     if controls.min() < -1.0 or controls.max() > 1.0:
-        raise ValueError(
-            f"{PYFDN_SKETCH_STRUCT_FIELD} controls out of bounds; expected [-1, 1]"
-        )
+        raise ValueError(f"{PYFDN_SKETCH_STRUCT_FIELD} controls out of bounds; expected [-1, 1]")
     return pyfdn_sketch_struct_array(controls)
 
 
@@ -976,9 +1059,7 @@ def _load_sketch_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> E
 
     device = _resolve_torch_device(config.device)
     # Surfaces a silently-CPU run in the first log lines (#3131).
-    logger.info(
-        "sketch_encoder_loaded", device=device, encode_batch=config.sketch_encode_batch
-    )
+    logger.info("sketch_encoder_loaded", device=device, encode_batch=config.sketch_encode_batch)
     load_pesto_model(checkpoint, device=device)
     return functools.partial(_sketch_encode, device=device, max_batch=config.sketch_encode_batch)
 
@@ -1022,6 +1103,18 @@ def _encode_sketch_column(
 
 
 EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
+    PARAM_NAME_EMBEDDING_REGISTRY_KEY: EmbeddingSpec(
+        name=PARAM_NAME_EMBEDDING_REGISTRY_KEY,
+        column=PARAM_NAME_EMBEDDING_FIELD,
+        default_checkpoint=EMBEDDING_MODEL,
+        co_resident=True,
+        index=None,
+        load_encoder=_load_param_name_spec_encoder,
+        encode_column=None,
+        encode_text_column=_encode_param_name_column,
+        resolve_artifact_identity=_param_name_artifact_identity,
+        input_fields=(PARAM_DESCRIPTION_FIELD,),
+    ),
     "clap": EmbeddingSpec(
         name="clap",
         column=CLAP_FIELD,
@@ -1272,14 +1365,14 @@ def _resume_identity_path(resume_cache: Path) -> Path:
 def _resume_source_identity(
     dataset: lance.LanceDataset,
     *,
-    sample_rate: int,
+    sample_rate: int | None,
     batch_size: int,
     input_fields: Sequence[str],
 ) -> str:
     """Identify the exact source and batching contract behind cached UDF outputs.
 
     :param dataset: Lance source read by the UDF.
-    :param sample_rate: Dataset sample rate in Hz.
+    :param sample_rate: Dataset sample rate, or ``None`` for text-only input.
     :param batch_size: Rows passed to each UDF invocation.
     :param input_fields: Ordered source columns read by the UDF.
     :returns: Stable source-policy identity.
@@ -1391,6 +1484,8 @@ def _resolve_artifact_identity(spec: EmbeddingSpec, config: AddEmbeddingsConfig)
     policy_values: tuple[str, ...] = ()
     if PARAM_ARRAY_FIELD in spec.input_fields:
         policy_values += (config.param_spec_name or "", config.param_text_normalizer)
+    if spec.name == PARAM_NAME_EMBEDDING_REGISTRY_KEY:
+        policy_values += (str(config.param_name_embedding_dimension),)
     if spec.rerenders:
         policy_values += tuple(param_shift_policy_values(config))
     if not policy_values:
@@ -1462,7 +1557,7 @@ def _decoded_column(column: pa.Array) -> np.ndarray:
 
 def _encode_columns(
     sources: Mapping[str, np.ndarray],
-    sample_rate: int,
+    sample_rate: int | None,
     specs: Sequence[EmbeddingSpec],
     encoders: Sequence[Encoder],
     stage_ms: dict[str, float] | None = None,
@@ -1470,16 +1565,22 @@ def _encode_columns(
     """Encode one decoded source batch through every policy in a UDF pass.
 
     :param sources: Decoded input columns keyed by field name.
-    :param sample_rate: Dataset sample rate in Hz.
+    :param sample_rate: Dataset sample rate, or ``None`` for text-only policies.
     :param specs: Policies sharing this pass.
     :param encoders: Encoders aligned with ``specs``.
     :param stage_ms: Optional destination for per-encoder wall times.
     :returns: Record batch containing each selected embedding column.
+    :raises ValueError: An audio-aware policy receives no sample-rate metadata.
     """
     columns: dict[str, pa.Array] = {}
     for spec, encoder in zip(specs, encoders, strict=True):
         started_at = time.monotonic()
-        encoded = spec.encode_column(sources, sample_rate, encoder)
+        if spec.encode_text_column is not None:
+            encoded = spec.encode_text_column(sources, encoder)
+        elif spec.encode_column is not None and sample_rate is not None:
+            encoded = spec.encode_column(sources, sample_rate, encoder)
+        else:
+            raise ValueError(f"embedding policy {spec.name!r} requires sample-rate metadata")
         columns[spec.column] = encoded
         if spec.index is not None:
             pooled = _pooled_vector_column(encoded, spec.index)
@@ -1494,14 +1595,14 @@ def _encode_columns(
 def _write_columns(
     dataset: lance.LanceDataset,
     specs: Sequence[EmbeddingSpec],
-    sample_rate: int,
+    sample_rate: int | None,
     config: AddEmbeddingsConfig,
 ) -> None:
     """Append one co-resident policy group as a single Lance UDF commit.
 
-    :param dataset: Open Lance dataset carrying fixed-shape audio.
+    :param dataset: Open Lance dataset carrying input fields.
     :param specs: Non-empty policy group whose encoders may coexist.
-    :param sample_rate: Dataset sample rate in Hz.
+    :param sample_rate: Dataset sample rate, or ``None`` for text-only policies.
     :param config: Batch, checkpoint, logging, and resume settings.
     :raises ValueError: Policies are empty or dataset write preconditions fail.
     :raises RuntimeError: ``add_columns`` returns without committing every
@@ -1593,9 +1694,7 @@ def _write_columns(
         )
         dataset.add_columns(udf, read_columns=input_fields, batch_size=config.lance_batch_size)
         # A zero-batch replay is valid only when the target columns are already committed.
-        uncommitted = [
-            column for column in output_columns if column not in dataset.schema.names
-        ]
+        uncommitted = [column for column in output_columns if column not in dataset.schema.names]
         if uncommitted:
             raise RuntimeError(
                 f"add_columns returned without committing column(s) {uncommitted} "
@@ -1679,6 +1778,22 @@ def build_index(
     return True
 
 
+def embedding_field_metadata(
+    name: str, config: AddEmbeddingsConfig
+) -> dict[bytes, bytes]:
+    """Return persisted model and policy identity for one registry field.
+
+    :param name: Selected embedding registry key.
+    :param config: Validated write policy.
+    :returns: Arrow field metadata binding the registry name and artifact identity.
+    """
+    spec = EMBEDDING_REGISTRY[name]
+    return {
+        _EMBEDDING_NAME_METADATA: name.encode(),
+        _EMBEDDING_ARTIFACT_METADATA: _resolve_artifact_identity(spec, config).encode(),
+    }
+
+
 def _embedding_output_schema(
     schema: pa.Schema,
     specs: Sequence[EmbeddingSpec],
@@ -1701,10 +1816,8 @@ def _embedding_output_schema(
             if identities is None
             else identities[spec.name]
         )
-        metadata = {
-            _EMBEDDING_NAME_METADATA: spec.name.encode(),
-            _EMBEDDING_ARTIFACT_METADATA: identity.encode(),
-        }
+        metadata = embedding_field_metadata(spec.name, config)
+        metadata[_EMBEDDING_ARTIFACT_METADATA] = identity.encode()
         fields.extend(
             schema.field(column).with_metadata(metadata) for column in _output_columns(spec)
         )
@@ -1741,8 +1854,7 @@ def _missing_embedding_specs(
             column: dataset.schema.field(column).metadata or {} for column in expected
         }
         has_identity = any(
-            _EMBEDDING_NAME_METADATA in metadata
-            or _EMBEDDING_ARTIFACT_METADATA in metadata
+            _EMBEDDING_NAME_METADATA in metadata or _EMBEDDING_ARTIFACT_METADATA in metadata
             for metadata in field_metadata.values()
         )
         if not has_identity:
@@ -1816,9 +1928,7 @@ def _matching_index_exists(
     """
     rows = dataset.count_rows()
     num_partitions = (
-        max(1, round(rows**0.5))
-        if config.num_partitions is None
-        else config.num_partitions
+        max(1, round(rows**0.5)) if config.num_partitions is None else config.num_partitions
     )
     num_sub_vectors = config.num_sub_vectors or index.num_sub_vectors
     metric = config.metric
@@ -1843,13 +1953,21 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
     """Append registry entries to one Lance dataset and resume missing index work.
 
     :param config: Validated dataset, embedding, checkpoint, and write settings.
+    :raises ValueError: Parameter-name width disagrees with dataset provenance.
     """
     from synth_setter.pipeline.data.lance_shard import read_shard_metadata
 
     specs = [EMBEDDING_REGISTRY[name] for name in config.embeddings]
     dataset = _open_lance_dataset(config.lance_uri)
-    sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)
+    if PARAM_NAME_EMBEDDING_REGISTRY_KEY in config.embeddings:
+        metadata = param_name_dataset_metadata(dataset.schema)
+        if metadata.dimension != config.param_name_embedding_dimension:
+            raise ValueError("param_name embedding dimension does not match dataset provenance")
     pending = _missing_embedding_specs(dataset, specs, config)
+    needs_sample_rate = any(spec.encode_text_column is None for spec in pending)
+    sample_rate = (
+        int(read_shard_metadata(dataset.schema).sample_rate) if needs_sample_rate else None
+    )
     if config.build_index:
         for spec in specs:
             if spec.index is None:
@@ -1858,7 +1976,8 @@ def add_embeddings(config: AddEmbeddingsConfig) -> None:
             if _nested_schema_field(dataset.schema, vector_column) is not None:
                 _matching_index_exists(dataset, vector_column, index=spec.index, config=config)
     if pending:
-        _validate_write_source(dataset, config.lance_batch_size)
+        input_fields = sorted({field for spec in pending for field in spec.input_fields})
+        _validate_write_source(dataset, config.lance_batch_size, input_fields)
     output_columns = [column for spec in specs for column in _output_columns(spec)]
 
     logger.info(

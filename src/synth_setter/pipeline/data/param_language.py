@@ -1,29 +1,92 @@
-"""Offline language descriptions in logical parameter-token order."""
+"""Canonical parameter descriptions and their dataset-level Lance embeddings."""
+
+from __future__ import annotations
 
 import hashlib
 import json
-import zipfile
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
-import structlog
+import pyarrow as pa
 from pydantic import BaseModel, ConfigDict
 
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
-from synth_setter.model_cache import retry_external_io
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.pipeline import r2_io
 
-PARAM_LANGUAGE_FILENAME = "param_language.npz"
+if TYPE_CHECKING:
+    from lance import LanceDataset
+
+PARAM_NAME_DATASET = "params.lance"
+PARAM_NAME_COMPLETE = "params.lance.complete"
+PARAM_FIELD_INDEX_FIELD = "field_index"
+PARAM_FIELD_NAME_FIELD = "field_name"
+PARAM_DESCRIPTION_FIELD = "description"
+PARAM_NAME_EMBEDDING_FIELD = "param_name_embedding"
+PARAM_NAME_EMBEDDING_REGISTRY_KEY = "param_name"
 EMBEDDING_MODEL = "google/embeddinggemma-300m"
 EMBEDDING_REVISION = "57c266a740f537b4dc058e1b0cda161fd15afa75"
+_PARAM_NAME_METADATA_KEY = b"synth_setter:param_name_metadata"
+_SUPPORTED_DIMENSIONS = (128, 256, 512, 768)
 
-logger = structlog.get_logger(__name__)
+
+class ParamNameDatasetMetadata(BaseModel):
+    """Strict identity for a field-description Lance dataset.
+
+    .. attribute :: model_config
+
+        Frozen JSON boundary rejecting unknown metadata.
+
+    .. attribute :: version
+
+        Dataset schema version.
+
+    .. attribute :: model
+
+        Pinned embedding model identifier.
+
+    .. attribute :: revision
+
+        Immutable model revision.
+
+    .. attribute :: extraction
+
+        Embedding and Matryoshka extraction contract.
+
+    .. attribute :: dimension
+
+        Selected embedding width.
+
+    .. attribute :: param_spec_name
+
+        Registered logical field layout.
+
+    .. attribute :: synth_name
+
+        Synth identity included in descriptions.
+
+    .. attribute :: descriptions_sha256
+
+        Digest of descriptions in logical-field order.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    version: Literal[1] = 1
+    model: Literal["google/embeddinggemma-300m"] = EMBEDDING_MODEL
+    revision: Literal["57c266a740f537b4dc058e1b0cda161fd15afa75"] = EMBEDDING_REVISION
+    extraction: Literal["encode_document;truncate;l2_normalize"] = (
+        "encode_document;truncate;l2_normalize"
+    )
+    dimension: Literal[128, 256, 512, 768]
+    param_spec_name: str
+    synth_name: str
+    descriptions_sha256: str
 
 
 def describe_fields(param_spec_name: str, synth_name: str) -> list[str]:
-    """Describe spec metadata without interpreting renderer-native ranges as physical units.
+    """Describe fields without interpreting renderer-native ranges as physical units.
 
     :param param_spec_name: Registered parameter specification.
     :param synth_name: Synth identity recorded with the dataset.
@@ -47,17 +110,17 @@ def describe_fields(param_spec_name: str, synth_name: str) -> list[str]:
 
 
 def matryoshka_vectors(embeddings: np.ndarray, dimension: int) -> np.ndarray:
-    """Truncate EmbeddingGemma vectors and renormalize their retained coordinates.
+    """Truncate EmbeddingGemma vectors and normalize retained coordinates.
 
     :param embeddings: Native-width float32 vectors shaped ``(fields, 768)``.
     :param dimension: Supported Matryoshka width.
     :returns: Unit-normalized float32 matrix shaped ``(fields, dimension)``.
     :raises ValueError: Width, values, or prefix norms are invalid.
     """
-    if dimension not in (128, 256, 512, 768):
+    if dimension not in _SUPPORTED_DIMENSIONS:
         raise ValueError("unsupported EmbeddingGemma Matryoshka dimension")
     if embeddings.ndim != 2:
-        raise ValueError("parameter language embeddings must be a matrix")
+        raise ValueError("parameter name embeddings must be a matrix")
     _validate_vectors(embeddings, embeddings.shape[0], 768)
     prefix = embeddings[:, :dimension].copy()
     norms = np.linalg.norm(prefix.astype(np.float64), axis=1, keepdims=True)
@@ -66,234 +129,203 @@ def matryoshka_vectors(embeddings: np.ndarray, dimension: int) -> np.ndarray:
     return (prefix / norms).astype(np.float32)
 
 
-def encode_param_language(
-    param_spec_name: str, synth_name: str, *, device: str = "cpu", batch_size: int = 16
-) -> np.ndarray:
-    """Encode static descriptions with the pinned EmbeddingGemma document pipeline.
-
-    :param param_spec_name: Registered parameter specification.
-    :param synth_name: Dataset synth identity.
-    :param device: Torch inference device.
-    :param batch_size: Number of descriptions per inference batch.
-    :returns: Native-width float32 embeddings shaped ``(fields, 768)``.
-    """
-    from httpx import TransportError
-    from sentence_transformers import SentenceTransformer
-
-    @retry_external_io(retry_exceptions=(OSError, TransportError))
-    def load_model() -> SentenceTransformer:
-        """Load the pinned encoder with bounded retries for transport failures.
-
-        :returns: Encoder loaded from the pinned checkpoint.
-        """
-        return SentenceTransformer(EMBEDDING_MODEL, revision=EMBEDDING_REVISION, device=device)
-
-    model = load_model()
-    model.eval()
-    model.requires_grad_(False)
-    descriptions = describe_fields(param_spec_name, synth_name)
-    embeddings = model.encode_document(
-        descriptions, batch_size=batch_size, convert_to_numpy=True, show_progress_bar=False
-    )
-    return matryoshka_vectors(np.asarray(embeddings, dtype=np.float32), 768)
-
-
-class ParamLanguageMetadata(BaseModel):
-    """Identity and extraction contract for a dataset-level field embedding table.
-
-    .. attribute :: model_config
-
-        Strict, frozen JSON boundary with unknown keys rejected.
-
-    .. attribute :: version
-
-        Artifact schema version.
-
-    .. attribute :: model
-
-        Matryoshka-trained encoder identifier.
-
-    .. attribute :: revision
-
-        Immutable encoder and pooling configuration revision.
-
-    .. attribute :: extraction
-
-        Document prompt, checkpoint pooling, prefix selection, and normalization contract.
-
-    .. attribute :: dimension
-
-        Retained Matryoshka width.
-
-    .. attribute :: param_spec_name
-
-        Registered numeric parameter specification.
-
-    .. attribute :: synth_name
-
-        Dataset synth identity.
-
-    .. attribute :: descriptions
-
-        Canonical metadata in logical-field order.
-
-    .. attribute :: descriptions_sha256
-
-        Digest of ordered descriptions.
-
-    .. attribute :: embeddings_sha256
-
-        Digest of canonical float32 tensor bytes.
-    """
-
-    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
-
-    version: Literal[1] = 1
-    model: Literal["google/embeddinggemma-300m"] = EMBEDDING_MODEL
-    revision: Literal["57c266a740f537b4dc058e1b0cda161fd15afa75"] = EMBEDDING_REVISION
-    extraction: Literal["encode_document;truncate;l2_normalize"] = (
-        "encode_document;truncate;l2_normalize"
-    )
-    dimension: Literal[128, 256, 512, 768]
-    param_spec_name: str
-    synth_name: str
-    descriptions: list[str]
-    descriptions_sha256: str
-    embeddings_sha256: str
-
-
 def _description_digest(descriptions: list[str]) -> str:
-    """Hash ordered descriptions without ambiguous string concatenation.
+    """Hash ordered descriptions without ambiguous concatenation.
 
-    :param descriptions: Canonical per-field descriptions.
-    :returns: SHA256 of their JSON representation.
+    :param descriptions: Canonical description rows.
+    :returns: SHA-256 of their JSON representation.
     """
     return hashlib.sha256(json.dumps(descriptions, ensure_ascii=False).encode()).hexdigest()
 
 
-def _embedding_digest(embeddings: np.ndarray) -> str:
-    """Hash the canonical little-endian float32 representation.
-
-    :param embeddings: Field-major matrix.
-    :returns: SHA256 of contiguous tensor bytes.
-    """
-    return hashlib.sha256(embeddings.astype("<f4").tobytes()).hexdigest()
-
-
 def _validate_vectors(embeddings: np.ndarray, count: int, dimension: int) -> None:
-    """Reject malformed or nonfinite field embeddings before publication or consumption.
+    """Reject malformed field embeddings.
 
     :param embeddings: Field-major matrix.
     :param count: Expected logical field count.
-    :param dimension: Expected embedding width.
-    :raises ValueError: Shape, dtype, or values violate the artifact contract.
+    :param dimension: Expected vector width.
+    :raises ValueError: Shape, dtype, or values violate the contract.
     """
     if embeddings.shape != (count, dimension) or embeddings.dtype != np.float32:
-        raise ValueError("parameter language embeddings require aligned float32 field vectors")
+        raise ValueError("parameter name embeddings require aligned float32 field vectors")
     if not np.isfinite(embeddings).all():
-        raise ValueError("parameter language embeddings must be finite")
+        raise ValueError("parameter name embeddings must be finite")
 
 
 def _validate_unit_norm(embeddings: np.ndarray) -> None:
-    """Reject field embeddings whose rows are not unit normalized.
+    """Reject vectors outside the normalized embedding contract.
 
     :param embeddings: Validated field-major matrix.
-    :raises ValueError: Any row does not have unit norm within artifact tolerance.
+    :raises ValueError: A row is not unit normalized.
     """
     norms = np.linalg.norm(embeddings.astype(np.float64), axis=1)
     if not np.allclose(norms, 1.0, rtol=1e-4, atol=1e-5):
-        raise ValueError("parameter language embeddings must have unit norm")
+        raise ValueError("parameter name embeddings must have unit norm")
 
 
-def save_param_language(
-    path: Path, embeddings: np.ndarray, param_spec_name: str, synth_name: str
+def write_param_name_dataset(
+    path: Path, param_spec_name: str, synth_name: str, *, dimension: int = 128
 ) -> None:
-    """Write a pickle-free embedding table with its spec and encoder identity.
+    """Write one minimal Lance row per logical parameter field.
 
-    :param path: Destination NPZ path.
-    :param embeddings: Float32 field-major matrix from the pinned encoder.
-    :param param_spec_name: Registered parameter specification.
-    :param synth_name: Dataset synth identity.
-    :raises ValueError: The embedding matrix is malformed.
+    :param path: Destination ``params.lance`` directory.
+    :param param_spec_name: Registered logical field layout.
+    :param synth_name: Synth identity included in every canonical description.
+    :param dimension: Selected Matryoshka embedding width.
+    :raises ValueError: The selected dimension is unsupported.
     """
+    from synth_setter.pipeline.data.lance_shard import write_lance_dataset
+
+    if dimension not in _SUPPORTED_DIMENSIONS:
+        raise ValueError("unsupported EmbeddingGemma Matryoshka dimension")
+    spec = resolve_param_spec(ParamSpecName(param_spec_name))
     descriptions = describe_fields(param_spec_name, synth_name)
-    if embeddings.ndim != 2:
-        raise ValueError("parameter language embeddings must be a matrix")
-    _validate_vectors(embeddings, len(descriptions), embeddings.shape[1])
-    _validate_unit_norm(embeddings)
-    metadata = ParamLanguageMetadata(
-        dimension=embeddings.shape[1],
+    names = [field.name for field, _ in spec.encoded_slices()]
+    metadata = ParamNameDatasetMetadata(
+        dimension=dimension,
         param_spec_name=param_spec_name,
         synth_name=synth_name,
-        descriptions=descriptions,
         descriptions_sha256=_description_digest(descriptions),
-        embeddings_sha256=_embedding_digest(embeddings),
     )
-    with TemporaryDirectory(dir=path.parent) as temporary_directory:
-        temporary_path = Path(temporary_directory) / PARAM_LANGUAGE_FILENAME
-        np.savez(
-            temporary_path,
-            embeddings=embeddings,
-            metadata=np.array(metadata.model_dump_json()),
-        )
-        temporary_path.replace(path)
+    schema = pa.schema(
+        [
+            pa.field(PARAM_FIELD_INDEX_FIELD, pa.int32(), nullable=False),
+            pa.field(PARAM_FIELD_NAME_FIELD, pa.string(), nullable=False),
+            pa.field(PARAM_DESCRIPTION_FIELD, pa.string(), nullable=False),
+        ],
+        metadata={_PARAM_NAME_METADATA_KEY: metadata.model_dump_json().encode()},
+    )
+    table = pa.Table.from_arrays(
+        [pa.array(range(len(names))), pa.array(names), pa.array(descriptions)], schema=schema
+    )
+    write_lance_dataset(path, schema, table.to_batches())
 
 
-def load_param_language(
-    path: Path, param_spec_name: str, synth_name: str
-) -> tuple[np.ndarray, ParamLanguageMetadata]:
-    """Load an artifact only when it agrees with the current spec and extraction contract.
+def _open_param_name_dataset(path: Path | str) -> LanceDataset:
+    """Open a local or credentialed R2 parameter-name dataset.
 
-    :param path: Pickle-free NPZ artifact.
-    :param param_spec_name: Expected registered parameter specification.
-    :param synth_name: Expected synth identity.
-    :returns: Float32 field matrix and validated provenance.
-    :raises ValueError: Metadata, vectors, or their fingerprints do not match.
+    :param path: Local path or R2 URI.
+    :returns: Open Lance dataset.
     """
-    with np.load(path, allow_pickle=False) as archive:
-        metadata = ParamLanguageMetadata.model_validate_json(str(archive["metadata"].item()))
-        embeddings = archive["embeddings"]
-    expected = describe_fields(param_spec_name, synth_name)
+    import lance
+
+    uri = str(path)
+    if r2_io.is_r2_uri(uri):
+        r2_io.ensure_r2_env_loaded()
+        return lance.dataset(r2_io.to_s3_uri(uri), storage_options=r2_io.r2_storage_options())
+    return lance.dataset(uri)
+
+
+def param_name_dataset_metadata(schema: pa.Schema) -> ParamNameDatasetMetadata:
+    """Validate and return parameter-name provenance from an Arrow schema.
+
+    :param schema: Field dataset schema.
+    :returns: Strict model, revision, dimension, and field-layout identity.
+    :raises ValueError: Provenance metadata is absent.
+    """
+    encoded = (schema.metadata or {}).get(_PARAM_NAME_METADATA_KEY)
+    if encoded is None:
+        raise ValueError("parameter name dataset lacks provenance metadata")
+    return ParamNameDatasetMetadata.model_validate_json(encoded)
+
+
+def load_param_name_embeddings(
+    path: Path | str, param_spec_name: str, synth_name: str
+) -> tuple[np.ndarray, ParamNameDatasetMetadata]:
+    """Load field vectors in explicit logical-field-index order.
+
+    :param path: Local or R2-backed ``params.lance`` directory.
+    :param param_spec_name: Expected registered logical field layout.
+    :param synth_name: Expected synth identity.
+    :returns: Unit-normalized float32 field matrix and validated provenance.
+    :raises ValueError: Schema, identity, row order, descriptions, or vectors mismatch.
+    """
+    dataset = _open_param_name_dataset(path)
+    metadata = param_name_dataset_metadata(dataset.schema)
+    expected_descriptions = describe_fields(param_spec_name, synth_name)
+    spec = resolve_param_spec(ParamSpecName(param_spec_name))
+    expected_names = [field.name for field, _ in spec.encoded_slices()]
     if (
         metadata.param_spec_name != param_spec_name
         or metadata.synth_name != synth_name
-        or metadata.descriptions != expected
-        or metadata.descriptions_sha256 != _description_digest(expected)
+        or metadata.descriptions_sha256 != _description_digest(expected_descriptions)
     ):
-        raise ValueError("parameter language artifact does not match the current spec")
-    _validate_vectors(embeddings, len(expected), metadata.dimension)
+        raise ValueError("parameter name dataset does not match the current spec")
+    required = {
+        PARAM_FIELD_INDEX_FIELD,
+        PARAM_FIELD_NAME_FIELD,
+        PARAM_DESCRIPTION_FIELD,
+        PARAM_NAME_EMBEDDING_FIELD,
+    }
+    if not required.issubset(dataset.schema.names):
+        raise ValueError("parameter name dataset lacks required fields")
+    from synth_setter.pipeline.data.add_embeddings import embedding_field_metadata
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    identity = embedding_field_metadata(
+        PARAM_NAME_EMBEDDING_REGISTRY_KEY,
+        AddEmbeddingsConfig(
+            lance_uri=str(path),
+            embeddings=(PARAM_NAME_EMBEDDING_REGISTRY_KEY,),
+            build_index=False,
+            param_name_embedding_dimension=metadata.dimension,
+        ),
+    )
+    field_metadata = dataset.schema.field(PARAM_NAME_EMBEDDING_FIELD).metadata or {}
+    if any(field_metadata.get(key) != value for key, value in identity.items()):
+        raise ValueError("parameter name embedding provenance does not match the registry")
+    table = dataset.to_table(columns=sorted(required)).sort_by(PARAM_FIELD_INDEX_FIELD)
+    if table[PARAM_FIELD_INDEX_FIELD].to_pylist() != list(range(len(expected_names))):
+        raise ValueError("parameter name dataset field indices are not complete")
+    if table[PARAM_FIELD_NAME_FIELD].to_pylist() != expected_names:
+        raise ValueError("parameter name dataset field names do not match the current spec")
+    if table[PARAM_DESCRIPTION_FIELD].to_pylist() != expected_descriptions:
+        raise ValueError("parameter name dataset descriptions do not match the current spec")
+    vectors = table[PARAM_NAME_EMBEDDING_FIELD].combine_chunks()
+    if (
+        not pa.types.is_fixed_size_list(vectors.type)
+        or vectors.type.list_size != metadata.dimension
+    ):
+        raise ValueError("parameter name embedding column has the wrong width")
+    embeddings = np.asarray(
+        vectors.values.to_numpy().reshape(len(expected_names), metadata.dimension),
+        dtype=np.float32,
+    )
+    _validate_vectors(embeddings, len(expected_names), metadata.dimension)
     _validate_unit_norm(embeddings)
-    if metadata.embeddings_sha256 != _embedding_digest(embeddings):
-        raise ValueError("parameter language embedding checksum mismatch")
     return embeddings, metadata
 
 
-def prepare_param_language(
-    work_dir: Path, param_spec_name: str, synth_name: str, *, dimension: int
+def prepare_param_name_embeddings(
+    work_dir: Path,
+    param_spec_name: str,
+    synth_name: str,
+    *,
+    dimension: int,
+    device: str = "cpu",
 ) -> Path:
-    """Cache full-width embeddings locally and stage the selected width for finalization.
+    """Build a minimal field dataset and augment it through ``add_embeddings``.
 
-    :param work_dir: Existing finalizer scratch directory.
-    :param param_spec_name: Registered parameter specification.
-    :param synth_name: Dataset synth identity.
-    :param dimension: Supported output width.
-    :returns: Validated, staged dataset-level NPZ path.
-    :raises ValueError: Requested width or freshly encoded vectors are invalid.
+    :param work_dir: Finalizer scratch directory receiving ``params.lance``.
+    :param param_spec_name: Registered logical field layout.
+    :param synth_name: Synth identity included in canonical descriptions.
+    :param dimension: Selected Matryoshka embedding width.
+    :param device: Torch device used by the shared embedding API.
+    :returns: Validated local ``params.lance`` path.
     """
-    cache_path = work_dir / "param_language_full.npz"
-    embeddings = None
-    if cache_path.exists():
-        try:
-            embeddings, metadata = load_param_language(cache_path, param_spec_name, synth_name)
-            if metadata.dimension != 768:
-                raise ValueError("parameter language full cache requires native width")
-        except (OSError, ValueError, EOFError, zipfile.BadZipFile, KeyError):
-            embeddings = None
-            logger.warning("param_language_cache_invalid", path=str(cache_path))
-    if embeddings is None:
-        embeddings = encode_param_language(param_spec_name, synth_name)
-        save_param_language(cache_path, embeddings, param_spec_name, synth_name)
-    output = work_dir / PARAM_LANGUAGE_FILENAME
-    selected = matryoshka_vectors(embeddings, dimension)
-    save_param_language(output, selected, param_spec_name, synth_name)
-    return output
+    from synth_setter.pipeline.data.add_embeddings import add_embeddings
+    from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+
+    path = work_dir / PARAM_NAME_DATASET
+    write_param_name_dataset(path, param_spec_name, synth_name, dimension=dimension)
+    add_embeddings(
+        AddEmbeddingsConfig(
+            lance_uri=str(path),
+            embeddings=(PARAM_NAME_EMBEDDING_REGISTRY_KEY,),
+            device=device,
+            build_index=False,
+            param_name_embedding_dimension=dimension,
+        )
+    )
+    load_param_name_embeddings(path, param_spec_name, synth_name)
+    return path

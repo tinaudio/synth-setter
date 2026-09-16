@@ -92,10 +92,21 @@ synth-setter-add-embeddings \
   num_workers=4
 ```
 
+Parameter-description datasets use the same API without audio metadata:
+
+```bash
+synth-setter-add-embeddings \
+  lance_uri=/path/to/params.lance \
+  'embeddings=[param_name]' \
+  param_name_embedding_dimension=128 \
+  build_index=false
+```
+
 The selected columns must not already exist. Registry keys, defaults, batching, indexing, and
 resume-cache settings are authoritative in
 [`add_embeddings.yaml`](../../src/synth_setter/configs/add_embeddings.yaml) and the
-`EMBEDDING_REGISTRY` used by its entrypoint.
+`EMBEDDING_REGISTRY` used by its entrypoint. Dataset finalization constructs and invokes this
+text-only operation automatically when `param_name_embedding=true`.
 
 ## Train
 

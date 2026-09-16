@@ -216,7 +216,9 @@ docs:
       - pattern: "src/synth_setter/same.py"
         covers: "Shared SAME checkpoint resolution, autoencoder loading, and latent-frame geometry used by both add-embeddings and the training-time audio loss."
       - pattern: "src/synth_setter/pipeline/data/add_embeddings.py"
-        covers: "Registry-driven Lance embedding augmentation with resumable artifact and index identity."
+        covers: "Registry-driven audio and text-only Lance embedding augmentation with resumable artifact and index identity."
+      - pattern: "src/synth_setter/pipeline/data/param_language.py"
+        covers: "Minimal logical-field Lance datasets, canonical type/range/category descriptions, and explicit-index embedding loading."
       - pattern: "src/synth_setter/pipeline/data/ssondo.py"
         covers: "Pinned S-SONDO checkpoint resolution and audio encoding."
       - pattern: "src/synth_setter/pipeline/data/meanaudio.py"
@@ -248,7 +250,7 @@ docs:
       - pattern: "src/synth_setter/pipeline/data/add_music2latent.py"
         covers: "Adds music2latent embeddings to Lance datasets"
       - pattern: "src/synth_setter/pipeline/data/lance_materialize.py"
-        covers: "Projected Lance hydration from pinned or latest snapshots"
+        covers: "Projected split hydration plus optional finalized parameter-name Lance metadata."
 
   # ── Deterministic data-generation seeding design ─────────────────
   - doc: docs/design/deterministic-seeding.md

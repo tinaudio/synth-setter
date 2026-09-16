@@ -184,7 +184,9 @@ def test_matpac_plus_registry_encoder_valid_sequence_returns_fixed_shape_tensor(
         assert sample_rate == _SAMPLE_RATE
         return np.ones((2, MATPAC_PLUS_FRONTEND.embedding_dim, 7), dtype=np.float32)
 
-    encoded = EMBEDDING_REGISTRY["matpac_plus"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, encode)
+    encode_column = EMBEDDING_REGISTRY["matpac_plus"].encode_column
+    assert encode_column is not None
+    encoded = encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, encode)
 
     assert encoded.to_numpy_ndarray().shape == (2, MATPAC_PLUS_FRONTEND.embedding_dim, 7)
 
@@ -213,8 +215,10 @@ def test_matpac_plus_registry_encoder_invalid_output_raises(
         del source, sample_rate
         return output
 
+    encode_column = EMBEDDING_REGISTRY["matpac_plus"].encode_column
+    assert encode_column is not None
     with pytest.raises(ValueError, match=message):
-        EMBEDDING_REGISTRY["matpac_plus"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, encode)
+        encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, encode)
 
 
 def test_resolve_matpac_plus_checkpoint_hash_identical_local_file_returns_path(

@@ -249,31 +249,37 @@ def finalize_from_spec(
     if spec.output_format is not OutputFormat.LANCE:
         raise ValueError(f"unsupported output_format: {spec.output_format!r}")
 
-    if spec.param_language_dimension is not None:
+    if spec.param_name_embedding:
         from synth_setter.pipeline.data.param_language import (
-            PARAM_LANGUAGE_FILENAME,
-            load_param_language,
-            prepare_param_language,
+            PARAM_NAME_COMPLETE,
+            PARAM_NAME_DATASET,
+            load_param_name_embeddings,
+            prepare_param_name_embeddings,
         )
 
-        language_uri = f"r2://{spec.r2.bucket}/{spec.r2.prefix}{PARAM_LANGUAGE_FILENAME}"
-        if r2_io.object_size(language_uri) is None:
-            language_path = prepare_param_language(
+        language_uri = f"r2://{spec.r2.bucket}/{spec.r2.prefix}{PARAM_NAME_DATASET}"
+        language_marker_uri = f"r2://{spec.r2.bucket}/{spec.r2.prefix}{PARAM_NAME_COMPLETE}"
+        if r2_io.object_size(language_marker_uri) is not None:
+            _, metadata = load_param_name_embeddings(
+                language_uri, str(spec.render.param_spec_name), spec.render.synth.name
+            )
+            if metadata.dimension != spec.param_name_embedding_dimension:
+                raise ValueError(
+                    "published parameter name embedding dimension does not match spec"
+                )
+            logger.info("reused validated parameter name dataset at {}", language_uri)
+        else:
+            language_path = prepare_param_name_embeddings(
                 work_dir,
                 str(spec.render.param_spec_name),
                 spec.render.synth.name,
-                dimension=spec.param_language_dimension,
+                dimension=spec.param_name_embedding_dimension,
             )
-            r2_io.upload(language_path, language_uri)
+            r2_io.upload_dir(language_path, language_uri)
+            language_marker = work_dir / PARAM_NAME_COMPLETE
+            language_marker.touch()
+            r2_io.upload(language_marker, language_marker_uri)
             report_finalize_progress(progress_callback, "artifact_uploaded")
-        else:
-            with r2_io.downloaded_to_tempfile(language_uri) as language_path:
-                _, metadata = load_param_language(
-                    language_path, str(spec.render.param_spec_name), spec.render.synth.name
-                )
-            if metadata.dimension != spec.param_language_dimension:
-                raise ValueError("published parameter language dimension does not match spec")
-            logger.info("reused validated parameter language artifact at {}", language_uri)
 
     # Persist static language first so gated-model failures cannot replay Lance commits.
     finalize_lance(
@@ -305,10 +311,10 @@ def _finalized_reference_uris(spec: DatasetSpec) -> list[str]:
         if lo < hi
     ]
     references = [*split_uris, spec.r2.welford_uri(), spec.r2.stats_uri()]
-    if spec.param_language_dimension is not None:
-        from synth_setter.pipeline.data.param_language import PARAM_LANGUAGE_FILENAME
+    if spec.param_name_embedding:
+        from synth_setter.pipeline.data.param_language import PARAM_NAME_DATASET
 
-        references.append(f"r2://{spec.r2.bucket}/{spec.r2.prefix}{PARAM_LANGUAGE_FILENAME}")
+        references.append(f"r2://{spec.r2.bucket}/{spec.r2.prefix}{PARAM_NAME_DATASET}")
     return references
 
 

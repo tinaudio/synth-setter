@@ -23,10 +23,8 @@ from synth_setter.model_cache import checkpoint_tree_sha256
 from synth_setter.pipeline.data.lance_shard import iter_lance_column_rows
 from synth_setter.pipeline.data.param_language import (
     EMBEDDING_REVISION,
-    encode_param_language,
-    load_param_language,
-    matryoshka_vectors,
-    save_param_language,
+    PARAM_NAME_DATASET,
+    prepare_param_name_embeddings,
 )
 from synth_setter.pipeline.data.stats import finalize, fold_lance_shard_into_welford
 from synth_setter.pipeline.schemas.spec import _get_git_sha
@@ -116,7 +114,8 @@ def build_config(root: Path, consumer: str, variant: str, *, seed: int, steps: i
             "embedding_path": str(
                 root
                 / "dataset"
-                / ("language768.npz" if variant == "language768" else "language128.npz")
+                / ("language768" if variant == "language768" else "language128")
+                / PARAM_NAME_DATASET
             ),
             "embedding_source": variant if variant in {"random", "learned"} else "language",
             "embedding_seed": seed,
@@ -175,13 +174,17 @@ def prepare_dataset(root: Path) -> None:
     state = fold_lance_shard_into_welford((0, 0, 0), dataset / "train.lance")
     mean, std = finalize(state, mask_degenerate=True)
     np.savez(dataset / "stats.npz", mean=mean, std=std)
-    if not (dataset / "language768.npz").exists():
-        full = encode_param_language("surge_simple", "surge_simple", device="cuda")
-        save_param_language(dataset / "language768.npz", full, "surge_simple", "surge_simple")
-    full, _ = load_param_language(dataset / "language768.npz", "surge_simple", "surge_simple")
-    save_param_language(
-        dataset / "language128.npz", matryoshka_vectors(full, 128), "surge_simple", "surge_simple"
-    )
+    for dimension in (128, 768):
+        language_root = dataset / f"language{dimension}"
+        if not (language_root / PARAM_NAME_DATASET).exists():
+            language_root.mkdir()
+            prepare_param_name_embeddings(
+                language_root,
+                "surge_simple",
+                "surge_simple",
+                dimension=dimension,
+                device="cuda",
+            )
     rows = [
         np.stack(list(iter_lance_column_rows(dataset / f"{split}.lance", PARAM_ARRAY_FIELD)))
         for split in ("train", "val", "test")

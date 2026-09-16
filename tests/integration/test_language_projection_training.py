@@ -1,5 +1,6 @@
 """Real synth data traverses language-conditioned training and checkpoint consumers."""
 
+import shutil
 from pathlib import Path
 
 import hydra
@@ -14,7 +15,7 @@ from omegaconf import DictConfig, open_dict
 from synth_setter.cli.eval import evaluate
 from synth_setter.cli.train import train
 from synth_setter.models.components.language_projection import LanguageParameterProjection
-from synth_setter.pipeline.data.param_language import prepare_param_language
+from synth_setter.pipeline.data.param_language import prepare_param_name_embeddings
 from tests.conftest import PLUGIN_PATH, _surge_smoke_render_config
 from tests.helpers.grouped_projection_training import build_grouped_projection_config
 
@@ -50,7 +51,7 @@ def test_language_projection_fixed_batch_reduces_loss(
     :param surge_xt_smoke_datasets: Real rendered Surge data shared across repeated steps.
     :param tmp_path: Isolated configuration and loss-history output.
     """
-    prepare_param_language(surge_xt_smoke_datasets, "surge_4", "surge_4", dimension=128)
+    prepare_param_name_embeddings(surge_xt_smoke_datasets, "surge_4", "surge_4", dimension=128)
     cfg = (
         cfg_slap_train_lance
         if consumer == "slap"
@@ -112,7 +113,9 @@ def test_language_flow_real_audio_checkpoint_rerenders_without_metadata(
     :param tmp_path: Isolated training and evaluation output root.
     :param surge_xt_smoke_datasets: Production-rendered Surge Lance splits.
     """
-    artifact = prepare_param_language(surge_xt_smoke_datasets, "surge_4", "surge_4", dimension=128)
+    artifact = prepare_param_name_embeddings(
+        surge_xt_smoke_datasets, "surge_4", "surge_4", dimension=128
+    )
     cfg = build_grouped_projection_config(
         tmp_path, config_name="train.yaml", projection_name="language"
     )
@@ -127,7 +130,7 @@ def test_language_flow_real_audio_checkpoint_rerenders_without_metadata(
     projection = objects["model"].vector_field.projection
     assert isinstance(projection, LanguageParameterProjection)
     assert projection.text_adapter.weight.requires_grad
-    artifact.unlink()
+    shutil.rmtree(artifact)
     eval_cfg = build_grouped_projection_config(
         tmp_path, config_name="eval.yaml", projection_name="language"
     )
@@ -157,7 +160,9 @@ def test_language_slap_real_audio_checkpoint_tests_without_metadata(
     :param cfg_slap_train_lance: Tiny shipped language-SLAP configuration.
     :param surge_xt_smoke_datasets: Production-rendered Surge Lance splits.
     """
-    artifact = prepare_param_language(surge_xt_smoke_datasets, "surge_4", "surge_4", dimension=128)
+    artifact = prepare_param_name_embeddings(
+        surge_xt_smoke_datasets, "surge_4", "surge_4", dimension=128
+    )
     cfg = cfg_slap_train_lance
     with open_dict(cfg):
         cfg.datamodule.dataset_root = str(surge_xt_smoke_datasets)
@@ -180,7 +185,7 @@ def test_language_slap_real_audio_checkpoint_tests_without_metadata(
     assert not torch.equal(projection.text_adapter.weight.detach().cpu(), initial_adapter)
     assert isinstance(projection, LanguageParameterProjection)
     assert all(not parameter.requires_grad for parameter in projection.decoders.parameters())
-    artifact.unlink()
+    shutil.rmtree(artifact)
     restored = hydra.utils.instantiate(cfg.model)
     results = objects["trainer"].test(
         restored,
