@@ -115,13 +115,26 @@ def _configured_backend_version() -> str:
         return str(compose(config_name="render/faustwasm").render.backend_version)
 
 
-def _config(identity: str = "faust_bright_organ", channels: int = 2) -> RenderConfig:
+def _input_audio_source() -> InputAudioSource:
+    return InputAudioSource(
+        dataset_uri="/tmp/finalized-source",
+        snapshot_txid="finalized-snapshot-txid",
+    )
+
+
+def _config(
+    identity: str = "faust_bright_organ",
+    channels: int = 2,
+    *,
+    input_audio_source: InputAudioSource | None = None,
+) -> RenderConfig:
     return RenderConfig(
         synth=SYNTHS[SynthName(identity)],
         renderer_backend="faustwasm",
         backend_version=_configured_backend_version(),
         block_size=64,
         render_contract_version=2,
+        input_audio_source=input_audio_source,
         sample_rate=44_100,
         channels=channels,
         velocity=100,
@@ -176,16 +189,9 @@ def test_faustwasm_backend_version_reads_packaged_metadata() -> None:
 
 
 def test_faustwasm_effect_accepts_pinned_input_audio_source() -> None:
-    config = _config("faust_fdn_effect").model_copy(
-        update={
-            "input_audio_source": InputAudioSource(
-                dataset_uri="/tmp/finalized-source",
-                snapshot_txid="finalized-snapshot-txid",
-            )
-        }
-    )
+    config = _config("faust_fdn_effect", input_audio_source=_input_audio_source())
 
-    assert RenderConfig.model_validate(config.model_dump()).input_audio_source is not None
+    assert config.input_audio_source is not None
 
 
 def test_faustwasm_legacy_digest_projection_is_rejected() -> None:
@@ -237,7 +243,9 @@ def test_faustwasm_factory_renders_real_source(identity: str, channels: int) -> 
 
 @pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_fdn_effect_stereo_input_renders_real_audio() -> None:
-    renderer = make_audio_renderer(_config("faust_fdn_effect"))
+    renderer = make_audio_renderer(
+        _config("faust_fdn_effect", input_audio_source=_input_audio_source())
+    )
     params = _midpoint_patch("faust_fdn_effect")
     source = np.zeros((2, 176_400), dtype=np.float32)
     source[0, 0] = 0.1
@@ -253,13 +261,32 @@ def test_faustwasm_fdn_effect_stereo_input_renders_real_audio() -> None:
 
 @pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 def test_faustwasm_fdn_effect_mono_input_raises() -> None:
-    renderer = make_audio_renderer(_config("faust_fdn_effect"))
+    renderer = make_audio_renderer(
+        _config("faust_fdn_effect", input_audio_source=_input_audio_source())
+    )
 
     with pytest.raises(ValueError, match=r"input audio shape .* expected \(2, 176400\)"):
         renderer.render_with_input(
             _midpoint_patch("faust_fdn_effect"),
             np.zeros(176_400, dtype=np.float32),
         )
+
+
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
+@pytest.mark.parametrize(
+    "non_finite",
+    [np.nan, np.inf, -np.inf],
+    ids=["nan", "positive-infinity", "negative-infinity"],
+)
+def test_faustwasm_fdn_effect_non_finite_input_raises(non_finite: float) -> None:
+    renderer = make_audio_renderer(
+        _config("faust_fdn_effect", input_audio_source=_input_audio_source())
+    )
+    source = np.zeros((2, 176_400), dtype=np.float32)
+    source[0, 0] = non_finite
+
+    with pytest.raises(ValueError, match="input audio must contain only finite samples"):
+        renderer.render_with_input(_midpoint_patch("faust_fdn_effect"), source)
 
 
 @pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")

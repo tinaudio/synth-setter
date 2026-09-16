@@ -31,17 +31,17 @@ _FAUST_MIDI_PITCH_MIN = 48
 # Faust serializes UI bounds at six significant digits, so the kernel angle
 # contract pins the serialized value rather than floating-point pi.
 _KRONECKER_KERNEL_ANGLE_BOUND = 3.14159
-_SHIMMER_FDN_NOTE_PARAMS: ParameterValues = {
+_FIXED_FAUST_NOTE_PARAMS: ParameterValues = {
     "pitch": 60,
     "note_start_and_end": (0.0, FAUST_NOTE_DURATION_SECONDS),
 }
 
 
-class ShimmerFDNParamSpec(ParamSpec):
-    """Represent only shimmer controls while supplying renderer-compatible note values."""
+class FixedNoteFaustParamSpec(ParamSpec):
+    """Represent only DSP controls while supplying renderer-compatible note values."""
 
     def __init__(self, synth_params: list[Parameter]) -> None:
-        """Bind the shimmer control vector without sampled MIDI coordinates.
+        """Bind the DSP control vector without sampled MIDI coordinates.
 
         :param synth_params: Exact-address controls represented in each encoded row.
         """
@@ -56,7 +56,7 @@ class ShimmerFDNParamSpec(ParamSpec):
         :returns: Sampled controls and fixed four-second MIDI mapping.
         """
         synth_params, _ = super().sample(rng)
-        return synth_params, _SHIMMER_FDN_NOTE_PARAMS.copy()
+        return synth_params, _FIXED_FAUST_NOTE_PARAMS.copy()
 
     def decode(self, params: np.ndarray) -> tuple[ParameterValues, ParameterValues]:
         """Decode DSP controls and return the fixed compatibility note.
@@ -65,7 +65,7 @@ class ShimmerFDNParamSpec(ParamSpec):
         :returns: Decoded controls and fixed four-second MIDI mapping.
         """
         synth_params, _ = super().decode(params)
-        return synth_params, _SHIMMER_FDN_NOTE_PARAMS.copy()
+        return synth_params, _FIXED_FAUST_NOTE_PARAMS.copy()
 
 
 def _note_params() -> list[Parameter]:
@@ -228,7 +228,7 @@ def _shimmer_fdn_param_spec() -> ParamSpec:
         _trigger_parameter(f"/shimmerFDN/Shimmer/shifted_lines/line__{index}")
         for index in range(8)
     ]
-    return ShimmerFDNParamSpec(
+    return FixedNoteFaustParamSpec(
         [
             ContinuousParameter(name="/shimmerFDN/FDN/T60_low", min=0.1, max=20.0),
             ContinuousParameter(name="/shimmerFDN/FDN/T60_high", min=0.05, max=20.0),
@@ -250,13 +250,12 @@ def _fdn_effect_param_spec() -> ParamSpec:
 
     :returns: Fresh exact-address FDN effect specification.
     """
-    return ParamSpec(
+    return FixedNoteFaustParamSpec(
         [
             ContinuousParameter(name="/fdnEffect/damping", min=500.0, max=18_000.0),
             ContinuousParameter(name="/fdnEffect/decay", min=0.0, max=0.95),
             _unit_parameter("/fdnEffect/dryWet"),
-        ],
-        _note_params(),
+        ]
     )
 
 

@@ -130,6 +130,8 @@ def test_faustwasm_fdn_effect_input_cli_selected_row_changes_output_and_repeats_
     repeated_row_one = _run_cli(tmp_path / "repeat", _render_config(source_root, txid, 0))
 
     assert selected_row_one.shape == (2, _FRAMES)
+    assert selected_row_one.dtype == np.dtype("float32")
     assert np.isfinite(selected_row_one).all()
+    assert np.max(np.abs(selected_row_one)) <= 1.0
     assert not np.array_equal(selected_row_one, selected_row_zero)
     assert selected_row_one.tobytes() == repeated_row_one.tobytes()

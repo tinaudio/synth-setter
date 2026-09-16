@@ -104,6 +104,26 @@ def test_input_audio_pool_real_lance_row_returns_stereo_waveform(
     np.testing.assert_array_equal(pool.take(0), audio[0])
 
 
+def test_input_audio_pool_stereo_source_with_foreign_sample_rate_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    audio = np.zeros((1, 2, _FRAMES), dtype=np.float32)
+    txid = _write_source(source_root, audio, sample_rate=48_000)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+
+    with pytest.raises(
+        ValueError,
+        match="input audio sample rate 48000 != renderer sample rate 44100",
+    ):
+        InputAudioPool(
+            _source(source_root, txid),
+            sample_rate=_SAMPLE_RATE,
+            frames=_FRAMES,
+            input_channels=2,
+        )
+
+
 def test_input_audio_pool_mono_source_for_stereo_renderer_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

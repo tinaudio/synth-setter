@@ -74,6 +74,7 @@ jobs:
 
       - name: Run effect-input E2Es
         run: |
+          set -euo pipefail
           uv run pytest tests/integration/test_pyfdn_dataset_input_e2e.py -v
           uv run pytest tests/integration/test_faustwasm_fdn_effect_input_e2e.py -v
 

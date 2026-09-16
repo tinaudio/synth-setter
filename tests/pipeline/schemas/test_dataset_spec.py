@@ -550,6 +550,42 @@ class TestRenderConfig:
         assert config.renderer_backend == "faustwasm"
         assert config.block_size == 128
 
+    def test_faustwasm_backend_rejects_input_source_for_zero_input_dsp(self) -> None:
+        """A source-free Faust DSP cannot consume dataset input audio."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_bright_organ")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=128,
+            input_audio_source={
+                "dataset_uri": "/finalized-source",
+                "snapshot_txid": "finalized-snapshot-txid",
+            },
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+
+        with pytest.raises(ValidationError, match="does not accept input_audio_source"):
+            RenderConfig(**values)
+
+    def test_faustwasm_backend_requires_input_source_for_input_dsp(self) -> None:
+        """An input-bearing Faust DSP cannot render without dataset input audio."""
+        values = _valid_render_kwargs(plugin_path="faust")
+        values.update(
+            synth=SYNTHS[SynthName("faust_fdn_effect")],
+            renderer_backend="faustwasm",
+            backend_version="0.18.3",
+            render_contract_version=2,
+            block_size=128,
+            plugin_reload_cadence="render",
+            gui_toggle_cadence="never",
+        )
+
+        with pytest.raises(ValidationError, match="requires input_audio_source"):
+            RenderConfig(**values)
+
     @pytest.mark.parametrize(
         ("identity", "channels"),
         [("faust_bright_organ", 1), ("faust_filter_osc", 2)],

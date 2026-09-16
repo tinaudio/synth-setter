@@ -858,6 +858,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
         )
         source = resolve_faust_dsp(source_identity)
+        if self.renderer_backend == "faustwasm":
+            if source.inputs > 0 and self.input_audio_source is None:
+                raise ValueError("FaustWasm input-bearing source requires input_audio_source")
+            if self.input_audio_source is not None and (source.inputs, source.outputs) != (2, 2):
+                raise ValueError("this FaustWasm source does not accept input_audio_source")
         isolated_backends = {"faustcpp", "faustwasm"}
         if self.renderer_backend in isolated_backends:
             if self.render_contract_version == 1:
