@@ -55,6 +55,7 @@ FAST_TEST_PATHS := \
 	tests/data/vst/test_shape_helpers.py \
 	tests/evaluation \
 	tests/features \
+	tests/test_eval_upload.py \
 	tests/integration/test_parallel_shard_dispatch.py \
 	tests/models/test_audio_distance.py \
 	tests/models/test_cnn.py \
