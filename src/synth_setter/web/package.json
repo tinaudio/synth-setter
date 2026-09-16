@@ -9,6 +9,7 @@
     "onnxruntime-web": "1.29.0"
   },
   "devDependencies": {
+    "@actions/expressions": "0.3.61",
     "@playwright/test": "1.63.0"
   }
 }

@@ -15,6 +15,10 @@ and RK4 integration. Audio decoding/features, checkpoint loading, SurgePy
 rendering, and metrics remain in the local Python CLI. SurgePy itself is **not**
 compiled to WebAssembly. No inference request goes to a remote model service.
 
+For browser-native feature extraction and audio rendering, see the separate
+[Surge WASM sketch page](surge-wasm-sketch-evaluation.md). That experimental
+path uses the unchanged Surge 1.4 development port rather than native SurgePy 1.3.4.
+
 ## 1. Install the real prerequisites
 
 Use Linux x86-64, Python 3.12.13, Node 24, and a worktree-local environment. The

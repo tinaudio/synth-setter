@@ -20,6 +20,19 @@ test("multiple RK4 steps advance a time-dependent field to the endpoint", async 
   assert.ok(Math.abs(result[0] - 2) < 1e-6);
 });
 
+test("20000 RK4 steps integrate a constant field to its endpoint", async () => {
+  const result = await integrateRK4({
+    field: async () => new Float32Array([1]),
+    noise: new Float32Array([0]),
+    steps: 20000,
+  });
+  assert.ok(Math.abs(result[0] - 1) < 2e-4);
+});
+
+test("steps beyond 20000 are rejected", async () => {
+  await assert.rejects(integrateRK4({field: async (x) => x, noise: new Float32Array([1]), steps: 20001}), /steps/);
+});
+
 test("zero integration steps are rejected", async () => {
   await assert.rejects(integrateRK4({field: async (x) => x, noise: new Float32Array([1]), steps: 0}), /steps/);
 });

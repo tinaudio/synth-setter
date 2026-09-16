@@ -11,8 +11,8 @@ function advance(x, velocity, dt) {
 }
 
 export async function integrateRK4({ field, noise, steps, onStep = () => {} }) {
-  if (!Number.isInteger(steps) || steps < 1 || steps > 1000) {
-    throw new Error("steps must be an integer between 1 and 1000");
+  if (!Number.isInteger(steps) || steps < 1 || steps > 20000) {
+    throw new Error("steps must be an integer between 1 and 20000");
   }
   if (!noise.length) throw new Error("Flow noise cannot be empty");
   let x = finiteVector(noise.slice(), noise.length);
