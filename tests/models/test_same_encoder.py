@@ -183,8 +183,7 @@ def test_same_projection_conditioning_overfits_fixed_batch(
         loss.backward()
         optimizer.step()
 
-    # A threefold reduction separates learning from the unchanged-loss failure mode across runners.
-    assert loss.item() < initial_loss.item() / 3
+    assert loss.item() < 1e-3
 
 
 def test_gradient_reaches_the_waveform(tiny_same_checkpoint: Path) -> None:
