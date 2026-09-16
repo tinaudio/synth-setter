@@ -17,7 +17,6 @@ The model revision is pinned to
 `57c266a740f537b4dc058e1b0cda161fd15afa75`. Its Sentence Transformers document
 pipeline supplies the prompt and pooling; retained prefixes are L2-normalized
 following the [model card](https://ai.google.dev/gemma/docs/embeddinggemma/model_card).
-EmbeddingGemma is distinct from the existing SA3 T5Gemma conditioner.
 
 The artifact contains float32 `embeddings` shaped `(logical_fields, dimension)`
 and strict JSON `metadata`. Descriptions record spec/synth identity, field class,

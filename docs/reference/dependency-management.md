@@ -121,7 +121,7 @@ Only the `cpu`/`cu128` backend-routing extras remain in
 `[project.optional-dependencies]`, because `[tool.uv.sources]` keys on extras.
 The commit-pinned `cqt-nsgt-pytorch`, `stable-audio-3`, `tinymu`, and `meanaudio`
 runtimes plus `ssondo==0.3.1` belong to the `torch` group, so normal heavy installs
-support CQT, SAME, S-SONDO, T5Gemma, TinyMU, and MeanAudio encoders without feature extras.
+support CQT, SAME, S-SONDO, TinyMU, and MeanAudio encoders without feature extras.
 CQT_pytorch is installed from Git because its PyPI distribution is stale and upstream publishes
 no tags; the immutable revision is authoritative in `CQT_PACKAGE_COMMIT`.
 TinyMU exposes MATPAC through its public package API and declares its own

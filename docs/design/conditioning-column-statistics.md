@@ -4,9 +4,9 @@
 
 The sample is the first 1,000 training rows from
 `r2://experiments/data/surge-simple-lance-440k-20k-20k/surge-simple-lance-440k-20k-20k-20260706T005448315Z/train.lance`.
-The six columns already materialized there were streamed directly from R2. T5Gemma and PupuJEPA
-Tiny/Large were materialized from the same 1,000 source `audio` and `param_array` rows with the
-production `synth-setter-add-embeddings` command, then streamed from the resulting local Lance
+The six columns already materialized there were streamed directly from R2. PupuJEPA Tiny/Large
+were materialized from the same 1,000 source `audio` rows with the production
+`synth-setter-add-embeddings` command, then streamed from the resulting local Lance
 dataset. PupuJEPA Large is included because it is now a cached conditioning profile, although it
 was not in the original requested list.
 
@@ -35,7 +35,6 @@ uv run python scripts/dev/characterise_conditioning_columns.py DATASET.lance \
 | matpac_plus band 5   | 1000 | -1.710274 / -0.024226 / 0.461242   | 0.000487 / 0.087787 / 0.351116 |   -0.028309 |   0.154223 |  -2.205247 |   1.108494 |             0 |   21.715780 |   0.690185 |                    0.021812 |
 | pupujepa_tiny        | 1000 | -2.752047 / -0.001471 / 10.365058  | 0.275437 / 0.444383 / 3.893067 |   -0.025001 |   1.075861 |  -7.664564 |  15.612594 |             0 |  420.626707 |  30.947511 |                    0.081109 |
 | pupujepa_large       | 1000 | -22.357522 / -0.000309 / 11.975433 | 0.784604 / 1.857159 / 7.626107 |    0.020806 |   2.454772 | -40.010300 |  31.701796 |             0 | 2221.844657 |  13.519245 |                    0.009130 |
-| t5gemma              | 1000 | -13.082806 / -0.082158 / 9.919632  | 2.400819 / 4.142338 / 8.031981 |   -0.096137 |   5.196103 | -52.176792 |  31.708429 |             0 | 2304.372245 |   0.000000 |                    0.076731 |
 | clap                 | 1000 | -0.093430 / -0.002290 / 0.119841   | 0.019192 / 0.028088 / 0.043186 |   -0.000975 |   0.044183 |  -0.174224 |   0.194696 |             0 |    1.000000 |   0.000000 |                           — |
 | ssondo               | 1000 | -0.300554 / -0.033079 / 0.596355   | 0.004504 / 0.014059 / 0.101316 |   -0.029548 |   0.083472 |  -0.329537 |   0.771413 |             0 |    2.738516 |   0.166143 |                           — |
 
@@ -47,7 +46,6 @@ uv run python scripts/dev/characterise_conditioning_columns.py DATASET.lance \
 - **matpac_plus: standardise** — use one shared scale across all five bands, not per-band scaling, to preserve relative spectral energy.
 - **pupujepa_tiny: already normalised — skip** — its transformer output is globally centered with standard deviation 1.08.
 - **pupujepa_large: standardise** — unlike Tiny, its global standard deviation is 2.45 and channel scales are highly uneven.
-- **t5gemma: standardise** — its global standard deviation is 5.20 and per-channel medians are 4.14.
 - **clap: already normalised — skip** — every sampled row has L2 norm 1.000000.
 - **ssondo: standardise** — row norms average 2.74 and channel scales vary by more than 20x.
 
@@ -59,17 +57,6 @@ uv run python scripts/dev/characterise_conditioning_columns.py DATASET.lance \
 `ClapModel.get_audio_features`. Transformers applies `F.normalize(audio_features, dim=-1)` before
 returning that output. The stored data confirms the contract exactly: row-L2 mean 1.000000 and
 standard deviation 0.000000. CLAP should not be standardized after this normalization.
-
-### T5Gemma scale
-
-The comment in `pipeline/data/t5gemma.py` is not a claim that the stored representation has
-standard deviation 1.75. It describes bfloat16 output drift between Torch releases: differences
-had standard deviation 1.75 and maxima up to 11.5. The real float32 column has global standard
-deviation 5.196, median channel standard deviation 4.142, and values from -52.177 to 31.708, so the
-1.75 figure is refuted as a description of data scale. All sampled row embeddings are identical
-(row-L2 standard deviation 0) because the currently registered `param_names` text normalizer
-intentionally emits the same parameter-name caption for every row; token and channel values still
-vary within that caption.
 
 ### MATPAC++ bands
 

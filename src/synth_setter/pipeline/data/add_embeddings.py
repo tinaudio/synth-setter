@@ -51,12 +51,10 @@ from synth_setter.data.vst.shapes import (
     PUPUJEPA_TINY_FIELD,
     SAME_L_FIELD,
     SAME_S_FIELD,
-    SHIFT_FIELD,
     SKETCH_PITCH_BINS,
     SKETCH_STRUCT_FIELD,
     SKETCH_VEC_CHILD,
     SSONDO_FIELD,
-    T5GEMMA_FIELD,
     mel_n_frames_from_samples,
 )
 from synth_setter.model_cache import checkpoint_tree_sha256
@@ -82,14 +80,6 @@ from synth_setter.pipeline.data.meanaudio import (
     encode_meanaudio_column,
     load_meanaudio_audio_encoder,
     meanaudio_artifact_digest,
-)
-from synth_setter.pipeline.data.param_shift import (
-    PARAM_SHIFT_INPUT_FIELDS,
-    ROW_ID_FIELD,
-    ParamShifter,
-    encode_param_shift_column,
-    load_param_shifter,
-    param_shift_policy_values,
 )
 from synth_setter.pipeline.data.pupujepa import (
     PupuJepaEncodeFn,
@@ -136,7 +126,6 @@ logger = structlog.get_logger(__name__)
 operator_workspace()
 
 DEFAULT_M2L_CHECKPOINT: str = ""
-DEFAULT_T5GEMMA_CHECKPOINT: str = "r2://intermediate-data/models/sa3-small-music"
 CLAP_EMBEDDING_DIM: int = 512
 M2L_ENCODE_MAX_BATCH: int = 64
 CLAP_ENCODE_MAX_BATCH: int = 32
@@ -167,7 +156,6 @@ type ClapEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SketchEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 type SameEncodeFn = Callable[[np.ndarray], np.ndarray]
 type SameFrameCountFn = Callable[[int, int], int]
-type ParamTextEncodeFn = Callable[[np.ndarray], np.ndarray]
 type Encoder = (
     M2LEncodeFn
     | ClapEncodeFn
@@ -175,8 +163,6 @@ type Encoder = (
     | SameEncodeFn
     | SSONDOEncodeFn
     | PupuJepaEncodeFn
-    | ParamTextEncodeFn
-    | ParamShifter
 )
 type LoadEncoderFn = Callable[[str, AddEmbeddingsConfig], Encoder]
 type EncodeColumnFn = Callable[[Mapping[str, np.ndarray], int, Encoder], pa.Array]
@@ -254,11 +240,6 @@ class EmbeddingSpec:
     .. attribute :: input_fields
 
         Dataset columns supplying this embedding's encoder input.
-
-    .. attribute :: rerenders
-
-        Whether the encoder re-renders audio, making the run's render config and seed
-        part of its output identity.
     """
 
     name: str
@@ -270,7 +251,6 @@ class EmbeddingSpec:
     encode_column: EncodeColumnFn
     resolve_artifact_identity: ResolveArtifactIdentityFn
     input_fields: tuple[str, ...] = (AUDIO_FIELD,)
-    rerenders: bool = False
 
 
 EMBEDDING_POLICY_VERSION = 1
@@ -349,18 +329,6 @@ def _same_artifact_identity(checkpoint: str) -> str:
     return _versioned_artifact_identity("same", checkpoint_tree_sha256(checkpoint_dir))
 
 
-def _t5gemma_artifact_identity(checkpoint: str) -> str:
-    """Resolve and hash one T5Gemma checkpoint tree.
-
-    :param checkpoint: Local, R2, or HuggingFace checkpoint source.
-    :returns: Versioned content identity.
-    """
-    from synth_setter.pipeline.data.t5gemma import _resolve_t5gemma_checkpoint_dir
-
-    checkpoint_dir = _resolve_t5gemma_checkpoint_dir(checkpoint)
-    return _versioned_artifact_identity("t5gemma", checkpoint_tree_sha256(checkpoint_dir))
-
-
 def _sketch_artifact_identity(checkpoint: str) -> str:
     """Identify the pesto-bundled sketch extraction artifact.
 
@@ -409,21 +377,6 @@ def _ssondo_artifact_identity(checkpoint: str) -> str:
         f"checkpoint:sha256:{SSONDO_CHECKPOINT_SHA256}"
     )
     return _versioned_artifact_identity("ssondo", digest)
-
-
-def _param_shift_artifact_identity(checkpoint: str) -> str:
-    """Return the re-render embedder's identity stem.
-
-    The output-determining settings are the render config and seed, which
-    :func:`_resolve_artifact_identity` folds in through ``EmbeddingSpec.rerenders``.
-
-    :param checkpoint: Empty placeholder; the embedder loads no checkpoint.
-    :returns: Versioned identity stem.
-    :raises ValueError: A checkpoint override was supplied for a checkpoint-free embedder.
-    """
-    if checkpoint:
-        raise ValueError("param_shift renders through a render config, not a checkpoint")
-    return _versioned_artifact_identity("param_shift", "renderer")
 
 
 def _matpac_plus_artifact_identity(checkpoint: str) -> str:
@@ -785,47 +738,6 @@ def _load_pupujepa_large_spec_encoder(
     )
 
 
-def _load_param_shift_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
-    """Build the re-render shifter through the registry's uniform factory signature.
-
-    :param checkpoint: Unused registry placeholder.
-    :param config: Run config supplying the composed render selection and seed.
-    :returns: Renderer-bound param shifter.
-    """
-    del checkpoint
-    return load_param_shifter(config)
-
-
-def _load_t5gemma_spec_encoder(checkpoint: str, config: AddEmbeddingsConfig) -> Encoder:
-    """Bind a param spec and text normalizer to an SA3 T5Gemma text encoder.
-
-    :param checkpoint: SA3 checkpoint source.
-    :param config: Run config supplying the device, param spec, and normalizer.
-    :returns: Encoder over encoded param rows.
-    :raises ValueError: The config selects no param spec.
-    """
-    from synth_setter.data.vst.param_spec_registry import resolve_param_spec
-    from synth_setter.data.vst.param_text import resolve_param_text_normalizer
-    from synth_setter.param_spec_name import ParamSpecName
-    from synth_setter.pipeline.data.t5gemma import load_t5gemma_text_encoder
-
-    if config.param_spec_name is None:
-        raise ValueError(f"{T5GEMMA_FIELD} embeddings require param_spec_name")
-    spec = resolve_param_spec(ParamSpecName(config.param_spec_name))
-    normalize = resolve_param_text_normalizer(config.param_text_normalizer)
-    encode_text = load_t5gemma_text_encoder(checkpoint, _resolve_torch_device(config.device))
-
-    def encode(params: np.ndarray) -> np.ndarray:
-        if params.shape[-1] != spec.encoded_width:
-            raise ValueError(
-                f"param rows are {params.shape[-1]} wide but param spec "
-                f"{config.param_spec_name!r} has encoded width {spec.encoded_width}"
-            )
-        return encode_text(normalize(spec, params))
-
-    return encode
-
-
 def _require_stored_mono(audio: np.ndarray) -> None:
     """Reject audio the per-row pyFDN extractor cannot consume.
 
@@ -958,31 +870,6 @@ def _encode_ssondo_column(
             f"{SSONDO_FIELD} encoder produced shape {vectors.shape}, expected {expected_shape}"
         )
     return _fixed_size_list(vectors, SSONDO_EMBEDDING_DIM)
-
-
-def _encode_t5gemma_column(
-    sources: Mapping[str, np.ndarray], sample_rate: int, encoder: Encoder
-) -> pa.Array:
-    """Encode one param batch as a fixed-shape text-embedding tensor column.
-
-    :param sources: Decoded source columns carrying ``(B, encoded_width)`` param rows.
-    :param sample_rate: Unused source sample rate.
-    :param encoder: Encoder over param rows.
-    :returns: Fixed-shape tensor array.
-    :raises ValueError: The encoder returns the wrong row count, rank, or non-finite values.
-    """
-    from synth_setter.pipeline.data.lance_shard import tensor_array
-
-    del sample_rate
-    params = sources[PARAM_ARRAY_FIELD]
-    encode = cast("ParamTextEncodeFn", encoder)
-    embeddings = _finite_embedding(T5GEMMA_FIELD, encode(params))
-    if embeddings.ndim != 3 or len(embeddings) != len(params):
-        raise ValueError(
-            f"{T5GEMMA_FIELD} encoder produced shape {embeddings.shape}, expected "
-            f"{len(params)} rows of (dim, seq) embeddings"
-        )
-    return tensor_array(embeddings, np.dtype("float32"), embeddings.shape[1:])
 
 
 @jaxtyped(typechecker=beartype)
@@ -1198,33 +1085,6 @@ EMBEDDING_REGISTRY: dict[str, EmbeddingSpec] = {
         encode_column=_encode_ssondo_column,
         resolve_artifact_identity=_ssondo_artifact_identity,
     ),
-    # Rows share one caption per param spec today, so an index over identical
-    # vectors would be degenerate; revisit when a values-aware normalizer lands.
-    "t5gemma": EmbeddingSpec(
-        name="t5gemma",
-        column=T5GEMMA_FIELD,
-        default_checkpoint=DEFAULT_T5GEMMA_CHECKPOINT,
-        co_resident=False,
-        index=None,
-        load_encoder=_load_t5gemma_spec_encoder,
-        encode_column=_encode_t5gemma_column,
-        resolve_artifact_identity=_t5gemma_artifact_identity,
-        input_fields=(PARAM_ARRAY_FIELD,),
-    ),
-    # Not an encoder: every row is re-rendered with one parameter redrawn, so the run's
-    # render config replaces a checkpoint and the pass is solo (it holds a plugin host).
-    "param_shift": EmbeddingSpec(
-        name="param_shift",
-        column=SHIFT_FIELD,
-        default_checkpoint="",
-        co_resident=False,
-        index=None,
-        load_encoder=_load_param_shift_encoder,
-        encode_column=encode_param_shift_column,
-        resolve_artifact_identity=_param_shift_artifact_identity,
-        input_fields=PARAM_SHIFT_INPUT_FIELDS,
-        rerenders=True,
-    ),
     "matpac_plus": EmbeddingSpec(
         name="matpac_plus",
         column=MATPAC_PLUS_FIELD,
@@ -1318,9 +1178,6 @@ def _validate_write_source(
         positive.
     """
     for field in input_fields:
-        # ``_rowid`` is synthesized by Lance per scan, so it is never in the schema.
-        if field == ROW_ID_FIELD:
-            continue
         if field not in dataset.schema.names:
             raise ValueError(f"dataset has no {field!r} column to embed")
     if batch_size < 1:
@@ -1451,25 +1308,14 @@ def _resume_cache_for_specs(
 
 
 def _resolve_artifact_identity(spec: EmbeddingSpec, config: AddEmbeddingsConfig) -> str:
-    """Resolve checkpoint and input-policy identity for one embedding.
+    """Resolve checkpoint identity for one embedding.
 
     :param spec: Embedding policy to identify.
-    :param config: Checkpoint and input-policy selection.
-    :returns: Identity covering every output-affecting artifact and policy.
+    :param config: Checkpoint selection.
+    :returns: Identity covering the output-affecting artifact and policy.
     """
     checkpoint = config.checkpoints.get(spec.name, spec.default_checkpoint)
-    identity = spec.resolve_artifact_identity(checkpoint)
-    policy_values: tuple[str, ...] = ()
-    if PARAM_ARRAY_FIELD in spec.input_fields:
-        policy_values += (config.param_spec_name or "", config.param_text_normalizer)
-    if spec.rerenders:
-        policy_values += tuple(param_shift_policy_values(config))
-    if not policy_values:
-        return identity
-    digest = hashlib.sha256()
-    for value in policy_values:
-        _update_framed_digest(digest, value.encode())
-    return f"{identity}:input-policy:{digest.hexdigest()}"
+    return spec.resolve_artifact_identity(checkpoint)
 
 
 def _load_encoders(specs: Sequence[EmbeddingSpec], config: AddEmbeddingsConfig) -> list[Encoder]:

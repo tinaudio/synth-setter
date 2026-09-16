@@ -45,8 +45,6 @@ docs:
         covers: "Materialized conditioning-column names and channel-first shapes"
       - pattern: "src/synth_setter/models/components/pretrained_encoder.py"
         covers: "CLAP get_audio_features output path"
-      - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
-        covers: "T5Gemma float32 reproducibility rationale"
 
   - doc: docs/reference/matpac-plus-embeddings.md
     description: MATPAC encoder interface
@@ -231,8 +229,6 @@ docs:
         covers: "Checkpoint verification and deterministic 16 kHz latent encoding."
       - pattern: "src/synth_setter/configs/conditioning/meanaudio_16k.yaml"
         covers: "Four-second MeanAudio EmbeddingPool conditioning profile."
-      - pattern: "src/synth_setter/pipeline/data/t5gemma.py"
-        covers: "Stable Audio 3 T5Gemma prompt conditioning at float32 with learned checkpoint padding."
       - pattern: "src/synth_setter/features/**"
         covers: "Sketch-control tracks on the mel frame grid."
       - pattern: "src/synth_setter/conditioning.py"
@@ -245,8 +241,6 @@ docs:
         covers: "Legacy SAME parity tensors with embedded generation provenance."
       - pattern: ".github/workflows/test-same-encoder.yml"
         covers: "Sequential CPU jobs validating SAME-S and SAME-L through the normal heavy runtime."
-      - pattern: "src/synth_setter/data/vst/param_text.py"
-        covers: "Param-spec text normalizers rendering encoded param rows as conditioning captions; `param_names` joins the spec's parameter names."
       - pattern: "src/synth_setter/configs/add_embeddings.yaml"
         covers: "Lance embedding-selection configuration."
       - pattern: "src/synth_setter/pipeline/schemas/add_embeddings_config.py"

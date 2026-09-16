@@ -65,7 +65,6 @@ on:
       - "src/synth_setter/pipeline/data/add_embeddings.py"
       - "src/synth_setter/pipeline/data/meanaudio.py"
       - "src/synth_setter/pipeline/data/ssondo.py"
-      - "src/synth_setter/pipeline/data/t5gemma.py"
       # Cadence cross-field coverage the retired render-matrix gated — the
       # parallel-render cells below now cover it under real Surge (#1354).
       - "src/synth_setter/data/render_config.py"
@@ -98,7 +97,6 @@ on:
       - "src/synth_setter/pipeline/data/add_embeddings.py"
       - "src/synth_setter/pipeline/data/meanaudio.py"
       - "src/synth_setter/pipeline/data/ssondo.py"
-      - "src/synth_setter/pipeline/data/t5gemma.py"
       - "src/synth_setter/data/render_config.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
       - "src/synth_setter/configs/render/**"
@@ -191,13 +189,11 @@ jobs:
           set -euo pipefail
           cache="${GITHUB_WORKSPACE}/.ci-model-cache/synth-setter/models/embeddings"
           mkdir -p "${cache}"
-          for model in same-s same-l sa3-small-music; do
+          for model in same-s same-l; do
             rclone copy --checksum "r2:intermediate-data/models/${model}" "${cache}/${model}"
           done
           test -f "${cache}/same-s/model.safetensors"
           test -f "${cache}/same-l/model.safetensors"
-          test -f "${cache}/sa3-small-music/model.safetensors"
-          test -f "${cache}/sa3-small-music/t5gemma-b-b-ul2/model.safetensors"
 
       # Reset preloaded Docker state and use separate storage when the runner provides it.
       - name: Prepare Docker storage capacity
