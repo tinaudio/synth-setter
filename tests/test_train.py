@@ -64,6 +64,7 @@ from synth_setter.models.components.transformer import (
     LearntProjection,
 )
 from synth_setter.models.components.vector_projection import VectorProjection
+from synth_setter.models.components.vqt_encoder import VqtAudioEncoder
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
@@ -3702,6 +3703,41 @@ def test_train_cqt_online_conditioning_returns_finite_loss(
     backbone = object_dict["model"].encoder.backbone
     assert isinstance(backbone, CqtAudioEncoder)
     assert backbone.max_batch_size == -1
+    _assert_conditioning_checkpoint_validates(cfg, tmp_path)
+
+
+@pytest.mark.slow
+def test_train_vqt_online_conditioning_returns_finite_loss(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Train one real step from raw Lance audio through online VQT conditioning.
+
+    :param tmp_path: Training output directory.
+    :param fake_surge_smoke_datasets: Tiny production-format Lance dataset.
+    :param param_spec_name: Parameter specification driving model width.
+    """
+    cfg = build_surge_xt_embedding_train_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        param_spec_name=param_spec_name,
+        conditioning="vqt_online",
+    )
+    with open_dict(cfg):
+        cfg.model.encoder.backbone.n_bins = 24
+        cfg.model.encoder.backbone.bins_per_octave = 12
+        cfg.model.encoder.head.embed_dim = 24
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = train(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert object_dict["trainer"].global_step >= 1
+    assert_finite_train_loss(metric_dict)
+    backbone = object_dict["model"].encoder.backbone
+    assert isinstance(backbone, VqtAudioEncoder)
     _assert_conditioning_checkpoint_validates(cfg, tmp_path)
 
 
