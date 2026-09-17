@@ -1,8 +1,12 @@
 """Static contracts for coding agents bundled in the devcontainer image."""
 
+import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
+
+_INFISICAL_URLS = re.compile(r'"(https://\S*?infisical\S*?)"', re.IGNORECASE)
 
 
 @pytest.mark.infra
@@ -58,13 +62,13 @@ def test_devcontainer_tools_declares_pinned_infisical_cli(project_root: Path) ->
 
 
 @pytest.mark.infra
-def test_no_provisioner_fetches_the_retired_cloudsmith_infisical_repo(
+def test_every_provisioner_fetches_infisical_from_its_upstream_release(
     project_root: Path,
 ) -> None:
-    """Verify nothing still fetches Infisical from the removed Cloudsmith repository.
+    """Verify each provisioner fetches the Infisical CLI from the upstream release host.
 
-    The whole ``infisical/infisical-cli`` Cloudsmith repo 404s, so a fetch from it
-    cannot be repaired by a version bump.
+    The retired ``infisical/infisical-cli`` Cloudsmith repository 404s in full, so a
+    fetch aimed anywhere inside it cannot be repaired by a version bump.
 
     :param project_root: Root path of the repository under test.
     """
@@ -73,9 +77,12 @@ def test_no_provisioner_fetches_the_retired_cloudsmith_infisical_repo(
         project_root / "scripts" / "runpod" / "bootstrap-vastai-pytorch-pod.sh",
     )
 
-    offenders = [p.name for p in provisioners if "cloudsmith.io" in p.read_text()]
+    hosts = {
+        path.name: {urlparse(url).hostname for url in _INFISICAL_URLS.findall(path.read_text())}
+        for path in provisioners
+    }
 
-    assert not offenders
+    assert hosts == dict.fromkeys(hosts, {"github.com"})
 
 
 @pytest.mark.infra
