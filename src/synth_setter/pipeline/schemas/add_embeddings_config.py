@@ -82,7 +82,7 @@ class AddEmbeddingsConfig(BaseModel):
 
         Lance UDF checkpoint cache removed after commit.
 
-    .. attribute :: debug
+    .. attribute :: debug_logging
 
         Whether to log every batch and enable native Lance debug output.
 
@@ -140,7 +140,9 @@ class AddEmbeddingsConfig(BaseModel):
     resume_cache: Path | None = Field(
         default=None, description="Lance UDF checkpoint cache removed after commit."
     )
-    debug: bool = Field(default=False, description="Enable per-batch and native debug logs.")
+    debug_logging: bool = Field(
+        default=False, description="Enable per-batch and native debug logs."
+    )
     param_spec_name: str | None = Field(
         default=None, description="Param spec describing param_array; null unless text-sourced."
     )

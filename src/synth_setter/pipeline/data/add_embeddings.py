@@ -1636,7 +1636,7 @@ def _write_columns(
             now = time.monotonic()
             interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
             time_due = now - last_progress_at >= PROGRESS_LOG_INTERVAL_SECONDS
-            if config.debug or interval_due or time_due:
+            if config.debug_logging or interval_due or time_due:
                 timings = {f"{name}_ms": round(duration, 1) for name, duration in stage_ms.items()}
                 logger.info(
                     "embedding_progress",
@@ -2144,7 +2144,7 @@ def _hydra_main(cfg: DictConfig) -> None:
         for run_logger in loggers:
             run_logger.log_hyperparams(config.model_dump(mode="json"))
         log_wandb_provenance()
-        _configure_lance_logging(debug=config.debug)
+        _configure_lance_logging(debug=config.debug_logging)
         logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
         add_embeddings(config)
         status = "success"

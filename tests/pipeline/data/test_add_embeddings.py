@@ -554,7 +554,7 @@ def test_add_embeddings_config_composition_surfaces_registry_defaults() -> None:
         assert cfg.num_sub_vectors is None
         assert cfg.metric == "cosine"
         assert cfg.resume_cache is None
-        assert cfg.debug is False
+        assert cfg.debug_logging is False
         assert cfg.logger.wandb._target_ == "lightning.pytorch.loggers.wandb.WandbLogger"
         assert AddEmbeddingsConfig.from_hydra_cfg(cfg) == AddEmbeddingsConfig(lance_uri=_LANCE_URI)
     finally:
@@ -1364,7 +1364,7 @@ def test_write_columns_with_debug_logs_progress_and_versions(
             lance.dataset(str(uri)),
             [_fake_spec("m2l")],
             _SAMPLE_RATE,
-            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), lance_batch_size=2, debug=True),
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), lance_batch_size=2, debug_logging=True),
         )
 
     progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
@@ -2891,7 +2891,7 @@ def test_add_embeddings_threads_device_and_debug_to_loaders_and_progress(
 
     with capture_logs() as logs:
         add_embeddings(
-            AddEmbeddingsConfig(lance_uri=str(uri), device="mps", debug=True, build_index=False)
+            AddEmbeddingsConfig(lance_uri=str(uri), device="mps", debug_logging=True, build_index=False)
         )
 
     assert selected == [("clap", "mps"), ("m2l", "mps")]

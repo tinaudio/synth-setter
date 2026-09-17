@@ -32,7 +32,7 @@ from synth_setter.pupujepa import (
     DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
 )
-from synth_setter.resources import configs_dir
+from synth_setter.resources import as_file, configs_dir
 from synth_setter.utils import extras
 from tests.conftest import _build_surge_xt_smoke_cfg
 
@@ -2108,3 +2108,43 @@ def test_nsynth_sketch_eval_experiment_pins_full_production_run() -> None:
     assert cfg.evaluation.rerender_target is False
     assert cfg.render.renderer_backend == "surgepy"
     assert cfg.logger.wandb.offline is False
+
+
+def _endpoint_config_names() -> list[str]:
+    """List the top-level Hydra entrypoint configs shipped in the config package.
+
+    :returns: Config names (without suffix) that Hydra can compose directly.
+    """
+    with as_file(configs_dir()) as root:
+        return sorted(path.stem for path in Path(root).glob("*.yaml"))
+
+
+def test_no_endpoint_config_field_shadows_a_config_group() -> None:
+    """A top-level field named after a config group is unreachable from the CLI.
+
+    Hydra resolves ``name=value`` against the config *groups* on the search path
+    before the composed fields, so a field sharing a directory's name can only be
+    overridden by editing the YAML (#3128).
+    """
+    # ``hydra`` is Hydra's own reserved node: its overrides are addressed as
+    # ``hydra/<group>=…`` or ``hydra.<field>=…``, so it cannot shadow a field.
+    with as_file(configs_dir()) as root:
+        groups = {path.name for path in Path(root).iterdir() if path.is_dir()} - {"hydra"}
+        shadowed = {
+            name: sorted(keys)
+            for name in _endpoint_config_names()
+            if (keys := groups & set(OmegaConf.load(Path(root) / f"{name}.yaml").keys()))
+        }
+
+    assert shadowed == {}
+
+
+def test_add_embeddings_debug_logging_is_overridable_from_the_cli() -> None:
+    """The documented per-batch logging switch must be reachable as a CLI override."""
+    with initialize_config_module(config_module="synth_setter.configs", version_base="1.3"):
+        cfg = compose(
+            config_name="add_embeddings",
+            overrides=["lance_uri=x", "debug_logging=true"],
+        )
+
+    assert cfg.debug_logging is True
