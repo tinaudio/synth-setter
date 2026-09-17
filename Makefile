@@ -53,6 +53,7 @@ FAST_TEST_PATHS := \
 	tests/data/vst/test_renderers.py \
 	tests/data/vst/test_seeding.py \
 	tests/data/vst/test_shape_helpers.py \
+	tests/data/vst/test_surgepy_runtime.py \
 	tests/evaluation \
 	tests/features \
 	tests/integration/test_parallel_shard_dispatch.py \
