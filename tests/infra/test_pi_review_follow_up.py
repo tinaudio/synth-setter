@@ -26,6 +26,12 @@ SCRIPT = REPO_ROOT / "agent/_shared/run_pi_review_follow_up.py"
 
 
 def _manifest(tmp_path: Path, *, output_path: Path | None = None) -> Path:
+    """Write a foreground handoff manifest under a fresh review root.
+
+    :param tmp_path: Temporary review root.
+    :param output_path: Foreground transcript the deferred pass claims, if any.
+    :returns: Path of the written manifest.
+    """
     review_dir = tmp_path / ".agent-reviews"
     review_dir.mkdir()
     deferred_pass: dict[str, object] = {
@@ -126,14 +132,29 @@ def test_follow_up_result_unknown_adjudication_skill_rejected() -> None:
 
 
 def _result_path(manifest: Path) -> Path:
+    """Return the strict result path the supervisor publishes for a manifest.
+
+    :param manifest: Manifest the supervisor ran against.
+    :returns: Sibling ``.result.json`` path.
+    """
     return Path(f"{manifest}.result.json")
 
 
 def _log_path(manifest: Path) -> Path:
+    """Return the follow-up log path the supervisor appends to for a manifest.
+
+    :param manifest: Manifest the supervisor ran against.
+    :returns: Sibling ``.follow-up.log`` path.
+    """
     return Path(f"{manifest}.follow-up.log")
 
 
 def _valid_result(*, status: str = "complete") -> str:
+    """Serialize a schema-valid follow-up result for the fake Pi to emit.
+
+    :param status: Terminal status the result reports.
+    :returns: JSON payload accepted by ``FollowUpResult``.
+    """
     return json.dumps(
         {
             "status": status,
@@ -159,6 +180,11 @@ def _valid_result(*, status: str = "complete") -> str:
 
 
 def _fake_pi(tmp_path: Path) -> Path:
+    """Install a fake ``pi`` executable whose behavior ``FAKE_PI_MODE`` selects.
+
+    :param tmp_path: Temporary directory placed ahead of ``PATH``.
+    :returns: Path of the executable, so tests can patch its source.
+    """
     pi = tmp_path / "pi"
     pi.write_text(
         "#!/usr/bin/env python3\n"
@@ -194,21 +220,28 @@ def _fake_pi(tmp_path: Path) -> Path:
     return pi
 
 
-def _environment(tmp_path: Path, *, mode: str, foreground_stopped: bool = True) -> dict[str, str]:
-    environment = {
+def _environment(tmp_path: Path, *, mode: str) -> dict[str, str]:
+    """Build the supervisor environment that resolves ``pi`` to the fake executable.
+
+    :param tmp_path: Temporary directory holding the fake executable.
+    :param mode: ``FAKE_PI_MODE`` selecting the fake's behavior.
+    :returns: Environment for one supervisor run.
+    """
+    return {
         **os.environ,
         "FAKE_PI_MODE": mode,
         "FAKE_PI_RESULT": _valid_result(),
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
     }
-    if foreground_stopped:
-        environment["SYNTH_SETTER_PI_REVIEW_FOREGROUND_STOPPED"] = "1"
-    else:
-        environment.pop("SYNTH_SETTER_PI_REVIEW_FOREGROUND_STOPPED", None)
-    return environment
 
 
 def _run_supervisor(manifest: Path, environment: dict[str, str]) -> int:
+    """Run the follow-up supervisor once and return its exit status.
+
+    :param manifest: Manifest to supervise.
+    :param environment: Environment for the supervisor process.
+    :returns: Exit status, with a non-zero code returned rather than raised.
+    """
     try:
         sh.Command(sys.executable)(
             SCRIPT,
@@ -224,10 +257,21 @@ def _run_supervisor(manifest: Path, environment: dict[str, str]) -> int:
 
 
 def _read_result(manifest: Path) -> FollowUpResult:
+    """Parse the published result for a manifest under the strict schema.
+
+    :param manifest: Manifest the supervisor ran against.
+    :returns: Validated result.
+    """
     return FollowUpResult.model_validate_json(_result_path(manifest).read_text())
 
 
 def _wait_for_path(path: Path, *, timeout: float = 5) -> None:
+    """Block until a path exists.
+
+    :param path: Path to poll for.
+    :param timeout: Seconds allowed before giving up.
+    :raises AssertionError: The path did not appear within the timeout.
+    """
     deadline = time.monotonic() + timeout
     while not path.exists():
         if time.monotonic() >= deadline:
@@ -236,6 +280,13 @@ def _wait_for_path(path: Path, *, timeout: float = 5) -> None:
 
 
 def _wait_for_text(path: Path, expected: str, *, timeout: float = 5) -> None:
+    """Block until a path contains the expected text.
+
+    :param path: Path to poll.
+    :param expected: Substring that must appear.
+    :param timeout: Seconds allowed before giving up.
+    :raises AssertionError: The text did not appear within the timeout.
+    """
     deadline = time.monotonic() + timeout
     while not path.exists() or expected not in path.read_text():
         if time.monotonic() >= deadline:
@@ -450,7 +501,7 @@ def test_supervisor_adopts_valid_foreground_output_without_duplicate_launch(
 
     completed = _run_supervisor(
         manifest,
-        _environment(tmp_path, mode="valid", foreground_stopped=False),
+        _environment(tmp_path, mode="valid"),
     )
 
     assert completed == 0
@@ -486,7 +537,7 @@ def test_supervisor_adopted_findings_reach_child_with_no_relaunch_instruction(
         json.dumps({"message": {"role": "assistant", "content": json.dumps(report)}}) + "\n"
     )
     manifest = _manifest(tmp_path, output_path=foreground_output)
-    environment = _environment(tmp_path, mode="valid", foreground_stopped=False)
+    environment = _environment(tmp_path, mode="valid")
     environment["FAKE_PI_EXPECT_ADOPTED"] = (
         "Use each row's output_path and do not launch those passes again."
     )
@@ -567,7 +618,7 @@ def test_supervisor_waits_for_delayed_foreground_report_without_duplicate_launch
 
     writer = threading.Thread(target=write_report)
     writer.start()
-    environment = _environment(tmp_path, mode="valid", foreground_stopped=False)
+    environment = _environment(tmp_path, mode="valid")
     environment["PI_REVIEW_FOLLOW_UP_OWNERSHIP_WAIT_SECONDS"] = "1"
     try:
         completed = _run_supervisor(manifest, environment)
@@ -580,32 +631,13 @@ def test_supervisor_waits_for_delayed_foreground_report_without_duplicate_launch
     assert statuses == ["adopted-foreground-result"]
 
 
-def test_supervisor_unstoppable_foreground_owner_fails_closed(tmp_path: Path) -> None:
-    """Refuse a duplicate launch when foreground termination is not guaranteed.
+def test_supervisor_unadoptable_foreground_output_fails_closed_without_relaunch(
+    tmp_path: Path,
+) -> None:
+    """Refuse a duplicate launch while a claimed foreground output has no adoptable report.
 
-    :param tmp_path: Temporary review root and fake Pi executable.
-    """
-    launch_marker = tmp_path / "pi-launched"
-    pi = _fake_pi(tmp_path)
-    pi.write_text(
-        pi.read_text().replace("runtime =", f"Path({str(launch_marker)!r}).touch()\nruntime =")
-    )
-    manifest = _manifest(tmp_path, output_path=tmp_path / "unfinished.jsonl")
-
-    completed = _run_supervisor(
-        manifest,
-        _environment(tmp_path, mode="valid", foreground_stopped=False),
-    )
-
-    assert completed == 1
-    assert not launch_marker.exists()
-    result = _read_result(manifest)
-    assert result.status == "failed"
-    assert "ownership" in {diagnostic.category for diagnostic in result.diagnostics}
-
-
-def test_supervisor_host_exit_does_not_authorize_duplicate_launch(tmp_path: Path) -> None:
-    """Fail closed because foreground host exit does not stop its workers.
+    The manifest names an ``output_path`` that never produced a valid report, so ownership
+    is still held elsewhere and relaunching would double-run the pass.
 
     :param tmp_path: Temporary review root and fake Pi executable.
     """
@@ -621,6 +653,7 @@ def test_supervisor_host_exit_does_not_authorize_duplicate_launch(tmp_path: Path
     assert completed == 1
     assert not launch_marker.exists()
     result = _read_result(manifest)
+    assert result.status == "failed"
     assert [attempt.status for attempt in result.attempts] == ["failed"]
     assert "ownership" in {diagnostic.category for diagnostic in result.diagnostics}
 
