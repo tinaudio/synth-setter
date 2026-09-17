@@ -160,6 +160,26 @@ def _assert_stub_xvfb_pids_dead(env: dict[str, str]) -> None:
         pytest.fail(f"stub Xvfb pid={pid} still exists")
 
 
+def _path_without_xsettingsd(env: dict[str, str], sysbin: Path) -> str:
+    """Mirror the environment's PATH into one directory, minus ``xsettingsd``.
+
+    A developer host has the real daemon installed, so deleting the stub only uncovers it; masking
+    the name needs a PATH that resolves everything else.
+
+    :param env: Environment whose PATH is mirrored.
+    :param sysbin: Directory to populate with the mirrored executables.
+    :returns: PATH holding the stub directory and the xsettingsd-free mirror.
+    """
+    sysbin.mkdir()
+    stub_dir, *system_dirs = env["PATH"].split(os.pathsep)
+    for directory in system_dirs:
+        for entry in Path(directory).glob("*"):
+            if entry.name == "xsettingsd" or (sysbin / entry.name).exists():
+                continue
+            (sysbin / entry.name).symlink_to(entry)
+    return os.pathsep.join([stub_dir, str(sysbin)])
+
+
 def test_bootstrap_first_attempt_succeeds_runs_command_under_display(
     stub_env: dict[str, str],
 ) -> None:
@@ -487,3 +507,41 @@ wait "$daemon" 2>/dev/null || true
     ]
     assert owner_lines, probe_log.read_text()
     assert not owner_lines[0].endswith(" 0x0")
+
+
+def test_bootstrap_without_xsettingsd_installed_still_runs_command(
+    stub_env: dict[str, str], tmp_path: Path
+) -> None:
+    """A host with no xsettingsd runs the command instead of failing the bootstrap.
+
+    GitHub's Ubuntu runners have no ``xsettingsd``, and the wrapper is used
+    there to compose Hydra configs with no plugin in sight — so an absent
+    binary must stay advisory (#3152).
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    :param tmp_path: Per-test dir for the xsettingsd-free system PATH.
+    """
+    stub_env["PATH"] = _path_without_xsettingsd(stub_env, tmp_path / "sysbin")
+    (Path(stub_env["PATH"].split(os.pathsep)[0]) / "xsettingsd").unlink()
+
+    result = _run_wrapper(stub_env)
+
+    assert result.returncode == 0, result.stderr
+    assert "ran-ok DISPLAY=:99" in result.stdout
+    assert "xsettingsd is not installed" in result.stderr
+
+
+def test_bootstrap_with_installed_xsettingsd_that_never_owns_fails(
+    stub_env: dict[str, str],
+) -> None:
+    """An installed daemon that never takes the selection still fails loudly.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
+    stub_env["XSETTINGSD_STUB_FAILS"] = "99"
+
+    result = _run_wrapper(stub_env)
+
+    assert result.returncode != 0
+    assert "ran-ok" not in result.stdout
+    assert _xsettingsd_calls(stub_env) == 3

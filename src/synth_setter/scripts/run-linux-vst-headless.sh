@@ -230,6 +230,36 @@ reap_failed_xsettingsd() {
   cat "$TMP_DIR/xsettingsd.log" >&2 || true
 }
 
+# Bring up an XSETTINGS manager, retrying a daemon that fails to take ownership.
+# An absent binary stays advisory: hosts without the package (GitHub's Ubuntu
+# runners) use this wrapper for config composition, with no plugin to starve.
+# Globals:
+#   TMP_DIR, XSETTINGS_PID, XVFB_BOOTSTRAP_ATTEMPTS.
+# Outputs:
+#   Bootstrap diagnostics to stderr.
+# Returns:
+#   0 when a manager owns the selection or none is installed; 1 when the
+#   installed daemon never takes it.
+start_xsettings_manager() {
+  if ! command -v xsettingsd >/dev/null 2>&1; then
+    echo "[wrapper] xsettingsd is not installed;" \
+      "continuing without an XSETTINGS manager" >&2
+    return 0
+  fi
+
+  local attempt=1
+  until start_xsettingsd_attempt; do
+    reap_failed_xsettingsd
+    if (( attempt >= XVFB_BOOTSTRAP_ATTEMPTS )); then
+      echo "XSETTINGS manager bootstrap failed after ${attempt} attempt(s)" >&2
+      return 1
+    fi
+    attempt=$((attempt+1))
+    echo "[wrapper] retrying xsettingsd bootstrap" \
+      "(attempt ${attempt}/${XVFB_BOOTSTRAP_ATTEMPTS})" >&2
+  done
+}
+
 # Bootstrap X11 and run the requested command in its D-Bus session.
 # Globals:
 #   Modifies DISPLAY_FILE, TMP_DIR, OPENBOX_PID, XSETTINGS_PID, and Xvfb
@@ -273,17 +303,7 @@ main() {
     fi
   done
 
-  attempt=1
-  until start_xsettingsd_attempt; do
-    reap_failed_xsettingsd
-    if (( attempt >= XVFB_BOOTSTRAP_ATTEMPTS )); then
-      echo "XSETTINGS manager bootstrap failed after ${attempt} attempt(s)" >&2
-      return 1
-    fi
-    attempt=$((attempt+1))
-    echo "[wrapper] retrying xsettingsd bootstrap" \
-      "(attempt ${attempt}/${XVFB_BOOTSTRAP_ATTEMPTS})" >&2
-  done
+  start_xsettings_manager || return 1
 
   openbox-session </dev/null >"$TMP_DIR/openbox.log" 2>&1 &
   OPENBOX_PID=$!
