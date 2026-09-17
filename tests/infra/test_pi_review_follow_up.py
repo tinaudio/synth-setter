@@ -20,6 +20,7 @@ from agent._shared.run_pi_review_follow_up import (
     _MAX_LOG_BYTES,
     FollowUpResult,
 )
+from tests.helpers.subprocess_progress import await_progress
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "agent/_shared/run_pi_review_follow_up.py"
@@ -209,22 +210,29 @@ def _environment(tmp_path: Path, *, mode: str, foreground_stopped: bool = True) 
 
 
 def _run_supervisor_capturing(manifest: Path, environment: dict[str, str]) -> tuple[int, str]:
+    supervisor = cast(
+        Any,
+        sh.Command(sys.executable)(
+            SCRIPT,
+            "--supervise",
+            manifest,
+            _bg=True,
+            _bg_exc=False,
+            _cwd=manifest.parents[1],
+            _env=environment,
+            _return_cmd=True,
+        ),
+    )
     try:
-        completed = cast(
-            sh.RunningCommand,
-            sh.Command(sys.executable)(
-                SCRIPT,
-                "--supervise",
-                manifest,
-                _cwd=manifest.parents[1],
-                _env=environment,
-                _timeout=5,
-                _return_cmd=True,
-            ),
-        )
+        _await_supervisor_exit(supervisor)
+    finally:
+        with contextlib.suppress(Exception):
+            supervisor.kill()
+    try:
+        supervisor.wait()
     except sh.ErrorReturnCode as error:
         return error.exit_code, error.stderr.decode()
-    return 0, completed.stderr.decode()
+    return 0, supervisor.stderr.decode()
 
 
 def _run_supervisor(manifest: Path, environment: dict[str, str]) -> int:
@@ -235,20 +243,39 @@ def _read_result(manifest: Path) -> FollowUpResult:
     return FollowUpResult.model_validate_json(_result_path(manifest).read_text())
 
 
-def _wait_for_path(path: Path, *, timeout: float = 5) -> None:
-    deadline = time.monotonic() + timeout
-    while not path.exists():
-        if time.monotonic() >= deadline:
-            raise AssertionError(f"timed out waiting for {path}")
-        time.sleep(0.01)
+def _await_supervisor_exit(supervisor: Any) -> None:
+    """Wait for a backgrounded supervisor to exit, however loaded the runner is.
+
+    :param supervisor: Backgrounded supervisor command.
+    """
+    await_progress(
+        lambda: not supervisor.is_alive(),
+        supervisor.pid,
+        description="the supervisor to exit",
+    )
 
 
-def _wait_for_text(path: Path, expected: str, *, timeout: float = 5) -> None:
-    deadline = time.monotonic() + timeout
-    while not path.exists() or expected not in path.read_text():
-        if time.monotonic() >= deadline:
-            raise AssertionError(f"timed out waiting for {expected!r} in {path}")
-        time.sleep(0.01)
+def _wait_for_path(supervisor: Any, path: Path) -> None:
+    """Wait for ``path`` to appear while the supervisor tree keeps working.
+
+    :param supervisor: Backgrounded supervisor whose tree writes ``path``.
+    :param path: File the supervisor or its child creates.
+    """
+    await_progress(path.exists, supervisor.pid, description=f"{path} to appear")
+
+
+def _wait_for_text(supervisor: Any, path: Path, expected: str) -> None:
+    """Wait for ``expected`` to reach ``path`` while the supervisor tree keeps working.
+
+    :param supervisor: Backgrounded supervisor whose tree writes ``path``.
+    :param path: File the text is expected in.
+    :param expected: Substring awaited in ``path``.
+    """
+    await_progress(
+        lambda: path.exists() and expected in path.read_text(),
+        supervisor.pid,
+        description=f"{expected!r} in {path}",
+    )
 
 
 def test_supervisor_valid_child_result_publishes_strict_atomic_result(tmp_path: Path) -> None:
@@ -360,11 +387,12 @@ def test_supervisor_killed_child_writes_failed_result_with_signal_code(tmp_path:
         ),
     )
     try:
-        _wait_for_path(child_pid_file)
-        _wait_for_text(_log_path(manifest), "child-log")
+        _wait_for_path(supervisor, child_pid_file)
+        _wait_for_text(supervisor, _log_path(manifest), "child-log")
         os.kill(int(child_pid_file.read_text()), signal.SIGKILL)
+        _await_supervisor_exit(supervisor)
         with pytest.raises(sh.ErrorReturnCode) as error:
-            supervisor.wait(timeout=5)
+            supervisor.wait()
         assert error.value.exit_code == 1
     finally:
         if child_pid_file.exists():
@@ -421,10 +449,11 @@ def test_supervisor_result_path_never_exposes_partial_child_output(tmp_path: Pat
         ),
     )
     try:
-        _wait_for_path(partial_marker)
+        _wait_for_path(supervisor, partial_marker)
         assert not _result_path(manifest).exists()
         release.touch()
-        supervisor.wait(timeout=5)
+        _await_supervisor_exit(supervisor)
+        supervisor.wait()
     finally:
         with contextlib.suppress(Exception):
             supervisor.kill()

@@ -9,10 +9,12 @@ cap so a spinning child is still killed rather than waited out.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import select
 import subprocess
 import time
+from collections.abc import Callable
 
 import psutil
 
@@ -24,17 +26,63 @@ _MAX_POLL_SECONDS = 1.0
 
 
 def accumulated_cpu_seconds(pid: int, last: float) -> float:
-    """Return the child's accumulated CPU time, or ``last`` once it is gone.
+    """Return the CPU time of the child's whole tree, or ``last`` once it is gone.
+
+    Descendants are included because a parent blocked in ``wait()`` consumes nothing while its
+    own child does the work; ``children_*`` covers the ones already reaped.
 
     :param pid: Process id of the child.
     :param last: Reading to keep when the process can no longer be sampled.
-    :returns: User plus system CPU seconds.
+    :returns: User plus system CPU seconds across the process tree.
     """
     try:
-        times = psutil.Process(pid).cpu_times()
+        process = psutil.Process(pid)
+        times = process.cpu_times()
     except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
         return last
-    return times.user + times.system
+    total = times.user + times.system + times.children_user + times.children_system
+    # Suppressed around the walk as well: one unreadable process must not discard the rest.
+    with contextlib.suppress(psutil.Error):
+        for descendant in process.children(recursive=True):
+            with contextlib.suppress(psutil.Error):
+                total += sum(descendant.cpu_times()[:2])
+    return total
+
+
+def await_progress(
+    condition: Callable[[], bool],
+    pid: int,
+    *,
+    description: str,
+    stall_timeout_s: float = _STALL_TIMEOUT_SECONDS,
+    hard_cap_s: float = _HARD_CAP_SECONDS,
+) -> None:
+    """Wait for ``condition`` while the tree under ``pid`` keeps making progress.
+
+    :param condition: Checked between polls; the wait ends once it returns true.
+    :param pid: Process whose tree is sampled for CPU time.
+    :param description: What is being awaited, quoted in the failure message.
+    :param stall_timeout_s: Seconds without CPU time that count as stuck.
+    :param hard_cap_s: Absolute bound, so a spinning tree still fails.
+    :raises AssertionError: If the tree stalls or the wait outlasts ``hard_cap_s``.
+    """
+    cpu_seconds = accumulated_cpu_seconds(pid, 0.0)
+    last_progress = time.monotonic()
+    hard_deadline = last_progress + hard_cap_s
+    poll_s = min(_MAX_POLL_SECONDS, stall_timeout_s / 4)
+    while not condition():
+        if time.monotonic() >= hard_deadline:
+            raise AssertionError(f"waited for {description} for over {hard_cap_s:g}s")
+        time.sleep(min(poll_s, max(0.0, hard_deadline - time.monotonic())))
+        sampled = accumulated_cpu_seconds(pid, cpu_seconds)
+        if sampled > cpu_seconds:
+            cpu_seconds = sampled
+            last_progress = time.monotonic()
+        elif time.monotonic() - last_progress >= stall_timeout_s:
+            raise AssertionError(
+                f"no progress for {stall_timeout_s:g}s (no CPU time) while waiting "
+                f"for {description}"
+            )
 
 
 def await_ready_signal(
