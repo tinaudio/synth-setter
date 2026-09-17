@@ -975,18 +975,25 @@ def cfg_dataset_faust(
 
 
 @pytest.fixture(scope="function")
-def cfg_dataset_pyfdn_householder(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose the fixed-Householder pyFDN dataset with temporary local paths.
+def cfg_dataset_pyfdn_householder(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> Iterator[DictConfig]:
+    """Compose a Householder pyFDN dataset with temporary local paths.
 
+    The synth group carries the registered ``source_sha256``, so a topology is
+    selected by indirect parametrization rather than by overwriting identity fields.
+
+    :param request: Indirect param naming the ``synth`` group, if supplied.
     :param tmp_path: Per-test output/work/log root.
     :yields DictConfig: PyFDN cfg with ``tmp_path``-pinned paths.
     """
+    synth = getattr(request, "param", "pyfdn_n8_mono_householder")
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
             overrides=[
                 "experiment=generate_dataset/smoke-shard",
-                "synth=pyfdn_n8_mono_householder",
+                f"synth={synth}",
                 "render=pyfdn",
                 "render.gui_toggle_cadence=never",
             ],
