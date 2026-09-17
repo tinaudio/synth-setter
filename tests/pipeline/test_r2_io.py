@@ -819,6 +819,28 @@ class TestUploadDir:
         dest = fake_r2_remote / "bucket" / "evals" / "run-1"
         assert (dest / "metrics.json").read_text() == '{"param_mse": 0.0}'
 
+    def test_immutable_upload_rejects_changed_file(
+        self, fake_r2_remote: Path, tmp_path: Path
+    ) -> None:
+        """An immutable upload cannot replace bytes already published at its URI.
+
+        :param fake_r2_remote: Local-typed rclone remote holding the first upload.
+        :param tmp_path: Pytest tmp dir holding the changed local source tree.
+        """
+        local_dir = tmp_path / "run"
+        local_dir.mkdir()
+        metrics = local_dir / "metrics.json"
+        metrics.write_text('{"param_mse": 1.0}')
+        destination = "r2://bucket/evals/attempt-1"
+        r2_io.upload_dir_immutable(local_dir, destination)
+
+        metrics.write_text('{"param_mse": 0.0}')
+        with pytest.raises(subprocess.CalledProcessError):
+            r2_io.upload_dir_immutable(local_dir, destination)
+
+        published = fake_r2_remote / "bucket" / "evals" / "attempt-1" / "metrics.json"
+        assert published.read_text() == '{"param_mse": 1.0}'
+
     def test_command_widens_io_timeout_and_omits_immutable(self, tmp_path: Path) -> None:
         """Pin the rclone verb, the 3h IO timeout, and the absence of ``--immutable``.
 

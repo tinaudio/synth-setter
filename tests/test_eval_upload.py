@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from omegaconf import DictConfig, OmegaConf
@@ -23,7 +24,7 @@ def _upload_cfg(output_dir: Path, upload_output_dir_uri: str | None) -> DictConf
 
     :param output_dir: Resolves to ``cfg.paths.output_dir`` — the tree to copy.
     :param upload_output_dir_uri: Resolves to ``cfg.evaluation.upload_output_dir_uri``.
-    :returns: A :class:`DictConfig` carrying only the two keys the helper reads.
+    :returns: A :class:`DictConfig` carrying only the keys the helper reads.
     """
     return OmegaConf.create(  # type: ignore[no-any-return]
         {
@@ -80,10 +81,11 @@ def test_maybe_upload_output_dir_noop_when_uri_unset(fake_r2_remote: Path, tmp_p
     output_dir = tmp_path / "run"
     _write_output_tree(output_dir)
 
-    _maybe_upload_output_dir(
+    published_uri = _maybe_upload_output_dir(
         _upload_cfg(output_dir, upload_output_dir_uri=None), is_global_zero=True
     )
 
+    assert published_uri is None
     assert list(fake_r2_remote.glob("bucket/**/*")) == []
 
 
@@ -101,32 +103,76 @@ def test_maybe_upload_output_dir_skips_non_global_zero_rank(
     output_dir = tmp_path / "run"
     _write_output_tree(output_dir)
 
-    _maybe_upload_output_dir(
+    published_uri = _maybe_upload_output_dir(
         _upload_cfg(output_dir, "r2://bucket/evals/run-1"), is_global_zero=False
     )
 
+    assert published_uri is None
     assert list(fake_r2_remote.glob("bucket/**/*")) == []
 
 
-def test_maybe_upload_output_dir_mirrors_tree_when_uri_set(
+def test_maybe_upload_output_dir_publishes_under_generated_attempt_id(
     fake_r2_remote: Path, storage_credentials: None, tmp_path: Path
 ) -> None:
-    """A set URI mirrors the whole output dir beneath the destination prefix.
+    """A suite root publishes the whole run beneath a generated attempt ID.
 
-    :param fake_r2_remote: Local-backed ``r2:`` remote where the mirror lands.
+    :param fake_r2_remote: Local-backed ``r2:`` remote where the attempt lands.
     :param storage_credentials: Dummy secrets so the real credential check passes.
     :param tmp_path: Holds the output dir copied to R2.
     """
     output_dir = tmp_path / "run"
     _write_output_tree(output_dir)
+    (output_dir / "wandb" / "run-1").mkdir(parents=True)
+    (output_dir / "wandb" / "run-1" / "run.wandb").write_text("redundant run state")
 
-    _maybe_upload_output_dir(
-        _upload_cfg(output_dir, "r2://bucket/evals/run-1"), is_global_zero=True
+    published_uri = _maybe_upload_output_dir(
+        _upload_cfg(output_dir, "r2://bucket/evals/suite/"), is_global_zero=True
     )
 
-    dest = fake_r2_remote / "bucket" / "evals" / "run-1"
-    assert (dest / "predictions" / "pred.json").read_text() == '{"ok": true}'
-    assert (dest / "metrics.json").read_text() == '{"param_mse": 0.0}'
+    assert published_uri is not None
+    attempt_id = published_uri.rsplit("/", maxsplit=1)[-1]
+    assert UUID(attempt_id).hex == attempt_id
+    destination = fake_r2_remote / "bucket" / "evals" / "suite" / attempt_id
+    assert (destination / "predictions" / "pred.json").read_text() == '{"ok": true}'
+    assert (destination / "metrics.json").read_text() == '{"param_mse": 0.0}'
+    assert (destination / "wandb" / "run-1" / "run.wandb").read_text() == ("redundant run state")
+
+
+def test_maybe_upload_output_dir_keeps_attempts_isolated(
+    fake_r2_remote: Path, storage_credentials: None, tmp_path: Path
+) -> None:
+    """Two invocations under one suite root retain independent payloads.
+
+    :param fake_r2_remote: Local-backed ``r2:`` remote holding both attempts.
+    :param storage_credentials: Dummy secrets so the real credential check passes.
+    :param tmp_path: Holds the two independent local run directories.
+    """
+    first_output = tmp_path / "first"
+    second_output = tmp_path / "second"
+    _write_output_tree(first_output)
+    _write_output_tree(second_output)
+    (first_output / "predictions" / "pred.json").write_text("failed-attempt-evidence")
+    (second_output / "predictions" / "pred.json").write_text("successful-retry")
+
+    first_uri = _maybe_upload_output_dir(
+        _upload_cfg(first_output, "r2://bucket/evals/suite"), is_global_zero=True
+    )
+    second_uri = _maybe_upload_output_dir(
+        _upload_cfg(second_output, "r2://bucket/evals/suite"), is_global_zero=True
+    )
+
+    assert first_uri is not None
+    assert second_uri is not None
+    assert first_uri != second_uri
+    first_attempt_id = first_uri.rsplit("/", maxsplit=1)[-1]
+    second_attempt_id = second_uri.rsplit("/", maxsplit=1)[-1]
+    suite_root = fake_r2_remote / "bucket" / "evals" / "suite"
+    assert (suite_root / first_attempt_id / "predictions" / "pred.json").read_text() == (
+        "failed-attempt-evidence"
+    )
+    assert (suite_root / second_attempt_id / "predictions" / "pred.json").read_text() == (
+        "successful-retry"
+    )
 
 
 def test_maybe_upload_output_dir_rejects_non_r2_uri(tmp_path: Path) -> None:
@@ -155,10 +201,9 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     """End-to-end through the ``synth-setter-eval`` CLI: R2 prefetch then oracle scoring.
 
     No in-process shortcuts and no mocks — the real entrypoint runs with real
-    ``rclone`` (local-backed remote). A dataset staged under an ``r2://`` prefix is
-    downloaded into an initially-absent ``data.dataset_root``, and the fake oracle's
-    exact-zero ``test/param_mse`` reaches ``metrics.json``. Proves the new
-    ``data.download_dataset_root_uri`` gate composes with eval through ``main``.
+    ``rclone`` (local-backed remote). The test split staged under an ``r2://`` prefix
+    is downloaded into an initially absent ``datamodule.dataset_root``, and the fake
+    oracle's exact-zero ``test/param_mse`` reaches ``metrics.json``.
 
     :param tmp_path: Root for the fake R2 remote, the download target, and the output dir.
     :param surge_xt_smoke_datasets: Source ``{train,val,test}.lance`` + ``stats.npz``.
@@ -173,6 +218,7 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     for name in ("train.lance", "val.lance", "test.lance"):
         shutil.copytree(surge_xt_smoke_datasets / name, staged / name)
     shutil.copy(surge_xt_smoke_datasets / "stats.npz", staged / "stats.npz")
+    (staged / "dataset.complete").touch()
 
     dataset_root = tmp_path / "downloaded"
     output_dir = tmp_path / "out"
@@ -210,9 +256,9 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     )
     assert proc.returncode == 0, proc.stderr
 
-    for split in ("train.lance", "val.lance", "test.lance"):
-        assert (dataset_root / split).is_dir(), f"{split} was not downloaded from R2"
-    assert (dataset_root / "stats.npz").is_file(), "stats.npz was not downloaded from R2"
+    downloaded_test_splits = list(dataset_root.rglob("test.lance"))
+    assert len(downloaded_test_splits) == 1
+    assert len(list(dataset_root.rglob("stats.npz"))) == 1
 
     metrics = json.loads((output_dir / "metrics" / "metrics.json").read_text())
     assert metrics["test/param_mse"] == 0.0
@@ -224,10 +270,9 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
     """End-to-end through the ``synth-setter-eval`` CLI: oracle scoring then R2 upload.
 
     No in-process shortcuts and no mocks — the real entrypoint runs with real
-    ``rclone`` (local-backed remote). With ``evaluation.upload_output_dir_uri`` set,
-    ``main``'s final step mirrors the whole run dir to that prefix, so every file
-    the eval wrote locally must reappear beneath the destination and the uploaded
-    ``metrics.json`` must carry the oracle's exact-zero ``test/param_mse``.
+    ``rclone`` (local-backed remote). The configured suite root receives the whole
+    run beneath the automatically generated attempt ID, and uploaded metrics carry
+    the oracle's exact-zero ``test/param_mse``.
 
     :param tmp_path: Root for the fake R2 remote and the local output dir.
     :param surge_xt_smoke_datasets: Source ``{train,val,test}.lance`` + ``stats.npz``.
@@ -237,8 +282,8 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
 
     remote_root = tmp_path / "r2"
     remote_root.mkdir()
-    output_dir = tmp_path / "out"
-    upload_uri = "r2://eval-artifacts/run-1"
+    log_dir = tmp_path / "logs"
+    upload_uri = "r2://eval-artifacts/oracle-suite"
 
     env = {
         **os.environ,
@@ -259,8 +304,7 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
             "datamodule.batch_size=1",
             "datamodule.num_workers=0",
             "ckpt_path=null",
-            f"paths.output_dir={output_dir}",
-            f"hydra.run.dir={output_dir}",
+            f"paths.log_dir={log_dir}",
             f"evaluation.upload_output_dir_uri={upload_uri}",
         ],
         cwd=remote_root,
@@ -271,15 +315,13 @@ def test_eval_cli_uploads_output_dir_to_r2(tmp_path: Path, surge_xt_smoke_datase
     )
     assert proc.returncode == 0, proc.stderr
 
-    local_files = {p.relative_to(output_dir) for p in output_dir.rglob("*") if p.is_file()}
-    assert local_files, "eval produced no output files to upload"
+    local_metrics = list(log_dir.glob("**/metrics/metrics.json"))
+    assert len(local_metrics) == 1, f"expected one eval run, found {local_metrics}"
 
-    uploaded_root = remote_root / "eval-artifacts" / "run-1"
-    uploaded_files = {
-        p.relative_to(uploaded_root) for p in uploaded_root.rglob("*") if p.is_file()
-    }
-    missing = local_files - uploaded_files
-    assert not missing, f"output dir not fully uploaded; missing {sorted(map(str, missing))}"
-
+    uploaded_attempts = list((remote_root / "eval-artifacts" / "oracle-suite").iterdir())
+    assert len(uploaded_attempts) == 1
+    uploaded_root = uploaded_attempts[0]
+    assert UUID(uploaded_root.name).hex == uploaded_root.name
     uploaded_metrics = json.loads((uploaded_root / "metrics" / "metrics.json").read_text())
     assert uploaded_metrics["test/param_mse"] == 0.0
+    assert (uploaded_root / "eval.log").is_file()

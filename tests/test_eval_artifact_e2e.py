@@ -32,7 +32,7 @@ from tests.helpers.wandb_offline import read_run_binary
 
 _CONFIG_ID = "test-mps-fake-oracle"
 _RUN_ID = "shared-generation-run"
-_UPLOAD_URI = "r2://eval-artifacts/eval-run-1"
+_UPLOAD_URI = "r2://eval-artifacts/oracle-suite"
 
 
 def _compose_offline_wandb_eval_cfg(
@@ -162,8 +162,11 @@ def test_evaluate_preserves_wandb_id_and_logs_eval_results_artifact(
         f"expected one .wandb binary in {offline_dirs[0]}, found {binary_files}"
     )
 
+    published_attempts = list((remote_root / "eval-artifacts" / "oracle-suite").iterdir())
+    assert len(published_attempts) == 1
+    attempt_id = published_attempts[0].name
+    s3_ref = f"s3://eval-artifacts/oracle-suite/{attempt_id}"
     artifact_name = f"eval-{_CONFIG_ID}"
-    s3_ref = "s3://eval-artifacts/eval-run-1"
     payload = read_run_binary(
         Path(binary_files[0]),
         until=lambda data: artifact_name.encode() in data and s3_ref.encode() in data,

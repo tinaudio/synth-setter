@@ -460,17 +460,21 @@ The R2 eval path follows the [storage-provenance-spec](storage-provenance-spec.m
 eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_run_id}/{eval_config_id}/{eval_wandb_run_id}/
 ```
 
-After metrics, optionally upload all eval outputs to R2:
+Managed launchers leave `hydra.run.dir` unset, so local output uses Hydra's standard
+run-name and timestamp path rather than a shared fixed directory.
 
-```bash
-make upload-eval
-# rclone sync \
-#   logs/eval/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/ \
-#   r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022500Z/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/ \
-#   --checksum
+When `evaluation.upload_output_dir_uri` is configured, it names a suite root rather than an
+attempt destination. After evaluation succeeds, the publication step generates a UUID, appends
+it to the suite root, and uploads the complete run directory with immutable checksum semantics:
+
+```text
+<upload_output_dir_uri>/<attempt_id>/
 ```
 
-Not automatic — explicit `make` target. Toggle via Hydra config or CLI flag.
+Publication runs after metric serialization. Evaluation failures are not published, while an
+interrupted upload can leave only an unreferenced UUID prefix. The W&B
+`eval-results` artifact is logged after upload and references the exact immutable attempt URI;
+there is no mutable suite-level `latest` pointer.
 
 **Browsing eval results in R2:**
 
@@ -481,8 +485,11 @@ rclone ls r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022500
 # All evals of a specific training run
 rclone ls r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022500Z/flow_simple/flow_simple-20260315T091500250Z/
 
-# A specific eval run (fully qualified 6-segment path)
+# Attempts published beneath a specific eval suite root
 rclone ls r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022500Z/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/
+
+# One immutable attempt returned by the eval-results W&B artifact
+rclone ls r2:intermediate-data/eval/surge_simple/surge_simple-20260312T143022500Z/flow_simple/flow_simple-20260315T091500250Z/surge_simple/surge_simple-20260320T160000750Z/<attempt_id>/
 ```
 
 ### 6.4 W&B Eval Lineage

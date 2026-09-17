@@ -11,6 +11,7 @@ from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 import hydra
 import pandas as pd
@@ -69,6 +70,7 @@ register_resolvers()
 log = RankedLogger(__name__, rank_zero_only=True)
 
 _MAX_EVALUATION_SEED = 2**32 - 1
+_SUPPORTED_EVALUATION_MODES = frozenset(("predict", "test", "val", "validate"))
 
 
 class _CheckpointChangedDuringDownloadError(RuntimeError):
@@ -513,8 +515,13 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
         ``trainer.callback_metrics`` (``torch.Tensor`` values) with audio
         metrics from :func:`_run_predict_postprocessing` (Python ``float``),
         so callers iterating values must handle both.
-    :raises ValueError: Seeded evaluation lacks a supported explicit integer seed.
+    :raises ValueError: The evaluation mode or seeded evaluation seed is unsupported.
     """
+    mode = cfg.get("mode", "test")
+    if mode not in _SUPPORTED_EVALUATION_MODES:
+        raise ValueError(f"unsupported evaluation mode: {mode!r}")
+    configured_checkpoint = cfg.ckpt_path
+
     seeded_evaluation = OmegaConf.select(cfg, "model.seeded_evaluation", default=False)
     if seeded_evaluation:
         evaluation_seed = cfg.get("seed")
@@ -550,7 +557,6 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     log.info(f"Instantiating trainer <{cfg.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(cfg.trainer, logger=logger, callbacks=callbacks)
 
-    configured_checkpoint = cfg.ckpt_path
     is_unpinned_remote = (
         cfg.get("ckpt_sha256") is None
         and isinstance(configured_checkpoint, str)
@@ -580,8 +586,6 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     # Record the model + dataset lineage edges before evaluation so the run links
     # to both inputs in the W&B DAG (storage-provenance-spec §5).
     record_input_lineage(logger, *_consumed_artifact_refs(cfg))
-
-    mode = cfg.get("mode", "test")
 
     audio_metrics: dict[str, float] = {}
     if mode == "test":
@@ -627,8 +631,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     # upload + artifact log below) to avoid concurrent writers corrupting metrics.json.
     if trainer.is_global_zero:
         _dump_metric_dict(metric_dict, Path(cfg.paths.output_dir))
-    _maybe_upload_output_dir(cfg, trainer.is_global_zero)
-    upload_uri = _upload_output_dir_uri(cfg)
+    upload_uri = _maybe_upload_output_dir(cfg, trainer.is_global_zero)
     # _get_git_sha() shells out, so only invoke it on the path that actually logs
     # the artifact (global-zero with a configured R2 prefix).
     if trainer.is_global_zero and upload_uri:
@@ -765,46 +768,37 @@ def _upload_output_dir_uri(cfg: DictConfig) -> str | None:
     return OmegaConf.select(cfg, "evaluation.upload_output_dir_uri")
 
 
-def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> None:
-    """Mirror the whole Hydra run dir to R2 when ``evaluation.upload_output_dir_uri`` is set.
+def _maybe_upload_output_dir(cfg: DictConfig, is_global_zero: bool) -> str | None:
+    """Publish one invocation beneath its configured R2 suite root.
 
-    Opt-in: a null URI is a no-op. Runs last so every artifact — metrics,
-    predictions, rendered audio, config logs — is on disk before the copy. The
-    configured URI is the exact destination prefix; the run dir's contents land
-    directly beneath it. Credential validation is delegated to
-    :func:`r2_io.ensure_r2_env_loaded`, matching the datamodule's R2 prefetch.
+    Each successful publication receives a unique remote UUID prefix. Publication
+    runs only after evaluation succeeds, so failed work cannot enter a retry's payload.
 
-    Only the global-zero rank uploads: under DDP ``main`` runs on every rank
-    against the one shared ``output_dir``, so an ungated copy would race N
-    redundant uploads — the same rank gate :func:`evaluate` puts on predict
-    postprocessing.
-
-    :param cfg: Reads ``cfg.evaluation.upload_output_dir_uri`` (``r2://`` prefix or
-        null) and ``cfg.paths.output_dir`` (the local tree to copy).
-    :param is_global_zero: Whether this is the global-zero rank; non-zero ranks
-        return without touching R2.
-    :raises ValueError: ``upload_output_dir_uri`` is set but not an ``r2://`` URI;
-        checked before the credential ping so a misconfigured destination is
-        attributed to the URI rather than surfacing as an auth failure.
+    :param cfg: Reads the optional suite root and local output directory.
+    :param is_global_zero: Whether this is the sole rank allowed to publish.
+    :returns: Exact immutable attempt URI, or ``None`` when publication is disabled.
+    :raises ValueError: The suite root is invalid.
     """
     if not is_global_zero:
-        return
-    dest_uri = _upload_output_dir_uri(cfg)
-    if not dest_uri:
-        return
-    if not r2_io.is_r2_uri(dest_uri):
+        return None
+    suite_root_uri = _upload_output_dir_uri(cfg)
+    if not suite_root_uri:
+        return None
+    if not r2_io.is_r2_uri(suite_root_uri):
         raise ValueError(
-            f"evaluation.upload_output_dir_uri must be an r2:// URI; got {dest_uri!r}."
+            f"evaluation.upload_output_dir_uri must be an r2:// URI; got {suite_root_uri!r}."
         )
+    attempt_uri = f"{suite_root_uri.rstrip('/')}/{uuid4().hex}"
     output_dir = Path(cfg.paths.output_dir)
-    log.info(f"Uploading eval output dir {output_dir} to {dest_uri}")
+    log.info(f"Uploading eval attempt {output_dir} to {attempt_uri}")
     r2_io.ensure_r2_env_loaded()
-    r2_io.upload_dir(output_dir, dest_uri)
+    r2_io.upload_dir_immutable(output_dir, attempt_uri)
+    return attempt_uri
 
 
 @hydra.main(version_base="1.3", config_path="pkg://synth_setter.configs", config_name="eval.yaml")
 def main(cfg: DictConfig) -> None:
-    """Run the evaluation entrypoint.
+    """Run the Hydra-composed evaluation entrypoint.
 
     :param cfg: DictConfig configuration composed by Hydra.
     """
@@ -816,7 +810,7 @@ def main(cfg: DictConfig) -> None:
     # (e.g. ask for tags if none are provided in cfg, print cfg tree, etc.)
     extras(cfg)
 
-    # evaluate() persists metrics, mirrors the output dir to R2, and logs the
+    # evaluate() persists metrics, publishes the output dir to R2, and logs the
     # eval-results artifact internally (before @task_wrapper closes the run).
     evaluate(cfg)
 

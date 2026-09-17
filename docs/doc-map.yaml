@@ -126,7 +126,7 @@ docs:
       - pattern: "src/synth_setter/cli/train.py"
         covers: "WandbLogger instantiation, trainer integration, run lifecycle, model-{config_id} artifact logged at train end with opt-in s3:// checkpoint reference"
       - pattern: "src/synth_setter/cli/eval.py"
-        covers: "Checkpoint resolution from W&B, evaluation logging"
+        covers: "Checkpoint resolution, evaluation logging, and exact UUID-scoped R2 artifact references"
       - pattern: "src/synth_setter/cli/generate_dataset.py"
         covers: "WandbLogger lifecycle for dataset generation: spec → hyperparams + dataset-spec artifact, per-shard + summary history rows, run id pinned to spec.run_id, inline oracle eval resuming the run to append per-split-namespaced audio rows (test bare audio/*; train/val under <split>/audio/* via +evaluation.metric_prefix)"
       - pattern: "src/synth_setter/pipeline/subprocess_stream.py"
@@ -426,7 +426,7 @@ docs:
     description: Evaluation pipeline design — predict, render, metrics, R2 integration
     sources:
       - pattern: "src/synth_setter/cli/eval.py"
-        covers: "Evaluation entry point, checkpoint loading, Hydra config composition"
+        covers: "Evaluation entry point, publication identity, checkpoint loading, and immutable publication"
       - pattern: "src/synth_setter/cli/migrate_checkpoint.py"
         covers: "synth-setter-migrate-checkpoint console script (strips legacy _orig_mod key parts; refuses overwrites, aborts on collisions/no-op) and checkpoint_migration_hint wrapping train/eval Trainer calls"
       - pattern: "src/synth_setter/evaluation/predict_vst_audio.py"
@@ -442,7 +442,7 @@ docs:
       - pattern: "renderscript.sh"
         covers: "Cross-platform rendering script, Xvfb auto-detection"
       - pattern: "src/synth_setter/configs/eval.yaml"
-        covers: "Evaluation config entry point, Hydra defaults, evaluation: gates, render: composition entry"
+        covers: "Evaluation config entry point, publication gate, and render composition"
       - pattern: "src/synth_setter/utils/utils.py"
         covers: "`${wandb:...}` OmegaConf resolver `_resolve_wandb_checkpoint` — lazily downloads a `model-{config_id}` artifact to `$PROJECT_ROOT/.cache/checkpoints/` and returns the local ckpt path"
       - pattern: "jobs/predict/*.sh"

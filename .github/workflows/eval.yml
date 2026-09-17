@@ -106,8 +106,7 @@ jobs:
                 "synth-setter-eval " \
                 "experiment=$EXPERIMENT " \
                 "$checkpoint_arg" \
-                "datamodule.download_dataset_root_uri=$DATASET_ROOT_URI " \
-                "hydra.run.dir=/home/build/synth-setter/eval-run"
+                "datamodule.download_dataset_root_uri=$DATASET_ROOT_URI"
               python -m synth_setter.pipeline.skypilot_launch \
                 "skypilot_launch/compute=$COMPUTE_OPTION" \
                 "skypilot_launch.tail=$TAIL" \
