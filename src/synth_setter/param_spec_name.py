@@ -6,11 +6,15 @@ Use ``ParamSpecName`` for runtime registry keys and
     def resolve(name: ParamSpecName) -> object: ...
 """
 
-from typing import Annotated, NewType
+from typing import Annotated, Literal, NewType
 
 from pydantic import AfterValidator
 
 ParamSpecName = NewType("ParamSpecName", str)
+
+NoteTimingParameterization = Literal["legacy_endpoints", "onset_duration"]
+LEGACY_NOTE_TIMING: NoteTimingParameterization = "legacy_endpoints"
+CURRENT_NOTE_TIMING: NoteTimingParameterization = "onset_duration"
 
 
 def _reject_blank(value: ParamSpecName) -> ParamSpecName:

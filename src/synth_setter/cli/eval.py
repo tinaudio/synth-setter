@@ -35,6 +35,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
     dataset_artifact_ref,
     describe_unresolved_dataset_root,
+    validate_dataset_note_timing,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig, _get_git_sha
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
@@ -530,6 +531,13 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             )
         seed_everything(evaluation_seed, workers=True)
     apply_feature_flags(cfg)
+    synth = cfg.get("synth")
+    if synth is not None:
+        validate_dataset_note_timing(
+            cfg.datamodule.get("dataset_root"),
+            cfg.datamodule.get("download_dataset_root_uri"),
+            synth.note_timing_parameterization,
+        )
 
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)

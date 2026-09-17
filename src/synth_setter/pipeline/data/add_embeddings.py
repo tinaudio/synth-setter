@@ -1910,13 +1910,34 @@ def _matching_index_exists(
     return False
 
 
+def _lineage_dataset_root(lance_uri: str) -> str:
+    """Return the directory holding a split's sibling dataset metadata.
+
+    ``lance_uri`` names one split (``<root>/train.lance``) while
+    ``input_spec.json`` lives at the root, so lineage reads the parent. A bare
+    relative split resolves against the working directory.
+
+    :param lance_uri: Split dataset URI from the run config.
+    :returns: Dataset-root URI for metadata reads.
+    """
+    parent, _, _ = lance_uri.rpartition("/")
+    return parent or "."
+
+
 def add_embeddings(config: AddEmbeddingsConfig) -> None:
     """Append registry entries to one Lance dataset and resume missing index work.
 
     :param config: Validated dataset, embedding, checkpoint, and write settings.
     """
     from synth_setter.pipeline.data.lance_shard import read_shard_metadata
+    from synth_setter.pipeline.dataset_lineage import validate_dataset_note_timing
 
+    if "param_shift" in config.embeddings and config.render is not None:
+        validate_dataset_note_timing(
+            _lineage_dataset_root(config.lance_uri),
+            None,
+            config.render.note_timing_parameterization,
+        )
     specs = [EMBEDDING_REGISTRY[name] for name in config.embeddings]
     dataset = _open_lance_dataset(config.lance_uri)
     sample_rate = int(read_shard_metadata(dataset.schema).sample_rate)

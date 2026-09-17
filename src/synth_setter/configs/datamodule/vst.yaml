@@ -28,3 +28,4 @@ growing_active_record: ${oc.select:training.growing_active_record,null}
 # Identity flows from the root synth group (#2565); selecting a VST datamodule
 # without `synth=<name>` fails loudly at first resolution.
 param_spec_name: ${synth.param_spec_name}
+note_timing_parameterization: ${synth.note_timing_parameterization}

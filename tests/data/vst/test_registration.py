@@ -585,6 +585,7 @@ def test_identity_group_yaml_states_the_full_identity() -> None:
     assert yaml.safe_load(yaml_text) == {
         "name": "fake_synth",
         "param_spec_name": "fake_synth",
+        "note_timing_parameterization": "legacy_endpoints",
         "plugin_path": "plugins/fake.vst3",
         "plugin_state_path": preset_repo_path("fake_synth"),
         "synth_version": "9.9.9",

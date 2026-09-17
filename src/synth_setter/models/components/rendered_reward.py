@@ -23,7 +23,7 @@ from synth_setter.data.vst.param_spec import (
     require_scalar_synth_params,
     spec_quantize_model_output,
 )
-from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import anchor_render_preset, make_audio_renderer
@@ -140,7 +140,10 @@ class SynthRenderedReward(nn.Module):
         super().__init__()
         self.render_config = anchor_render_preset(render_config)
         self.distance = distance
-        self.spec = param_specs[render_config.param_spec_name]
+        self.spec = resolve_param_spec(
+            render_config.param_spec_name,
+            render_config.note_timing_parameterization,
+        )
         # Built on first use: the native engine is not picklable and must live in the
         # process that renders.
         self._renderer: AudioRenderer | None = None

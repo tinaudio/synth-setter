@@ -1,6 +1,7 @@
 # Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
 name: "faust_bright_organ"
 param_spec_name: "faust_bright_organ"
+note_timing_parameterization: "onset_duration"
 plugin_path: "registry://faust/faust_bright_organ"
 plugin_state_path: ""
 synth_version: "1"

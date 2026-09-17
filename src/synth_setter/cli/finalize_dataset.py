@@ -262,6 +262,7 @@ def finalize_from_spec(
                 work_dir,
                 str(spec.render.param_spec_name),
                 spec.render.synth.name,
+                note_timing_parameterization=spec.render.note_timing_parameterization,
                 dimension=spec.param_language_dimension,
             )
             r2_io.upload(language_path, language_uri)
@@ -269,7 +270,10 @@ def finalize_from_spec(
         else:
             with r2_io.downloaded_to_tempfile(language_uri) as language_path:
                 _, metadata = load_param_language(
-                    language_path, str(spec.render.param_spec_name), spec.render.synth.name
+                    language_path,
+                    str(spec.render.param_spec_name),
+                    spec.render.synth.name,
+                    spec.render.note_timing_parameterization,
                 )
             if metadata.dimension != spec.param_language_dimension:
                 raise ValueError("published parameter language dimension does not match spec")
