@@ -160,6 +160,87 @@ def test_learned_signal_detaches_the_render() -> None:
     )
 
 
+def _unclipped_flamo() -> tuple[torch.nn.Module, torch.Tensor, torch.Tensor]:
+    """Build a real FLAMO response renderer whose output exceeds TorchSynth's stored range.
+
+    TorchSynth cannot exercise the renderer-neutral boundary: its adapter clamps its own
+    output to match the range its stored targets were written in. A backend with
+    unrestricted gain is the only way to observe whether generic control scoring imposes
+    that convention on renderers that do not share it.
+
+    :returns: The renderer, one supported parameter row, and that row's own render.
+    """
+    from synth_setter.models.components.differentiable_renderer import (
+        FlamoFDNDifferentiableRenderer,
+    )
+
+    row = torch.zeros(1, 27)
+    row[:, 8:25] = 1.0
+    renderer = FlamoFDNDifferentiableRenderer.from_param_spec(
+        param_spec="pyfdn_n8_mono_householder", sample_rate=44_100, signal_length=4096
+    )
+    target = renderer(row).detach()
+    assert target.abs().max() > 1.0, "render stays in range; the clipping assertion is vacuous"
+    return renderer, row, target
+
+
+def _multichannel_cost():
+    """Build the production distance over the channelized geometry FLAMO renders.
+
+    :returns: The configured distance.
+    """
+    from synth_setter.models.components.audio_distance import MultichannelAudioDistance
+
+    return MultichannelAudioDistance(
+        sample_rate=44_100,
+        spectral_weight=1.0,
+        channel_mldr_weight=0.1,
+        pair_mldr_weight=0.1,
+    )
+
+
+def test_gradient_signal_scores_an_unrestricted_render_against_its_own_target() -> None:
+    """A render matching its target exactly costs nothing, whatever its amplitude."""
+    renderer, row, target = _unclipped_flamo()
+
+    signal = gradient_control_signal(
+        theta_hat=row.clone().requires_grad_(True),
+        target_audio=target,
+        render=renderer,
+        cost=_multichannel_cost(),
+    )
+
+    assert signal[:, 0].abs().max().item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_gradient_signal_differentiates_an_unrestricted_render() -> None:
+    """Dropping the clamp must not cost the unrestricted backend its gradient block."""
+    renderer, row, target = _unclipped_flamo()
+
+    signal = gradient_control_signal(
+        theta_hat=row.clone().requires_grad_(True),
+        target_audio=target * 0.5,
+        render=renderer,
+        cost=_multichannel_cost(),
+    )
+
+    assert torch.isfinite(signal).all()
+    norms = signal[:, 1:].norm(dim=-1)
+    assert torch.allclose(norms, torch.ones_like(norms), atol=1e-5)
+
+
+def test_learned_signal_encodes_a_zero_residual_for_an_unrestricted_render() -> None:
+    """The residual of a render against itself is zero, so the encoder sees only its bias."""
+    renderer, row, target = _unclipped_flamo()
+    encoder = torch.nn.Linear(target.shape[-1], 4)
+
+    signal = learned_control_signal(
+        theta_hat=row, target_audio=target, render=renderer, encoder=encoder
+    )
+
+    assert torch.allclose(signal, encoder(torch.zeros_like(target)), atol=1e-6)
+
+
 def _controlled(t_min: float = 0.8) -> ControlledFlow:
     """Build a controlled flow over a frozen field and a zero-initialised control net.
 
