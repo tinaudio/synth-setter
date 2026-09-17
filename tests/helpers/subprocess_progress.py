@@ -23,7 +23,7 @@ _READY_BYTE = b"1"
 _MAX_POLL_SECONDS = 1.0
 
 
-def _cpu_seconds(pid: int, last: float) -> float:
+def accumulated_cpu_seconds(pid: int, last: float) -> float:
     """Return the child's accumulated CPU time, or ``last`` once it is gone.
 
     :param pid: Process id of the child.
@@ -55,7 +55,7 @@ def await_ready_signal(
     """
     assert process.stdout is not None, "child must be started with stdout=subprocess.PIPE"
     output: list[str] = []
-    cpu_seconds = _cpu_seconds(process.pid, 0.0)
+    cpu_seconds = accumulated_cpu_seconds(process.pid, 0.0)
     last_progress = time.monotonic()
     hard_deadline = last_progress + hard_cap_s
     poll_s = min(_MAX_POLL_SECONDS, stall_timeout_s / 4)
@@ -81,7 +81,7 @@ def await_ready_signal(
             return "".join(output)
         if process.stdout not in watched and process.poll() is not None:
             raise AssertionError(f"child exited before signalling readiness:\n{''.join(output)}")
-        sampled = _cpu_seconds(process.pid, cpu_seconds)
+        sampled = accumulated_cpu_seconds(process.pid, cpu_seconds)
         if sampled > cpu_seconds:
             cpu_seconds = sampled
             last_progress = time.monotonic()
