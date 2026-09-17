@@ -1,6 +1,8 @@
 """Hydra entrypoint for training and (optionally) test-set evaluation of a Lightning model."""
 
 import signal
+from collections.abc import Iterator
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -504,6 +506,51 @@ def _apply_auto_resume(cfg: DictConfig, config_id: str) -> str | None:
     return decision.wandb_run_id
 
 
+@contextmanager
+def _completed_fit_survives_teardown(trainer: Trainer) -> Iterator[None]:
+    """Keep a fit that reached its stopping condition from being failed by teardown.
+
+    Tearing a persistent worker down can abort after the fit loop is already done
+    (#2981). Lightning then resets the ``CombinedLoader``, and every later
+    ``sized_len`` call raises ``Please call `iter(combined_loader)` first.`` —
+    ``sized_len`` catches only ``TypeError``/``NotImplementedError``, so that
+    secondary error replaces the worker abort as the run's outcome.
+
+    The training work is finished by then, so the failure is logged with the root
+    cause recovered from the exception chain and the run continues to its testing,
+    checkpoint-upload and metric steps.
+
+    :param trainer: Trainer whose ``fit`` the caller is about to run.
+    :yields: Control to the wrapped ``fit`` call.
+    :ytype: None
+    :raises Exception: Re-raised unchanged when the fit loop had not finished.
+    """
+    try:
+        yield
+    except Exception as err:
+        if not trainer.fit_loop.done:
+            raise
+        # RankedLogger.log() takes `rank` as its third positional parameter, so
+        # %-style args would bind there instead of formatting the message.
+        log.error(
+            f"Training reached its stopping condition at step {trainer.global_step}, then "
+            f"failed tearing the dataloaders down: {_root_cause(err)}. "
+            "Keeping the completed fit."
+        )
+
+
+def _root_cause(err: BaseException) -> BaseException:
+    """Return the first exception in ``err``'s implicit chain.
+
+    :param err: Exception that propagated out of the wrapped call.
+    :returns: The originally raised exception, which the chain's surface may mask.
+    """
+    cause = err
+    while cause.__context__ is not None:
+        cause = cause.__context__
+    return cause
+
+
 @task_wrapper
 def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     """Train the model and optionally evaluate on a testset using best-checkpoint weights.
@@ -579,7 +626,10 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     if cfg.get("train"):
         log.info("Starting training!")
         try:
-            with checkpoint_migration_hint(cfg.get("ckpt_path")):
+            with (
+                _completed_fit_survives_teardown(trainer),
+                checkpoint_migration_hint(cfg.get("ckpt_path")),
+            ):
                 trainer.fit(
                     model=model,
                     datamodule=datamodule,
