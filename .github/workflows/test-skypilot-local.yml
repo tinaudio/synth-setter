@@ -89,14 +89,14 @@ jobs:
       # The stock ubuntu-latest runner doesn't ship it, so `sky check
       # kubernetes` reports "Kubernetes: disabled" and the subsequent
       # sky.launch raises NoCloudAccessError.
-      # socat is in the distro archive, so `Dir::Etc::sourceparts=-` costs nothing and drops the
-      # third-party lists whose transient `Hash Sum mismatch` red-lined this lane (#3331).
+      # The `Hash Sum mismatch` that red-lined this lane (#3331) is remote and transient, so each
+      # attempt discards the partial lists it left behind rather than refreshing over them.
       - name: Install socat (kubectl port-forward dependency)
         run: |
           set -euo pipefail
           attempts=3
           for attempt in $(seq "${attempts}"); do
-            if sudo apt-get update -qq -o Dir::Etc::sourceparts=-; then
+            if sudo apt-get update -qq; then
               break
             fi
             if [[ "${attempt}" -eq "${attempts}" ]]; then

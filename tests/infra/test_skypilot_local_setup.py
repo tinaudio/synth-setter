@@ -183,11 +183,12 @@ def test_socat_install_retry_discards_the_stale_index(tmp_path: Path) -> None:
     assert run.calls["rm"][0].startswith("-rf /var/lib/apt/lists/")
 
 
-def test_socat_index_refresh_skips_third_party_lists(tmp_path: Path) -> None:
-    """The refresh reads only the distro archive, where socat lives.
+def test_socat_index_refresh_reads_every_configured_source(tmp_path: Path) -> None:
+    """The refresh keeps ``sources.list.d``, where the runner declares the distro archive.
 
-    The mismatch in #3331 came from a third-party list this lane never installs from, so
-    excluding ``sources.list.d`` removes the failure mode rather than waiting it out.
+    ubuntu-24.04 runners ship the Ubuntu archive as deb822 in ``sources.list.d/ubuntu.sources`` and
+    leave ``sources.list`` empty, so suppressing that directory refreshes an empty index and socat
+    stops resolving at all.
 
     :param tmp_path: Directory holding the stub executables and their logs.
     """
@@ -195,4 +196,4 @@ def test_socat_index_refresh_skips_third_party_lists(tmp_path: Path) -> None:
 
     update_calls = [call for call in run.calls["apt-get"] if "update" in call]
     assert update_calls, "step never refreshed the package index"
-    assert all(_SOURCEPARTS_OPT in call for call in update_calls)
+    assert not [call for call in update_calls if _SOURCEPARTS_OPT in call]
