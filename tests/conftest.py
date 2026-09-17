@@ -2151,7 +2151,9 @@ def assert_embedding_columns(dataset_root: Path) -> None:
     train_lance = dataset_root / "train.lance"
     _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
     dataset = lance.dataset(train_lance)
-    assert set(_EMBEDDING_KEYS) == set(EMBEDDING_REGISTRY)
+    # Subset, not equality: the E2E materializes the profiles it trains, and the
+    # registry also carries producers with no conditioning profile (#2845).
+    assert set(_EMBEDDING_KEYS) <= set(EMBEDDING_REGISTRY)
     assert {
         AUDIO_FIELD,
         MEL_SPEC_FIELD,
