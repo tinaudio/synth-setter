@@ -475,6 +475,35 @@ def test_finalize_stats_npz_matches_direct_recompute_over_train_mel_rows(
     np.testing.assert_allclose(stats_std, train_mel.std(axis=0), rtol=1e-6)
 
 
+def test_finalize_welford_stats_records_train_attempt_provenance(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Welford-derived stats carry the same attempt provenance as estimated stats.
+
+    Without it a later estimating finalize reads the artifact as foreign and
+    reuses it across a changed train winner (#3686).
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = tiny_lance_spec()
+    stage_all_shards(spec, tmp_path)
+
+    finalize_from_spec(spec, tmp_path / "work")
+
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    with np.load(run_root / "stats.npz") as stats:
+        assert set(stats.files) == {"mean", "std", "train_attempts"}
+        recorded = LanceStatsProvenance.model_validate_json(str(stats["train_attempts"]))
+    card = LanceDatasetCard.model_validate_json((run_root / "dataset.json").read_text())
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    assert recorded.train_attempts == tuple(
+        selected
+        for selected in card.selected_attempts
+        if train_lo <= selected.shard_id < train_hi
+    )
+
+
 def set_valid_marker_mtime(
     fake_r2_remote: Path, spec: DatasetSpec, shard_id: int, name: str, epoch: float
 ) -> None:
