@@ -90,6 +90,9 @@ if [[ "$1" == "pr" && "$2" == "checks" ]]; then
     if [[ "${GH_STUB_CHECKS_UNSUPPORTED:-0}" == "1" ]]; then
       echo "unknown flag: --json" >&2
       exit 1
+    elif [[ "${GH_STUB_CHECKS_FIELD_UNKNOWN:-0}" == "1" ]]; then
+      echo 'Unknown JSON field: "startedAt"' >&2
+      exit 1
     elif [[ -n "${GH_STUB_CHECKS_MESSAGE:-}" ]]; then
       printf '%s\n' "$GH_STUB_CHECKS_MESSAGE"
     elif [[ -n "${GH_STUB_CHECKS_JSON:-}" ]]; then
@@ -1768,6 +1771,101 @@ T_probe_old_gh_null_conclusion_waits() {
 it "probe: old gh + null conclusion → WAIT" \
   T_probe_old_gh_null_conclusion_waits
 
+T_probe_rerun_supersedes_earlier_failure() {
+  local out
+  export GH_STUB_CHECKS_UNSUPPORTED=1 GH_STUB_MERGEABLE=MERGEABLE
+  export GH_STUB_STATUS_ROLLUP_JSON='[
+    {"__typename":"CheckRun","name":"check-pr-title","workflowName":"PR metadata",
+     "startedAt":"2026-01-01T00:00:00Z","status":"COMPLETED","conclusion":"FAILURE",
+     "detailsUrl":"https://example.test/log/old"},
+    {"__typename":"CheckRun","name":"check-pr-title","workflowName":"PR metadata",
+     "startedAt":"2026-01-01T01:00:00Z","status":"COMPLETED","conclusion":"SUCCESS",
+     "detailsUrl":"https://example.test/log/new"}]'
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "Gate 1 (CI): PASS" <<<"$out" || {
+    echo "a later successful rerun should supersede the earlier failure; got: $out"
+    return 1
+  }
+}
+it "probe: later successful rerun supersedes an earlier failure (#2901)" \
+  T_probe_rerun_supersedes_earlier_failure
+
+T_probe_rerun_failure_supersedes_earlier_success() {
+  local out
+  export GH_STUB_CHECKS_UNSUPPORTED=1 GH_STUB_MERGEABLE=MERGEABLE
+  export GH_STUB_STATUS_ROLLUP_JSON='[
+    {"__typename":"CheckRun","name":"check-pr-title","workflowName":"PR metadata",
+     "startedAt":"2026-01-01T00:00:00Z","status":"COMPLETED","conclusion":"SUCCESS",
+     "detailsUrl":"https://example.test/log/old"},
+    {"__typename":"CheckRun","name":"check-pr-title","workflowName":"PR metadata",
+     "startedAt":"2026-01-01T01:00:00Z","status":"COMPLETED","conclusion":"FAILURE",
+     "detailsUrl":"https://example.test/log/new"}]'
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 1 || return 1
+  grep -q "https://example.test/log/new" <<<"$out" || {
+    echo "the newest run decides, even when it is the failure; got: $out"
+    return 1
+  }
+}
+it "probe: a later failing rerun is not masked by an earlier success" \
+  T_probe_rerun_failure_supersedes_earlier_success
+
+T_probe_same_name_in_two_workflows_stays_distinct() {
+  local out
+  export GH_STUB_CHECKS_UNSUPPORTED=1 GH_STUB_MERGEABLE=MERGEABLE
+  export GH_STUB_STATUS_ROLLUP_JSON='[
+    {"__typename":"CheckRun","name":"code-quality","workflowName":"Code Quality PR",
+     "startedAt":"2026-01-01T00:00:00Z","status":"COMPLETED","conclusion":"FAILURE",
+     "detailsUrl":"https://example.test/log/pr"},
+    {"__typename":"CheckRun","name":"code-quality","workflowName":"Code Quality Main",
+     "startedAt":"2026-01-01T01:00:00Z","status":"COMPLETED","conclusion":"SUCCESS",
+     "detailsUrl":"https://example.test/log/main"}]'
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 1 || return 1
+  grep -q "https://example.test/log/pr" <<<"$out" || {
+    echo "one workflow's failure must not be deduped away by another's success; got: $out"
+    return 1
+  }
+}
+it "probe: one check name in two workflows is not collapsed" \
+  T_probe_same_name_in_two_workflows_stays_distinct
+
+T_probe_rerun_supersedes_in_checks_json_path() {
+  local out
+  export GH_STUB_MERGEABLE=MERGEABLE GH_STUB_CHECKS_EXIT=0
+  export GH_STUB_CHECKS_JSON='[
+    {"bucket":"fail","name":"check-pr-title","state":"FAILURE","workflow":"PR metadata",
+     "startedAt":"2026-01-01T00:00:00Z","link":"https://example.test/log/old"},
+    {"bucket":"pass","name":"check-pr-title","state":"SUCCESS","workflow":"PR metadata",
+     "startedAt":"2026-01-01T01:00:00Z","link":"https://example.test/log/new"}]'
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "Gate 1 (CI): PASS" <<<"$out" || {
+    echo "the checks --json path needs the same supersede rule; got: $out"
+    return 1
+  }
+}
+it "probe: supersede rule also applies to the gh pr checks --json path" \
+  T_probe_rerun_supersedes_in_checks_json_path
+
+T_probe_falls_back_when_checks_json_field_unknown() {
+  local out
+  export GH_STUB_MERGEABLE=MERGEABLE GH_STUB_CHECKS_FIELD_UNKNOWN=1
+  export GH_STUB_STATUS_ROLLUP_JSON='[
+    {"__typename":"CheckRun","name":"unit-tests","workflowName":"Tests",
+     "startedAt":"2026-01-01T00:00:00Z","status":"COMPLETED","conclusion":"SUCCESS",
+     "detailsUrl":"https://example.test/log/ok"}]'
+  out=$(run_probe 42)
+  assert_probe_exit "$out" 0 || return 1
+  grep -q "Gate 1 (CI): PASS" <<<"$out" || {
+    echo "an unknown --json field must fall back, not fail the env; got: $out"
+    return 1
+  }
+}
+it "probe: gh rejecting a --json field falls back to statusCheckRollup" \
+  T_probe_falls_back_when_checks_json_field_unknown
+
 T_probe_checks_not_registered_yet_waits() {
   local out
   export GH_STUB_CHECKS_EXIT=1 GH_STUB_MERGEABLE=MERGEABLE
@@ -2285,6 +2383,109 @@ T_link_plugins_dangling_primary_link_fails_loudly() {
   }
 }
 it "link-plugins: dangling primary link → fails with actionable error" T_link_plugins_dangling_primary_link_fails_loudly
+
+#######################################
+# Verify link detection survives a checkout path that traverses a symlink.
+# `readlink` returns the link text while `git rev-parse` resolves symlinks, so
+# comparing the two raw strings misses a link that is in fact correct (#3297).
+# Outputs:
+#   Failure diagnostics to stdout.
+# Returns:
+#   0 for the expected actionable failure, non-zero otherwise.
+#######################################
+T_link_plugins_dangling_link_under_symlinked_path_fails_loudly() {
+  local out physical base primary target
+  physical="$TEST_DIR/plugin-symlink-real-$$"
+  base="$TEST_DIR/plugin-symlink-alias-$$"
+  mkdir -p "$physical"
+  ln -s "$physical" "$base"
+  primary="$base/primary"
+  target="$base/worktree"
+  git init -q "$primary"
+  git -C "$primary" config user.email test@test
+  git -C "$primary" config user.name test
+  git -C "$primary" commit -q --allow-empty -m init
+  mkdir -p "$primary/plugins/Surge XT.vst3"
+  git -C "$primary" worktree add --detach "$target" >/dev/null 2>&1
+  ln -s "$primary/plugins" "$target/plugins"
+  rm -rf "$primary/plugins"
+
+  if out=$(cd "$target" && make -f "$REPO_ROOT/Makefile" link-plugins STUDIORACK=true 2>&1); then
+    echo "dangling link under a symlinked path was not detected: $out"; return 1
+  fi
+  echo "$out" | grep -q "primary plugins directory is unavailable" || {
+    echo "missing actionable dangling-link error: $out"; return 1
+  }
+}
+it "link-plugins: dangling link under a symlinked path → fails with actionable error" \
+  T_link_plugins_dangling_link_under_symlinked_path_fails_loudly
+
+#######################################
+# Verify an intact shared link under a symlinked path is reported as linked.
+# Outputs:
+#   Failure diagnostics to stdout.
+# Returns:
+#   0 when the existing link is recognized, non-zero otherwise.
+#######################################
+T_link_plugins_existing_link_under_symlinked_path_is_recognized() {
+  local out physical base primary target
+  physical="$TEST_DIR/plugin-symlink-intact-real-$$"
+  base="$TEST_DIR/plugin-symlink-intact-alias-$$"
+  mkdir -p "$physical"
+  ln -s "$physical" "$base"
+  primary="$base/primary"
+  target="$base/worktree"
+  git init -q "$primary"
+  git -C "$primary" config user.email test@test
+  git -C "$primary" config user.name test
+  git -C "$primary" commit -q --allow-empty -m init
+  mkdir -p "$primary/plugins/Surge XT.vst3"
+  git -C "$primary" worktree add --detach "$target" >/dev/null 2>&1
+  ln -s "$primary/plugins" "$target/plugins"
+
+  out=$(cd "$target" && make -f "$REPO_ROOT/Makefile" link-plugins STUDIORACK=false 2>&1) || {
+    echo "existing link under a symlinked path failed: $out"; return 1
+  }
+  echo "$out" | grep -q "plugins/ already linked" || {
+    echo "existing link was not recognized as linked: $out"; return 1
+  }
+}
+it "link-plugins: intact link under a symlinked path → reported as already linked" \
+  T_link_plugins_existing_link_under_symlinked_path_is_recognized
+
+#######################################
+# Verify link-thoughts recognizes its own link through a symlinked path too —
+# it makes the same readlink-vs-resolved comparison as link-plugins.
+# Outputs:
+#   Failure diagnostics to stdout.
+# Returns:
+#   0 when the existing link is recognized, non-zero otherwise.
+#######################################
+T_link_thoughts_existing_link_under_symlinked_path_is_recognized() {
+  local out physical base primary target
+  physical="$TEST_DIR/thoughts-symlink-real-$$"
+  base="$TEST_DIR/thoughts-symlink-alias-$$"
+  mkdir -p "$physical"
+  ln -s "$physical" "$base"
+  primary="$base/primary"
+  target="$base/worktree"
+  git init -q "$primary"
+  git -C "$primary" config user.email test@test
+  git -C "$primary" config user.name test
+  git -C "$primary" commit -q --allow-empty -m init
+  mkdir -p "$primary/thoughts"
+  git -C "$primary" worktree add --detach "$target" >/dev/null 2>&1
+  ln -s "$primary/thoughts" "$target/thoughts"
+
+  out=$(cd "$target" && make -f "$REPO_ROOT/Makefile" link-thoughts 2>&1) || {
+    echo "existing thoughts link under a symlinked path failed: $out"; return 1
+  }
+  echo "$out" | grep -q "thoughts/ already linked" || {
+    echo "existing thoughts link was not recognized: $out"; return 1
+  }
+}
+it "link-thoughts: intact link under a symlinked path → reported as already linked" \
+  T_link_thoughts_existing_link_under_symlinked_path_is_recognized
 
 T_wt_post_setup_exits_0_on_missing_path() {
   local out
