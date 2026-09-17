@@ -39,6 +39,7 @@ _FOLLOW_UP_PROVIDER = "openai-codex"
 _FOLLOW_UP_THINKING = "medium"
 _RUNTIME_MANIFEST_ENV = "PI_REVIEW_FOLLOW_UP_RUNTIME_MANIFEST"
 _OWNERSHIP_WAIT_ENV = "PI_REVIEW_FOLLOW_UP_OWNERSHIP_WAIT_SECONDS"
+_FOREGROUND_STOPPED_ENV = "SYNTH_SETTER_PI_REVIEW_FOREGROUND_STOPPED"
 _MAX_OWNERSHIP_WAIT_SECONDS = 3600
 _OWNERSHIP_POLL_SECONDS = 0.25
 _MAX_LOG_BYTES = 64 * 1024
@@ -501,10 +502,25 @@ def _adopt_report(deferred: DeferredPass, target: str) -> WorkerReport | None:
         return None
 
 
-def _plan_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
-    """Adopt reports and fail closed when a foreground owner may remain live.
+def _release_ownership(deferred: DeferredPass) -> DeferredPass:
+    """Drop the foreground handles so the follow-up owner starts the pass itself.
+
+    :param deferred: Pass whose foreground owner has stopped without reporting.
+    :returns: Equivalent pass carrying no foreground ownership.
+    """
+    return DeferredPass.model_validate(
+        deferred.model_dump() | {"agent_id": None, "output_path": None}
+    )
+
+
+def _plan_ownership(
+    manifest: FollowUpManifest, *, transfer_stalled_owners: bool = False
+) -> _OwnershipPlan:
+    """Adopt reports, then transfer or refuse ownership of every reportless pass.
 
     :param manifest: Validated foreground ownership handoff.
+    :param transfer_stalled_owners: Whether a reportless pass may change owner instead of blocking
+        the plan.
     :returns: Adoption and relaunch plan.
     """
     remaining: list[DeferredPass] = []
@@ -527,6 +543,16 @@ def _plan_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
             continue
         if deferred.agent_id is None:
             remaining.append(deferred)
+            continue
+        if transfer_stalled_owners:
+            attempts.append(
+                _attempt(
+                    deferred,
+                    "stale",
+                    "foreground host stopped before this pass reported; ownership transferred",
+                )
+            )
+            remaining.append(_release_ownership(deferred))
             continue
         attempts.append(
             _attempt(
@@ -561,7 +587,7 @@ def _ownership_wait_seconds() -> int:
 
 
 def _wait_for_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
-    """Wait for foreground reports without ever launching a duplicate owner.
+    """Wait for foreground reports, transferring ownership only once the host has stopped.
 
     :param manifest: Validated foreground ownership handoff.
     :returns: Adoption and relaunch plan after completion or grace-period expiry.
@@ -570,8 +596,12 @@ def _wait_for_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
     while True:
         ownership = _plan_ownership(manifest)
         remaining_seconds = deadline - time.monotonic()
-        if not ownership.blocked or remaining_seconds <= 0:
+        if not ownership.blocked:
             return ownership
+        if remaining_seconds <= 0:
+            if os.environ.get(_FOREGROUND_STOPPED_ENV) != "1":
+                return ownership
+            return _plan_ownership(manifest, transfer_stalled_owners=True)
         time.sleep(min(_OWNERSHIP_POLL_SECONDS, remaining_seconds))
 
 
