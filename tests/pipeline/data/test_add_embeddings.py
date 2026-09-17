@@ -124,10 +124,8 @@ from synth_setter.same import (
 from synth_setter.sketch import pool_sketch_controls
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
-from tests.helpers.lance_fixtures import (
-    ANN_SELF_QUERY_REFINE_FACTOR,
-    write_lance_shard,
-)
+from tests.helpers.ann import ANN_SELF_QUERY_REFINE_FACTOR
+from tests.helpers.lance_fixtures import write_lance_shard
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_offline import read_run_config, read_run_exit_code, read_run_project
 

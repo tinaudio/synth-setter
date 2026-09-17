@@ -25,7 +25,7 @@ from synth_setter.pipeline.data.ssondo import (
     ssondo_encoder_input,
 )
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
-from tests.helpers.lance_fixtures import ANN_SELF_QUERY_REFINE_FACTOR
+from tests.helpers.ann import ANN_SELF_QUERY_REFINE_FACTOR
 
 
 def test_ssondo_config_incompatible_pq_subvectors_raises() -> None:

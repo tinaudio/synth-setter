@@ -28,10 +28,6 @@ from synth_setter.pipeline.data.lance_shard import (
     write_lance_dataset,
 )
 
-# Candidate multiplier that re-ranks IVF_PQ hits against the exact vectors,
-# which lossy PQ codes alone cannot order reliably.
-ANN_SELF_QUERY_REFINE_FACTOR = 10
-
 # Tiny per-row shapes shared by the datamodule test fixtures: large enough to
 # expose shape mix-ups (every axis distinct), small enough for sub-second tests.
 AUDIO_CHANNELS = 2
