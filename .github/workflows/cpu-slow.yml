@@ -57,6 +57,9 @@ jobs:
         with:
           version: "0.11.28"
           enable-cache: true
+          # surgepy builds from source, so the cached wheel links the builder image's
+          # glibc; without this the 22.04 and 24.04 lanes share one key (#3507).
+          cache-suffix: ${{ env.ImageOS }}
 
       - name: Install CPU test dependencies
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
@@ -125,6 +128,9 @@ jobs:
         with:
           version: "0.11.28"
           enable-cache: true
+          # surgepy builds from source, so the cached wheel links the builder image's
+          # glibc; without this the 22.04 and 24.04 lanes share one key (#3507).
+          cache-suffix: ${{ env.ImageOS }}
 
       # Frozen sync, CPU torch via [tool.uv.sources] — see test.yml for rationale.
       - name: Install dependencies (uv sync --frozen, CPU torch)
@@ -337,6 +343,9 @@ jobs:
         with:
           version: "0.11.28"
           enable-cache: true
+          # surgepy builds from source, so the cached wheel links the builder image's
+          # glibc; without this the 22.04 and 24.04 lanes share one key (#3507).
+          cache-suffix: ${{ env.ImageOS }}
 
       - name: Install Python dependencies
         run: uv sync --frozen
