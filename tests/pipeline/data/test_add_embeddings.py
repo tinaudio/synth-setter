@@ -75,6 +75,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     SAME_LATENT_FRAMES,
     SKETCH_INDEX_SUB_VECTORS,
     SKETCH_VEC_COLUMN,
+    EmbeddingOutputGeometry,
     EmbeddingSpec,
     Encoder,
     IndexSpec,
@@ -88,6 +89,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_t5gemma_spec_encoder,
     _matching_index_exists,
     _missing_embedding_specs,
+    _output_columns,
     _prepare_resume_cache,
     _resolve_artifact_identity,
     _resolve_clap_checkpoint,
@@ -532,6 +534,32 @@ def test_pupujepa_registry_artifact_identity_threads_variant(
 
     assert calls == [("custom/pupujepa", variant)]
     assert "digest" in identity
+
+
+@pytest.mark.parametrize(
+    "embedding_name",
+    [name for name, spec in EMBEDDING_REGISTRY.items() if not spec.rerenders],
+)
+def test_registry_declares_every_generation_output_before_encoding(
+    embedding_name: str,
+) -> None:
+    """Each generation-eligible registry entry owns its complete field contract.
+
+    :param embedding_name: Registry entry under test.
+    """
+    embedding = EMBEDDING_REGISTRY[embedding_name]
+    assert embedding.output_fields is not None
+
+    fields = embedding.output_fields(
+        EmbeddingOutputGeometry(
+            channels=2,
+            num_samples=176_400,
+            sample_rate=44_100,
+        )
+    )
+
+    assert tuple(field.name for field in fields) == _output_columns(embedding)
+    assert all(not field.nullable for field in fields)
 
 
 def test_embedding_spec_when_mutated_raises_frozen_instance_error() -> None:

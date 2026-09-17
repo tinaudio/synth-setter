@@ -15,10 +15,10 @@ import lance
 import pytest
 
 from synth_setter.cli.finalize_dataset import finalize_from_spec
-from synth_setter.cli.growing_lance import main
-from synth_setter.pipeline.data.growing_lance import GrowingPlan
+from synth_setter.cli.growing_lance import _spec_for_snapshot, main
+from synth_setter.pipeline.data.growing_lance import GrowingPlan, GrowingSnapshot
 from synth_setter.pipeline.data.lance_staging import stage_lance_shard_attempt
-from synth_setter.pipeline.schemas.spec import DatasetSpec
+from synth_setter.pipeline.schemas.spec import DatasetSpec, GenerationEmbeddingPolicy
 from synth_setter.pipeline.spec_io import upload_spec
 from tests.pipeline.data.test_lance_finalize import stage_all_shards
 from tests.pipeline.data.test_lance_staging import tiny_lance_spec, write_local_shard
@@ -74,6 +74,44 @@ def _init(spec: DatasetSpec, work_dir: Path, *extra: str) -> None:
             *extra,
         ]
     )
+
+
+def test_spec_for_snapshot_rejects_disagreeing_explicit_embedding_policy(
+    fake_r2_remote: Path,
+    finalized_spec: DatasetSpec,
+    tmp_path: Path,
+) -> None:
+    """A caller cannot override the embedding contract frozen by branch initialization.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone transport.
+    :param finalized_spec: Finalized baseline producer specification.
+    :param tmp_path: Operator workspace.
+    """
+    _init(finalized_spec, tmp_path / "operator")
+    train = _train_dataset(fake_r2_remote, finalized_spec)
+    version = train.tags.get_version("g-ready")
+    snapshot_path = (
+        _remote_metadata_dir(fake_r2_remote, finalized_spec, "g")
+        / "versions"
+        / str(version)
+        / "snapshot.json"
+    )
+    snapshot = GrowingSnapshot.model_validate_json(snapshot_path.read_text())
+    explicit = finalized_spec.model_copy(
+        update={
+            "embedding_generation": GenerationEmbeddingPolicy(embeddings=("clap",), device="cuda")
+        }
+    )
+    different = snapshot.model_copy(
+        update={
+            "embedding_generation": GenerationEmbeddingPolicy(
+                embeddings=("ssondo",), device="cuda"
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="disagrees"):
+        _spec_for_snapshot(explicit, different)
 
 
 def test_init_without_baseline_version_pins_the_finalized_train_version(

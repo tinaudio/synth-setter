@@ -68,7 +68,9 @@ onboarded with **no edits to core pipeline, storage, or model code**. See
 
 2. **Generate** -- Workers render audio samples through the configured synth
    backend, producing Lance shards uploaded to R2. Each shard contains audio
-   waveforms, mel spectrograms, and ground-truth parameter arrays. Offline pyFDN
+   waveforms, mel spectrograms, and ground-truth parameter arrays; an optional
+   frozen policy adds registry-backed embedding columns on the worker GPU before
+   fragment staging. Offline pyFDN
    rows deterministically retry complete patches after clipped or quiet renders;
    native impulse responses are the default, with an in-process canonical chirp
    available by explicit configuration, so R2 is destination-only.
