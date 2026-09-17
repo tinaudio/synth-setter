@@ -208,19 +208,27 @@ def _environment(tmp_path: Path, *, mode: str, foreground_stopped: bool = True) 
     return environment
 
 
-def _run_supervisor(manifest: Path, environment: dict[str, str]) -> int:
+def _run_supervisor_capturing(manifest: Path, environment: dict[str, str]) -> tuple[int, str]:
     try:
-        sh.Command(sys.executable)(
-            SCRIPT,
-            "--supervise",
-            manifest,
-            _cwd=manifest.parents[1],
-            _env=environment,
-            _timeout=5,
+        completed = cast(
+            sh.RunningCommand,
+            sh.Command(sys.executable)(
+                SCRIPT,
+                "--supervise",
+                manifest,
+                _cwd=manifest.parents[1],
+                _env=environment,
+                _timeout=5,
+                _return_cmd=True,
+            ),
         )
     except sh.ErrorReturnCode as error:
-        return error.exit_code
-    return 0
+        return error.exit_code, error.stderr.decode()
+    return 0, completed.stderr.decode()
+
+
+def _run_supervisor(manifest: Path, environment: dict[str, str]) -> int:
+    return _run_supervisor_capturing(manifest, environment)[0]
 
 
 def _read_result(manifest: Path) -> FollowUpResult:
@@ -640,3 +648,68 @@ def test_follow_up_result_rejects_model_written_extra_fields() -> None:
 
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         FollowUpResult.model_validate_json(json.dumps(payload))
+
+
+def test_supervisor_failed_child_names_its_diagnostic_on_stderr(tmp_path: Path) -> None:
+    """Make a failed follow-up diagnosable from the job log without the artifact.
+
+    :param tmp_path: Temporary review root and fake Pi executable.
+    """
+    _fake_pi(tmp_path)
+    manifest = _manifest(tmp_path)
+
+    completed, stderr = _run_supervisor_capturing(manifest, _environment(tmp_path, mode="nonzero"))
+
+    assert completed == 1
+    assert "child-exit" in stderr
+    assert "Pi follow-up child exited with code 7" in stderr
+
+
+def test_supervisor_unstoppable_owner_names_the_unfinished_pass_on_stderr(tmp_path: Path) -> None:
+    """Name which checklists never landed when ownership blocks the relaunch.
+
+    :param tmp_path: Temporary review root and fake Pi executable.
+    """
+    _fake_pi(tmp_path)
+    manifest = _manifest(tmp_path, output_path=tmp_path / "unfinished.jsonl")
+
+    completed, stderr = _run_supervisor_capturing(
+        manifest,
+        _environment(tmp_path, mode="valid", foreground_stopped=False),
+    )
+
+    assert completed == 1
+    assert "ownership" in stderr
+    assert "correctness-review" in stderr
+    assert "free-pool" in stderr
+
+
+def test_supervisor_failure_stderr_withholds_child_output(tmp_path: Path) -> None:
+    """Keep provider text out of the job log; the sidecar artifact carries it.
+
+    :param tmp_path: Temporary review root and fake Pi executable.
+    """
+    _fake_pi(tmp_path)
+    manifest = _manifest(tmp_path)
+    environment = {**_environment(tmp_path, mode="nonzero"), "FAKE_PI_LOG": "sk-secret-token"}
+
+    completed, stderr = _run_supervisor_capturing(manifest, environment)
+
+    assert completed == 1
+    assert "sk-secret-token" in _log_path(manifest).read_text()
+    assert "child-exit" in stderr
+    assert "sk-secret-token" not in stderr
+
+
+def test_supervisor_complete_result_writes_no_failure_report(tmp_path: Path) -> None:
+    """Leave the green path quiet so a failure report is never ambiguous.
+
+    :param tmp_path: Temporary review root and fake Pi executable.
+    """
+    _fake_pi(tmp_path)
+    manifest = _manifest(tmp_path)
+
+    completed, stderr = _run_supervisor_capturing(manifest, _environment(tmp_path, mode="valid"))
+
+    assert completed == 0
+    assert "Pi review follow-up failed" not in stderr
