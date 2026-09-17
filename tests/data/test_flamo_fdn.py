@@ -1,9 +1,6 @@
 """Real offline/FLAMO parity for the canonical FLAMO FDN boundary."""
 
-import subprocess
-import sys
 from dataclasses import replace
-from textwrap import dedent
 from typing import cast
 
 import numpy as np
@@ -12,38 +9,37 @@ import torch
 from pyFDN import FDNBuild
 
 from synth_setter.data.flamo_fdn import FlamoFDN
-
-_TORCHSYNTH_IMPORT_TIMEOUT_SECONDS = 30
+from tests.helpers.fresh_process_probe import run_fresh_process_probe
 
 
 def test_torchsynth_loader_preserves_canonical_pi_in_fresh_process() -> None:
     """The compatibility boundary repairs TorchSynth's process-global constant mutation."""
-    probe = """
+    run_fresh_process_probe("""
         import math
         import torch
+        progress("torch")
         import torchsynth.util
+        progress("torchsynth")
         from synth_setter.data.torchsynth_datamodule import _torchsynth_types
+        ready()
 
         assert torch.pi != math.pi
         _torchsynth_types()
         assert torch.pi == math.pi
-    """
-
-    subprocess.run(
-        [sys.executable, "-c", dedent(probe)],
-        check=True,
-        timeout=_TORCHSYNTH_IMPORT_TIMEOUT_SECONDS,
-    )
+    """)
 
 
 def test_torchsynth_loader_import_failure_preserves_canonical_pi_in_fresh_process() -> None:
     """A failed compatibility import still repairs TorchSynth's constant mutation."""
-    probe = """
+    run_fresh_process_probe("""
         import builtins
         import math
         import torch
+        progress("torch")
         import torchsynth.util
+        progress("torchsynth")
         from synth_setter.data.torchsynth_datamodule import _torchsynth_types
+        ready()
 
         original_import = builtins.__import__
         def fail_synth_import(name: str, *args: object, **kwargs: object) -> object:
@@ -59,24 +55,22 @@ def test_torchsynth_loader_import_failure_preserves_canonical_pi_in_fresh_proces
         else:
             raise AssertionError("TorchSynth import unexpectedly succeeded")
         assert torch.pi == math.pi
-    """
-
-    subprocess.run(
-        [sys.executable, "-c", dedent(probe)],
-        check=True,
-        timeout=_TORCHSYNTH_IMPORT_TIMEOUT_SECONDS,
-    )
+    """)
 
 
 def test_torchsynth_loader_preserves_flamo_float64_parity_in_fresh_process() -> None:
     """A TorchSynth-first import leaves the real FLAMO response on its float64 baseline."""
-    probe = """
+    run_fresh_process_probe("""
         import numpy as np
         import torch
+        progress("torch")
         import torchsynth.util
+        progress("torchsynth")
         from pyFDN import FDNBuild
+        progress("pyFDN")
         from synth_setter.data.flamo_fdn import FlamoFDN
         from synth_setter.data.torchsynth_datamodule import _torchsynth_types
+        ready()
 
         _torchsynth_types()
         build = FDNBuild(
@@ -95,13 +89,7 @@ def test_torchsynth_loader_preserves_flamo_float64_parity_in_fresh_process() -> 
         actual = model(impulse).detach().numpy().transpose(1, 2, 0)[:512]
 
         np.testing.assert_allclose(actual, expected, atol=1e-9, rtol=1e-7)
-    """
-
-    subprocess.run(
-        [sys.executable, "-c", dedent(probe)],
-        check=True,
-        timeout=_TORCHSYNTH_IMPORT_TIMEOUT_SECONDS,
-    )
+    """)
 
 
 @pytest.fixture

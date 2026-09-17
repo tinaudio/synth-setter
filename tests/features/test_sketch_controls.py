@@ -299,14 +299,26 @@ def test_extract_sketch_controls_batch_on_cuda_predicts_the_same_pitch_bins() ->
     assert torch.allclose(cpu_pitch, cuda_pitch, atol=5e-3)
 
 
+@RunIf(min_gpus=1)
+def test_load_pesto_model_returns_weights_on_the_requested_device_after_an_external_move() -> None:
+    """A device request is honoured even after a caller moved the shared module.
+
+    The cache hands out one process-wide module, so any caller can move it; the next request must
+    still place the weights where it asked.
+    """
+    load_pesto_model(device="cuda").to("cpu")
+    model = load_pesto_model(device="cuda")
+    assert next(model.parameters()).device.type == "cuda"
+
+
 def test_load_pesto_model_without_a_device_defaults_to_cpu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A first load that names no device holds its weights on CPU.
 
-    :param monkeypatch: Clears the cached device so this is a first load.
+    :param monkeypatch: Drops the cached model so this is a first load.
     """
-    monkeypatch.setattr(sketch_controls, "_pesto_device", None)
+    monkeypatch.setattr(sketch_controls, "_pesto_model", None)
     model = load_pesto_model()
     assert next(model.parameters()).device.type == "cpu"
 
