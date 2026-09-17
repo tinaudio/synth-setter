@@ -1434,6 +1434,45 @@ def train_attempt_workers(run_root: Path, spec: DatasetSpec) -> set[str]:
     }
 
 
+def test_finalize_estimation_recomputes_over_welford_stats_from_a_retired_attempt(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Welford stats from a superseded attempt must not survive an estimating retry.
+
+    The archive the non-estimating pass wrote is this pipeline's own, so the
+    reuse guard must read its provenance rather than treat it as foreign (#3686).
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = mono_tiny_lance_spec()
+    stage_all_shards(spec, tmp_path, worker_id="pod-a")
+    stage_train_replacement_attempts(spec, tmp_path)
+    finalize_from_spec(spec, tmp_path / "work-a")
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    assert train_attempt_workers(run_root, spec) == {"pod-a"}
+    with np.load(run_root / "stats.npz") as stats:
+        welford_mean = np.array(stats["mean"], copy=True)
+    (run_root / "dataset.complete").unlink()
+    (run_root / "dataset.json").unlink()
+    retire_train_attempts(spec, fake_r2_remote, "pod-a")
+
+    finalize_from_spec(spec, tmp_path / "work-b", estimate_normalization_stats=True, seed=5)
+
+    assert train_attempt_workers(run_root, spec) == {"pod-b"}
+    train = lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train")))
+    audio = train.take(list(range(train.count_rows())), columns=[AUDIO_FIELD])[AUDIO_FIELD]
+    waveform = torch.from_numpy(audio.combine_chunks().to_numpy_ndarray()[:, 0].astype(np.float32))
+    frontend = LogMelFrontend(waveform.shape[-1], sample_rate=spec.render.sample_rate)
+    expected_mean, expected_std = estimate_log_mel_statistics(
+        [waveform], frontend, mask_degenerate=True
+    )
+    with np.load(run_root / "stats.npz") as stats:
+        np.testing.assert_array_equal(stats["mean"], expected_mean)
+        np.testing.assert_array_equal(stats["std"], expected_std)
+    assert not np.array_equal(expected_mean, welford_mean)
+
+
 def test_finalize_estimation_retry_onto_a_replacement_train_attempt_recomputes_stats(
     fake_r2_remote: Path, tmp_path: Path
 ) -> None:
