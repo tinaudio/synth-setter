@@ -39,6 +39,7 @@ class VectorProjection(nn.Module):
                 f"expected embedding shape (batch, {self.input_dim}), got {tuple(embedding.shape)}"
             )
         projected = self.projection(embedding)
-        if self.n_conditioning_outputs == 1:
+        n_conditioning_outputs = getattr(self, "n_conditioning_outputs", 1)
+        if n_conditioning_outputs == 1:
             return projected
-        return projected.unflatten(-1, (self.n_conditioning_outputs, self.d_model))
+        return projected.unflatten(-1, (n_conditioning_outputs, self.d_model))

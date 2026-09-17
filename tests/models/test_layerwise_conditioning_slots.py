@@ -49,6 +49,15 @@ def test_encoder_with_one_slot_keeps_the_pooled_rank_two_output(
     assert build(1)(torch.zeros(sample_shape)).shape == (2, 6)
 
 
+def test_vector_projection_legacy_checkpoint_without_slot_metadata_keeps_rank_two() -> None:
+    """Pre-slot checkpoints retain their original single-output projection contract."""
+    encoder = _projection(1)
+    del encoder.n_conditioning_outputs
+    del encoder.d_model
+
+    assert encoder(torch.zeros(2, 4)).shape == (2, 6)
+
+
 @pytest.mark.parametrize(("build", "sample_shape"), _ENCODER_CASES)
 def test_encoder_with_many_slots_emits_one_conditioning_row_per_slot(
     build: Callable[[int], nn.Module], sample_shape: tuple[int, ...]
