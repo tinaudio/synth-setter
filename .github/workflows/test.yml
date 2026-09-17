@@ -76,11 +76,17 @@ jobs:
           npm ci
           npm test
 
+      # A repo-scoped uv cache serves every image unless the key names one, and the env
+      # context cannot see the runner's own ImageOS — so republish it first (#3507, #3688).
+      - name: Publish the runner image id
+        run: echo "RUNNER_IMAGE_OS=${ImageOS:-unknown}" >> "$GITHUB_ENV"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.11.28"
           enable-cache: true
+          cache-suffix: ${{ env.RUNNER_IMAGE_OS }}
           python-version: ${{ matrix.python-version }}
 
       # --extra cpu routes torch through pytorch-cpu per [tool.uv.sources];
@@ -133,11 +139,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # A repo-scoped uv cache serves every image unless the key names one, and the env
+      # context cannot see the runner's own ImageOS — so republish it first (#3507, #3688).
+      - name: Publish the runner image id
+        run: echo "RUNNER_IMAGE_OS=${ImageOS:-unknown}" >> "$GITHUB_ENV"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.11.28"
           enable-cache: true
+          cache-suffix: ${{ env.RUNNER_IMAGE_OS }}
           python-version: ${{ matrix.python-version }}
 
       # macOS: bare `uv sync --frozen` lets torch resolve from PyPI's
