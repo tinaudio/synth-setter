@@ -19,7 +19,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from zipfile import BadZipFile
 
 import lance
@@ -47,6 +47,7 @@ from synth_setter.pipeline.constants import (
     LANCE_SHARD_STATS_KEYS,
     LANCE_SHARD_STATS_SUFFIX,
     STATS_NPZ_FILENAME,
+    STATS_TRAIN_ATTEMPTS_KEY,
 )
 from synth_setter.pipeline.data.finalize_progress import (
     FinalizeProgressCallback,
@@ -68,6 +69,7 @@ from synth_setter.pipeline.data.stats import finalize as finalize_welford
 from synth_setter.pipeline.schemas.lance_attempt import (
     LanceDatasetCard,
     LanceFragmentSidecar,
+    LanceStatsProvenance,
     SelectedLanceAttempt,
 )
 from synth_setter.pipeline.schemas.r2_location import parse_shard_staging_dir
@@ -569,6 +571,76 @@ def _validate_existing_stats(spec: DatasetSpec) -> None:
             )
 
 
+def _selected_train_attempts(
+    spec: DatasetSpec, winners: dict[int, CheckedLanceWinner]
+) -> tuple[SelectedLanceAttempt, ...]:
+    """Identify the training audio a statistics estimate would be derived from.
+
+    :param spec: Validated dataset spec.
+    :param winners: Checked winner per shard id.
+    :returns: The winning attempt per training shard, in ``shard_id`` order.
+    """
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    return tuple(
+        SelectedLanceAttempt(
+            shard_id=shard_id,
+            attempt=winners[shard_id].attempt.name,
+            valid_key=winners[shard_id].attempt.valid_key,
+        )
+        for shard_id in range(train_lo, train_hi)
+    )
+
+
+def _recorded_stats_train_attempts(spec: DatasetSpec) -> tuple[SelectedLanceAttempt, ...] | None:
+    """Read the train attempts an existing statistics archive was derived from.
+
+    :param spec: Spec locating the statistics artifact.
+    :returns: The recorded attempts, or ``None`` when the archive carries no
+        provenance — it predates #3360 or came from outside this pipeline.
+    :raises ValueError: The archive records provenance that does not parse.
+    """
+    with r2_io.downloaded_to_tempfile(spec.r2.stats_uri()) as stats_path, np.load(
+        stats_path
+    ) as stats:
+        if STATS_TRAIN_ATTEMPTS_KEY not in stats:
+            return None
+        recorded = str(stats[STATS_TRAIN_ATTEMPTS_KEY])
+    try:
+        return LanceStatsProvenance.model_validate_json(recorded).train_attempts
+    except ValidationError as exc:
+        raise ValueError(f"existing stats.npz provenance is invalid: {exc}") from exc
+
+
+def _reuses_existing_stats(  # noqa: DOC502
+    spec: DatasetSpec, train_attempts: tuple[SelectedLanceAttempt, ...]
+) -> bool:
+    """Decide whether an existing statistics artifact describes this run's train audio.
+
+    An artifact without provenance is reused: it is either user-supplied or
+    predates #3360, and finalize cannot tell it apart from one it wrote.
+
+    :param spec: Spec locating the statistics artifact.
+    :param train_attempts: Train attempts this finalize pass selected.
+    :returns: Whether the existing artifact may be published unchanged.
+    :raises ValueError: The archive records provenance that does not parse.
+    """
+    if r2_io.object_size(spec.r2.stats_uri()) is None:
+        return False
+    recorded = _recorded_stats_train_attempts(spec)
+    if recorded is None:
+        logger.info("reusing_normalization_stats_without_provenance", uri=spec.r2.stats_uri())
+        return True
+    if recorded == train_attempts:
+        return True
+    logger.info(
+        "recomputing_normalization_stats_for_new_train_attempts",
+        recorded=[attempt.attempt for attempt in recorded],
+        selected=[attempt.attempt for attempt in train_attempts],
+        uri=spec.r2.stats_uri(),
+    )
+    return False
+
+
 def _sampled_audio_batches(
     dataset: lance.LanceDataset, *, seed: int, sample_limit: int
 ) -> Iterator[torch.Tensor]:
@@ -592,13 +664,24 @@ def _sampled_audio_batches(
         yield torch.from_numpy(np.ascontiguousarray(audio[:, 0], dtype=np.float32))
 
 
-def _estimate_and_upload_stats(spec: DatasetSpec, work_dir: Path, *, seed: int) -> bool:
+def _estimate_and_upload_stats(  # noqa: DOC502
+    spec: DatasetSpec,
+    work_dir: Path,
+    *,
+    seed: int,
+    train_attempts: tuple[SelectedLanceAttempt, ...],
+) -> bool:
     """Estimate raw online-front-end statistics from committed train audio.
+
+    The attempts the estimate was derived from travel inside the uploaded archive, so a later
+    finalize can tell whether it still describes the committed audio (#3360).
 
     :param spec: Mono dataset spec defining canonical frontend settings.
     :param work_dir: Scratch directory for the upload artifact.
     :param seed: Seed selecting the uniform training-row subset.
+    :param train_attempts: Train attempts the estimate is derived from.
     :returns: Whether this process uploaded the artifact.
+    :raises ValueError: A concurrently written artifact is unusable.
     """
     from synth_setter.models.components.spec_encoder import LogMelFrontend
 
@@ -614,8 +697,10 @@ def _estimate_and_upload_stats(spec: DatasetSpec, work_dir: Path, *, seed: int) 
         mask_degenerate=spec.mask_degenerate_bins,
     )
     stats_path = work_dir / STATS_NPZ_FILENAME
-    np.savez(stats_path, mean=mean, std=std)
-    if r2_io.object_size(spec.r2.stats_uri()) is not None:
+    provenance = LanceStatsProvenance(schema_version=1, train_attempts=train_attempts)
+    provenance_field: dict[str, Any] = {STATS_TRAIN_ATTEMPTS_KEY: provenance.model_dump_json()}
+    np.savez(stats_path, mean=mean, std=std, **provenance_field)
+    if _reuses_existing_stats(spec, train_attempts):
         _validate_existing_stats(spec)
         logger.info("reused_normalization_stats", uri=spec.r2.stats_uri())
         return False
@@ -690,19 +775,23 @@ def finalize_lance_fragments(  # noqa: DOC502
     :raises ValueError: Any spec shard has no staged-valid attempt, or a
         winner fails a structural check.
     """
+    if estimate_normalization_stats and r2_io.object_size(spec.r2.stats_uri()) is not None:
+        _validate_existing_stats(spec)
+
+    winners = _select_checked_winners(spec, progress_callback)
+
     reuse_estimated_stats = False
+    train_attempts: tuple[SelectedLanceAttempt, ...] = ()
     if estimate_normalization_stats:
-        reuse_estimated_stats = r2_io.object_size(spec.r2.stats_uri()) is not None
+        train_attempts = _selected_train_attempts(spec, winners)
+        reuse_estimated_stats = _reuses_existing_stats(spec, train_attempts)
         if reuse_estimated_stats:
-            _validate_existing_stats(spec)
             logger.info("reused_normalization_stats", uri=spec.r2.stats_uri())
         elif spec.render.channels != 1:
             raise ValueError(
                 "normalization statistics estimation currently requires mono audio; "
                 f"got channels={spec.render.channels}"
             )
-
-    winners = _select_checked_winners(spec, progress_callback)
 
     for split, (lo, hi) in spec.split_shard_ranges.items():
         if lo >= hi:
@@ -717,7 +806,9 @@ def finalize_lance_fragments(  # noqa: DOC502
         report_finalize_progress(progress_callback, "artifact_uploaded")
         logger.info("committed_winner_fragments", fragment_count=hi - lo, split=split)
         if split == "train" and estimate_normalization_stats and not reuse_estimated_stats:
-            if _estimate_and_upload_stats(spec, work_dir, seed=seed):
+            if _estimate_and_upload_stats(
+                spec, work_dir, seed=seed, train_attempts=train_attempts
+            ):
                 report_finalize_progress(progress_callback, "artifact_uploaded")
 
     welford = _reduce_and_upload_welford(spec, winners, work_dir, progress_callback)
