@@ -521,3 +521,59 @@ def test_plugin_load_timeout_is_not_overshot_by_the_heartbeat_interval() -> None
 
     # Two 0.25s waits would take 0.5s; remaining-aware waits stop at ~0.3s.
     assert time.monotonic() - started < 0.45
+
+
+def test_plugin_load_timeout_binds_when_the_watchdog_thread_is_scheduled_late(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The budget runs from the load, not from whenever the watchdog gets scheduled.
+
+    A contended runner can leave the watchdog unscheduled for longer than the
+    whole budget. If the deadline's origin were read inside that thread, a load
+    that had already overrun would be waved through — #3562's ``assert 0 != 0``.
+
+    :param monkeypatch: Delays the watchdog body past the declared timeout.
+    """
+    timeout_seconds = 0.05
+    load_running = threading.Event()
+    release = threading.Event()
+    real_thread_run = threading.Thread.run
+
+    def run_watchdog_late(self: threading.Thread) -> None:
+        """Withhold the watchdog body until the load has already overrun.
+
+        :param self: The thread whose body is being withheld.
+        """
+        if self.name == "plugin-load-watchdog":
+            release.wait(timeout=5.0)
+        real_thread_run(self)
+
+    def blocks_past_the_budget(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        load_running.set()
+        release.wait(timeout=5.0)
+        return IntrospectFakePlugin({})
+
+    monkeypatch.setattr(threading.Thread, "run", run_watchdog_late)
+
+    def overrun_then_release() -> None:
+        load_running.wait(timeout=5.0)
+        # Sleep is a lower bound only: the load is guaranteed to have overrun.
+        time.sleep(timeout_seconds * 4)
+        release.set()
+
+    releaser = threading.Thread(target=overrun_then_release, name="test-releaser")
+    releaser.start()
+    try:
+        with pytest.raises(click.UsageError, match="did not finish loading"):
+            _load_plugin_loudly(
+                "fake.vst3",
+                None,
+                blocks_past_the_budget,
+                timeout_seconds=timeout_seconds,
+                heartbeat_seconds=0.02,
+                hard_timeout_grace_seconds=0.0,
+                hard_timeout_handler=lambda _message: release.set(),
+            )
+    finally:
+        release.set()
+        releaser.join(timeout=5.0)
