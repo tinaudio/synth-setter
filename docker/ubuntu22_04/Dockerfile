@@ -575,7 +575,7 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
-# Secret injection needs Infisical; Cloudsmith's versioned .deb avoids an apt repo.
+# Secret injection needs Infisical; the release .deb avoids an apt repo.
 # When bumping, download both packages, then run `sha256sum infisical_*.deb` to refresh pins.
 ARG TARGETARCH
 ARG INFISICAL_VERSION=0.38.0
@@ -587,7 +587,7 @@ RUN case "${TARGETARCH:-}" in \
       *) echo "ERROR: unsupported TARGETARCH for infisical: ${TARGETARCH:-<unset>}" >&2; exit 1 ;; \
     esac && \
     package="infisical_${INFISICAL_VERSION}_linux_${TARGETARCH}.deb" && \
-    url="https://dl.cloudsmith.io/public/infisical/infisical-cli/deb/debian/pool/any-version/main/i/in/infisical_${INFISICAL_VERSION}/${package}" && \
+    url="https://github.com/Infisical/infisical/releases/download/infisical-cli/v${INFISICAL_VERSION}/${package}" && \
     curl -fsSL "$url" -o "/tmp/${package}" && \
     echo "${infisical_sha}  /tmp/${package}" | sha256sum -c - && \
     dpkg -i "/tmp/${package}" && \

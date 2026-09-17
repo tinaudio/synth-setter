@@ -52,9 +52,30 @@ def test_devcontainer_tools_declares_pinned_infisical_cli(project_root: Path) ->
         "503883eab614f544ed228ab6aadd7ed92124ff37ee31179ce3186d6043f22da7"
     ) in dockerfile
     assert "infisical_${INFISICAL_VERSION}_linux_${TARGETARCH}.deb" in dockerfile
-    assert "dl.cloudsmith.io/public/infisical/infisical-cli" in dockerfile
+    assert "github.com/Infisical/infisical/releases/download" in dockerfile
     assert 'echo "${infisical_sha}  /tmp/${package}" | sha256sum -c -' in dockerfile
     assert "infisical --version" in dockerfile
+
+
+@pytest.mark.infra
+def test_no_provisioner_fetches_the_retired_cloudsmith_infisical_repo(
+    project_root: Path,
+) -> None:
+    """Verify nothing still fetches Infisical from the removed Cloudsmith repository.
+
+    The whole ``infisical/infisical-cli`` Cloudsmith repo 404s, so a fetch from it
+    cannot be repaired by a version bump.
+
+    :param project_root: Root path of the repository under test.
+    """
+    provisioners = (
+        project_root / "docker" / "ubuntu22_04" / "Dockerfile",
+        project_root / "scripts" / "runpod" / "bootstrap-vastai-pytorch-pod.sh",
+    )
+
+    offenders = [p.name for p in provisioners if "cloudsmith.io" in p.read_text()]
+
+    assert not offenders
 
 
 @pytest.mark.infra

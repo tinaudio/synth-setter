@@ -326,7 +326,7 @@ if ! zellij --version 2>/dev/null | grep -q "${ZELLIJ_VERSION#v}"; then
 fi
 if ! infisical --version 2>/dev/null | grep -q "$INFISICAL_VERSION"; then
   package="infisical_${INFISICAL_VERSION}_linux_amd64.deb"
-  fetch "https://dl.cloudsmith.io/public/infisical/infisical-cli/deb/debian/pool/any-version/main/i/in/infisical_${INFISICAL_VERSION}/${package}" -o "/tmp/${package}"
+  fetch "https://github.com/Infisical/infisical/releases/download/infisical-cli/v${INFISICAL_VERSION}/${package}" -o "/tmp/${package}"
   sha_check "$INFISICAL_SHA256" "/tmp/${package}"
   dpkg -i "/tmp/${package}" && rm "/tmp/${package}"
 fi
