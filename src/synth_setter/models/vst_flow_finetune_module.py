@@ -657,7 +657,7 @@ class VSTFlowFinetuneModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         prediction = self.vector_field.combine(velocity, t, control_input)
 
         squared_flow_error = (prediction - target).square()
-        loss = (squared_flow_error.mean(dim=-1) * w).mean()
+        loss = (squared_flow_error.mean(dim=-1, keepdim=True) * w).mean()
         endpoint_estimate = self._one_step_estimate(x_t, t, prediction)
         return TrainStepOutputs(
             loss=loss,
