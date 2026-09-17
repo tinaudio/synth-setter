@@ -176,6 +176,9 @@ def _rclone_argv(verb: str, *operands: str, timeout: str = "300s") -> list[str]:
         "--contimeout=30s",
         f"--timeout={timeout}",
         "--retries=3",
+        # Every bucket here is provisioned already; without this rclone opens a
+        # destination with CreateBucket, which an object-scoped R2 token 404s (#3476).
+        "--s3-no-check-bucket",
         *operands,
     ]
 

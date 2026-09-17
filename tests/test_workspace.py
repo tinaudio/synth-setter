@@ -47,6 +47,50 @@ def _stage_synthetic_package(tmp_path: Path) -> Path:
     return dest
 
 
+def _import_probe(module: str) -> str:
+    """Build the subprocess source that imports ``module`` and reports ``$PROJECT_ROOT``.
+
+    The probe leaves via :func:`os._exit` once the value is flushed, so the
+    result reflects the import only. Running CPython finalization over the
+    launchers' native stack instead would fold an unrelated teardown failure
+    into this contract — the macOS ``recursive_mutex`` abort in #3429/#3506
+    scored a ``SIGABRT`` on a process that had already printed the right path.
+
+    :param module: Module the probe imports.
+    :returns: Python source for ``python -c``.
+    """
+    return (
+        "import os, sys\n"
+        f"import {module}\n"
+        "sys.stdout.write(os.environ.get('PROJECT_ROOT', '<unset>') + '\\n')\n"
+        "sys.stdout.flush()\n"
+        "os._exit(0)\n"
+    )
+
+
+def _run_probe(source: str, dest: Path, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    """Run ``source`` in a fresh interpreter with no ``.project-root`` reachable.
+
+    :param source: Python source to execute.
+    :param dest: Synthetic ``site-packages`` directory to put on ``PYTHONPATH``.
+    :param tmp_path: Working directory, so the cwd fallback resolves here.
+    :returns: The completed subprocess.
+    """
+    return subprocess.run(  # noqa: S603 — invoking python with controlled argv
+        [sys.executable, "-s", "-c", source],
+        cwd=tmp_path,
+        env={
+            "PYTHONPATH": str(dest),
+            "PYTHONNOUSERSITE": "1",
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(tmp_path),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
 def test_env_override_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """``$SYNTH_SETTER_WORKSPACE`` takes precedence over the checkout.
 
@@ -131,23 +175,10 @@ def test_cwd_fallback_when_no_checkout_reachable(tmp_path: Path) -> None:
     """
     dest = _stage_synthetic_package(tmp_path)
 
-    proc = subprocess.run(  # noqa: S603 — invoking python with controlled argv
-        [
-            sys.executable,
-            "-s",
-            "-c",
-            ("from synth_setter.workspace import operator_workspace; print(operator_workspace())"),
-        ],
-        cwd=tmp_path,
-        env={
-            "PYTHONPATH": str(dest),
-            "PYTHONNOUSERSITE": "1",
-            "PATH": "/usr/bin:/bin",
-            "HOME": str(tmp_path),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
+    proc = _run_probe(
+        "from synth_setter.workspace import operator_workspace; print(operator_workspace())",
+        dest,
+        tmp_path,
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == str(tmp_path.resolve())
@@ -178,25 +209,54 @@ def test_launcher_imports_without_project_root(tmp_path: Path, module: str) -> N
     """
     dest = _stage_synthetic_package(tmp_path)
 
-    proc = subprocess.run(  # noqa: S603 — controlled argv
-        [
-            sys.executable,
-            "-s",
-            "-c",
-            (f"import os; import {module}; print(os.environ.get('PROJECT_ROOT', '<unset>'))"),
-        ],
-        cwd=tmp_path,
-        env={
-            "PYTHONPATH": str(dest),
-            "PYTHONNOUSERSITE": "1",
-            "PATH": "/usr/bin:/bin",
-            "HOME": str(tmp_path),
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    proc = _run_probe(_import_probe(module), dest, tmp_path)
+
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == str(tmp_path.resolve()), (
         f"launcher import did not publish $PROJECT_ROOT (got {proc.stdout.strip()!r})"
     )
+
+
+def test_launcher_probe_when_interpreter_teardown_aborts_still_reports_the_import(
+    tmp_path: Path,
+) -> None:
+    """A module whose teardown aborts still scores its import as the success it was.
+
+    Pins #3429/#3506: the launchers' native stack aborted during CPython
+    finalization on macOS (``recursive_mutex lock failed``) long after the
+    import had published the right ``$PROJECT_ROOT``, and the probe reported
+    that as an import regression. Here an ``atexit`` abort stands in for that
+    teardown on any platform.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    dest = _stage_synthetic_package(tmp_path)
+    (dest / "aborts_at_teardown.py").write_text(
+        "import atexit, os\n"
+        "from synth_setter.workspace import operator_workspace\n"
+        "operator_workspace()\n"
+        "atexit.register(os.abort)\n",
+        encoding="utf-8",
+    )
+
+    proc = _run_probe(_import_probe("aborts_at_teardown"), dest, tmp_path)
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == str(tmp_path.resolve())
+
+
+def test_launcher_probe_when_the_import_raises_reports_failure(tmp_path: Path) -> None:
+    """The probe still fails when the import itself raises — the #1261 contract.
+
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    dest = _stage_synthetic_package(tmp_path)
+    (dest / "raises_on_import.py").write_text(
+        "raise FileNotFoundError('.project-root')\n", encoding="utf-8"
+    )
+
+    proc = _run_probe(_import_probe("raises_on_import"), dest, tmp_path)
+
+    assert proc.returncode != 0
+    assert "FileNotFoundError" in proc.stderr
+    assert proc.stdout.strip() == ""
