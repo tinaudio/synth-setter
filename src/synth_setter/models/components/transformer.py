@@ -236,6 +236,44 @@ class ParamTokenEmbed(nn.Module):
         return self.projection.param_to_token(params)
 
 
+class TemporalPatchEmbed(nn.Module):
+    """Project a temporal feature sequence into transformer patch tokens."""
+
+    @jaxtyped(typechecker=beartype)
+    def __init__(self, input_dim: int, d_model: int, num_tokens: int) -> None:
+        """Build one shared projection for every temporal frame.
+
+        :param input_dim: Feature width of each input frame.
+        :param d_model: Transformer token width.
+        :param num_tokens: Maximum number of temporal frames and positional encodings.
+        """
+        super().__init__()
+        self.input_dim = input_dim
+        self.num_tokens = num_tokens
+        self.projection = nn.Linear(input_dim, d_model)
+
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self, features: Float[Tensor, "batch input_dim num_tokens"]
+    ) -> Float[Tensor, "batch num_tokens d_model"]:
+        """Project temporal frames without collapsing their order.
+
+        :param features: Feature-major sequence ``(batch, input_dim, frames)``.
+        :returns: Time-major patch tokens ``(batch, frames, d_model)``.
+        :raises ValueError: The feature width is wrong or the frame count exceeds capacity.
+        """
+        if (
+            features.shape[1] != self.input_dim
+            or features.shape[2] == 0
+            or features.shape[2] > self.num_tokens
+        ):
+            raise ValueError(
+                f"expected temporal features shaped (batch, {self.input_dim}, frames) "
+                f"with 1 <= frames <= {self.num_tokens}, got {tuple(features.shape)}"
+            )
+        return self.projection(features.transpose(1, 2))
+
+
 class AdaptiveLayerNorm(nn.LayerNorm):
     """LayerNorm whose scale and shift are predicted from a conditioning vector (AdaLN)."""
 
@@ -801,6 +839,7 @@ class AudioSpectrogramTransformer(nn.Module):
                 use_fixed_ast_padding=use_fixed_ast_padding,
             )
         )
+        self.input_dim = getattr(self.patch_embed, "input_dim", None)
 
         self.positional_encoding = PositionalEncoding(
             d_model,
