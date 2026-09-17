@@ -1,5 +1,8 @@
 """Behavioral tests for sketch-control extraction (loudness, centroid, pitch)."""
 
+import warnings
+
+import librosa
 import numpy as np
 import pytest
 import torch
@@ -296,13 +299,77 @@ def test_extract_sketch_controls_batch_on_cuda_predicts_the_same_pitch_bins() ->
     assert torch.allclose(cpu_pitch, cuda_pitch, atol=5e-3)
 
 
+@RunIf(min_gpus=1)
+def test_load_pesto_model_returns_weights_on_the_requested_device_after_an_external_move() -> None:
+    """A device request is honoured even after a caller moved the shared module.
+
+    The cache hands out one process-wide module, so any caller can move it; the next request must
+    still place the weights where it asked.
+    """
+    load_pesto_model(device="cuda").to("cpu")
+    model = load_pesto_model(device="cuda")
+    assert next(model.parameters()).device.type == "cuda"
+
+
 def test_load_pesto_model_without_a_device_defaults_to_cpu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A first load that names no device holds its weights on CPU.
 
-    :param monkeypatch: Clears the cached device so this is a first load.
+    :param monkeypatch: Drops the cached model so this is a first load.
     """
-    monkeypatch.setattr(sketch_controls, "_pesto_device", None)
+    monkeypatch.setattr(sketch_controls, "_pesto_model", None)
     model = load_pesto_model()
     assert next(model.parameters()).device.type == "cpu"
+
+
+def test_loudness_track_extraction_emits_no_divide_by_zero_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DC FFT bin must not push librosa's A-weighting through ``log10(0)``.
+
+    :param monkeypatch: Clears the per-process weight cache so the curve is rebuilt here.
+    """
+    monkeypatch.setattr(sketch_controls, "_a_weights", None)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        track = loudness_track(_sine(440.0), _SAMPLE_RATE)
+
+    assert [str(w.message) for w in caught if "divide by zero" in str(w.message)] == []
+    assert torch.isfinite(track).all()
+
+
+def test_a_weighting_curve_matches_librosa_above_the_dc_bin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skipping the DC bin must not perturb any audible weight.
+
+    :param monkeypatch: Clears the per-process weight cache so the curve is rebuilt here.
+    """
+    monkeypatch.setattr(sketch_controls, "_a_weights", None)
+    freqs = librosa.fft_frequencies(
+        sr=sketch_controls._LOUDNESS_SAMPLE_RATE, n_fft=sketch_controls._LOUDNESS_N_FFT
+    )
+    expected = librosa.A_weighting(freqs[1:], min_db=None) - sketch_controls._LOUDNESS_REF_DB
+
+    curve = sketch_controls._a_weighting_db(torch.device("cpu"))
+
+    np.testing.assert_allclose(curve[1:, 0].numpy(), expected, rtol=0, atol=1e-5)
+
+
+def test_dc_a_weighting_bin_floors_its_loudness_contribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A-weighting is inaudible at DC, so that bin contributes the loudness floor.
+
+    :param monkeypatch: Clears the per-process weight cache so the curve is rebuilt here.
+    """
+    monkeypatch.setattr(sketch_controls, "_a_weights", None)
+
+    dc_weight = sketch_controls._a_weighting_db(torch.device("cpu"))[0, 0]
+
+    loudest_db = torch.tensor(sketch_controls._LOUDNESS_MAX_DB)
+    assert float((loudest_db + dc_weight).clamp_min(sketch_controls._LOUDNESS_MIN_DB)) == (
+        sketch_controls._LOUDNESS_MIN_DB
+    )

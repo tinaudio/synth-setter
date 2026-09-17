@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import numbers
 from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +61,36 @@ _ENDPOINT_TIME_WEIGHTINGS: frozenset[str] = frozenset(("flowmol3", "uniform"))
 _PARAMETERIZATIONS: frozenset[str] = frozenset(("endpoint", "velocity"))
 _EVAL_BATCH_SEED_STRIDE = 2**16
 _EVAL_SEED_MODULUS = 2**63 - 1
+
+
+@jaxtyped(typechecker=beartype)
+def _normalize_cfg_strength(value: object, name: str) -> float:
+    """Widen a composed guidance scale to the ``float`` the jaxtyped sampling boundary requires.
+
+    Hydra composes a bare CLI ``0``/``1``/``2`` as ``int``, which then reaches sampling
+    unchanged and fails the first validation batch rather than the override (#3023).
+
+    :param value: Composed guidance scale.
+    :param name: Hyperparameter name, quoted in the error.
+    :returns: ``value`` as a float.
+    :raises TypeError: If ``value`` is boolean or not a real number.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise TypeError(f"{name} must be a real number, got {value!r}")
+    return float(value)
+
+
+@jaxtyped(typechecker=beartype)
+def _normalize_optional_cfg_strength(value: object, name: str) -> float | None:
+    """Widen a composed guidance scale that may be left unset.
+
+    :param value: Composed guidance scale, or ``None`` to inherit the content scale.
+    :param name: Hyperparameter name, quoted in the error.
+    :returns: ``value`` as a float, or ``None`` when unset.
+    """
+    return None if value is None else _normalize_cfg_strength(value, name)
+
+
 _EVAL_TEST_SEED_OFFSET = 1_000_003
 _FIXED_TIME_PERCENT_CENTERS = tuple(range(5, 100, 10))
 _CHECKPOINT_SPOOL_BYTES = 64 * 1024**2
@@ -663,6 +694,17 @@ class VSTFlowMatchingModule(LightningModule):
             raise ValueError(
                 "endpoint_time_weighting='flowmol3' requires parameterization='endpoint'"
             )
+
+        validation_cfg_strength = _normalize_cfg_strength(
+            validation_cfg_strength, "validation_cfg_strength"
+        )
+        validation_sketch_cfg_strength = _normalize_optional_cfg_strength(
+            validation_sketch_cfg_strength, "validation_sketch_cfg_strength"
+        )
+        test_cfg_strength = _normalize_cfg_strength(test_cfg_strength, "test_cfg_strength")
+        test_sketch_cfg_strength = _normalize_optional_cfg_strength(
+            test_sketch_cfg_strength, "test_sketch_cfg_strength"
+        )
 
         # Saving hyperparameters deep-copies them, which a weight-normalized frozen encoder
         # inside the audio term cannot survive; the term is training-time only, so it is not

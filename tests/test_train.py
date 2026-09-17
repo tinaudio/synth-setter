@@ -80,6 +80,7 @@ from tests.conftest import (
     _SURGE_FIXTURE_CHANNELS,
     _SURGE_FIXTURE_DURATION_SECONDS,
     _SURGE_FIXTURE_SAMPLE_RATE,
+    EMBEDDING_E2E_KEYS,
     FAKE_VST_VARIANTS,
     NUM_FIXTURE_SAMPLES,
     REAL_VST_VARIANTS,
@@ -294,25 +295,25 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "synth", ["pyfdn_n8_mono_householder", "pyfdn_n8_mono_householder_vector"]
+    "cfg_dataset_pyfdn_householder",
+    ["pyfdn_n8_mono_householder", "pyfdn_n8_mono_householder_vector"],
+    indirect=True,
 )
 def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
     cfg_dataset_pyfdn_householder: DictConfig,
     tmp_path: Path,
-    synth: str,
 ) -> None:
     """Generate pyFDN data, train through FLAMO, then reload and evaluate its checkpoint.
 
-    :param cfg_dataset_pyfdn_householder: Real local pyFDN producer configuration.
+    :param cfg_dataset_pyfdn_householder: Real local pyFDN producer configuration, composed at the
+        feedback topology shared by data generation and differentiable training.
     :param tmp_path: Root for generated, checkpoint, metric, and audio artifacts.
-    :param synth: Feedback topology shared by data generation and differentiable training.
     """
     from synth_setter.data.vst.writers import make_lance_dataset
     from synth_setter.pipeline.data.stats import finalize, fold_lance_shard_into_welford
 
+    synth = cfg_dataset_pyfdn_householder.synth.name
     with open_dict(cfg_dataset_pyfdn_householder):
-        cfg_dataset_pyfdn_householder.synth.name = synth
-        cfg_dataset_pyfdn_householder.synth.param_spec_name = synth
         cfg_dataset_pyfdn_householder.train_val_test_sizes = [2, 2, 2]
         cfg_dataset_pyfdn_householder.render.samples_per_shard = 2
         cfg_dataset_pyfdn_householder.render.min_loudness = -100.0
@@ -895,7 +896,7 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         assert values, f"no {prefix} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
     assert torch.isfinite(
-        metric_dict["val/number_group_optimal_assignment_mse/adsr_1.attack"]
+        metric_dict["val/number_group_optimal_assignment_mse/adsr_N.attack"]
     ).all()
 
     checkpoint = tmp_path / "checkpoints" / "last.ckpt"
@@ -2938,9 +2939,12 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
             rendered_params.at["a_amp_eg_attack", "target"]
         )
 
+    # compute_audio_metrics scores mid/side only for stereo pairs, so the expected key
+    # set follows the render's channel count rather than a frozen literal (#3328).
+    stereo_only = ("mldr_mid_side",) if cfg_surge_real_train.render.channels == 2 else ()
     assert set(metrics) == {
         f"val_audio/{name}_{stat}"
-        for name in ("mss", "wmfcc", "sot", "rms", "mldr")
+        for name in ("mss", "wmfcc", "sot", "rms", "mldr", *stereo_only)
         for stat in ("mean", "std")
     }
     bounds = ORACLE_AUDIO_METRIC_BOUNDS
@@ -3423,18 +3427,6 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     assert second_logger_cfg.resume is None
 
 
-_ALL_EMBEDDING_CONDITIONING_PROFILES = (
-    "clap",
-    "m2l",
-    "same_s",
-    "same_l",
-    "ssondo",
-    "t5gemma",
-    "matpac_plus",
-    "meanaudio_16k",
-)
-
-
 def _assert_conditioning_checkpoint_validates(cfg: DictConfig, output_dir: Path) -> None:
     """Validate a trained embedding-conditioned checkpoint.
 
@@ -3759,7 +3751,7 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
     )
     assert_embedding_columns(dataset_root)
 
-    for conditioning in _ALL_EMBEDDING_CONDITIONING_PROFILES:
+    for conditioning in EMBEDDING_E2E_KEYS:
         cfg = build_surge_xt_embedding_train_cfg(
             tmp_path / conditioning,
             dataset_root,
