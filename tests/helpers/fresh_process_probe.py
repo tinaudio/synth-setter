@@ -3,7 +3,9 @@
 A probe that imports torch, torchsynth and FLAMO spends most of its wall clock before the behavior
 under test begins, so a single whole-process timeout turns a saturated CI runner into a false "the
 loader hung" report (#3455 on macOS, #3500 on Ubuntu). Probes here report each startup stage
-instead, and a stage is only rejected once it stops making progress.
+instead, and a stage is only rejected once it stops making progress — emitting a marker or
+consuming CPU, so a stage whose interior is silent (one long import) is not a hang by definition
+(#3666).
 """
 
 from __future__ import annotations
@@ -13,12 +15,19 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from textwrap import dedent
 from typing import IO
 
+from tests.helpers.subprocess_progress import accumulated_cpu_seconds
+
 _STARTUP_STALL_TIMEOUT_SECONDS = 30.0
+# Absolute bound on startup, so CPU time buys a silent stage time without retiring the hang bound.
+_STARTUP_CAP_SECONDS = 300.0
 _BEHAVIOR_TIMEOUT_SECONDS = 30.0
 _READY_MARKER = "probe-ready"
+# Bounded so CPU time is sampled several times within one stall window.
+_MAX_POLL_SECONDS = 1.0
 
 # Injected above every probe: progress() marks a completed startup stage and
 # ready() hands the remaining budget to the behavior under test.
@@ -55,26 +64,56 @@ def _start_stage_reader(stream: IO[str]) -> queue.Queue[str | None]:
     return sink
 
 
-def _await_ready(stages: queue.Queue[str | None], stall_timeout_s: float) -> None:
+def _await_ready(
+    stages: queue.Queue[str | None],
+    pid: int,
+    *,
+    stall_timeout_s: float,
+    cap_s: float,
+) -> None:
     """Consume startup stages until the probe reports readiness.
 
+    A stage counts as progressing while it emits markers or accumulates CPU time, so one long
+    import is bounded by ``cap_s`` rather than read as a stall.
+
     :param stages: Queue of stdout progress markers.
-    :param stall_timeout_s: Seconds one startup stage may run without reporting.
-    :raises AssertionError: If a stage stalls or the probe exits before readiness.
+    :param pid: Probe process id, sampled for CPU time between markers.
+    :param stall_timeout_s: Seconds one startup stage may run without marker or CPU time.
+    :param cap_s: Absolute seconds startup may take, however busy the probe is.
+    :raises AssertionError: If a stage stalls, startup outlasts ``cap_s``, or the probe exits.
     """
     reached: list[str] = []
+    cpu_seconds = accumulated_cpu_seconds(pid, 0.0)
+    last_progress = time.monotonic()
+    cap_deadline = last_progress + cap_s
+    poll_s = min(_MAX_POLL_SECONDS, stall_timeout_s / 4)
     while True:
-        try:
-            stage = stages.get(timeout=stall_timeout_s)
-        except queue.Empty:
+        remaining_s = cap_deadline - time.monotonic()
+        if remaining_s <= 0:
             raise AssertionError(
-                f"probe startup made no progress for {stall_timeout_s}s after stages {reached}"
-            ) from None
+                f"probe startup did not reach readiness within {cap_s:g}s after stages {reached}"
+            )
+        try:
+            # Clamped to the cap so a spinning probe is rejected at the cap, not a poll later.
+            stage = stages.get(timeout=min(poll_s, remaining_s))
+        except queue.Empty:
+            sampled = accumulated_cpu_seconds(pid, cpu_seconds)
+            if sampled > cpu_seconds:
+                cpu_seconds = sampled
+                last_progress = time.monotonic()
+            elif time.monotonic() - last_progress >= stall_timeout_s:
+                raise AssertionError(
+                    f"probe startup made no progress for {stall_timeout_s}s "
+                    f"after stages {reached} (no marker, no CPU time)"
+                ) from None
+            continue
         if stage is None:
             raise AssertionError(f"probe exited before readiness after stages {reached}")
         if stage == _READY_MARKER:
             return
         reached.append(stage)
+        cpu_seconds = accumulated_cpu_seconds(pid, cpu_seconds)
+        last_progress = time.monotonic()
 
 
 def _await_clean_exit(process: subprocess.Popen[str], behavior_timeout_s: float) -> None:
@@ -98,6 +137,7 @@ def run_fresh_process_probe(
     body: str,
     *,
     startup_stall_timeout_s: float = _STARTUP_STALL_TIMEOUT_SECONDS,
+    startup_cap_s: float = _STARTUP_CAP_SECONDS,
     behavior_timeout_s: float = _BEHAVIOR_TIMEOUT_SECONDS,
 ) -> None:
     """Run ``body`` in a fresh interpreter and require it to exit zero.
@@ -107,7 +147,8 @@ def run_fresh_process_probe(
     then runs against its own budget.
 
     :param body: Probe source, dedented before execution.
-    :param startup_stall_timeout_s: Seconds one startup stage may run without reporting.
+    :param startup_stall_timeout_s: Seconds one startup stage may run without marker or CPU time.
+    :param startup_cap_s: Absolute seconds startup may take, however busy the probe is.
     :param behavior_timeout_s: Seconds the probe may run after reporting readiness.
     :raises AssertionError: If startup stalls, behavior overruns, or the probe exits non-zero.
     """
@@ -123,7 +164,12 @@ def run_fresh_process_probe(
         with process:
             assert process.stdout is not None
             try:
-                _await_ready(_start_stage_reader(process.stdout), startup_stall_timeout_s)
+                _await_ready(
+                    _start_stage_reader(process.stdout),
+                    process.pid,
+                    stall_timeout_s=startup_stall_timeout_s,
+                    cap_s=startup_cap_s,
+                )
                 _await_clean_exit(process, behavior_timeout_s)
             except AssertionError as failure:
                 process.kill()
