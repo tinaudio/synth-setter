@@ -580,7 +580,6 @@ def test_ram_fit_checkpoint_load_preserves_eval_prediction(tmp_path: Path) -> No
         checkpoint,
         encoder=_WaveformEncoder(),
         reward=_NormReward(),
-        base_checkpoint=None,
         weights_only=False,
     )
     actual = loaded.sample_batch(
@@ -593,6 +592,101 @@ def test_ram_fit_checkpoint_load_preserves_eval_prediction(tmp_path: Path) -> No
 
     _assert_same(_state(loaded.eval_field), _state(module.eval_field))
     torch.testing.assert_close(actual, expected)
+
+
+def test_ram_checkpoint_omits_the_reference_field_weights(tmp_path: Path) -> None:
+    """The frozen reference is re-derivable from the pinned base, so it is not stored.
+
+    :param tmp_path: Directory for the base and RAM checkpoints.
+    """
+    torch.manual_seed(41)
+    module = _ram(_base_checkpoint(tmp_path), overrides={"reward": _NormReward()})
+    trainer = _trainer()
+    trainer.fit(module, datamodule=_data())
+    checkpoint = tmp_path / "ram.ckpt"
+    trainer.save_checkpoint(checkpoint)
+
+    saved = torch.load(checkpoint, map_location="cpu", weights_only=False)["state_dict"]
+
+    assert [name for name in saved if name.startswith("reference_field.")] == []
+    assert [name for name in saved if name.startswith("old_field.")] != []
+    assert [name for name in saved if name.startswith("eval_field.")] != []
+
+
+def test_ram_checkpoint_load_rebuilds_the_reference_field_from_the_base(
+    tmp_path: Path,
+) -> None:
+    """Reloading reproduces the frozen reference exactly, from the base rather than the file.
+
+    :param tmp_path: Directory for the base and RAM checkpoints.
+    """
+    torch.manual_seed(43)
+    base = _base_checkpoint(tmp_path)
+    module = _ram(base, overrides={"reward": _NormReward()})
+    trainer = _trainer()
+    trainer.fit(module, datamodule=_data())
+    checkpoint = tmp_path / "ram.ckpt"
+    trainer.save_checkpoint(checkpoint)
+
+    loaded = VSTFlowRAMModule.load_from_checkpoint(
+        checkpoint,
+        encoder=_WaveformEncoder(),
+        reward=_NormReward(),
+        base_checkpoint=base,
+        weights_only=False,
+    )
+
+    _assert_same(_state(loaded.reference_field), _state(module.reference_field))
+
+
+def test_ram_checkpoint_load_without_the_pinned_base_raises(tmp_path: Path) -> None:
+    """Dropping the base leaves the reference unrecoverable, so the load refuses it.
+
+    :param tmp_path: Directory for the base and RAM checkpoints.
+    """
+    torch.manual_seed(45)
+    module = _ram(_base_checkpoint(tmp_path), overrides={"reward": _NormReward()})
+    trainer = _trainer()
+    trainer.fit(module, datamodule=_data())
+    checkpoint = tmp_path / "ram.ckpt"
+    trainer.save_checkpoint(checkpoint)
+
+    with pytest.raises(ValueError, match="base_checkpoint"):
+        VSTFlowRAMModule.load_from_checkpoint(
+            checkpoint,
+            encoder=_WaveformEncoder(),
+            reward=_NormReward(),
+            base_checkpoint=None,
+            weights_only=False,
+        )
+
+
+def test_ram_checkpoint_load_with_another_base_raises(tmp_path: Path) -> None:
+    """A different base would silently install the wrong frozen reference.
+
+    :param tmp_path: Directory for the base and RAM checkpoints.
+    """
+    torch.manual_seed(47)
+    module = _ram(_base_checkpoint(tmp_path), overrides={"reward": _NormReward()})
+    trainer = _trainer()
+    trainer.fit(module, datamodule=_data())
+    checkpoint = tmp_path / "ram.ckpt"
+    trainer.save_checkpoint(checkpoint)
+    other = tmp_path / "other"
+    other.mkdir()
+    # _base_module seeds itself, so a second base is byte-identical until perturbed.
+    divergent = _base_module()
+    with torch.no_grad():
+        next(iter(divergent.parameters())).add_(1.0)
+
+    with pytest.raises(ValueError, match="sha256"):
+        VSTFlowRAMModule.load_from_checkpoint(
+            checkpoint,
+            encoder=_WaveformEncoder(),
+            reward=_NormReward(),
+            base_checkpoint=_base_checkpoint(other, divergent),
+            weights_only=False,
+        )
 
 
 def test_ram_legacy_checkpoint_without_eval_ema_raises(tmp_path: Path) -> None:

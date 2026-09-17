@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import copy
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from pathlib import Path
 from typing import cast
 
@@ -42,6 +42,8 @@ from synth_setter.models.vst_flow_matching_module import (
 )
 
 _BATCH_ANY_SHAPE = "batch ..."
+_REFERENCE_FIELD_PREFIX = "reference_field."
+_REFERENCE_BASE_SHA_KEY = "ram_reference_field_base_sha256"
 _BATCH_PARAMS_SHAPE = "batch params"
 _BATCH_TIME_SHAPE = "batch 1"
 _SCALAR_SHAPE = ""
@@ -227,8 +229,29 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         return self
 
     @jaxtyped(typechecker=beartype)
+    def on_save_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Drop the frozen reference field, which the pinned base reproduces exactly.
+
+        It is a third full copy of the vector field on disk (~110 MB for the default field) and
+        never moves during the run, so only its provenance is stored (#3257).
+
+        :param checkpoint: Mutable Lightning checkpoint payload.
+        :raises TypeError: The checkpoint has a malformed state dictionary.
+        """
+        super().on_save_checkpoint(checkpoint)
+        if self.base_checkpoint_sha256 is None:
+            return
+        state = checkpoint.get("state_dict")
+        if not isinstance(state, MutableMapping):
+            raise TypeError("Lightning checkpoint state_dict must be a mutable mapping")
+        for name in tuple(state):
+            if isinstance(name, str) and name.startswith(_REFERENCE_FIELD_PREFIX):
+                del state[name]
+        checkpoint[_REFERENCE_BASE_SHA_KEY] = self.base_checkpoint_sha256
+
+    @jaxtyped(typechecker=beartype)
     def on_load_checkpoint(self, checkpoint: dict[str, object]) -> None:
-        """Refuse checkpoints that predate the evaluation EMA trajectory.
+        """Refuse a checkpoint predating the eval EMA, and restore the omitted reference.
 
         :param checkpoint: Mutable Lightning checkpoint payload.
         :raises ValueError: The checkpoint has no saved evaluation EMA state.
@@ -241,7 +264,41 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
                 "checkpoint is missing the eval EMA trajectory; legacy RAM checkpoints "
                 "cannot reconstruct it from final policy weights"
             )
+        self._restore_reference_field(checkpoint, state)
         super().on_load_checkpoint(checkpoint)
+
+    @jaxtyped(typechecker=beartype)
+    def _restore_reference_field(
+        self, checkpoint: Mapping[str, object], state: Mapping[str, object]
+    ) -> None:
+        """Put this module's reference weights back where the save hook removed them.
+
+        ``__init__`` has already rebuilt them from ``base_checkpoint``, so the identity
+        check is on that base rather than on the weights themselves.
+
+        :param checkpoint: Lightning checkpoint payload.
+        :param state: The payload's state dictionary.
+        :raises TypeError: ``state`` cannot be written back into.
+        :raises ValueError: The module was built from a different base, or none.
+        """
+        stamped = checkpoint.get(_REFERENCE_BASE_SHA_KEY)
+        if stamped is None:
+            return
+        if self.base_checkpoint_sha256 is None:
+            raise ValueError(
+                "checkpoint omits reference_field weights; load it with the "
+                f"base_checkpoint whose sha256 is {stamped}"
+            )
+        if self.base_checkpoint_sha256 != stamped:
+            raise ValueError(
+                f"checkpoint was cut from base sha256={stamped}, but this module loaded "
+                f"sha256={self.base_checkpoint_sha256}"
+            )
+        if not isinstance(state, MutableMapping):
+            raise TypeError("Lightning checkpoint state_dict must be a mutable mapping")
+        for name, value in self.state_dict().items():
+            if name.startswith(_REFERENCE_FIELD_PREFIX):
+                state[name] = value
 
     @jaxtyped(typechecker=beartype)
     def on_train_start(self) -> None:
