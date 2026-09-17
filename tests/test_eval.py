@@ -493,7 +493,9 @@ def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/eval_flow_sketch_nsynth"],
+            # eval.yaml defaults to trainer=gpu, and evaluate() builds the Trainer
+            # before it reads ckpt_path, so a CPU-only runner would raise first.
+            overrides=["experiment=surge/eval_flow_sketch_nsynth", "trainer=cpu"],
         )
     with open_dict(cfg):
         cfg.ckpt_path = "???"
