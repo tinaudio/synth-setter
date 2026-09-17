@@ -165,3 +165,24 @@ def test_cqt_audio_encoder_invalid_configuration_raises(
     """
     with pytest.raises(ValueError, match=message):
         CqtAudioEncoder(**kwargs)
+
+
+def test_compiled_cqt_conditioning_matches_eager_conditioning() -> None:
+    """The online CQT profile compiles now that #3572 lifted the jaxtyping block."""
+    sample_rate = 16_000
+    audio = _tones(rows=2, channels=1, samples=4_000, sample_rate=sample_rate)
+    encoder = PretrainedConditioningEncoder(
+        backbone=CqtAudioEncoder(sample_rate=sample_rate),
+        head=EmbeddingPool(
+            embed_dim=CQT_EMBEDDING_DIM,
+            d_model=8,
+            num_heads=2,
+            max_seq_len=cqt_num_frames(4_000, sample_rate),
+        ),
+        out_dim=8,
+    )
+    expected = encoder(audio)
+
+    encoder.compile(backend="eager")
+
+    assert torch.allclose(encoder(audio), expected, atol=1e-5)
