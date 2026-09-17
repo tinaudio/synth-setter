@@ -1,5 +1,10 @@
 """Behavior tests for the jaxtyping/Dynamo type-check bypass."""
 
+import ast
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 import torch
 from beartype import beartype
@@ -8,6 +13,8 @@ from jaxtyping import _config as jaxtyping_config
 from torch import Tensor, nn
 
 from synth_setter.models.dynamo_typecheck import install_dynamo_typecheck_bypass
+
+_MODELS_DIR = Path(__file__).resolve().parents[2] / "src/synth_setter/models"
 
 
 class _Doubler(nn.Module):
@@ -43,3 +50,65 @@ def test_repeated_installation_keeps_eager_type_checking_on() -> None:
 
     with pytest.raises(TypeCheckError):
         _Doubler()(torch.zeros(2, 3, dtype=torch.int64))
+
+
+def test_importing_the_models_package_does_not_import_torch() -> None:
+    """The package root stays torch-free so coverage can resolve a submodule source.
+
+    `coverage run --source=synth_setter.models.<mod>` resolves that source by importing the
+    parent package before conftest runs. Pulling torch in there re-enters `torch/__init__` and
+    aborts the interpreter in `torch._C` — see #3572.
+    """
+    probe = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [sys.executable, "-c", "import synth_setter.models, sys; print('torch' in sys.modules)"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+    assert probe.returncode == 0, probe.stdout + probe.stderr
+    assert probe.stdout.strip() == "False", "synth_setter.models must not import torch at import"
+
+
+def _compiling_setups() -> list[tuple[str, ast.FunctionDef]]:
+    """Return every ``setup`` in the models package that compiles a submodule.
+
+    :returns: Pairs of module filename and its ``setup`` definition.
+    """
+    found: list[tuple[str, ast.FunctionDef]] = []
+    for path in sorted(Path(_MODELS_DIR).glob("*.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef) or node.name != "setup":
+                continue
+            calls = {
+                child.func.attr
+                for child in ast.walk(node)
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+            }
+            if "compile" in calls:
+                found.append((path.name, node))
+    return found
+
+
+def test_every_compiling_setup_installs_the_bypass() -> None:
+    """A compile site that skips the install silently loses the #3572 fix.
+
+    The bypass is installed per compile site rather than at package import, because importing
+    torch from ``synth_setter/models/__init__.py`` aborts the interpreter under coverage.
+    """
+    setups = _compiling_setups()
+
+    assert setups, "no compiling setup() found — the guard would pass vacuously"
+    missing = [
+        name
+        for name, node in setups
+        if "install_dynamo_typecheck_bypass"
+        not in {
+            child.func.id
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+        }
+    ]
+    assert not missing, f"compile sites without the jaxtyping bypass: {missing}"

@@ -35,6 +35,7 @@ from synth_setter.metrics import (
 from synth_setter.model_cache import retry_external_io
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 from synth_setter.models.components.sketch_tokens import CONTROL_GROUPS, SketchControlTokens
+from synth_setter.models.dynamo_typecheck import install_dynamo_typecheck_bypass
 
 _BATCH_SHAPE = "batch"
 _BATCH_ANY_SHAPE = "batch ..."
@@ -1558,6 +1559,7 @@ class VSTFlowMatchingModule(LightningModule):
 
     def setup(self, stage: str) -> None:
         if self.hparams.compile and stage == "fit":
+            install_dynamo_typecheck_bypass()
             self.vector_field.compile()
             self.encoder.compile()
 

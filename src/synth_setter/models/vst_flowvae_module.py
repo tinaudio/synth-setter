@@ -6,6 +6,8 @@ import torch
 from lightning import LightningModule
 from lightning.pytorch.utilities import grad_norm
 
+from synth_setter.models.dynamo_typecheck import install_dynamo_typecheck_bypass
+
 
 class VSTFlowVAEModule(LightningModule):
     """Flow-VAE LightningModule that learns a latent flow and a regression flow to params."""
@@ -130,6 +132,7 @@ class VSTFlowVAEModule(LightningModule):
 
     def setup(self, stage: str) -> None:
         if self.hparams.compile and stage == "fit":
+            install_dynamo_typecheck_bypass()
             self.net.compile()
 
     def on_before_optimizer_step(self, optimizer) -> None:
