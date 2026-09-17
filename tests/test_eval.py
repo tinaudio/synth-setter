@@ -1266,7 +1266,7 @@ def test_eval_torchsynth_flow_logs_grouped_per_param_metrics_by_default(
         GlobalHydra.instance().clear()
 
     assert torch.isfinite(
-        metric_dict["val/number_group_optimal_assignment_mse/adsr_1.attack"]
+        metric_dict["val/number_group_optimal_assignment_mse/adsr_N.attack"]
     ).all()
 
 
