@@ -56,7 +56,6 @@ from synth_setter.data.vst.shapes import (
     SKETCH_PITCH_SLICE,
     SKETCH_STRUCT_FIELD,
     SKETCH_VEC_CHILD,
-    T5GEMMA_FIELD,
     dataset_field_shapes,
 )
 from synth_setter.features.sketch_controls import (
@@ -65,7 +64,6 @@ from synth_setter.features.sketch_controls import (
     sketch_num_frames,
 )
 from synth_setter.model_cache import checkpoint_tree_sha256
-from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     CQT_EMBEDDING_DIM,
@@ -78,14 +76,11 @@ from synth_setter.pipeline.data.add_embeddings import (
     EmbeddingSpec,
     Encoder,
     IndexSpec,
-    ParamTextEncodeFn,
     _configure_lance_logging,
     _downmix_to_mono,
-    _encode_t5gemma_column,
     _load_clap_spec_encoder,
     _load_m2l_spec_encoder,
     _load_same_spec_encoder,
-    _load_t5gemma_spec_encoder,
     _matching_index_exists,
     _missing_embedding_specs,
     _prepare_resume_cache,
@@ -415,7 +410,6 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "clap",
         "cqt",
         "m2l",
-        "param_shift",
         "pupujepa_large",
         "pupujepa_tiny",
         "pyfdn_sketch",
@@ -423,7 +417,6 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         "same_s",
         "sketch",
         "ssondo",
-        "t5gemma",
         "matpac_plus",
         "meanaudio_16k",
     }
@@ -451,8 +444,6 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
         pool="mean", vector_column=f"{SAME_L_FIELD}_vec"
     )
     assert EMBEDDING_REGISTRY["ssondo"].index == IndexSpec(pool="none", vector_dim=960)
-    assert EMBEDDING_REGISTRY["t5gemma"].index is None
-    assert EMBEDDING_REGISTRY["t5gemma"].input_fields == (PARAM_ARRAY_FIELD,)
     assert EMBEDDING_REGISTRY["clap"].co_resident is True
     assert EMBEDDING_REGISTRY["m2l"].co_resident is True
     assert EMBEDDING_REGISTRY["pupujepa_tiny"].co_resident is False
@@ -463,7 +454,6 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     assert EMBEDDING_REGISTRY["same_s"].co_resident is False
     assert EMBEDDING_REGISTRY["same_l"].co_resident is False
     assert EMBEDDING_REGISTRY["ssondo"].co_resident is True
-    assert EMBEDDING_REGISTRY["t5gemma"].co_resident is False
     assert EMBEDDING_REGISTRY["matpac_plus"].co_resident is False
     assert EMBEDDING_REGISTRY["meanaudio_16k"].index == IndexSpec(
         pool="mean",
@@ -1611,24 +1601,6 @@ def test_add_embeddings_existing_artifact_identity_mismatch_raises(
         add_embeddings(
             AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("clap",), build_index=False)
         )
-
-
-def test_t5gemma_artifact_identity_includes_parameter_text_policy() -> None:
-    """Text embeddings from different parameter policies are incompatible."""
-    spec = _fake_spec("t5gemma")
-    surge_xt = AddEmbeddingsConfig(
-        lance_uri=_LANCE_URI,
-        embeddings=("t5gemma",),
-        param_spec_name="surge_xt",
-        param_text_normalizer="param_names",
-    )
-    surge_4 = surge_xt.model_copy(update={"param_spec_name": "surge_4"})
-    alternate_normalizer = surge_xt.model_copy(update={"param_text_normalizer": "future_policy"})
-
-    assert _resolve_artifact_identity(spec, surge_xt) != _resolve_artifact_identity(spec, surge_4)
-    assert _resolve_artifact_identity(spec, surge_xt) != _resolve_artifact_identity(
-        spec, alternate_normalizer
-    )
 
 
 def test_add_embeddings_partial_policy_columns_raise(
@@ -3352,145 +3324,6 @@ def test_add_embeddings_main_with_registry_selection_writes_requested_columns(
     assert checkpoints == ["custom/same-s"]
 
 
-def _install_fake_t5gemma(
-    monkeypatch: pytest.MonkeyPatch, seen: list[np.ndarray] | None = None
-) -> None:
-    """Install a dependency-free t5gemma entry recording its encoder input.
-
-    :param monkeypatch: Fixture restoring the registry entry after the test.
-    :param seen: Optional list receiving each encoded param batch.
-    """
-
-    def load(checkpoint: str, config: AddEmbeddingsConfig) -> Callable[..., np.ndarray]:
-        del checkpoint, config
-
-        def encode(rows: np.ndarray) -> np.ndarray:
-            if seen is not None:
-                seen.append(rows)
-            return np.zeros((len(rows), 4, 5), dtype=np.float32)
-
-        return encode
-
-    monkeypatch.setitem(
-        EMBEDDING_REGISTRY,
-        "t5gemma",
-        replace(
-            EMBEDDING_REGISTRY["t5gemma"],
-            load_encoder=load,
-            resolve_artifact_identity=lambda checkpoint: f"fake:t5gemma:{checkpoint}",
-        ),
-    )
-
-
-def test_add_embeddings_with_param_array_spec_feeds_encoder_param_rows_not_audio(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A param-sourced embedding reads param_array, leaving audio untouched.
-
-    :param tmp_path: Scratch directory for the shard.
-    :param monkeypatch: Fixture installing the dependency-free t5gemma entry.
-    """
-    uri = tmp_path / "t5gemma.lance"
-    write_minimal_lance_shard(uri, build_lance_smoke_spec())
-    seen: list[np.ndarray] = []
-    _install_fake_t5gemma(monkeypatch, seen)
-
-    add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(uri),
-            embeddings=("t5gemma",),
-            build_index=False,
-            param_spec_name="surge_simple",
-        )
-    )
-
-    expected = (
-        lance.dataset(str(uri))
-        .to_table(columns=[PARAM_ARRAY_FIELD])
-        .column(PARAM_ARRAY_FIELD)
-        .combine_chunks()
-        .to_numpy_ndarray()
-    )
-    np.testing.assert_array_equal(seen[-1], expected)
-
-
-def test_add_embeddings_with_param_array_spec_writes_fixed_shape_tensor_column(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The param-sourced embedding lands as a fixed-shape tensor column.
-
-    :param tmp_path: Scratch directory for the shard.
-    :param monkeypatch: Fixture installing the dependency-free t5gemma entry.
-    """
-    uri = tmp_path / "t5gemma.lance"
-    write_minimal_lance_shard(uri, build_lance_smoke_spec())
-    _install_fake_t5gemma(monkeypatch)
-
-    add_embeddings(
-        AddEmbeddingsConfig(
-            lance_uri=str(uri),
-            embeddings=("t5gemma",),
-            build_index=False,
-            param_spec_name="surge_simple",
-        )
-    )
-
-    column_type = lance.dataset(str(uri)).schema.field(T5GEMMA_FIELD).type
-    assert isinstance(column_type, pa.FixedShapeTensorType)
-    assert column_type.shape == [4, 5]
-
-
-def test_t5gemma_encoder_with_param_rows_wider_than_its_spec_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A param spec that does not describe the dataset fails instead of mislabeling it.
-
-    :param monkeypatch: Fixture replacing the heavyweight text-model load.
-    """
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.t5gemma.load_t5gemma_text_encoder",
-        lambda checkpoint, device: lambda prompts: np.zeros((len(prompts), 4, 5), np.float32),
-    )
-    config = AddEmbeddingsConfig(
-        lance_uri="unused.lance", embeddings=("t5gemma",), param_spec_name="surge_4"
-    )
-    encode = cast("ParamTextEncodeFn", _load_t5gemma_spec_encoder("unused-checkpoint", config))
-    surge_4_width = resolve_param_spec(ParamSpecName("surge_4")).encoded_width
-
-    with pytest.raises(ValueError, match="encoded width"):
-        encode(np.zeros((2, surge_4_width + 1), dtype=np.float32))
-
-
-def test_t5gemma_encoder_with_matching_param_rows_encodes_one_caption_per_row(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Correctly shaped param rows become one prompt per row.
-
-    :param monkeypatch: Fixture replacing the heavyweight text-model load.
-    """
-    seen: list[list[str]] = []
-
-    def fake_load(checkpoint: str, device: str) -> Callable[[list[str]], np.ndarray]:
-        del checkpoint, device
-
-        def encode_text(prompts: list[str]) -> np.ndarray:
-            seen.append(prompts)
-            return np.zeros((len(prompts), 4, 5), dtype=np.float32)
-
-        return encode_text
-
-    monkeypatch.setattr("synth_setter.pipeline.data.t5gemma.load_t5gemma_text_encoder", fake_load)
-    config = AddEmbeddingsConfig(
-        lance_uri="unused.lance", embeddings=("t5gemma",), param_spec_name="surge_4"
-    )
-    spec = resolve_param_spec(ParamSpecName("surge_4"))
-    encode = cast("ParamTextEncodeFn", _load_t5gemma_spec_encoder("unused-checkpoint", config))
-
-    encode(np.zeros((3, spec.encoded_width), dtype=np.float32))
-
-    assert seen == [[", ".join(spec.names)] * 3]
-
-
 def test_add_embeddings_config_without_lance_uri_raises() -> None:
     """An augmentation run requires one Lance dataset."""
     with pytest.raises(ValidationError, match="lance_uri"):
@@ -3503,49 +3336,6 @@ def test_add_embeddings_config_with_dataset_root_target_raises() -> None:
         AddEmbeddingsConfig.model_validate(
             {"dataset_root_uri": "dataset", "embeddings": ("matpac_plus",)}
         )
-
-
-def test_add_embeddings_config_with_t5gemma_and_no_param_spec_raises() -> None:
-    """A param-sourced embedding cannot run without knowing its parameter space."""
-    with pytest.raises(ValidationError, match="require param_spec_name"):
-        AddEmbeddingsConfig(lance_uri="x.lance", embeddings=("t5gemma",))
-
-
-def test_add_embeddings_config_with_audio_embeddings_needs_no_param_spec() -> None:
-    """Audio-sourced embeddings are unaffected by the param-spec requirement."""
-    config = AddEmbeddingsConfig(lance_uri="x.lance", embeddings=("clap",))
-
-    assert config.param_spec_name is None
-
-
-def test_add_embeddings_config_with_unknown_param_spec_name_raises() -> None:
-    """An unregistered param spec is rejected at config time."""
-    with pytest.raises(ValidationError, match="param_spec_name"):
-        AddEmbeddingsConfig(
-            lance_uri="x.lance", embeddings=("t5gemma",), param_spec_name="not_a_synth"
-        )
-
-
-def test_add_embeddings_config_with_unknown_text_normalizer_raises() -> None:
-    """An unregistered text normalizer is rejected at config time."""
-    with pytest.raises(ValidationError, match="param_text_normalizer"):
-        AddEmbeddingsConfig(
-            lance_uri="x.lance",
-            embeddings=("t5gemma",),
-            param_spec_name="surge_4",
-            param_text_normalizer="not_a_strategy",
-        )
-
-
-def test_add_embeddings_config_composition_defaults_the_text_normalizer() -> None:
-    """The shipped Hydra config exposes the param-text defaults."""
-    cfg = _compose_add_embeddings()
-    try:
-        config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
-    finally:
-        GlobalHydra.instance().clear()
-
-    assert (config.param_spec_name, config.param_text_normalizer) == (None, "param_names")
 
 
 def test_load_m2l_spec_encoder_passes_the_configured_device(
@@ -3604,35 +3394,6 @@ def test_load_same_spec_encoder_passes_the_checkpoint_and_configured_device(
     )
 
     assert seen == [("custom/same-s", "cpu")]
-
-
-def test_load_t5gemma_spec_encoder_without_a_param_spec_raises() -> None:
-    """Calling the loader outside config validation still refuses to guess a param spec."""
-    config = AddEmbeddingsConfig(lance_uri="x.lance", embeddings=("clap",))
-
-    with pytest.raises(ValueError, match="require param_spec_name"):
-        _load_t5gemma_spec_encoder("unused-checkpoint", config)
-
-
-@pytest.mark.parametrize(
-    ("shape", "reason"),
-    [((2, 4), "rank"), ((1, 4, 5), "row count")],
-)
-def test_encode_t5gemma_column_with_malformed_encoder_output_raises(
-    shape: tuple[int, ...], reason: str
-) -> None:
-    """A conditioner returning the wrong rank or row count fails before the Arrow write.
-
-    :param shape: Malformed encoder output shape.
-    :param reason: What the shape gets wrong, named for readability.
-    """
-    del reason
-    params = np.zeros((2, 7), dtype=np.float32)
-
-    with pytest.raises(ValueError, match="expected 2 rows"):
-        _encode_t5gemma_column(
-            {PARAM_ARRAY_FIELD: params}, 44100, lambda _: np.zeros(shape, dtype=np.float32)
-        )
 
 
 def _struct_sketch_controls(struct: pa.StructArray) -> np.ndarray:

@@ -65,7 +65,6 @@ from synth_setter.models.components.transformer import (
 )
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
-from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 from synth_setter.models.vst_flow_ram_module import VSTFlowRAMModule
 from synth_setter.pipeline import r2_io
@@ -3429,7 +3428,6 @@ _ALL_EMBEDDING_CONDITIONING_PROFILES = (
     "same_s",
     "same_l",
     "ssondo",
-    "t5gemma",
     "matpac_plus",
     "meanaudio_16k",
 )
@@ -3458,56 +3456,6 @@ def _assert_conditioning_checkpoint_validates(cfg: DictConfig, output_dir: Path)
     finally:
         GlobalHydra.instance().clear()
 
-    assert torch.isfinite(eval_metric_dict["val/param_mse"])
-
-
-def _assert_t5gemma_feed_forward_checkpoint_validates(
-    output_dir: Path, dataset_root: Path, param_spec_name: str
-) -> None:
-    """Train the T5Gemma feed-forward model, then validate the checkpoint it produced.
-
-    :param output_dir: Training output dir; evaluation runs from its ``evaluation`` child.
-    :param dataset_root: Lance root already carrying the real ``t5gemma`` column.
-    :param param_spec_name: Parameter specification driving model width.
-    """
-    cfg = build_surge_xt_embedding_train_cfg(
-        output_dir,
-        dataset_root,
-        param_spec_name=param_spec_name,
-        conditioning="t5gemma",
-        architecture="feed_forward",
-    )
-    HydraConfig().set_config(cfg)
-    try:
-        metric_dict, object_dict = train(cfg)
-    finally:
-        GlobalHydra.instance().clear()
-
-    trainer = object_dict["trainer"]
-    assert isinstance(object_dict["model"], VSTFeedForwardModule)
-    assert trainer.global_step >= 1, (
-        f"T5Gemma feed-forward trainer did not advance: global_step={trainer.global_step}"
-    )
-    assert_finite_train_loss(metric_dict)
-
-    checkpoint_path = output_dir / "checkpoints" / "last.ckpt"
-    assert checkpoint_path.is_file()
-
-    eval_cfg = cfg.copy()
-    eval_output_dir = output_dir / "evaluation"
-    with open_dict(eval_cfg):
-        eval_cfg.paths.output_dir = str(eval_output_dir)
-        eval_cfg.paths.log_dir = str(eval_output_dir)
-        eval_cfg.ckpt_path = str(checkpoint_path)
-        eval_cfg.mode = "validate"
-        eval_cfg.trainer.limit_val_batches = 1
-    HydraConfig().set_config(eval_cfg)
-    try:
-        eval_metric_dict, eval_object_dict = evaluate(eval_cfg)
-    finally:
-        GlobalHydra.instance().clear()
-
-    assert isinstance(eval_object_dict["model"], VSTFeedForwardModule)
     assert torch.isfinite(eval_metric_dict["val/param_mse"])
 
 
@@ -3781,7 +3729,3 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
             _assert_model_predictions_depend_on_conditioning(object_dict)
         if conditioning == "ssondo":
             _assert_conditioning_checkpoint_validates(cfg, tmp_path / conditioning)
-
-    _assert_t5gemma_feed_forward_checkpoint_validates(
-        tmp_path / "t5gemma-feed-forward", dataset_root, param_spec_name
-    )

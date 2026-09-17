@@ -306,8 +306,7 @@ requires-dist = [
   "torchaudio>=2.4",
 ]
 
-# Package-scoped metadata relaxes SA3's torch pins without collapsing cpu/cu128 routing;
-# float32 parity evidence lives in scripts/dev/sa3_t5gemma_parity.py.
+# Package-scoped metadata relaxes SA3's torch pins without collapsing cpu/cu128 routing.
 [[tool.uv.dependency-metadata]]
 name = "stable-audio-3"
 version = "0.1.0"

@@ -64,7 +64,6 @@ _EMBEDDING_KEYS = (
     "same_s",
     "same_l",
     "ssondo",
-    "t5gemma",
     "matpac_plus",
     "meanaudio_16k",
 )
@@ -72,7 +71,6 @@ _EMBEDDING_E2E_CHECKPOINTS = {
     "clap": embedding_model_dir("clap-htsat-unfused"),
     "same_l": embedding_model_dir("same-l"),
     "same_s": embedding_model_dir("same-s"),
-    "t5gemma": embedding_model_dir("sa3-small-music"),
 }
 
 
@@ -1609,13 +1607,6 @@ def local_embedding_checkpoints() -> dict[str, str]:
         ),
         _EMBEDDING_E2E_CHECKPOINTS["same_s"]: ("model_config.json", "model.safetensors"),
         _EMBEDDING_E2E_CHECKPOINTS["same_l"]: ("model_config.json", "model.safetensors"),
-        _EMBEDDING_E2E_CHECKPOINTS["t5gemma"]: (
-            "model_config.json",
-            "model.safetensors",
-            "t5gemma-b-b-ul2/config.json",
-            "t5gemma-b-b-ul2/model.safetensors",
-            "t5gemma-b-b-ul2/tokenizer.json",
-        ),
     }
     missing = [
         directory / filename
@@ -2136,10 +2127,8 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         SAME_L_FIELD,
         SAME_S_FIELD,
         SSONDO_FIELD,
-        T5GEMMA_FIELD,
     )
     from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY
-    from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
 
     train_lance = dataset_root / "train.lance"
     _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
@@ -2154,7 +2143,6 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         SAME_S_FIELD,
         SAME_L_FIELD,
         SSONDO_FIELD,
-        T5GEMMA_FIELD,
         MATPAC_PLUS_FIELD,
         MEANAUDIO_16K_FIELD,
     } <= set(dataset.schema.names)
@@ -2168,7 +2156,6 @@ def assert_embedding_columns(dataset_root: Path) -> None:
             SAME_S_FIELD,
             SAME_L_FIELD,
             SSONDO_FIELD,
-            T5GEMMA_FIELD,
             MATPAC_PLUS_FIELD,
             MEANAUDIO_16K_FIELD,
         ]
@@ -2182,7 +2169,6 @@ def assert_embedding_columns(dataset_root: Path) -> None:
     same_s = table.column(SAME_S_FIELD).combine_chunks().to_numpy_ndarray()
     same_l = table.column(SAME_L_FIELD).combine_chunks().to_numpy_ndarray()
     ssondo = np.stack(table.column(SSONDO_FIELD).to_numpy(zero_copy_only=False))
-    t5gemma = table.column(T5GEMMA_FIELD).combine_chunks().to_numpy_ndarray()
     matpac_plus = table.column(MATPAC_PLUS_FIELD).combine_chunks().to_numpy_ndarray()
     meanaudio_16k = table.column(MEANAUDIO_16K_FIELD).combine_chunks().to_numpy_ndarray()
 
@@ -2204,16 +2190,6 @@ def assert_embedding_columns(dataset_root: Path) -> None:
         assert np.linalg.norm(flat, axis=1).min() > 0, f"{name} contains a zero row"
         assert flat.std(axis=1).min() > 0, f"{name} contains a constant row"
         assert not np.array_equal(values[0], values[1]), f"{name} collapsed distinct inputs"
-
-    assert t5gemma.shape == (
-        _EMBEDDING_E2E_ROWS,
-        T5GEMMA_EMBEDDING_DIM,
-        T5GEMMA_MAX_LENGTH,
-    )
-    assert t5gemma.dtype == np.float32
-    assert np.isfinite(t5gemma).all()
-    assert np.linalg.norm(t5gemma.reshape(_EMBEDDING_E2E_ROWS, -1), axis=1).min() > 0
-    np.testing.assert_array_equal(t5gemma[0], t5gemma[1])
 
 
 def augment_lance_splits_with_same(dataset_root: Path, conditioning: str) -> Path:

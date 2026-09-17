@@ -106,15 +106,9 @@ jobs:
           - name: pipeline-param-language
             patterns:
               - synth_setter.pipeline.data.param_language.*
-          - name: pipeline-param-shift
-            patterns:
-              - synth_setter.pipeline.data.param_shift.*
           - name: pipeline-ssondo
             patterns:
               - synth_setter.pipeline.data.ssondo.*
-          - name: pipeline-t5gemma
-            patterns:
-              - synth_setter.pipeline.data.t5gemma.*
           - name: pipeline-matpac-plus
             patterns:
               - synth_setter.pipeline.data.matpac_plus.*

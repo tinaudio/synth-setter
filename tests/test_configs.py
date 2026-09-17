@@ -27,7 +27,6 @@ from synth_setter.models.components.rendered_reward import (
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.data.meanaudio import MEANAUDIO_EMBEDDING_DIM
-from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
 from synth_setter.pupujepa import (
     DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
@@ -352,7 +351,6 @@ def _compose(config_name: str, overrides: Sequence[str]) -> DictConfig:
         pytest.param("cqt", (256, 401), id="cqt"),
         pytest.param("same_s", (256, 44), id="same-s"),
         pytest.param("same_l", (256, 44), id="same-l"),
-        pytest.param("t5gemma", (T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH), id="t5gemma"),
         pytest.param("matpac_plus", (MATPAC_PLUS_FRONTEND.embedding_dim, 25), id="matpac_plus"),
         pytest.param("meanaudio_16k", (MEANAUDIO_EMBEDDING_DIM, 125), id="meanaudio_16k"),
     ],
@@ -467,93 +465,6 @@ def test_sketch_on_profile_composes_with_m2l_and_trains_one_step() -> None:
     assert batch["conditioning"].shape == (2, 128, 42)
     assert batch["sketch_ctrl"].shape == (2, NUM_SKETCH_CONTROLS, 32)
     loss = model._train_step(batch).loss  # noqa: SLF001
-    assert torch.isfinite(loss)
-
-
-def _compose_t5gemma_cached_train_cfg(
-    model_name: str, model_overrides: Sequence[str]
-) -> DictConfig:
-    """Compose a one-step CPU train cfg reading synthetic T5Gemma batches.
-
-    :param model_name: VST model config selected for the training step.
-    :param model_overrides: Tiny-network overrides that keep the regression CPU-fast.
-    :returns: The composed config.
-    """
-    return _compose(
-        "train.yaml",
-        [
-            "datamodule=surge_lance",
-            "synth=surge_xt",
-            f"model={model_name}",
-            "conditioning=t5gemma",
-            "trainer=cpu",
-            "+trainer.max_steps=1",
-            "paths.output_dir=/tmp/synth-setter-test",
-            "+datamodule.fake=true",
-            "datamodule.batch_size=2",
-            "datamodule.num_workers=0",
-            "datamodule.persistent_workers=false",
-            "model.compile=false",
-            *model_overrides,
-        ],
-    )
-
-
-@pytest.mark.parametrize(
-    ("model_name", "model_overrides", "expected_output_dim"),
-    [
-        (
-            "vst_flow",
-            [
-                "model.vector_field.d_ff=16",
-                "model.vector_field.d_model=16",
-                "model.vector_field.num_heads=1",
-                "model.vector_field.num_layers=1",
-                "model.vector_field.projection.num_tokens=4",
-            ],
-            16,
-        ),
-        (
-            "vst_ffn",
-            [
-                "model.net.d_model=16",
-                "model.net.n_heads=1",
-                "model.net.n_layers=1",
-            ],
-            300,
-        ),
-    ],
-    ids=["flow", "feed_forward"],
-)
-def test_t5gemma_conditioning_profile_cached_batch_trains(
-    model_name: str,
-    model_overrides: list[str],
-    expected_output_dim: int,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The T5Gemma profile trains either VST model from its cached Lance tensor.
-
-    :param model_name: VST model config selected for the training step.
-    :param model_overrides: Tiny-network overrides that keep the regression CPU-fast.
-    :param expected_output_dim: Model-owned cached encoder output width.
-    :param monkeypatch: Pytest fixture used to detach Lightning logging from a Trainer.
-    """
-    cfg = _compose_t5gemma_cached_train_cfg(model_name, model_overrides)
-    datamodule = hydra.utils.instantiate(cfg.datamodule)
-    model = hydra.utils.instantiate(cfg.model)
-    monkeypatch.setattr(model, "log", lambda *args, **kwargs: None)
-
-    datamodule.setup("fit")
-    batch = next(iter(datamodule.train_dataloader()))
-    loss = model.training_step(batch, batch_idx=0)
-
-    assert datamodule.embedding_conditioning is not None
-    assert datamodule.embedding_conditioning.column == "t5gemma"
-    assert datamodule.embedding_conditioning.input_shape == (768, 256)
-    assert batch["conditioning"].shape == (2, 768, 256)
-    assert cfg.model.encoder_output_dim == expected_output_dim
-    assert cfg.model.encoder.d_model == expected_output_dim
-    assert loss.ndim == 0
     assert torch.isfinite(loss)
 
 
