@@ -294,25 +294,25 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "synth", ["pyfdn_n8_mono_householder", "pyfdn_n8_mono_householder_vector"]
+    "cfg_dataset_pyfdn_householder",
+    ["pyfdn_n8_mono_householder", "pyfdn_n8_mono_householder_vector"],
+    indirect=True,
 )
 def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
     cfg_dataset_pyfdn_householder: DictConfig,
     tmp_path: Path,
-    synth: str,
 ) -> None:
     """Generate pyFDN data, train through FLAMO, then reload and evaluate its checkpoint.
 
-    :param cfg_dataset_pyfdn_householder: Real local pyFDN producer configuration.
+    :param cfg_dataset_pyfdn_householder: Real local pyFDN producer configuration, composed at the
+        feedback topology shared by data generation and differentiable training.
     :param tmp_path: Root for generated, checkpoint, metric, and audio artifacts.
-    :param synth: Feedback topology shared by data generation and differentiable training.
     """
     from synth_setter.data.vst.writers import make_lance_dataset
     from synth_setter.pipeline.data.stats import finalize, fold_lance_shard_into_welford
 
+    synth = cfg_dataset_pyfdn_householder.synth.name
     with open_dict(cfg_dataset_pyfdn_householder):
-        cfg_dataset_pyfdn_householder.synth.name = synth
-        cfg_dataset_pyfdn_householder.synth.param_spec_name = synth
         cfg_dataset_pyfdn_householder.train_val_test_sizes = [2, 2, 2]
         cfg_dataset_pyfdn_householder.render.samples_per_shard = 2
         cfg_dataset_pyfdn_householder.render.min_loudness = -100.0
@@ -895,7 +895,7 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         assert values, f"no {prefix} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
     assert torch.isfinite(
-        metric_dict["val/number_group_optimal_assignment_mse/adsr_1.attack"]
+        metric_dict["val/number_group_optimal_assignment_mse/adsr_N.attack"]
     ).all()
 
     checkpoint = tmp_path / "checkpoints" / "last.ckpt"
