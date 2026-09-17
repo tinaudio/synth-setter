@@ -66,10 +66,18 @@ fi
 action_required=0
 wait_required=0
 
+# A rerun leaves every earlier run of the same check in the rollup, so the newest
+# run per (workflow, name) decides the gate. The key keeps the workflow, because
+# two workflows legitimately publish the same check name (e.g. `code-quality`).
+readonly NEWEST_RUN_PER_CHECK='
+  group_by([.workflow, .name]) | map(max_by(.startedAt // ""))
+'
+
 checks_rc=0
-checks=$(gh pr checks "$PR" --json name,state,bucket,link 2>&1) \
+checks=$(gh pr checks "$PR" --json name,state,bucket,link,startedAt,workflow 2>&1) \
   || checks_rc=$?
-if [[ "$checks_rc" -eq 1 && "$checks" == *"unknown flag: --json"* ]]; then
+if [[ "$checks_rc" -eq 1 && ("$checks" == *"unknown flag: --json"* \
+  || "$checks" == *"Unknown JSON field"*) ]]; then
   rollup=$(gh pr view "$PR" --json statusCheckRollup 2>&1) \
     || fail_env "gh pr view ${PR} check fallback failed: ${rollup}"
   jq -e '.statusCheckRollup | type == "array"' >/dev/null 2>&1 \
@@ -90,7 +98,9 @@ if [[ "$checks_rc" -eq 1 && "$checks" == *"unknown flag: --json"* ]]; then
     elif .state == "PENDING" or .state == "EXPECTED" then "pending"
     elif .state == "FAILURE" or .state == "ERROR" then "fail"
     else "pass" end),
-    link: (.detailsUrl // .targetUrl)
+    link: (.detailsUrl // .targetUrl),
+    startedAt: .startedAt,
+    workflow: .workflowName
   }]' <<<"$rollup")
   if [[ "$(jq 'length' <<<"$checks")" -eq 0 ]]; then
     checks="no checks reported on PR #${PR}"
@@ -110,6 +120,7 @@ if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$checks"; then
     fail_env "gh pr checks ${PR} returned non-JSON: ${checks}"
   fi
 else
+  checks=$(jq "${NEWEST_RUN_PER_CHECK}" <<<"$checks")
   failed_checks=$(jq -r '
     .[] | select(.bucket == "fail" or .bucket == "cancel")
     | "  - \(.name) (\(.state)) — " + (.link // "no URL")
