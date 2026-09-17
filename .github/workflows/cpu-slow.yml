@@ -52,11 +52,18 @@ jobs:
         with:
           python-version: "3.12.13"
 
+      # surgepy builds from source, so a cached wheel links the builder image's glibc and the
+      # 22.04 and 24.04 lanes must not share a key (#3507). The env context cannot see the
+      # runner's own ImageOS, so the image id is republished through $GITHUB_ENV first.
+      - name: Publish the runner image id
+        run: echo "RUNNER_IMAGE_OS=${ImageOS:-unknown}" >> "$GITHUB_ENV"
+
       - name: Install uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.11.28"
           enable-cache: true
+          cache-suffix: ${{ env.RUNNER_IMAGE_OS }}
 
       - name: Install CPU test dependencies
         run: uv sync --frozen --extra cpu --no-default-groups --group dev
@@ -120,11 +127,18 @@ jobs:
         with:
           python-version: "3.12.13"
 
+      # surgepy builds from source, so a cached wheel links the builder image's glibc and the
+      # 22.04 and 24.04 lanes must not share a key (#3507). The env context cannot see the
+      # runner's own ImageOS, so the image id is republished through $GITHUB_ENV first.
+      - name: Publish the runner image id
+        run: echo "RUNNER_IMAGE_OS=${ImageOS:-unknown}" >> "$GITHUB_ENV"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.11.28"
           enable-cache: true
+          cache-suffix: ${{ env.RUNNER_IMAGE_OS }}
 
       # Frozen sync, CPU torch via [tool.uv.sources] — see test.yml for rationale.
       - name: Install dependencies (uv sync --frozen, CPU torch)
@@ -332,11 +346,18 @@ jobs:
         with:
           python-version: "3.12.13"
 
+      # surgepy builds from source, so a cached wheel links the builder image's glibc and the
+      # 22.04 and 24.04 lanes must not share a key (#3507). The env context cannot see the
+      # runner's own ImageOS, so the image id is republished through $GITHUB_ENV first.
+      - name: Publish the runner image id
+        run: echo "RUNNER_IMAGE_OS=${ImageOS:-unknown}" >> "$GITHUB_ENV"
+
       - name: Install uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.11.28"
           enable-cache: true
+          cache-suffix: ${{ env.RUNNER_IMAGE_OS }}
 
       - name: Install Python dependencies
         run: uv sync --frozen

@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 import torch
@@ -75,9 +75,7 @@ def _module(
         num_heads=2,
         d_ff=_D_MODEL,
         num_tokens=5,
-        # "none" is a valid runtime value model/vst_flow.yaml ships; the
-        # constructor's Literal annotation omits it.
-        pe_type=cast(Literal["initial", "layerwise"], "none"),
+        pe_type="none",
         time_encoding="scalar",
         learn_projection=True,
     )

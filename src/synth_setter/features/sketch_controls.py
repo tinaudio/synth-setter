@@ -16,6 +16,7 @@ Typical usage::
 """
 
 import librosa
+import numpy as np
 import torch
 import torchaudio
 from beartype import beartype
@@ -69,7 +70,6 @@ _LOUDNESS_PEAK_RANGE_DB = 80.0
 
 _pesto_model = None
 _pesto_checkpoint: str | None = None
-_pesto_device: torch.device | None = None
 _a_weights: torch.Tensor | None = None
 
 
@@ -84,25 +84,22 @@ def load_pesto_model(
 
     :param checkpoint: PESTO checkpoint name; ``None`` reuses the cached model,
         loading ``DEFAULT_PESTO_CHECKPOINT`` when none is cached yet.
-    :param device: Torch device to hold the weights; ``None`` reuses the cached
-        device, defaulting to CPU.
+    :param device: Torch device to hold the weights; ``None`` keeps the weights
+        where they are, which is CPU for a freshly loaded model.
     :returns: The cached process-wide model.
     """
-    global _pesto_model, _pesto_checkpoint, _pesto_device
+    global _pesto_model, _pesto_checkpoint
     target = checkpoint or _pesto_checkpoint or DEFAULT_PESTO_CHECKPOINT
-    target_device = torch.device(device) if device is not None else _pesto_device
-    if target_device is None:
-        target_device = torch.device("cpu")
     if _pesto_model is None or _pesto_checkpoint != target:
         import pesto
 
         _pesto_model = pesto.load_model(target, step_size=_PESTO_STEP_MS)
         _pesto_checkpoint = target
-        # A freshly loaded model sits on CPU; clear the flag so the move below runs.
-        _pesto_device = None
-    if _pesto_device != target_device:
-        _pesto_model = _pesto_model.to(target_device)
-        _pesto_device = target_device
+    # The weights are the only record of their device: a tracking global would
+    # desync whenever a caller moves this shared module.
+    current = next(_pesto_model.parameters()).device
+    if device is not None and torch.device(device) != current:
+        _pesto_model = _pesto_model.to(device)
     return _pesto_model
 
 
@@ -173,7 +170,10 @@ def _a_weighting_db(device: torch.device) -> torch.Tensor:
     global _a_weights
     if _a_weights is None:
         freqs = librosa.fft_frequencies(sr=_LOUDNESS_SAMPLE_RATE, n_fft=_LOUDNESS_N_FFT)
-        curve = librosa.A_weighting(freqs, min_db=None) - _LOUDNESS_REF_DB
+        # A-weighting is -inf at DC and librosa reaches it through log10(0); the value is
+        # exact, the warning is not, so only the audible bins go through the library.
+        curve = np.full(freqs.shape, -np.inf)
+        curve[1:] = librosa.A_weighting(freqs[1:], min_db=None) - _LOUDNESS_REF_DB
         _a_weights = torch.tensor(curve, dtype=torch.float32)[:, None]
     return _a_weights.to(device)
 

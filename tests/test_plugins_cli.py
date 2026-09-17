@@ -838,3 +838,43 @@ def test_plugins_cli_install_configures_studiorack_and_links_bundle(tmp_path: Pa
     alias = tmp_path / "checkout/plugins/Example Synth.vst3"
     assert alias.is_symlink()
     assert alias.resolve() == bundle.resolve()
+
+
+def test_plugins_cli_studiorack_failure_reports_its_stderr(tmp_path: Path) -> None:
+    """A failing Studiorack install names its reason, not just an exit code.
+
+    Studiorack's stderr is piped so the retry policy can classify it, and
+    ``CalledProcessError.__str__`` omits it — so the Docker image build logged
+    only ``returned non-zero exit status 1`` for a permanently red lane and the
+    reason never reached anyone (#3623).
+
+    :param tmp_path: Scratch root for CLI files and installer.
+    """
+    manifest_path = _manifest(tmp_path / "studiorack.json")
+    _artifact_lock(tmp_path / "studiorack.lock.json")
+    executable = tmp_path / "studiorack"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "if sys.argv[1:3] == ['plugins', 'install']:\n"
+        "    print('ENOSPC: no space left on device, write', file=sys.stderr)\n"
+        "    raise SystemExit(1)\n"
+    )
+    executable.chmod(0o755)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "--manifest",
+            str(manifest_path),
+            "--plugins-dir",
+            str(tmp_path / "managed"),
+            "--studiorack-executable",
+            str(executable),
+            "install",
+            "--plugin",
+            "example/synth",
+        ],
+    )
+
+    assert "ENOSPC: no space left on device, write" in result.output
