@@ -680,6 +680,7 @@ _WAVEFORM_CONDITIONING_PROFILES = frozenset(
         "pupujepa_tiny_scratch",
         "same_l_online",
         "same_s_online",
+        "vqt_online",
     }
 )
 _CACHED_CONDITIONING_PROFILES = [
@@ -770,6 +771,37 @@ def test_cqt_online_profile_routes_audio_through_canonical_temporal_pool() -> No
 
     assert cfg.model.encoder.backbone.sample_rate == 16_000
     assert cfg.model.encoder.head.max_seq_len == 101
+
+
+def test_vqt_online_profile_routes_audio_through_nnaudio2_frontend() -> None:
+    """Online VQT composes raw audio into fixed temporal tokens."""
+    cfg = _compose(
+        "train.yaml",
+        ["experiment=surge/flow_simple", "conditioning=vqt_online", "trainer=cpu"],
+    )
+
+    assert cfg.datamodule.conditioning == "audio"
+    assert cfg.model.compile is False
+    assert cfg.model.conditioning == "audio"
+    assert (
+        cfg.model.encoder.backbone._target_
+        == "synth_setter.models.components.vqt_encoder.VqtAudioEncoder"
+    )
+    assert cfg.model.encoder.backbone.sample_rate == 44_100
+    assert cfg.model.encoder.backbone.hop_length == 441
+    assert cfg.model.encoder.backbone.fmin == 32.7
+    assert cfg.model.encoder.backbone.n_bins == 256
+    assert cfg.model.encoder.backbone.bins_per_octave == 32
+    assert cfg.model.encoder.backbone.gamma == 20.0
+    assert cfg.model.encoder.backbone.max_batch_size == 32
+    assert cfg.model.encoder.head.embed_dim == 256
+    assert cfg.model.encoder.head.max_seq_len == 401
+
+    OmegaConf.update(cfg, "datamodule.sample_rate", 48_000, force_add=True)
+    OmegaConf.update(cfg, "datamodule.signal_length", 192_000, force_add=True)
+
+    assert cfg.model.encoder.backbone.hop_length == 480
+    assert cfg.model.encoder.head.max_seq_len == 401
 
 
 def test_clap_online_profile_matches_training_checkpoint_identity() -> None:
