@@ -1117,3 +1117,27 @@ def test_install_plugins_native_adoption_uses_distinct_renderer_version(
     )
     assert resolved == tmp_path / "managed/VST3/example/synth/1.2.3/Example Synth.vst3"
     assert extract_renderer_version(resolved) == "0.26.2"
+
+
+def test_studiorack_install_error_without_stderr_reports_only_the_exit_code() -> None:
+    """A silent Studiorack exit adds no blank trailer to the message."""
+    error = plugin_manager.StudiorackInstallError(1, ["studiorack"], stderr="  \n ")
+
+    assert str(error) == subprocess.CalledProcessError(1, ["studiorack"]).__str__()
+
+
+def test_studiorack_install_error_stays_retry_classifiable() -> None:
+    """Carrying the message must not cost the stderr-based retry classification.
+
+    ``_is_retryable_studiorack_exit`` matches permanent messages against
+    ``exc.stderr``, so the richer message has to remain a ``CalledProcessError``
+    with its stderr intact.
+    """
+    permanent = plugin_manager.StudiorackInstallError(
+        1, ["studiorack"], stderr="artifact lock mismatch for example/synth@1.2.3"
+    )
+    transient = plugin_manager.StudiorackInstallError(1, ["studiorack"], stderr="socket hang up")
+
+    assert isinstance(permanent, subprocess.CalledProcessError)
+    assert not plugin_manager._is_retryable_studiorack_exit(permanent)
+    assert plugin_manager._is_retryable_studiorack_exit(transient)

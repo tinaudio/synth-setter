@@ -26,7 +26,11 @@ from synth_setter.conditioning import (
 from synth_setter.data.ot import _hungarian_match
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
-from synth_setter.pipeline.data.lance_materialize import materialize_splits, subset_dirname
+from synth_setter.pipeline.data.lance_materialize import (
+    materialize_splits,
+    resolve_latest_versions,
+    subset_dirname,
+)
 
 _SEED_BOUND = torch.iinfo(torch.int64).max
 _MATERIALIZE_SPLITS = ("train", "val", "test")
@@ -426,6 +430,8 @@ class VSTDataModule(LightningDataModule):
         self.high_memory_materialization = (
             materialize_config.high_memory_materialization
         )
+        # Unpinned hydration pins every split at the first stage so later stages match it.
+        self._snapshot_versions: dict[str, int] | None = None
         self.predict_split = self._predict_split(predict_file, configured_root)
         self.projection = self._derive_projection(self.predict_split)
         self.dataset_root = self._resolve_dataset_root(configured_root, self.projection)
@@ -539,9 +545,6 @@ class VSTDataModule(LightningDataModule):
         set, so narrowing them here would re-hydrate shared splits under a new
         digest and clash with an earlier stage's manifest.
 
-        A split staged later resolves a later source snapshot unless
-        ``download_dataset_txids`` pins one (#2923).
-
         :returns: Columns to materialize, keyed by the splits this stage reads.
         """
         # A finished Trainer keeps its last state.fn, so scope to the stage only
@@ -559,16 +562,24 @@ class VSTDataModule(LightningDataModule):
     def prepare_data(self) -> None:
         """Rematerialize the running stage's projected splits under ``dataset_root``.
 
-        Skipped entirely when no hydration source is configured.
+        Skipped entirely when no hydration source is configured. Without
+        ``download_dataset_txids``, the first call pins every split's latest
+        version for this instance, so a later stage reads the same snapshot set;
+        separate runs still resolve latest independently.
         """
         if not self.download_dataset_root_uri:
             return
         if r2_io.is_r2_uri(self.download_dataset_root_uri):
             r2_io.ensure_r2_env_loaded()
+        if self.download_dataset_txids is None and self._snapshot_versions is None:
+            self._snapshot_versions = resolve_latest_versions(
+                self.download_dataset_root_uri, self.projection, self.shard_suffix
+            )
         materialize_splits(
             self.download_dataset_root_uri,
             self.dataset_root,
             txids=self.download_dataset_txids,
+            versions=self._snapshot_versions,
             projection=self._staged_projection(),
             row_limit=self.download_dataset_row_limit,
             shard_suffix=self.shard_suffix,
