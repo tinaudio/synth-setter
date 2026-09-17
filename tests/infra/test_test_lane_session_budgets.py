@@ -9,11 +9,13 @@ its budget instead of quietly crawling; enforcement lives in
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -103,3 +105,28 @@ def test_fast_budget_target_prints_two_minute_limit() -> None:
     )
 
     assert result.stdout == "120\n"
+
+
+@pytest.mark.infra
+def test_ci_fast_tier_kill_timeout_leaves_the_session_budget_room_to_report() -> None:
+    """CI's outer ``timeout`` is a hang backstop, not a second budget.
+
+    The in-process check fires at ``pytest_sessionfinish``, while the outer
+    timer also covers ``make`` startup, interpreter boot and collection. Given
+    the same number of seconds the ``SIGKILL`` always lands first, costing the
+    ``session budget exceeded`` diagnostic, the test report and coverage, and
+    leaving only exit 137 — #3344.
+    """
+    workflow = yaml.safe_load(
+        (_PROJECT_ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["run_tests_ubuntu"]["steps"]
+    run = next(step["run"] for step in steps if "fast-test-budget" in step.get("run", ""))
+
+    timeout_arg = re.search(r'timeout --signal=KILL "([^"]+)s"', run)
+    assert timeout_arg is not None, f"fast-tier step no longer wraps make in timeout:\n{run}"
+    multiplier = re.fullmatch(r"\$\(\(budget_seconds \* (\d+)\)\)", timeout_arg.group(1))
+    assert multiplier is not None, (
+        f"kill timeout must scale from the lane budget, got {timeout_arg.group(1)!r}"
+    )
+    assert int(multiplier.group(1)) > 1, "kill timeout must exceed the in-process session budget"
