@@ -1,0 +1,45 @@
+# @package _global_
+
+defaults:
+  - /experiment/pyfdn/flow
+  - override /callbacks: eval_vst
+  - override /logger: wandb
+  - override /sketch: pyfdn_reverb
+  - _self_
+
+experiment_name: flow-sketch-rir
+run_name: flow-sketch-rir
+tags: [pyfdn, flow, sketch, rir, third_party]
+mode: predict
+evaluation_only: true
+
+consumed_train_artifact_alias: v0
+consumed_train_config_id: flow_sketch
+ckpt_path: s3://experiments/checkpoints/pyfdn-flow_sketch__sketch-pyfdn_reverb__conditioning-mel__ot-true/flow_sketch-20260908T170724945Z/model.ckpt
+ckpt_sha256: 9a17f57e32e318b6f057cd308d28cc7600d5f0fda62183f548947ac1e73e8bcf
+source_train_artifact: model-flow_sketch:v0
+source_train_git_sha: 487568b24b58063ba907c4406cf0a0083400c645
+source_train_run_id: flow_sketch-20260908T170724945Z
+
+logger:
+  wandb:
+    group: flow-sketch-rir
+
+model:
+  compile: false
+  encoder:
+    use_fixed_ast_padding: false
+
+datamodule:
+  batch_size: 5
+  num_workers: 4
+  row_limit: 5
+  mel_stats_uri: r2://experiments/data/pyfdn-householder-lance-131k-616k-8k-256/pyfdn-householder-lance-131k-616k-8k-256-20260904T065718759Z/stats.npz
+  mel_stats_sha256: db418cbe3e8fa29bfeb1d13a9f64e87352277ab1c1dc5f6bae896ee8f4f34ebc
+
+evaluation:
+  compute_metrics: true
+  no_params: true
+  num_workers: 5
+  render_vst: true
+  rerender_target: false
