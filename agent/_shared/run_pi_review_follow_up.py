@@ -829,6 +829,30 @@ def _supervise_child(
     )
 
 
+def _render_failure_report(result: FollowUpResult, result_path: Path) -> str:
+    """Render a failed follow-up as a self-contained job-log block.
+
+    Child output is withheld: it is provider text that can carry credentials,
+    and the workflow uploads the sidecar as an artifact for that detail (#2905).
+
+    :param result: Published failure carrying diagnostics and pass rows.
+    :param result_path: Canonical sidecar holding the full evidence.
+    :returns: Multi-line report for stderr.
+    """
+    lines = [f"Pi review follow-up failed: {result_path}"]
+    # Zero means the child returned cleanly and failed some other way, so the
+    # code is noise there; a nonzero one is not always named by a diagnostic.
+    if result.child_exit_code:
+        lines.append(f"  child exit code: {result.child_exit_code}")
+    lines.extend(f"  [{row.category}] {row.message}" for row in result.diagnostics)
+    lines.extend(
+        f"  unfinished pass {row.skill}/{row.pass_name}: {row.detail}"
+        for row in result.attempts
+        if row.status == "failed"
+    )
+    return "\n".join(lines)
+
+
 def supervise_follow_up(manifest_path: Path) -> int:
     """Run one Pi child and atomically guarantee the canonical result sidecar.
 
@@ -877,6 +901,8 @@ def supervise_follow_up(manifest_path: Path) -> int:
         _atomic_write_result(paths.canonical_result, result)
         paths.runtime_result.unlink(missing_ok=True)
         paths.runtime_manifest.unlink(missing_ok=True)
+        if result.status == "failed":
+            sys.stderr.write(f"{_render_failure_report(result, paths.canonical_result)}\n")
     return 1 if result.status == "failed" else 0
 
 

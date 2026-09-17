@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.helpers.transient_cli import run_until_stable, skip_on_transient_registry_failure
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 STUDIORACK_CLI = PROJECT_ROOT / "node_modules/.bin/studiorack"
 STUDIORACK_LOCK = PROJECT_ROOT / "studiorack.lock.json"
@@ -53,6 +55,10 @@ class StudiorackRoot:
 def _run_studiorack(home: Path, args: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
     """Invoke the repository-pinned Studiorack CLI under an isolated home.
 
+    Every command here reaches the live Open Audio registry, so a transient network fault is
+    retried and a sustained one is classified as an external-service skip rather than a lane
+    failure (#3041).
+
     :param home: Temporary home containing the CLI configuration.
     :param args: Studiorack command arguments.
     :returns: Completed CLI process with captured text output.
@@ -60,15 +66,21 @@ def _run_studiorack(home: Path, args: tuple[str, ...]) -> subprocess.CompletedPr
     env = os.environ.copy()
     env["HOME"] = str(home)
     env.pop("SYNTH_SETTER_STUDIORACK_ARTIFACT_LOCK", None)
-    return subprocess.run(  # noqa: S603 — fixed repository executable
-        [str(STUDIORACK_CLI), *args],
-        cwd=PROJECT_ROOT,
-        env=env,
-        capture_output=True,
-        check=False,
-        text=True,
-        timeout=180,
-    )
+
+    def invoke() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603 — fixed repository executable
+            [str(STUDIORACK_CLI), *args],
+            cwd=PROJECT_ROOT,
+            env=env,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=180,
+        )
+
+    completed = run_until_stable(invoke)
+    skip_on_transient_registry_failure(completed)
+    return completed
 
 
 @pytest.fixture()
