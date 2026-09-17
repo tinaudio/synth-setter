@@ -22,6 +22,7 @@ set -euo pipefail
 TMP_DIR=""
 DISPLAY_FILE=""
 readonly XVFB_STARTUP_PROBES=100
+readonly XSETTINGS_OWNERSHIP_MARKER="Took ownership of selection"
 
 cleanup() {
   # `kill PID` is async — bash returns while the child is still draining.
@@ -185,6 +186,50 @@ reap_failed_xvfb() {
   cat "$TMP_DIR/xvfb.log" >&2 || true
 }
 
+# Start xsettingsd and confirm it owns the XSETTINGS selection.
+# No X client can query a selection owner, so the daemon's own announcement is
+# the readiness signal. Without an owner the plugin reads window 0 and X kills
+# it with BadWindow (#3152).
+# Globals:
+#   TMP_DIR, DISPLAY, XSETTINGS_PID, XSETTINGS_READY_PROBES.
+# Outputs:
+#   Readiness diagnostics to stderr.
+# Returns:
+#   0 once the selection is owned; 1 when the daemon dies or never takes it.
+start_xsettingsd_attempt() {
+  : > "$TMP_DIR/xsettingsd.log"
+  # Detached stdin prevents daemons from keeping SkyPilot's SSH pipe open (#735).
+  xsettingsd --config /dev/null </dev/null >"$TMP_DIR/xsettingsd.log" 2>&1 &
+  XSETTINGS_PID=$!
+
+  local probe
+  for ((probe = 0; probe < XSETTINGS_READY_PROBES; probe += 1)); do
+    if grep -q "$XSETTINGS_OWNERSHIP_MARKER" "$TMP_DIR/xsettingsd.log"; then
+      return 0
+    fi
+    if ! kill -0 "$XSETTINGS_PID" 2>/dev/null; then
+      echo "[wrapper] xsettingsd exited before taking the XSETTINGS selection" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  echo "[wrapper] xsettingsd did not take the XSETTINGS selection within" \
+    "${XSETTINGS_READY_PROBES} probes" >&2
+  return 1
+}
+
+# Reap a failed xsettingsd and surface the log cleanup would otherwise delete.
+# Globals:
+#   TMP_DIR, XSETTINGS_PID.
+# Outputs:
+#   The failed xsettingsd log to stderr.
+reap_failed_xsettingsd() {
+  kill "$XSETTINGS_PID" 2>/dev/null || true
+  wait "$XSETTINGS_PID" 2>/dev/null || true
+  XSETTINGS_PID=""
+  cat "$TMP_DIR/xsettingsd.log" >&2 || true
+}
+
 # Bootstrap X11 and run the requested command in its D-Bus session.
 # Globals:
 #   Modifies DISPLAY_FILE, TMP_DIR, OPENBOX_PID, XSETTINGS_PID, and Xvfb
@@ -208,7 +253,9 @@ main() {
     XVFB_BOOTSTRAP_ATTEMPTS 3 9)
   XVFB_READY_PROBES=$(normalize_positive_decimal XVFB_READY_PROBES 50 100)
   XVFB_RETRY_JITTER_MAX=$(normalize_decimal XVFB_RETRY_JITTER_MAX 9 9)
-  readonly XVFB_BOOTSTRAP_ATTEMPTS XVFB_READY_PROBES XVFB_RETRY_JITTER_MAX
+  XSETTINGS_READY_PROBES=$(normalize_positive_decimal XSETTINGS_READY_PROBES 50 100)
+  readonly XVFB_BOOTSTRAP_ATTEMPTS XVFB_READY_PROBES XVFB_RETRY_JITTER_MAX \
+    XSETTINGS_READY_PROBES
 
   local attempt=1
   until start_xvfb_attempt; do
@@ -226,9 +273,17 @@ main() {
     fi
   done
 
-  # Detached stdin prevents daemons from keeping SkyPilot's SSH pipe open (#735).
-  xsettingsd --config /dev/null </dev/null >"$TMP_DIR/xsettingsd.log" 2>&1 &
-  XSETTINGS_PID=$!
+  attempt=1
+  until start_xsettingsd_attempt; do
+    reap_failed_xsettingsd
+    if (( attempt >= XVFB_BOOTSTRAP_ATTEMPTS )); then
+      echo "XSETTINGS manager bootstrap failed after ${attempt} attempt(s)" >&2
+      return 1
+    fi
+    attempt=$((attempt+1))
+    echo "[wrapper] retrying xsettingsd bootstrap" \
+      "(attempt ${attempt}/${XVFB_BOOTSTRAP_ATTEMPTS})" >&2
+  done
 
   openbox-session </dev/null >"$TMP_DIR/openbox.log" 2>&1 &
   OPENBOX_PID=$!
