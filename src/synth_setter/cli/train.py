@@ -362,6 +362,57 @@ def _upload_best_checkpoint(
     return uri
 
 
+def _checkpoint_path_written_by_run(trainer: Trainer) -> str:
+    """Return the best checkpoint path this run itself wrote, or ``""``.
+
+    ``ModelCheckpoint.best_model_path`` is restored from a resumed checkpoint's
+    callback state, so it can name a file from an earlier run even when this run
+    was configured to write none (``save_top_k=0``, ``save_last=false``, a fresh
+    ``dirpath``). Uploading that file would publish another run's weights under
+    this run's URI (#3260), so a best path outside the callback's own ``dirpath``
+    is dropped and the run degrades to a lineage-only artifact.
+
+    :param trainer: The finished trainer whose checkpoint callback is consulted.
+    :returns: The best checkpoint path, or ``""`` when there is none to upload.
+    """
+    callback = trainer.checkpoint_callback
+    best_model_path = getattr(callback, "best_model_path", "") or ""
+    dirpath = getattr(callback, "dirpath", None)
+    if not best_model_path or dirpath is None:
+        return best_model_path
+    if Path(dirpath).resolve() not in Path(best_model_path).resolve().parents:
+        log.warning(
+            f"Best checkpoint {best_model_path} lies outside this run's checkpoint directory "
+            f"{dirpath}; it was inherited from a resumed run and will not be uploaded."
+        )
+        return ""
+    return best_model_path
+
+
+def _checkpoint_counters(best_model_path: str) -> dict[str, int]:
+    """Read a checkpoint file's own epoch and step counters.
+
+    :param best_model_path: Local path of the checkpoint that was uploaded.
+    :returns: The ``epoch`` / ``global_step`` entries the file stores; empty when
+        the file cannot be read as a checkpoint.
+    """
+    try:
+        # mmap keeps the weights off-heap — only the top-level counters are read; the
+        # file is this process's own upload source, so unpickling it is not a trust boundary.
+        payload = torch.load(best_model_path, map_location="cpu", mmap=True, weights_only=False)
+    except Exception as exc:  # noqa: BLE001 — an unreadable checkpoint must not abort a run
+        log.warning(f"Checkpoint counters unavailable for {best_model_path}: {exc}")
+        return {}
+    if not isinstance(payload, dict):
+        log.warning(f"Checkpoint {best_model_path} holds no counter mapping; omitting epoch/step.")
+        return {}
+    return {
+        key: value
+        for key in ("epoch", "global_step")
+        if isinstance(value := payload.get(key), int)
+    }
+
+
 def _checkpoint_metadata(trainer: Trainer, best_model_path: str, ckpt_uri: str) -> dict[str, Any]:
     """Describe the checkpoint the model artifact's R2 reference points at.
 
@@ -371,16 +422,25 @@ def _checkpoint_metadata(trainer: Trainer, best_model_path: str, ckpt_uri: str) 
     leaving W&B. Each key whose source is unavailable is omitted rather than
     recorded as ``None``.
 
-    :param trainer: The finished trainer; supplies epoch/step and the checkpoint callback.
+    Counters come from the uploaded bytes, not from the trainer: a resumed run
+    can inherit an earlier run's ``best_model_path`` and upload it unchanged
+    (#3260). When the two disagree, the uploading run's step is kept alongside
+    under ``trainer_global_step`` so that lineage stays explicit.
+
+    :param trainer: The finished trainer; supplies the uploading step and the checkpoint callback.
     :param best_model_path: Local path of the checkpoint that was uploaded.
     :param ckpt_uri: The ``r2://`` URI it was uploaded to.
     :returns: ``artifact.metadata`` entries describing the referenced checkpoint.
     """
-    metadata: dict[str, Any] = {
-        "ckpt_uri": ckpt_uri,
-        "epoch": trainer.current_epoch,
-        "global_step": trainer.global_step,
-    }
+    counters = _checkpoint_counters(best_model_path)
+    metadata: dict[str, Any] = {"ckpt_uri": ckpt_uri, **counters}
+    if (stored_step := counters.get("global_step")) != trainer.global_step:
+        metadata["trainer_global_step"] = trainer.global_step
+        if stored_step is not None:
+            log.warning(
+                f"Uploaded checkpoint {best_model_path} was written at step {stored_step}, not "
+                f"this run's step {trainer.global_step}; a resumed best checkpoint was kept."
+            )
     try:
         metadata["ckpt_bytes"] = Path(best_model_path).stat().st_size
     except OSError as exc:
@@ -613,7 +673,7 @@ def train(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
     # nothing references the upload) and global-zero (so DDP ranks don't race duplicate
     # artifact versions). Degrades to lineage-only when R2 is unreachable or no ckpt exists.
     if trainer.is_global_zero and _has_wandb_logger(logger):
-        best_model_path = getattr(trainer.checkpoint_callback, "best_model_path", "") or ""
+        best_model_path = _checkpoint_path_written_by_run(trainer)
         ckpt_uri = _upload_best_checkpoint(cfg, best_model_path, run_id, launch_uuid)
         ckpt_metadata = (
             _checkpoint_metadata(trainer, best_model_path, ckpt_uri) if ckpt_uri else None
