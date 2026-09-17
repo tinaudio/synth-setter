@@ -25,6 +25,7 @@ from synth_setter.pipeline.data.ssondo import (
     ssondo_encoder_input,
 )
 from synth_setter.pipeline.schemas.add_embeddings_config import AddEmbeddingsConfig
+from tests.helpers.lance_fixtures import ANN_SELF_QUERY_REFINE_FACTOR
 
 
 def test_ssondo_config_incompatible_pq_subvectors_raises() -> None:
@@ -264,7 +265,12 @@ def test_ssondo_index_builds_and_returns_stored_query_row(tmp_path: Path) -> Non
     assert built is True
     assert [entry["fields"] for entry in indices] == [[SSONDO_FIELD]]
     hits = lance.dataset(str(uri)).to_table(
-        nearest={"column": SSONDO_FIELD, "q": vectors[137], "k": 1},
+        nearest={
+            "column": SSONDO_FIELD,
+            "q": vectors[137],
+            "k": 1,
+            "refine_factor": ANN_SELF_QUERY_REFINE_FACTOR,
+        },
         columns=["row_id"],
     )
     assert hits.column("row_id")[0].as_py() == 137

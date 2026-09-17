@@ -124,7 +124,10 @@ from synth_setter.same import (
 from synth_setter.sketch import pool_sketch_controls
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
-from tests.helpers.lance_fixtures import write_lance_shard
+from tests.helpers.lance_fixtures import (
+    ANN_SELF_QUERY_REFINE_FACTOR,
+    write_lance_shard,
+)
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_offline import read_run_config, read_run_exit_code, read_run_project
 
@@ -4147,7 +4150,12 @@ def test_build_index_on_nested_vec_child_serves_ann_self_query(tmp_path: Path) -
     assert [SKETCH_VEC_COLUMN] in index_fields
     target_row = 137
     hits = dataset.to_table(
-        nearest={"column": SKETCH_VEC_COLUMN, "q": vectors[target_row], "k": 1},
+        nearest={
+            "column": SKETCH_VEC_COLUMN,
+            "q": vectors[target_row],
+            "k": 1,
+            "refine_factor": ANN_SELF_QUERY_REFINE_FACTOR,
+        },
         columns=["row"],
     )
     assert hits.column("row")[0].as_py() == target_row
