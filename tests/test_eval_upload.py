@@ -16,6 +16,7 @@ import pytest
 from omegaconf import DictConfig, OmegaConf
 
 from synth_setter.cli.eval import _maybe_upload_output_dir
+from synth_setter.pipeline.constants import DATASET_COMPLETE_FILENAME
 
 
 def _upload_cfg(output_dir: Path, upload_output_dir_uri: str | None) -> DictConfig:
@@ -173,6 +174,9 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     for name in ("train.lance", "val.lance", "test.lance"):
         shutil.copytree(surge_xt_smoke_datasets / name, staged / name)
     shutil.copy(surge_xt_smoke_datasets / "stats.npz", staged / "stats.npz")
+    # Hydration refuses any root without finalize's marker, which the smoke fixture
+    # (a generate-only root) never writes; finalize writes it empty (#2992).
+    (staged / DATASET_COMPLETE_FILENAME).touch()
 
     dataset_root = tmp_path / "downloaded"
     output_dir = tmp_path / "out"
@@ -210,9 +214,14 @@ def test_eval_cli_downloads_dataset_from_r2_then_scores_oracle(
     )
     assert proc.returncode == 0, proc.stderr
 
-    for split in ("train.lance", "val.lance", "test.lance"):
-        assert (dataset_root / split).is_dir(), f"{split} was not downloaded from R2"
-    assert (dataset_root / "stats.npz").is_file(), "stats.npz was not downloaded from R2"
+    # Hydration materializes into a conditioning-scoped profile dir and pulls only the
+    # splits the stage reads, so mode=test yields test.lance alone (#2919).
+    hydrated = sorted(dataset_root.glob("*/test.lance"))
+    assert len(hydrated) == 1, f"test split was not hydrated under {dataset_root}"
+    profile_root = hydrated[0].parent
+    assert (profile_root / "stats.npz").is_file(), "stats.npz was not downloaded from R2"
+    for unread in ("train.lance", "val.lance"):
+        assert not list(dataset_root.glob(f"*/{unread}")), f"{unread} was hydrated for mode=test"
 
     metrics = json.loads((output_dir / "metrics" / "metrics.json").read_text())
     assert metrics["test/param_mse"] == 0.0
