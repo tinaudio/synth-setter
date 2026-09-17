@@ -58,7 +58,9 @@ _SURGE_MEL_SHAPE = (2, 128, 401)
 _SURGE_SILENCE_PEAK_THRESHOLD = 1e-4
 NUM_FIXTURE_SAMPLES = 5
 _EMBEDDING_E2E_ROWS = 2
-_EMBEDDING_KEYS = (
+# The profiles the embedding E2E materializes and then trains; test_train.py
+# imports this so the two halves cannot drift apart (#2964).
+EMBEDDING_E2E_KEYS = (
     "clap",
     "m2l",
     "same_s",
@@ -975,18 +977,25 @@ def cfg_dataset_faust(
 
 
 @pytest.fixture(scope="function")
-def cfg_dataset_pyfdn_householder(tmp_path: Path) -> Iterator[DictConfig]:
-    """Compose the fixed-Householder pyFDN dataset with temporary local paths.
+def cfg_dataset_pyfdn_householder(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> Iterator[DictConfig]:
+    """Compose a Householder pyFDN dataset with temporary local paths.
 
+    The synth group carries the registered ``source_sha256``, so a topology is
+    selected by indirect parametrization rather than by overwriting identity fields.
+
+    :param request: Indirect param naming the ``synth`` group, if supplied.
     :param tmp_path: Per-test output/work/log root.
     :yields DictConfig: PyFDN cfg with ``tmp_path``-pinned paths.
     """
+    synth = getattr(request, "param", "pyfdn_n8_mono_householder")
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="dataset",
             overrides=[
                 "experiment=generate_dataset/smoke-shard",
-                "synth=pyfdn_n8_mono_householder",
+                f"synth={synth}",
                 "render=pyfdn",
                 "render.gui_toggle_cadence=never",
             ],
@@ -2022,7 +2031,7 @@ def augment_lance_splits_with_all_embeddings(
         "synth_setter.pipeline.data.add_embeddings",
         "logger=[]",
         f"lance_uri={train_uri}",
-        f"embeddings=[{','.join(_EMBEDDING_KEYS)}]",
+        f"embeddings=[{','.join(EMBEDDING_E2E_KEYS)}]",
         f"param_spec_name={param_spec_name}",
         "device=cpu",
         "build_index=false",
@@ -2144,7 +2153,9 @@ def assert_embedding_columns(dataset_root: Path) -> None:
     train_lance = dataset_root / "train.lance"
     _validate_surge_dataset(train_lance, _EMBEDDING_E2E_ROWS)
     dataset = lance.dataset(train_lance)
-    assert set(_EMBEDDING_KEYS) == set(EMBEDDING_REGISTRY)
+    # Subset, not equality: the E2E materializes the profiles it trains, and the
+    # registry also carries producers with no conditioning profile (#2845).
+    assert set(EMBEDDING_E2E_KEYS) <= set(EMBEDDING_REGISTRY)
     assert {
         AUDIO_FIELD,
         MEL_SPEC_FIELD,

@@ -1034,3 +1034,27 @@ class TestStageScopedHydration:
         module.prepare_data()
 
         assert lance.dataset(str(module.dataset_root / "test.lance")).count_rows() == 6
+
+    def test_test_stage_after_source_advance_reads_the_fit_run_snapshot(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A later stage of the same run stages the snapshot set its first stage saw (#2923).
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        module = _hydrating_module(source_root, tmp_path / "local")
+        _stage_probe_trainer(tmp_path).fit(_StageProbeModule(), datamodule=module)
+        source_test = source_root / "test.lance"
+        lance.write_dataset(
+            lance.dataset(str(source_test)).to_table(), source_test, mode="append"
+        )
+
+        _stage_probe_trainer(tmp_path).test(_StageProbeModule(), datamodule=module)
+
+        assert lance.dataset(str(module.dataset_root / "test.lance")).count_rows() == 6
