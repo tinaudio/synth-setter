@@ -41,6 +41,10 @@ const managerSourceFixture = path.join(
   projectRoot,
   "tests/fixtures/studiorack/ManagerLocal.patch-preconditions.txt",
 );
+const previousManagerFixture = path.join(
+  projectRoot,
+  "tests/fixtures/studiorack/ManagerLocal.previous-comparison.txt",
+);
 const packageReference = "example/synth@1.2.3";
 
 /**
@@ -158,6 +162,7 @@ async function assertArtifactLockRejected(document, expected) {
  * @property {string} [liveSha256] Digest exposed by the registry fixture.
  * @property {string} liveUrl URL exposed by the registry fixture.
  * @property {string} [type] Studiorack artifact type.
+ * @property {LockedArtifact[]} [extraLiveArtifacts] Artifacts the registry exposes beyond the lock.
  */
 
 /**
@@ -174,6 +179,7 @@ async function managerFixture(
     liveSha256 = "a".repeat(64),
     liveUrl,
     type = "archive",
+    extraLiveArtifacts = [],
   },
 ) {
   const lock = await writeArtifactLock({
@@ -196,6 +202,10 @@ async function managerFixture(
             ...artifact({ sha256: liveSha256, type, url: liveUrl }),
             systems: [{ type: getSystem() }],
           },
+          ...extraLiveArtifacts.map((extra) => ({
+            ...extra,
+            systems: extra.systems.map((system) => ({ type: system })),
+          })),
         ],
       },
     }),
@@ -456,15 +466,21 @@ function helperSource() {
  * @param {string} root Temporary fixture root.
  * @param {string} adminSource Unpatched admin source.
  * @param {string} [helperText] Unpatched helper source.
+ * @param {string} [managerSource] Manager source fixture to patch.
  * @returns {Promise<{admin: string, helper: string, manager: string, result: import("node:child_process").SpawnSyncReturns<string>}>} Fixture paths and patch result.
  */
-async function patchFixture(root, adminSource, helperText = helperSource()) {
+async function patchFixture(
+  root,
+  adminSource,
+  helperText = helperSource(),
+  managerSource = managerSourceFixture,
+) {
   const helper = path.join(root, "file.js");
   const manager = path.join(root, "ManagerLocal.js");
   const admin = path.join(root, "admin.js");
   await Promise.all([
     writeFile(helper, helperText),
-    copyFile(managerSourceFixture, manager),
+    copyFile(managerSource, manager),
     writeFile(admin, adminSource),
   ]);
   const result = spawnSync(
@@ -520,6 +536,67 @@ test("patched core gives the explicit environment lock precedence", async () => 
       else
         process.env.SYNTH_SETTER_STUDIORACK_ARTIFACT_LOCK = previousLock;
     }
+  });
+});
+
+test("patched core installs the pinned artifact when the registry adds another", async () => {
+  await withTemporaryRoot(async (root) => {
+    const url = "https://example.test/locked.zip";
+    const { manager, pluginsDir } = await managerFixture(root, {
+      lockedUrl: url,
+      liveUrl: url,
+      extraLiveArtifacts: [
+        artifact({ sha256: "c".repeat(64), url: "https://example.test/added.zip" }),
+      ],
+    });
+    await mkdir(path.join(pluginsDir, "VST3/example/synth/1.2.3"), {
+      recursive: true,
+    });
+
+    const installed = await manager.install("example/synth", "1.2.3");
+
+    assert.equal(installed.installed, true);
+  });
+});
+
+test("patched core keeps a locked installer once the registry publishes an archive", async () => {
+  await withTemporaryRoot(async (root) => {
+    const url = "https://example.test/locked.deb";
+    const { manager, pluginsDir } = await managerFixture(root, {
+      lockedUrl: url,
+      liveUrl: url,
+      type: "installer",
+      extraLiveArtifacts: [
+        artifact({
+          sha256: "c".repeat(64),
+          url: "https://example.test/pluginsonly.tar.gz",
+        }),
+      ],
+    });
+    await mkdir(path.join(pluginsDir, "VST3/example/synth/1.2.3"), {
+      recursive: true,
+    });
+
+    const installed = await manager.install("example/synth", "1.2.3");
+
+    assert.equal(installed.installed, true);
+  });
+});
+
+test("patched core names the pinned artifact the registry no longer offers", async () => {
+  await withTemporaryRoot(async (root) => {
+    const { manager, pluginsDir } = await managerFixture(root, {
+      lockedUrl: "https://example.test/locked.zip",
+      liveUrl: "https://example.test/replaced.zip",
+    });
+    await mkdir(path.join(pluginsDir, "VST3/example/synth/1.2.3"), {
+      recursive: true,
+    });
+
+    await assert.rejects(
+      manager.install("example/synth", "1.2.3"),
+      /artifact lock mismatch for example\/synth@1\.2\.3 .*https:\/\/example\.test\/locked\.zip/,
+    );
   });
 });
 
@@ -906,6 +983,27 @@ test("admin patch fails closed when its forwarding precondition is missing", asy
     assert.equal(await readFile(helper, "utf8"), originalHelper);
     assert.equal(await readFile(manager, "utf8"), originalManager);
   });
+});
+
+test("patch migrates a previously patched manager onto the current source", async () => {
+  const adminSource =
+    "const manager = new ManagerLocal(args.type, { appDir: args.appDir });";
+  const patchedSources = [];
+  for (const managerSource of [managerSourceFixture, previousManagerFixture]) {
+    await withTemporaryRoot(async (root) => {
+      const { manager, result } = await patchFixture(
+        root,
+        adminSource,
+        helperSource(),
+        managerSource,
+      );
+
+      assert.equal(result.status, 0, result.stderr);
+      patchedSources.push(await readFile(manager, "utf8"));
+    });
+  }
+
+  assert.equal(patchedSources[1], patchedSources[0]);
 });
 
 test("patch fails closed when an applied source marker is ambiguous", async () => {
