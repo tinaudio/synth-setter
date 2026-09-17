@@ -9,7 +9,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,9 +37,7 @@ _FOLLOW_UP_MODEL = "gpt-5.6-terra"
 _FOLLOW_UP_PROVIDER = "openai-codex"
 _FOLLOW_UP_THINKING = "medium"
 _RUNTIME_MANIFEST_ENV = "PI_REVIEW_FOLLOW_UP_RUNTIME_MANIFEST"
-_OWNERSHIP_WAIT_ENV = "PI_REVIEW_FOLLOW_UP_OWNERSHIP_WAIT_SECONDS"
-_MAX_OWNERSHIP_WAIT_SECONDS = 3600
-_OWNERSHIP_POLL_SECONDS = 0.25
+_FOREGROUND_STOPPED_ENV = "SYNTH_SETTER_PI_REVIEW_FOREGROUND_STOPPED"
 _MAX_LOG_BYTES = 64 * 1024
 _LOG_TAIL_CHARS = 16 * 1024
 _CAPACITY_MARKERS = (
@@ -502,7 +499,7 @@ def _adopt_report(deferred: DeferredPass, target: str) -> WorkerReport | None:
 
 
 def _plan_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
-    """Adopt reports and fail closed when a foreground owner may remain live.
+    """Adopt reports and transfer unfinished passes only after host shutdown.
 
     :param manifest: Validated foreground ownership handoff.
     :returns: Adoption and relaunch plan.
@@ -512,6 +509,7 @@ def _plan_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
     attempts: list[FollowUpAttempt] = []
     adopted: list[WorkerReport] = []
     blocked = False
+    foreground_stopped = os.environ.get(_FOREGROUND_STOPPED_ENV) == "1"
     for deferred in manifest.deferred_passes:
         report = _adopt_report(deferred, manifest.target)
         if report is not None:
@@ -528,6 +526,9 @@ def _plan_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
         if deferred.agent_id is None:
             remaining.append(deferred)
             continue
+        if foreground_stopped:
+            remaining.append(deferred.model_copy(update={"agent_id": None, "output_path": None}))
+            continue
         attempts.append(
             _attempt(
                 deferred,
@@ -543,36 +544,6 @@ def _plan_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
         adopted_reports=tuple(adopted),
         blocked=blocked,
     )
-
-
-def _ownership_wait_seconds() -> int:
-    """Return the bounded grace period for foreground reports to finish.
-
-    :returns: Configured grace period in seconds.
-    :raises ValueError: If the setting is not an integer from zero through one hour.
-    """
-    raw_value = os.environ.get(_OWNERSHIP_WAIT_ENV, "0")
-    if not raw_value.isdigit():
-        raise ValueError(f"{_OWNERSHIP_WAIT_ENV} must be an integer")
-    wait_seconds = int(raw_value)
-    if wait_seconds > _MAX_OWNERSHIP_WAIT_SECONDS:
-        raise ValueError(f"{_OWNERSHIP_WAIT_ENV} must not exceed {_MAX_OWNERSHIP_WAIT_SECONDS}")
-    return wait_seconds
-
-
-def _wait_for_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
-    """Wait for foreground reports without ever launching a duplicate owner.
-
-    :param manifest: Validated foreground ownership handoff.
-    :returns: Adoption and relaunch plan after completion or grace-period expiry.
-    """
-    deadline = time.monotonic() + _ownership_wait_seconds()
-    while True:
-        ownership = _plan_ownership(manifest)
-        remaining_seconds = deadline - time.monotonic()
-        if not ownership.blocked or remaining_seconds <= 0:
-            return ownership
-        time.sleep(min(_OWNERSHIP_POLL_SECONDS, remaining_seconds))
 
 
 def _bounded_log_tail(log_path: Path) -> str:
@@ -841,7 +812,7 @@ def supervise_follow_up(manifest_path: Path) -> int:
     result: FollowUpResult | None = None
     try:
         manifest = load_manifest(manifest_path)
-        ownership = _wait_for_ownership(manifest)
+        ownership = _plan_ownership(manifest)
         attempts = ownership.attempts
         result = _prelaunch_result(manifest, ownership)
         if result is None:
