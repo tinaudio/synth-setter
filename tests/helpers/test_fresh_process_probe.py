@@ -10,21 +10,27 @@ from tests.helpers.fresh_process_probe import run_fresh_process_probe
 
 # Long enough that waiting the probe out instead of killing it is unmistakable.
 _STALLED_PROBE_SLEEP_SECONDS = 30.0
+# Four reporting stages at a quarter of the bound each: their sum exceeds one
+# bound, so a cumulative deadline fails, while a loaded runner would have to
+# stretch a single gap fourfold to produce the false red this module exists to
+# prevent.
+_STAGE_STALL_BOUND_SECONDS = 2.0
+_STAGE_GAP_SECONDS = _STAGE_STALL_BOUND_SECONDS / 4
 
 
 def test_run_fresh_process_probe_steady_startup_progress_outlasts_the_stall_bound() -> None:
     """Startup longer than one stall bound passes while every stage keeps reporting."""
     run_fresh_process_probe(
-        """
+        f"""
         import time
 
-        for stage in ("torch", "torchsynth", "flamo"):
-            time.sleep(0.2)
+        for stage in ("torch", "torchsynth", "pyFDN", "flamo"):
+            time.sleep({_STAGE_GAP_SECONDS})
             progress(stage)
         ready()
         """,
-        startup_stall_timeout_s=0.5,
-        behavior_timeout_s=5.0,
+        startup_stall_timeout_s=_STAGE_STALL_BOUND_SECONDS,
+        behavior_timeout_s=_STALLED_PROBE_SLEEP_SECONDS,
     )
 
 
