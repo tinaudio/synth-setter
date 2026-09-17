@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789678461599,
+  "lastUpdate": 1789678466467,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -149192,6 +149192,2390 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-29/wmfcc",
             "value": 0.42184576582629235,
+            "unit": "wmfcc"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b6756890d19ee69c02eba14185c41f309321d004",
+          "message": "test(evaluation): pin missing-checkpoint eval test to CPU trainer (#3607)\n\neval.yaml defaults to trainer=gpu and the surge eval experiment does not\noverride it, while evaluate() instantiates the Trainer before it reads\nckpt_path. On a CPU-only runner Lightning raised \"No supported gpu\nbackend found!\" first, so the test never reached the assertion and the\nUbuntu fast tier stayed red.\n\nCompose the test with trainer=cpu, as the rest of the eval suite already\ndoes. The assertion is unchanged and still requires the missing-value\nerror.\n\nFixes #3553\nFixes #3565\nRefs #3537\nRefs #3529\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-17T15:48:01-04:00",
+          "tree_id": "ea85b055e5c8ceb64356b92b3903c71bc5fc885d",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b6756890d19ee69c02eba14185c41f309321d004"
+        },
+        "date": 1789678465475,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/random-patches/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard/dataset-seconds-per-render",
+            "value": 9.752343262166665,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard/dataset-realtime-factor",
+            "value": 2.4380858155416663,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer/dataset-seconds-per-render",
+            "value": 4.497379079199997,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer/dataset-realtime-factor",
+            "value": 1.1243447697999993,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/random-patches/surgepy/dataset-seconds-per-render",
+            "value": 0.21016169426666995,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/random-patches/surgepy/dataset-realtime-factor",
+            "value": 0.05254042356666749,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 6.786009788513184,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/mss-max",
+            "value": 4.205289363861084,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.0417422279715538,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 7.630850318670273,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.24173468351364136,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 8.485736846923828,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/mss-max",
+            "value": 5.290524959564209,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sot-max",
+            "value": 0.08595024794340134,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 6.9542157036066055,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.289756178855896,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 8.310659408569336,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/mss-max",
+            "value": 5.40334939956665,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.09112006425857544,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 8.028892146646976,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.10322648286819458,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-00/mel-rmse",
+            "value": 3.3221139907836914,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-00/mss",
+            "value": 1.154956340789795,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-00/rms-envelope-cosine-distance",
+            "value": 0.0011165142059326172,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-00/sot",
+            "value": 0.006566829048097134,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-00/wmfcc",
+            "value": 1.5398320969566703,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-01/mel-rmse",
+            "value": 4.627203464508057,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-01/mss",
+            "value": 1.0593687295913696,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-01/rms-envelope-cosine-distance",
+            "value": 0.24173468351364136,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-01/sot",
+            "value": 0.028143279254436493,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-01/wmfcc",
+            "value": 0.7825301584601402,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-02/mel-rmse",
+            "value": 4.147611141204834,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-02/mss",
+            "value": 2.0982882976531982,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-02/rms-envelope-cosine-distance",
+            "value": 0.0024323463439941406,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-02/sot",
+            "value": 0.006776686757802963,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-02/wmfcc",
+            "value": 2.5340700767934323,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-03/mel-rmse",
+            "value": 2.8028724193573,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-03/mss",
+            "value": 0.8242137432098389,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-03/rms-envelope-cosine-distance",
+            "value": 0.00007855892181396484,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-03/sot",
+            "value": 0.0030129654332995415,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-03/wmfcc",
+            "value": 1.0824996379576624,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-04/mel-rmse",
+            "value": 5.457400798797607,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-04/mss",
+            "value": 2.052680492401123,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-04/rms-envelope-cosine-distance",
+            "value": 0.0004361867904663086,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-04/sot",
+            "value": 0.004716673865914345,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-04/wmfcc",
+            "value": 1.3917711881920696,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-05/mel-rmse",
+            "value": 4.4503493309021,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-05/mss",
+            "value": 2.3362324237823486,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-05/rms-envelope-cosine-distance",
+            "value": 0.026354312896728516,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-05/sot",
+            "value": 0.01148275937885046,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-05/wmfcc",
+            "value": 3.3920168291218578,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-06/mel-rmse",
+            "value": 2.5952372550964355,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-06/mss",
+            "value": 1.2147204875946045,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-06/rms-envelope-cosine-distance",
+            "value": 0.00949561595916748,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-06/sot",
+            "value": 0.02236035093665123,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-06/wmfcc",
+            "value": 1.5949472578149289,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-07/mel-rmse",
+            "value": 3.2802183628082275,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-07/mss",
+            "value": 1.341431736946106,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-07/rms-envelope-cosine-distance",
+            "value": 0.014362335205078125,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-07/sot",
+            "value": 0.011838298290967941,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-07/wmfcc",
+            "value": 1.9778217390924693,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-08/mel-rmse",
+            "value": 5.963222503662109,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-08/mss",
+            "value": 3.617384910583496,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-08/rms-envelope-cosine-distance",
+            "value": 0.0038729310035705566,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-08/sot",
+            "value": 0.025189394131302834,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-08/wmfcc",
+            "value": 3.810393243283033,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-09/mel-rmse",
+            "value": 3.2908496856689453,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-09/mss",
+            "value": 1.7471352815628052,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-09/rms-envelope-cosine-distance",
+            "value": 0.00609976053237915,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-09/sot",
+            "value": 0.011192487552762032,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-09/wmfcc",
+            "value": 2.8391807138733567,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-10/mel-rmse",
+            "value": 3.1128671169281006,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-10/mss",
+            "value": 1.3355807065963745,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-10/rms-envelope-cosine-distance",
+            "value": 0.0007867217063903809,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-10/sot",
+            "value": 0.005339236464351416,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-10/wmfcc",
+            "value": 1.6290364445000887,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-11/mel-rmse",
+            "value": 2.9306905269622803,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-11/mss",
+            "value": 0.9743936657905579,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-11/rms-envelope-cosine-distance",
+            "value": 0.00012940168380737305,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-11/sot",
+            "value": 0.007763261906802654,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-11/wmfcc",
+            "value": 1.5204485747218133,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-12/mel-rmse",
+            "value": 0.5848379731178284,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-12/mss",
+            "value": 0.3930266201496124,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-12/rms-envelope-cosine-distance",
+            "value": 0.001031339168548584,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-12/sot",
+            "value": 0.0007684534648433328,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-12/wmfcc",
+            "value": 0.1566492149280384,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-13/mel-rmse",
+            "value": 1.873213529586792,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-13/mss",
+            "value": 0.5383174419403076,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-13/rms-envelope-cosine-distance",
+            "value": 0.0007751584053039551,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-13/sot",
+            "value": 0.0033932363148778677,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-13/wmfcc",
+            "value": 0.976197368670255,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-14/mel-rmse",
+            "value": 4.8221435546875,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-14/mss",
+            "value": 2.950155019760132,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-14/rms-envelope-cosine-distance",
+            "value": 0.001456141471862793,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-14/sot",
+            "value": 0.011555581353604794,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-14/wmfcc",
+            "value": 3.179776880443096,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-15/mel-rmse",
+            "value": 3.765702486038208,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-15/mss",
+            "value": 1.8403714895248413,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-15/rms-envelope-cosine-distance",
+            "value": 0.0005397796630859375,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-15/sot",
+            "value": 0.0071260808035731316,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-15/wmfcc",
+            "value": 2.3501070807874203,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-16/mel-rmse",
+            "value": 1.6317212581634521,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-16/mss",
+            "value": 0.9105899930000305,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-16/rms-envelope-cosine-distance",
+            "value": 0.03465402126312256,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-16/sot",
+            "value": 0.00670498376712203,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-16/wmfcc",
+            "value": 0.9657740279613063,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-17/mel-rmse",
+            "value": 4.434189319610596,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-17/mss",
+            "value": 2.257082223892212,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-17/rms-envelope-cosine-distance",
+            "value": 0.001659691333770752,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-17/sot",
+            "value": 0.006058216094970703,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-17/wmfcc",
+            "value": 2.626933519244194,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-18/mel-rmse",
+            "value": 3.06438946723938,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-18/mss",
+            "value": 1.1539959907531738,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-18/rms-envelope-cosine-distance",
+            "value": 0.004966318607330322,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-18/sot",
+            "value": 0.007080859038978815,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-18/wmfcc",
+            "value": 1.7240189353376627,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-19/mel-rmse",
+            "value": 4.172346115112305,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-19/mss",
+            "value": 1.6332074403762817,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-19/rms-envelope-cosine-distance",
+            "value": 0.032644569873809814,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-19/sot",
+            "value": 0.0417422279715538,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-19/wmfcc",
+            "value": 2.3112137258052825,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-20/mel-rmse",
+            "value": 2.600541830062866,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-20/mss",
+            "value": 1.1154930591583252,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-20/rms-envelope-cosine-distance",
+            "value": 0.0009118914604187012,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-20/sot",
+            "value": 0.006181797478348017,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-20/wmfcc",
+            "value": 1.809683818295598,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-21/mel-rmse",
+            "value": 3.725900173187256,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-21/mss",
+            "value": 1.6029853820800781,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-21/rms-envelope-cosine-distance",
+            "value": 0.0741918683052063,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-21/sot",
+            "value": 0.03700914606451988,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-21/wmfcc",
+            "value": 3.11607824370265,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-22/mel-rmse",
+            "value": 3.321012258529663,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-22/mss",
+            "value": 1.1754597425460815,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-22/rms-envelope-cosine-distance",
+            "value": 0.00023555755615234375,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-22/sot",
+            "value": 0.005004689563065767,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-22/wmfcc",
+            "value": 1.9702172982692718,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-23/mel-rmse",
+            "value": 3.1496570110321045,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-23/mss",
+            "value": 1.2085996866226196,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-23/rms-envelope-cosine-distance",
+            "value": 0.017017364501953125,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-23/sot",
+            "value": 0.008581596426665783,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-23/wmfcc",
+            "value": 1.922378898113966,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-24/mel-rmse",
+            "value": 3.6752002239227295,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-24/mss",
+            "value": 2.5112907886505127,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-24/rms-envelope-cosine-distance",
+            "value": 0.028553426265716553,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-24/sot",
+            "value": 0.015078742057085037,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-24/wmfcc",
+            "value": 2.3302337349951268,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-25/mel-rmse",
+            "value": 2.7103023529052734,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-25/mss",
+            "value": 1.8558255434036255,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-25/rms-envelope-cosine-distance",
+            "value": 0.00423884391784668,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-25/sot",
+            "value": 0.011520829051733017,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-25/wmfcc",
+            "value": 2.639426130652428,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-26/mel-rmse",
+            "value": 1.6420656442642212,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-26/mss",
+            "value": 1.2279270887374878,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-26/rms-envelope-cosine-distance",
+            "value": 0.0004596114158630371,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-26/sot",
+            "value": 0.003962561953812838,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-26/wmfcc",
+            "value": 0.02751080263406038,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-27/mel-rmse",
+            "value": 6.786009788513184,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-27/mss",
+            "value": 4.205289363861084,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-27/rms-envelope-cosine-distance",
+            "value": 0.0007055401802062988,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-27/sot",
+            "value": 0.02015119604766369,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-27/wmfcc",
+            "value": 7.630850318670273,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-28/mel-rmse",
+            "value": 1.8130218982696533,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-28/mss",
+            "value": 0.19105739891529083,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-28/rms-envelope-cosine-distance",
+            "value": 0.000017642974853515625,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-28/sot",
+            "value": 0.0013395702699199319,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-28/wmfcc",
+            "value": 0.2722929736971855,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-29/mel-rmse",
+            "value": 1.3493744134902954,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-29/mss",
+            "value": 0.2640123665332794,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-29/rms-envelope-cosine-distance",
+            "value": 0.0000845789909362793,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-29/sot",
+            "value": 0.0006753827910870314,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-dawdreamer/sample-29/wmfcc",
+            "value": 0.38118649783544245,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-00/mel-rmse",
+            "value": 3.2548677921295166,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-00/mss",
+            "value": 1.2643247842788696,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-00/rms-envelope-cosine-distance",
+            "value": 0.0013695359230041504,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-00/sot",
+            "value": 0.009824637323617935,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-00/wmfcc",
+            "value": 1.480697582885623,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-01/mel-rmse",
+            "value": 4.466349124908447,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-01/mss",
+            "value": 1.2224078178405762,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-01/rms-envelope-cosine-distance",
+            "value": 0.289756178855896,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-01/sot",
+            "value": 0.0038710918743163347,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-01/wmfcc",
+            "value": 2.8167007285356522,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-02/mel-rmse",
+            "value": 4.190629482269287,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-02/mss",
+            "value": 1.8558145761489868,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-02/rms-envelope-cosine-distance",
+            "value": 0.0009737610816955566,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-02/sot",
+            "value": 0.006647786591202021,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-02/wmfcc",
+            "value": 2.677766809165478,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-03/mel-rmse",
+            "value": 2.453596830368042,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-03/mss",
+            "value": 0.7613170146942139,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-03/rms-envelope-cosine-distance",
+            "value": 0.00005263090133666992,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-03/sot",
+            "value": 0.0025808478239923716,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-03/wmfcc",
+            "value": 0.9573486331629101,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-04/mel-rmse",
+            "value": 8.485736846923828,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-04/mss",
+            "value": 5.290524959564209,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-04/rms-envelope-cosine-distance",
+            "value": 0.0017812252044677734,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-04/sot",
+            "value": 0.010573735460639,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-04/wmfcc",
+            "value": 3.489770743679255,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-05/mel-rmse",
+            "value": 4.545818328857422,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-05/mss",
+            "value": 2.355219602584839,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-05/rms-envelope-cosine-distance",
+            "value": 0.03156250715255737,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-05/sot",
+            "value": 0.011154582723975182,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-05/wmfcc",
+            "value": 3.4902174230106175,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-06/mel-rmse",
+            "value": 2.428699254989624,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-06/mss",
+            "value": 1.3752251863479614,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-06/rms-envelope-cosine-distance",
+            "value": 0.009175300598144531,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-06/sot",
+            "value": 0.03711509704589844,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-06/wmfcc",
+            "value": 1.9111615582555532,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-07/mel-rmse",
+            "value": 3.3590590953826904,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-07/mss",
+            "value": 1.3984421491622925,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-07/rms-envelope-cosine-distance",
+            "value": 0.031100928783416748,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-07/sot",
+            "value": 0.013963451609015465,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-07/wmfcc",
+            "value": 2.180902475267649,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-08/mel-rmse",
+            "value": 4.367883682250977,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-08/mss",
+            "value": 2.254915237426758,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-08/rms-envelope-cosine-distance",
+            "value": 0.0018919706344604492,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-08/sot",
+            "value": 0.01132165640592575,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-08/wmfcc",
+            "value": 2.956759849591181,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-09/mel-rmse",
+            "value": 3.6272199153900146,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-09/mss",
+            "value": 2.1226847171783447,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-09/rms-envelope-cosine-distance",
+            "value": 0.02322179079055786,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-09/sot",
+            "value": 0.019011415541172028,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-09/wmfcc",
+            "value": 4.46012262493372,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-10/mel-rmse",
+            "value": 3.185417652130127,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-10/mss",
+            "value": 1.5885652303695679,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-10/rms-envelope-cosine-distance",
+            "value": 0.0015343427658081055,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-10/sot",
+            "value": 0.005993131548166275,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-10/wmfcc",
+            "value": 1.5740444043977186,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-11/mel-rmse",
+            "value": 2.9987354278564453,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-11/mss",
+            "value": 1.0296190977096558,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-11/rms-envelope-cosine-distance",
+            "value": 0.00010120868682861328,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-11/sot",
+            "value": 0.08595024794340134,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-11/wmfcc",
+            "value": 1.522229441665113,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-12/mel-rmse",
+            "value": 0.6674920320510864,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-12/mss",
+            "value": 0.525128960609436,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-12/rms-envelope-cosine-distance",
+            "value": 0.0021722912788391113,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-12/sot",
+            "value": 0.0010338047286495566,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-12/wmfcc",
+            "value": 0.16840834660455584,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-13/mel-rmse",
+            "value": 2.0043604373931885,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-13/mss",
+            "value": 0.7428062558174133,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-13/rms-envelope-cosine-distance",
+            "value": 0.0003216862678527832,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-13/sot",
+            "value": 0.004334085155278444,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-13/wmfcc",
+            "value": 1.1910336580313743,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-14/mel-rmse",
+            "value": 4.656885623931885,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-14/mss",
+            "value": 2.3098506927490234,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-14/rms-envelope-cosine-distance",
+            "value": 0.0023897886276245117,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-14/sot",
+            "value": 0.011617541313171387,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-14/wmfcc",
+            "value": 3.035030267164111,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-15/mel-rmse",
+            "value": 3.8192155361175537,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-15/mss",
+            "value": 1.7904986143112183,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-15/rms-envelope-cosine-distance",
+            "value": 0.000603795051574707,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-15/sot",
+            "value": 0.0072887493297457695,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-15/wmfcc",
+            "value": 2.3579950830340386,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-16/mel-rmse",
+            "value": 1.7153103351593018,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-16/mss",
+            "value": 0.9779151082038879,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-16/rms-envelope-cosine-distance",
+            "value": 0.01403731107711792,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-16/sot",
+            "value": 0.007521331310272217,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-16/wmfcc",
+            "value": 1.0093247872637585,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-17/mel-rmse",
+            "value": 4.487399101257324,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-17/mss",
+            "value": 2.5476644039154053,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-17/rms-envelope-cosine-distance",
+            "value": 0.002604067325592041,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-17/sot",
+            "value": 0.0064594801515340805,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-17/wmfcc",
+            "value": 2.5789814622700216,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-18/mel-rmse",
+            "value": 3.025761127471924,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-18/mss",
+            "value": 1.1600464582443237,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-18/rms-envelope-cosine-distance",
+            "value": 0.0045680999755859375,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-18/sot",
+            "value": 0.007774106226861477,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-18/wmfcc",
+            "value": 1.6173772779107094,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-19/mel-rmse",
+            "value": 4.037481307983398,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-19/mss",
+            "value": 1.6196552515029907,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-19/rms-envelope-cosine-distance",
+            "value": 0.03236997127532959,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-19/sot",
+            "value": 0.015268037095665932,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-19/wmfcc",
+            "value": 2.0082502230256796,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-20/mel-rmse",
+            "value": 2.6696386337280273,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-20/mss",
+            "value": 1.1467840671539307,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-20/rms-envelope-cosine-distance",
+            "value": 0.0009995102882385254,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-20/sot",
+            "value": 0.006636425387114286,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-20/wmfcc",
+            "value": 1.7043591514229774,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-21/mel-rmse",
+            "value": 5.965116024017334,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-21/mss",
+            "value": 3.1517059803009033,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-21/rms-envelope-cosine-distance",
+            "value": 0.09013450145721436,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-21/sot",
+            "value": 0.038086023181676865,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-21/wmfcc",
+            "value": 6.9542157036066055,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-22/mel-rmse",
+            "value": 3.4671952724456787,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-22/mss",
+            "value": 1.1849414110183716,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-22/rms-envelope-cosine-distance",
+            "value": 0.00012201070785522461,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-22/sot",
+            "value": 0.004944921936839819,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-22/wmfcc",
+            "value": 2.0496629376709463,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-23/mel-rmse",
+            "value": 2.779367446899414,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-23/mss",
+            "value": 0.9197072386741638,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-23/rms-envelope-cosine-distance",
+            "value": 0.0011357665061950684,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-23/sot",
+            "value": 0.005511220544576645,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-23/wmfcc",
+            "value": 1.3343335363268851,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-24/mel-rmse",
+            "value": 3.6681385040283203,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-24/mss",
+            "value": 1.733342170715332,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-24/rms-envelope-cosine-distance",
+            "value": 0.009871840476989746,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-24/sot",
+            "value": 0.014216127805411816,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-24/wmfcc",
+            "value": 2.139734944626689,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-25/mel-rmse",
+            "value": 4.680615425109863,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-25/mss",
+            "value": 4.016246318817139,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-25/rms-envelope-cosine-distance",
+            "value": 0.021416425704956055,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-25/sot",
+            "value": 0.011092953383922577,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-25/wmfcc",
+            "value": 4.63927208930254,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-26/mel-rmse",
+            "value": 0.736851692199707,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-26/mss",
+            "value": 1.1044631004333496,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-26/rms-envelope-cosine-distance",
+            "value": 0.002086639404296875,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-26/sot",
+            "value": 0.003321266733109951,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-26/wmfcc",
+            "value": 0.029722917005419732,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-27/mel-rmse",
+            "value": 3.7488512992858887,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-27/mss",
+            "value": 1.8296089172363281,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-27/rms-envelope-cosine-distance",
+            "value": 0.0007368326187133789,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-27/sot",
+            "value": 0.008817799389362335,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-27/wmfcc",
+            "value": 2.766868890076876,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-28/mel-rmse",
+            "value": 2.172086000442505,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-28/mss",
+            "value": 0.1457737684249878,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-28/rms-envelope-cosine-distance",
+            "value": 0.000031054019927978516,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-28/sot",
+            "value": 0.0013190852478146553,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-28/wmfcc",
+            "value": 0.2524781986477319,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-29/mel-rmse",
+            "value": 1.7409480810165405,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-29/mss",
+            "value": 0.3586643636226654,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-29/rms-envelope-cosine-distance",
+            "value": 0.000009655952453613281,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-29/sot",
+            "value": 0.0008641435415484011,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/pedalboard-vs-surgepy/sample-29/wmfcc",
+            "value": 0.5163791027478873,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-00/mel-rmse",
+            "value": 3.116507053375244,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-00/mss",
+            "value": 1.118196964263916,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-00/rms-envelope-cosine-distance",
+            "value": 0.0013058185577392578,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-00/sot",
+            "value": 0.0067965020425617695,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-00/wmfcc",
+            "value": 1.454658204782754,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-01/mel-rmse",
+            "value": 2.785109281539917,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-01/mss",
+            "value": 1.786178708076477,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-01/rms-envelope-cosine-distance",
+            "value": 0.09108233451843262,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-01/sot",
+            "value": 0.03156876191496849,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-01/wmfcc",
+            "value": 2.8075406649708747,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-02/mel-rmse",
+            "value": 4.51545524597168,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-02/mss",
+            "value": 2.0562078952789307,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-02/rms-envelope-cosine-distance",
+            "value": 0.002128422260284424,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-02/sot",
+            "value": 0.007101231720298529,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-02/wmfcc",
+            "value": 2.8065413442254066,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-03/mel-rmse",
+            "value": 2.802415609359741,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-03/mss",
+            "value": 0.8017529845237732,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-03/rms-envelope-cosine-distance",
+            "value": 0.00006777048110961914,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-03/sot",
+            "value": 0.0028895556461066008,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-03/wmfcc",
+            "value": 1.071545726582408,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-04/mel-rmse",
+            "value": 8.310659408569336,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-04/mss",
+            "value": 4.804158687591553,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-04/rms-envelope-cosine-distance",
+            "value": 0.0017045140266418457,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-04/sot",
+            "value": 0.008782409131526947,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-04/wmfcc",
+            "value": 3.120367123298347,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-05/mel-rmse",
+            "value": 4.697362899780273,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-05/mss",
+            "value": 2.4156970977783203,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-05/rms-envelope-cosine-distance",
+            "value": 0.04249626398086548,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-05/sot",
+            "value": 0.011469058692455292,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-05/wmfcc",
+            "value": 3.664778828879353,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-06/mel-rmse",
+            "value": 2.663679838180542,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-06/mss",
+            "value": 0.9333813786506653,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-06/rms-envelope-cosine-distance",
+            "value": 0.010175466537475586,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-06/sot",
+            "value": 0.029941314831376076,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-06/wmfcc",
+            "value": 1.978105939924717,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-07/mel-rmse",
+            "value": 3.215068817138672,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-07/mss",
+            "value": 1.23884117603302,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-07/rms-envelope-cosine-distance",
+            "value": 0.021330296993255615,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-07/sot",
+            "value": 0.011878213845193386,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-07/wmfcc",
+            "value": 1.6913595964593697,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-08/mel-rmse",
+            "value": 6.2177958488464355,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-08/mss",
+            "value": 4.1630353927612305,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-08/rms-envelope-cosine-distance",
+            "value": 0.0016942024230957031,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-08/sot",
+            "value": 0.017807690426707268,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-08/wmfcc",
+            "value": 3.56577529668808,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-09/mel-rmse",
+            "value": 3.9579899311065674,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-09/mss",
+            "value": 2.237379789352417,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-09/rms-envelope-cosine-distance",
+            "value": 0.006544232368469238,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-09/sot",
+            "value": 0.012422675266861916,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-09/wmfcc",
+            "value": 4.224500749111176,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-10/mel-rmse",
+            "value": 3.134921073913574,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-10/mss",
+            "value": 1.3609561920166016,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-10/rms-envelope-cosine-distance",
+            "value": 0.0010679364204406738,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-10/sot",
+            "value": 0.006337201222777367,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-10/wmfcc",
+            "value": 1.6564028725214301,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-11/mel-rmse",
+            "value": 2.9536237716674805,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-11/mss",
+            "value": 1.024863362312317,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-11/rms-envelope-cosine-distance",
+            "value": 0.00011932849884033203,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-11/sot",
+            "value": 0.09112006425857544,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-11/wmfcc",
+            "value": 1.2889158700965344,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-12/mel-rmse",
+            "value": 0.6258845329284668,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-12/mss",
+            "value": 0.21820886433124542,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-12/rms-envelope-cosine-distance",
+            "value": 0.00025260448455810547,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-12/sot",
+            "value": 0.0009942249162122607,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-12/wmfcc",
+            "value": 0.14508195986039937,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-13/mel-rmse",
+            "value": 2.1051595211029053,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-13/mss",
+            "value": 0.703355610370636,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-13/rms-envelope-cosine-distance",
+            "value": 0.0011232495307922363,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-13/sot",
+            "value": 0.0040698060765862465,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-13/wmfcc",
+            "value": 1.127899389921222,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-14/mel-rmse",
+            "value": 5.243040561676025,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-14/mss",
+            "value": 3.093064546585083,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-14/rms-envelope-cosine-distance",
+            "value": 0.0011556744575500488,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-14/sot",
+            "value": 0.010069867596030235,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-14/wmfcc",
+            "value": 3.218078033924103,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-15/mel-rmse",
+            "value": 3.72959041595459,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-15/mss",
+            "value": 1.9243367910385132,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-15/rms-envelope-cosine-distance",
+            "value": 0.0005456805229187012,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-15/sot",
+            "value": 0.008062533102929592,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-15/wmfcc",
+            "value": 2.3047389207035303,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-16/mel-rmse",
+            "value": 1.6892095804214478,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-16/mss",
+            "value": 0.9427194595336914,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-16/rms-envelope-cosine-distance",
+            "value": 0.027557849884033203,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-16/sot",
+            "value": 0.0042113084346055984,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-16/wmfcc",
+            "value": 0.8429258330096491,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-17/mel-rmse",
+            "value": 4.354761123657227,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-17/mss",
+            "value": 2.1625986099243164,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-17/rms-envelope-cosine-distance",
+            "value": 0.0021626949310302734,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-17/sot",
+            "value": 0.00639674486592412,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-17/wmfcc",
+            "value": 2.4971765135228634,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-18/mel-rmse",
+            "value": 2.9572701454162598,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-18/mss",
+            "value": 1.2079604864120483,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-18/rms-envelope-cosine-distance",
+            "value": 0.002455294132232666,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-18/sot",
+            "value": 0.007396180182695389,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-18/wmfcc",
+            "value": 1.5921609804034234,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-19/mel-rmse",
+            "value": 3.6487796306610107,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-19/mss",
+            "value": 1.4601796865463257,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-19/rms-envelope-cosine-distance",
+            "value": 0.034209489822387695,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-19/sot",
+            "value": 0.03571000695228577,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-19/wmfcc",
+            "value": 1.6517412707954646,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-20/mel-rmse",
+            "value": 2.626129388809204,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-20/mss",
+            "value": 1.0718575716018677,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-20/rms-envelope-cosine-distance",
+            "value": 0.0012961030006408691,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-20/sot",
+            "value": 0.0065045650117099285,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-20/wmfcc",
+            "value": 1.6187993542477488,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-21/mel-rmse",
+            "value": 5.308816909790039,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-21/mss",
+            "value": 2.5766639709472656,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-21/rms-envelope-cosine-distance",
+            "value": 0.10322648286819458,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-21/sot",
+            "value": 0.031576935201883316,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-21/wmfcc",
+            "value": 5.8875391668081285,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-22/mel-rmse",
+            "value": 3.272465705871582,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-22/mss",
+            "value": 1.1544078588485718,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-22/rms-envelope-cosine-distance",
+            "value": 0.0001842975616455078,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-22/sot",
+            "value": 0.005265234038233757,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-22/wmfcc",
+            "value": 1.6176347432099283,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-23/mel-rmse",
+            "value": 3.157365560531616,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-23/mss",
+            "value": 1.1646904945373535,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-23/rms-envelope-cosine-distance",
+            "value": 0.017840027809143066,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-23/sot",
+            "value": 0.005505189765244722,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-23/wmfcc",
+            "value": 1.791727254493162,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-24/mel-rmse",
+            "value": 3.9007816314697266,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-24/mss",
+            "value": 2.418706178665161,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-24/rms-envelope-cosine-distance",
+            "value": 0.029524803161621094,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-24/sot",
+            "value": 0.01616833731532097,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-24/wmfcc",
+            "value": 2.4965888091176747,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-25/mel-rmse",
+            "value": 5.886902332305908,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-25/mss",
+            "value": 5.40334939956665,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-25/rms-envelope-cosine-distance",
+            "value": 0.040638625621795654,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-25/sot",
+            "value": 0.010751632042229176,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-25/wmfcc",
+            "value": 6.136798825860024,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-26/mel-rmse",
+            "value": 0.9276789426803589,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-26/mss",
+            "value": 1.4031423330307007,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-26/rms-envelope-cosine-distance",
+            "value": 0.000616610050201416,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-26/sot",
+            "value": 0.003894245019182563,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-26/wmfcc",
+            "value": 0.027348831435665487,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-27/mel-rmse",
+            "value": 7.229657173156738,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-27/mss",
+            "value": 4.710587024688721,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-27/rms-envelope-cosine-distance",
+            "value": 0.0012282133102416992,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-27/sot",
+            "value": 0.024150917306542397,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-27/wmfcc",
+            "value": 8.028892146646976,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-28/mel-rmse",
+            "value": 2.107844114303589,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-28/mss",
+            "value": 0.20088648796081543,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-28/rms-envelope-cosine-distance",
+            "value": 0.000029087066650390625,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-28/sot",
+            "value": 0.0016027131350710988,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-28/wmfcc",
+            "value": 0.2972666650742758,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-29/mel-rmse",
+            "value": 1.7252970933914185,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-29/mss",
+            "value": 0.3568762540817261,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-29/rms-envelope-cosine-distance",
+            "value": 0.0000807642936706543,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-29/sot",
+            "value": 0.0005537364049814641,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/random-patches/dawdreamer-vs-surgepy/sample-29/wmfcc",
+            "value": 0.5703357135504484,
             "unit": "wmfcc"
           }
         ]
