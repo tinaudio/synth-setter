@@ -53,8 +53,8 @@ readonly PUEUE_SHA256=c1b10d7e4e62211075ddd0e1dc3e8cbfc5a43d662cb3be7402a28504e2
 readonly PUEUED_SHA256=5afeff6adbafb909e8d54e2caff158e6966c2adffa2c09e60fd631cc51b60390
 readonly ZELLIJ_VERSION=v0.44.3
 readonly ZELLIJ_SHA256=0f7c346788627f506c0a28296517768633cff24fc822a739f8264b640ecad751
-readonly INFISICAL_VERSION=0.38.0
-readonly INFISICAL_SHA256=b77813070e5b59ecdebd399f2d7efbb0158aabbf5d6fba679a1f32e6f3e9d03f
+readonly INFISICAL_VERSION=0.41.90
+readonly INFISICAL_SHA256=43e5c251ce5ba078f3751f76971a816f7b9f99c2fe4a938848af5cf5b087bf3c
 readonly KR106_VERSION=v2.5.13
 readonly KR106_GIT_REF=bc15caee5843ab238a25d0969e68d57db2b1615f
 readonly DOOM_EMACS_GIT_SHA=04b2956bafd883e5da7c530f8e0fbd22b1fe7af8
@@ -326,7 +326,7 @@ if ! zellij --version 2>/dev/null | grep -q "${ZELLIJ_VERSION#v}"; then
 fi
 if ! infisical --version 2>/dev/null | grep -q "$INFISICAL_VERSION"; then
   package="infisical_${INFISICAL_VERSION}_linux_amd64.deb"
-  fetch "https://dl.cloudsmith.io/public/infisical/infisical-cli/deb/debian/pool/any-version/main/i/in/infisical_${INFISICAL_VERSION}/${package}" -o "/tmp/${package}"
+  fetch "https://github.com/Infisical/infisical/releases/download/infisical-cli/v${INFISICAL_VERSION}/${package}" -o "/tmp/${package}"
   sha_check "$INFISICAL_SHA256" "/tmp/${package}"
   dpkg -i "/tmp/${package}" && rm "/tmp/${package}"
 fi

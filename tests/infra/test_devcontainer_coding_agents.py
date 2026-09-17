@@ -1,8 +1,25 @@
 """Static contracts for coding agents bundled in the devcontainer image."""
 
+import re
 from pathlib import Path
 
 import pytest
+
+_INFISICAL_RELEASE_URL_PREFIX = (
+    "https://github.com/Infisical/infisical/releases/download/infisical-cli/v"
+)
+
+
+def _capture(pattern: str, text: str) -> str:
+    """Return the single capture group of ``pattern``, asserting it matches once.
+
+    :param pattern: Regular expression carrying exactly one capture group.
+    :param text: File contents searched for the pin.
+    :returns: The captured pin value.
+    """
+    matches = re.findall(pattern, text)
+    assert len(matches) == 1, f"expected one match for {pattern!r}, got {matches}"
+    return matches[0]
 
 
 @pytest.mark.infra
@@ -34,7 +51,7 @@ def test_devcontainer_tools_installs_hermes_and_pi(project_root: Path) -> None:
 
 @pytest.mark.infra
 def test_devcontainer_tools_declares_pinned_infisical_cli(project_root: Path) -> None:
-    """Verify the Dockerfile declares the Infisical source and integrity pins.
+    """Verify the Dockerfile pins the Infisical CLI and verifies its checksum.
 
     The built-image smoke test verifies this declaration installs and runs the CLI.
 
@@ -42,19 +59,80 @@ def test_devcontainer_tools_declares_pinned_infisical_cli(project_root: Path) ->
     """
     dockerfile = (project_root / "docker" / "ubuntu22_04" / "Dockerfile").read_text()
 
-    assert "ARG INFISICAL_VERSION=0.38.0" in dockerfile
-    assert (
-        "ARG INFISICAL_SHA256_AMD64="
-        "b77813070e5b59ecdebd399f2d7efbb0158aabbf5d6fba679a1f32e6f3e9d03f"
-    ) in dockerfile
-    assert (
-        "ARG INFISICAL_SHA256_ARM64="
-        "503883eab614f544ed228ab6aadd7ed92124ff37ee31179ce3186d6043f22da7"
-    ) in dockerfile
+    assert re.search(r"ARG INFISICAL_VERSION=\d+\.\d+\.\d+", dockerfile)
+    assert re.search(r"ARG INFISICAL_SHA256_AMD64=[0-9a-f]{64}", dockerfile)
+    assert re.search(r"ARG INFISICAL_SHA256_ARM64=[0-9a-f]{64}", dockerfile)
     assert "infisical_${INFISICAL_VERSION}_linux_${TARGETARCH}.deb" in dockerfile
-    assert "dl.cloudsmith.io/public/infisical/infisical-cli" in dockerfile
     assert 'echo "${infisical_sha}  /tmp/${package}" | sha256sum -c -' in dockerfile
     assert "infisical --version" in dockerfile
+
+
+@pytest.mark.infra
+def test_devcontainer_tools_fetches_infisical_from_its_release_tag(project_root: Path) -> None:
+    """Verify the Dockerfile fetches Infisical from the upstream release, not Cloudsmith.
+
+    Cloudsmith stopped serving the ``deb/debian/pool`` layout the pin was written
+    against, so every version under that host 404s (#3682).
+
+    :param project_root: Root path of the repository under test.
+    """
+    dockerfile = (project_root / "docker" / "ubuntu22_04" / "Dockerfile").read_text()
+
+    assert _INFISICAL_RELEASE_URL_PREFIX + "${INFISICAL_VERSION}/" in dockerfile
+    assert "dl.cloudsmith.io" not in dockerfile
+
+
+@pytest.mark.infra
+def test_pod_bootstrap_fetches_infisical_from_its_release_tag(project_root: Path) -> None:
+    """Verify the vastai bootstrap fetches Infisical from the same live host.
+
+    :param project_root: Root path of the repository under test.
+    """
+    script = (project_root / "scripts" / "runpod" / "bootstrap-vastai-pytorch-pod.sh").read_text()
+
+    assert _INFISICAL_RELEASE_URL_PREFIX + "${INFISICAL_VERSION}/" in script
+    assert "dl.cloudsmith.io" not in script
+
+
+@pytest.mark.infra
+def test_infisical_pins_agree_across_both_install_sites(project_root: Path) -> None:
+    """Verify the Dockerfile and the pod bootstrap install the same Infisical build.
+
+    The two sites pin the version and checksum independently, so a bump applied to one alone leaves
+    the other fetching a build whose checksum can no longer match.
+
+    :param project_root: Root path of the repository under test.
+    """
+    dockerfile = (project_root / "docker" / "ubuntu22_04" / "Dockerfile").read_text()
+    script = (project_root / "scripts" / "runpod" / "bootstrap-vastai-pytorch-pod.sh").read_text()
+
+    dockerfile_pins = (
+        _capture(r"ARG INFISICAL_VERSION=(\S+)", dockerfile),
+        _capture(r"ARG INFISICAL_SHA256_AMD64=(\S+)", dockerfile),
+    )
+    script_pins = (
+        _capture(r"readonly INFISICAL_VERSION=(\S+)", script),
+        _capture(r"readonly INFISICAL_SHA256=(\S+)", script),
+    )
+
+    assert dockerfile_pins == script_pins
+
+
+@pytest.mark.infra
+def test_infisical_smoke_expectation_matches_the_pinned_version(project_root: Path) -> None:
+    """Verify the in-image smoke test expects the version the Dockerfile installs.
+
+    That smoke test runs where the repository is absent, so it carries the version as a literal and
+    can only be kept honest from outside the image.
+
+    :param project_root: Root path of the repository under test.
+    """
+    dockerfile = (project_root / "docker" / "ubuntu22_04" / "Dockerfile").read_text()
+    smoke = (project_root / "tests" / "docker" / "test_devcontainer_tools.py").read_text()
+
+    pinned = _capture(r"ARG INFISICAL_VERSION=(\S+)", dockerfile)
+
+    assert f'"infisical version {pinned}"' in smoke
 
 
 @pytest.mark.infra
