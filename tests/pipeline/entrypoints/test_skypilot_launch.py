@@ -431,10 +431,10 @@ class TestResolveWorkerEnvWandbProject:
 
         assert resolved["WANDB_PROJECT"] == "synth-setter-citest"
 
-    def test_env_file_project_overrides_process(
+    def test_process_project_overrides_env_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A local project selection takes precedence over process state.
+        """An exported project selection takes precedence over the env file.
 
         :param tmp_path: Pytest fixture providing an isolated env file.
         :param monkeypatch: Pytest fixture for process-environment mutation.
@@ -443,7 +443,7 @@ class TestResolveWorkerEnvWandbProject:
         env_file = tmp_path / ".env"
         env_file.write_text("WANDB_PROJECT=from-file\n")
 
-        assert resolve_worker_env(env_file)["WANDB_PROJECT"] == "from-file"
+        assert resolve_worker_env(env_file)["WANDB_PROJECT"] == "from-process"
 
     def test_blank_env_file_project_falls_back_to_process(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1634,14 +1634,14 @@ class TestDispatchViaSkypilot:
         monkeypatch: pytest.MonkeyPatch,
         mock_sky: MagicMock,
     ) -> None:
-        """Dotenv client auth outranks stale process env when the job is submitted.
+        """Dotenv client auth is active at submission when nothing is exported.
 
         :param tmp_path: Pytest temporary directory.
         :param env_file: Fixture-provided worker env file.
-        :param monkeypatch: Supplies the stale process endpoint the dotenv must beat.
+        :param monkeypatch: Keeps ambient client auth out of the process env.
         :param mock_sky: Mocked external SkyPilot SDK boundary.
         """
-        monkeypatch.setenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, "https://stale.example.com")
+        monkeypatch.delenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, raising=False)
         with env_file.open("a", encoding="utf-8") as stream:
             stream.write(
                 f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=https://sky.example.com\n"
@@ -1659,6 +1659,40 @@ class TestDispatchViaSkypilot:
             cmd="echo",
             env_file=str(env_file),
             job_name="dotenv-auth",
+        )
+
+        dispatch_via_skypilot(sky_cfg)
+
+        mock_sky.jobs.launch.assert_called_once()
+
+    def test_dispatch_exported_endpoint_overrides_env_file(
+        self,
+        tmp_path: Path,
+        env_file: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_sky: MagicMock,
+    ) -> None:
+        """An exported endpoint outranks the dotenv value at submission time.
+
+        :param tmp_path: Pytest temporary directory.
+        :param env_file: Fixture-provided worker env file.
+        :param monkeypatch: Supplies the exported override.
+        :param mock_sky: Mocked external SkyPilot SDK boundary.
+        """
+        monkeypatch.setenv(ENV_SKYPILOT_API_SERVER_ENDPOINT, "https://exported.example.com")
+        with env_file.open("a", encoding="utf-8") as stream:
+            stream.write(f"{ENV_SKYPILOT_API_SERVER_ENDPOINT}=https://dotenv.example.com\n")
+
+        def assert_exported_endpoint_is_active(*_args: object, **_kwargs: object) -> str:
+            assert os.environ[ENV_SKYPILOT_API_SERVER_ENDPOINT] == "https://exported.example.com"
+            return "launch-req"
+
+        mock_sky.jobs.launch.side_effect = assert_exported_endpoint_is_active
+        sky_cfg = SkypilotLaunchConfig(
+            compute=_runpod_compute(),
+            cmd="echo",
+            env_file=str(env_file),
+            job_name="exported-endpoint",
         )
 
         dispatch_via_skypilot(sky_cfg)

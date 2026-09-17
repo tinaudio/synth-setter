@@ -48,8 +48,8 @@ tool details from dataset, training, evaluation, and CLI logic.
 
 `StorageSettings` is the only type that reads environment variables, and
 `storage_settings_from_sources(env_file)` is the loading entry point: it reads
-the dotenv file (when it exists) with non-blank dotenv values taking precedence
-over process env, then validates. It uses `pydantic_settings.BaseSettings`
+the dotenv file (when it exists) with non-blank process-env values taking
+precedence over dotenv, then validates. It uses `pydantic_settings.BaseSettings`
 because loading settings is ambient process-boundary behavior.
 
 ```python

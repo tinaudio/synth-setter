@@ -65,8 +65,8 @@ expanded.
 ## Environment resolution
 
 `storage_settings_from_sources()` resolves each setting in this order:
-canonical dotenv, canonical process environment, legacy dotenv alias, then
-legacy process-environment alias. Blank values are absent. `StorageConfig`
+canonical process environment, canonical dotenv, legacy process-environment
+alias, then legacy dotenv alias. Blank values are absent. `StorageConfig`
 defaults the provider to `r2`, the region to `auto`, and the rclone backend
 type to `s3`, so legacy credential-only deployments retain their previous R2
 behavior.
