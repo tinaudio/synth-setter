@@ -14,6 +14,7 @@ from click.testing import CliRunner
 from synth_setter.data.vst.clap_introspect import ClapParamInfo, ClapPluginInfo
 from synth_setter.data.vst.param_map import load_param_map
 from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter, ParamSpec
+from synth_setter.data.vst.surgepy_runtime import surgepy_version_matches
 from synth_setter.tools import build_param_map
 from synth_setter.tools.build_param_map import HostDump, HostParam, join_param_map
 
@@ -660,7 +661,7 @@ def test_dump_surgepy_reads_real_patch_and_native_identities(tmp_path: Path) -> 
 
     assert result.exit_code == 0, result.output
     dump = build_param_map.SurgePyDump.model_validate_json(output_path.read_text())
-    assert dump.engine_version == "1.3.master.f7b97c68"
+    assert surgepy_version_matches(dump.engine_version, "1.3.master.f7b97c68")
     assert dump.parameter_count == 762
     assert len({parameter.synth_side_id for parameter in dump.params}) == 762
 
