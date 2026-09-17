@@ -20,6 +20,9 @@ _STAGE_GAP_SECONDS = _STAGE_STALL_BOUND_SECONDS / 4
 # real dependency opens on a saturated runner (#3666), not a marginal overshoot.
 _SILENT_BUSY_SECONDS = 1.5
 _BUSY_STALL_BOUND_SECONDS = 0.3
+# Work before the first marker: on a loaded runner interpreter startup alone
+# outlasts a sub-second bound, and the failure then names no stage at all.
+_PRE_MARKER_BUSY_SECONDS = 1.0
 
 
 def test_run_fresh_process_probe_steady_startup_progress_outlasts_the_stall_bound() -> None:
@@ -120,3 +123,20 @@ def test_run_fresh_process_probe_spinning_startup_fails_against_the_absolute_cap
             behavior_timeout_s=_STALLED_PROBE_SLEEP_SECONDS,
         )
     assert time.monotonic() - started_at < _STALLED_PROBE_SLEEP_SECONDS
+
+
+def test_run_fresh_process_probe_busy_start_before_the_first_marker_is_not_a_stall() -> None:
+    """Startup CPU spent before any marker counts, so an empty stage list is never the verdict."""
+    run_fresh_process_probe(
+        f"""
+        import time
+
+        deadline = time.monotonic() + {_PRE_MARKER_BUSY_SECONDS}
+        while time.monotonic() < deadline:
+            pass
+        progress("torch")
+        ready()
+        """,
+        startup_stall_timeout_s=_BUSY_STALL_BOUND_SECONDS,
+        behavior_timeout_s=_STALLED_PROBE_SLEEP_SECONDS,
+    )
