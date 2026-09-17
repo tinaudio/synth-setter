@@ -34,12 +34,6 @@ src/synth_setter/evaluation/predict_vst_audio.py
     DOC101: Function `params_to_csv`: Docstring contains fewer arguments than in function signature.
     DOC103: Function `params_to_csv`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [param_spec: ParamSpec, pred_note_params: NoteParams, pred_synth_params: dict[str, float], save_path: str, target_note_params: NoteParams | None, target_synth_params: dict[str, float] | None].
 --------------------
-src/synth_setter/metrics.py
-    DOC101: Method `LogSpectralDistance.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `LogSpectralDistance.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**kwargs: , eps: float].
-    DOC101: Method `SpectralDistance.__init__`: Docstring contains fewer arguments than in function signature.
-    DOC103: Method `SpectralDistance.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [**kwargs: , eps: float].
---------------------
 src/synth_setter/models/components/cnn.py
     DOC101: Method `ResidualMLPBlock.__init__`: Docstring contains fewer arguments than in function signature.
     DOC103: Method `ResidualMLPBlock.__init__`: Docstring arguments are different from function arguments. (Or could be other formatting issues: https://jsh9.github.io/pydoclint/violation_codes.html#notes-on-doc103 ). Arguments in the function signature but not in the docstring: [hidden_dim: int | None, in_dim: int, out_dim: int | None].
