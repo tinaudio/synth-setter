@@ -8,6 +8,7 @@ model:
   conditioning:
     column: t5gemma
     input_shape: [768, 256]
+    normalization: per_channel
   encoder:
     embed_dim: 768
     max_seq_len: 256
@@ -16,3 +17,4 @@ datamodule:
   conditioning:
     column: t5gemma
     input_shape: [768, 256]
+    normalization: per_channel

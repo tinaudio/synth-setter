@@ -9,6 +9,7 @@ model:
   conditioning:
     column: m2l
     input_shape: [128, 42]
+    normalization: per_channel
   encoder:
     embed_dim: 128
     max_seq_len: 42
@@ -17,3 +18,4 @@ datamodule:
   conditioning:
     column: m2l
     input_shape: [128, 42]
+    normalization: per_channel

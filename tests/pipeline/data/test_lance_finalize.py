@@ -34,6 +34,7 @@ from synth_setter.pipeline.data.lance_staging import (
     shard_has_complete_attempt,
     stage_lance_shard_attempt,
 )
+from synth_setter.pipeline.data.stats import WelfordState
 from synth_setter.pipeline.schemas.lance_attempt import (
     LanceDatasetCard,
 )
@@ -650,7 +651,9 @@ def test_finalize_forwards_mask_degenerate_bins_to_welford_finalize(
     captured: dict[str, bool] = {}
     real_finalize = lance_finalize.finalize_welford
 
-    def capture_finalize(existing: object, mask_degenerate: bool = False) -> object:
+    def capture_finalize(
+        existing: WelfordState, mask_degenerate: bool = False
+    ) -> tuple[np.ndarray, np.ndarray]:
         captured["mask_degenerate"] = mask_degenerate
         return real_finalize(existing, mask_degenerate=mask_degenerate)
 
