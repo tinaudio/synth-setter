@@ -55,8 +55,11 @@ def test_music_profile_pools_tracks_and_zeros_weak_pitch(monkeypatch: pytest.Mon
     controls = torch.full((386, 401), 0.05)
     controls[0] = 0.25
     controls[1] = 0.5
-    controls[2, 0] = 0.1
-    controls[2, 13] = 0.11
+    # Pooling 401 source frames to 32 averages source 0-12 into output 0 and 12-25 into
+    # output 1, so the spikes are sized by window mean, clear of the threshold either way.
+    controls[2, :26] = 0.0
+    controls[2, 0] = 0.12 * 13
+    controls[2, 13] = 0.08 * 14
     monkeypatch.setattr(profile_controls, "extract_sketch_controls", lambda *args: controls)
     spec = SketchControlSpec(num_frames=32, pitch_zero_threshold=0.1)
     pooled = extract_profile_controls(np.zeros((2, 176400), np.float32), _SAMPLE_RATE, spec)
@@ -64,8 +67,8 @@ def test_music_profile_pools_tracks_and_zeros_weak_pitch(monkeypatch: pytest.Mon
     assert pooled.dtype is torch.float32
     assert torch.equal(pooled[:, 0], torch.full((1, 32), 0.25))
     assert torch.equal(pooled[:, 1], torch.full((1, 32), 0.5))
-    assert pooled[0, 2, 0] == pytest.approx(0.1)
-    assert pooled[0, 2, 1] == pytest.approx(0.11)
+    assert pooled[0, 2, 0] == pytest.approx(0.12)
+    assert pooled[0, 2, 1] == 0.0
     assert torch.count_nonzero(pooled[:, 2:, 2:]) == 0
 
 
