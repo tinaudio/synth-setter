@@ -554,9 +554,12 @@ def _load_plugin_loudly[PluginT](
     timed_out = threading.Event()
     timeout_messages: list[str] = []
 
+    # Read on the caller thread: the budget bounds the load, not the scheduler's
+    # delay in getting the watchdog running (#3562).
+    started = time.monotonic()
+
     def _watchdog() -> None:
         """Emit heartbeats until ``loader`` finishes or the timeout path wins."""
-        started = time.monotonic()
         while True:
             elapsed = time.monotonic() - started
             remaining = timeout_seconds - elapsed
