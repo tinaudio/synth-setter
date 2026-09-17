@@ -13,7 +13,7 @@ import hashlib
 import json
 import os
 import shutil
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from uuid import uuid4
 
@@ -622,8 +622,8 @@ def materialize_lance_subset(  # noqa: DOC502, DOC503
         unrelated dataset.
     :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
     :param columns: Columns to project, in scan order.
-    :param version: Explicit source version, used for native branch snapshots whose
-        transaction reader is unavailable in Lance 9. Mutually exclusive with ``txid``.
+    :param version: Explicit source version. Unlike ``txid`` it leaves the request
+        hash equal to an unpinned resolve of that version. Mutually exclusive with ``txid``.
     :param branch: Native branch selected from ``source_base_uri`` at ``version``.
     :param source_base_uri: Parent dataset URI used to resolve inherited branch fragments.
     :param limit: First-N row cap, or ``None`` for all rows.
@@ -658,7 +658,7 @@ def materialize_lance_subset(  # noqa: DOC502, DOC503
         if version is not None
         else ds.version if txid is None else resolve_txid_version(ds, txid)
     )
-    resolved_txid = None if version is not None else _transaction_uuid(ds, resolved_version)
+    resolved_txid = None if branch is not None else _transaction_uuid(ds, resolved_version)
     if dest_path.exists():
         return _reuse_or_raise(
             dest_path,
@@ -712,11 +712,29 @@ def _require_dataset_complete(source_root_uri: str) -> None:
         )
 
 
+def resolve_latest_versions(
+    source_root_uri: str, splits: Iterable[str], shard_suffix: str
+) -> dict[str, int]:
+    """Read the current version of each split under a finalized dataset root.
+
+    :param source_root_uri: Hydration root holding the split datasets.
+    :param splits: Split names to resolve.
+    :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
+    :returns: ``{split: latest_version}``.
+    """
+    _require_dataset_complete(source_root_uri)
+    return {
+        split: _open_source(f"{source_root_uri.rstrip('/')}/{split}{shard_suffix}").version
+        for split in splits
+    }
+
+
 def materialize_splits(
     source_root_uri: str,
     dest_root: Path,
     *,
     txids: Mapping[str, str] | None,
+    versions: Mapping[str, int] | None = None,
     projection: Mapping[str, Sequence[str]],
     row_limit: int | None,
     shard_suffix: str,
@@ -729,6 +747,7 @@ def materialize_splits(
     :param dest_root: Local destination root; each split lands at
         ``dest_root / f"{split}{shard_suffix}"``.
     :param txids: Per-split transaction uuids, or ``None`` to use latest snapshots.
+    :param versions: Per-split source versions pinning an unpinned request, or ``None``.
     :param projection: Columns to materialize per split.
     :param row_limit: First-N row cap per split, or ``None`` for all rows.
     :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
@@ -741,6 +760,7 @@ def materialize_splits(
             f"{source_root_uri.rstrip('/')}/{name}",
             dest_root / name,
             txid=txids[split] if txids is not None else None,
+            version=versions[split] if versions is not None else None,
             columns=columns,
             limit=row_limit,
             high_memory_materialization=high_memory_materialization,
