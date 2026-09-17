@@ -17,7 +17,6 @@ from synth_setter.data.vst.shapes import (
 from synth_setter.pupujepa import (
     DEFAULT_PUPUJEPA_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
-    PUPUJEPA_CHECKPOINT_SPECS,
     PUPUJEPA_LARGE_CONFIG,
     PUPUJEPA_SAMPLE_RATE,
     PUPUJEPA_TINY_CONFIG,
@@ -26,12 +25,10 @@ from synth_setter.pupujepa import (
     PUPUJEPA_UPSTREAM_COMMIT,
     pupujepa_num_time_patches,
 )
+from synth_setter.pipeline.data.embedding_batches import resolve_encode_batch_size
 from synth_setter.utils.logging_utils import resolve_git_sha
 
 logger = structlog.get_logger(__name__)
-
-PUPUJEPA_ENCODE_MAX_BATCH = PUPUJEPA_CHECKPOINT_SPECS["tiny"].encode_max_batch
-PUPUJEPA_LARGE_ENCODE_MAX_BATCH = PUPUJEPA_CHECKPOINT_SPECS["large"].encode_max_batch
 
 type PupuJepaEncodeFn = Callable[[np.ndarray, int], np.ndarray]
 
@@ -149,12 +146,14 @@ def load_pupujepa_audio_encoder(
     *,
     device: str = "cpu",
     variant: PupuJepaVariant = "tiny",
+    batch_size: int = -1,
 ) -> PupuJepaEncodeFn:
     """Load the frozen teacher and return the bounded offline NumPy adapter.
 
     :param checkpoint: Canonical pinned Hugging Face repo or local checkpoint directory.
     :param device: Explicit Torch inference device.
     :param variant: Released teacher size to load.
+    :param batch_size: Rows per offline model call, or ``-1`` for the full input.
     :returns: Encoder from ``(B, C, T)`` waveforms to
         ``(B, config.output_dim, time_patches)`` sequences.
     """
@@ -187,10 +186,12 @@ def load_pupujepa_audio_encoder(
         """
         mono = pupujepa_encoder_input(audio, sample_rate)
         chunks: list[np.ndarray] = []
-        max_batch = PUPUJEPA_CHECKPOINT_SPECS[variant].encode_max_batch
+        resolved_batch_size = resolve_encode_batch_size(batch_size, len(mono))
         with torch.inference_mode():
-            for start in range(0, len(mono), max_batch):
-                waveform = torch.from_numpy(mono[start : start + max_batch]).to(device)
+            for start in range(0, len(mono), resolved_batch_size):
+                waveform = torch.from_numpy(
+                    mono[start : start + resolved_batch_size]
+                ).to(device)
                 sequence = model(waveform, sample_rate=sample_rate)
                 chunks.append(sequence.float().cpu().numpy())
         return np.ascontiguousarray(np.concatenate(chunks, axis=0), dtype=np.float32)

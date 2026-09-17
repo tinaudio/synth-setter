@@ -31,10 +31,15 @@ def cqt_artifact_digest(checkpoint: str) -> str:
     return CQT_POLICY_DIGEST
 
 
-def load_cqt_audio_encoder(device: str) -> CQTEncodeFn:
+def load_cqt_audio_encoder(
+    device: str,
+    *,
+    batch_size: int = -1,
+) -> CQTEncodeFn:
     """Build an adapter returning canonical CQT features as NumPy arrays.
 
     :param device: Torch device used for transform construction and extraction.
+    :param batch_size: Rows per transform call, or ``-1`` for the full input.
     :returns: Encoder from ``(B, C, T)`` waveforms to float32 CQT features.
     """
     import torch
@@ -56,7 +61,10 @@ def load_cqt_audio_encoder(device: str) -> CQTEncodeFn:
             raise ValueError(f"expected audio shaped (B, C, T), got {audio.shape}")
         encoder = encoders.get(sample_rate)
         if encoder is None:
-            encoder = CqtAudioEncoder(sample_rate=sample_rate)
+            encoder = CqtAudioEncoder(
+                sample_rate=sample_rate,
+                max_batch_size=batch_size,
+            )
             encoders[sample_rate] = encoder
         waveform = torch.as_tensor(np.ascontiguousarray(audio), device=torch_device)
         return encoder(waveform).cpu().numpy().astype(np.float32, copy=False)

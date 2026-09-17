@@ -590,10 +590,12 @@ def test_load_matpac_plus_audio_encoder_batches_and_preserves_row_order(
         [np.full((1, 16_000), row / 20, dtype=np.float32) for row in range(17)]
     )
 
-    encode = matpac_plus_module.load_matpac_plus_audio_encoder("local-checkpoint", device="cpu")
+    encode = matpac_plus_module.load_matpac_plus_audio_encoder(
+        "local-checkpoint", device="cpu", batch_size=6
+    )
     encoded = encode(audio, 16_000)
 
-    assert model.batch_sizes == [16, 1]
+    assert model.batch_sizes == [6, 6, 5]
     assert encoded.shape == (17, MATPAC_PLUS_FRONTEND.embedding_dim, 7)
     np.testing.assert_allclose(encoded[:, 0, 0], np.arange(17) / 20)
 
@@ -605,10 +607,12 @@ def test_matpac_plus_registry_loader_returns_package_encoder(
 
     :param monkeypatch: Fixture replacing the already-tested package loader boundary.
     """
-    seen: list[tuple[str, str]] = []
+    seen: list[tuple[str, str, int]] = []
 
-    def load(checkpoint: str, *, device: str) -> matpac_plus_module.MatpacPlusEncodeFn:
-        seen.append((checkpoint, device))
+    def load(
+        checkpoint: str, *, device: str, batch_size: int
+    ) -> matpac_plus_module.MatpacPlusEncodeFn:
+        seen.append((checkpoint, device, batch_size))
 
         def encode(audio: np.ndarray, sample_rate: int) -> np.ndarray:
             del sample_rate
@@ -633,7 +637,7 @@ def test_matpac_plus_registry_loader_returns_package_encoder(
     )
     encoded = encoder(np.zeros((2, 1, 16_000), dtype=np.float32), 16_000)
 
-    assert seen == [("checkpoint.pt", "cpu")]
+    assert seen == [("checkpoint.pt", "cpu", -1)]
     assert encoded.shape == (2, MATPAC_PLUS_FRONTEND.embedding_dim, 7)
     assert np.all(encoded == 0.5)
 

@@ -19,8 +19,6 @@ from synth_setter.data.vst.shapes import (
 from synth_setter.models.components.pupujepa_encoder import PupuJepaAudioEncoder
 from synth_setter.pipeline.data.add_embeddings import EMBEDDING_REGISTRY, IndexSpec
 from synth_setter.pipeline.data.pupujepa import (
-    PUPUJEPA_ENCODE_MAX_BATCH,
-    PUPUJEPA_LARGE_ENCODE_MAX_BATCH,
     encode_pupujepa_column,
     encode_pupujepa_large_column,
     pupujepa_encoder_input,
@@ -354,33 +352,35 @@ def test_load_pupujepa_audio_encoder_bounds_chunks_and_preserves_rows(
         "from_pretrained",
         lambda **_kwargs: model,
     )
-    rows = PUPUJEPA_ENCODE_MAX_BATCH + 1
+    rows = 17
     audio = np.stack(
         [np.full((1, 960), row / rows, dtype=np.float32) for row in range(rows)]
     )
 
-    encode = pupujepa_module.load_pupujepa_audio_encoder(device="cpu")
+    encode = pupujepa_module.load_pupujepa_audio_encoder(
+        device="cpu", batch_size=5
+    )
     embeddings = encode(audio, PUPUJEPA_SAMPLE_RATE)
 
-    assert model.batch_sizes == [PUPUJEPA_ENCODE_MAX_BATCH, 1]
+    assert model.batch_sizes == [5, 5, 5, 2]
     assert embeddings.shape == (rows, PUPUJEPA_EMBEDDING_DIM, 1)
     np.testing.assert_allclose(embeddings[:, 0, 0], np.arange(rows) / rows)
 
 
-def test_load_pupujepa_large_audio_encoder_processes_one_row_per_chunk(
+def test_load_pupujepa_large_audio_encoder_default_uses_full_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Large inference bounds model residency to one waveform per forward.
+    """The loader default sends the complete non-empty batch.
 
     :param monkeypatch: Fixture replacing only the pretrained materialization boundary.
     """
     model = _BatchRecordingEncoder(PUPUJEPA_LARGE_EMBEDDING_DIM)
     monkeypatch.setattr(PupuJepaAudioEncoder, "from_pretrained", lambda **_kwargs: model)
-    rows = PUPUJEPA_LARGE_ENCODE_MAX_BATCH + 1
+    rows = 2
     audio = np.zeros((rows, 1, 960), dtype=np.float32)
 
     encode = pupujepa_module.load_pupujepa_audio_encoder(device="cpu", variant="large")
     embeddings = encode(audio, PUPUJEPA_SAMPLE_RATE)
 
-    assert model.batch_sizes == [1, 1]
+    assert model.batch_sizes == [2]
     assert embeddings.shape == (rows, PUPUJEPA_LARGE_EMBEDDING_DIM, 1)

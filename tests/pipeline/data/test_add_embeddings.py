@@ -478,22 +478,23 @@ def test_embedding_registry_contains_peer_specs_with_expected_policies() -> None
     ("name", "variant"),
     [("pupujepa_tiny", "tiny"), ("pupujepa_large", "large")],
 )
-def test_pupujepa_registry_loader_threads_variant(
+def test_pupujepa_registry_loader_threads_variant_and_encode_batch(
     monkeypatch: pytest.MonkeyPatch,
     name: str,
     variant: str,
 ) -> None:
-    """Each PupuJEPA registry adapter selects its released teacher size.
+    """Each PupuJEPA registry adapter selects its teacher and global batch.
 
     :param monkeypatch: Fixture replacing heavyweight teacher loading.
     :param name: Registry profile under test.
     :param variant: Expected teacher size.
     """
-    calls: list[tuple[str, str, str]] = []
+    calls: list[tuple[str, str, str, int]] = []
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_pupujepa_audio_encoder",
-        lambda checkpoint, *, device, variant: (
-            calls.append((checkpoint, device, variant)) or (lambda audio, rate: audio)
+        lambda checkpoint, *, device, variant, batch_size: (
+            calls.append((checkpoint, device, variant, batch_size))
+            or (lambda audio, rate: audio)
         ),
     )
     spec = EMBEDDING_REGISTRY[name]
@@ -503,7 +504,14 @@ def test_pupujepa_registry_loader_threads_variant(
         AddEmbeddingsConfig(lance_uri="x.lance", device="cpu"),
     )
 
-    assert calls == [("custom/pupujepa", "cpu", variant)]
+    assert calls == [
+        (
+            "custom/pupujepa",
+            "cpu",
+            variant,
+            -1,
+        )
+    ]
 
 
 @pytest.mark.parametrize(
@@ -549,6 +557,7 @@ def test_add_embeddings_config_composition_surfaces_registry_defaults() -> None:
         assert dict(cfg.checkpoints) == {}
         assert cfg.device is None
         assert cfg.lance_batch_size == DEFAULT_LANCE_BATCH_SIZE
+        assert cfg.encode_batch_size == -1
         assert cfg.build_index is True
         assert cfg.num_partitions is None
         assert cfg.num_sub_vectors is None
@@ -1070,6 +1079,7 @@ def test_resume_source_identity_changes_with_input_contract(tmp_path: Path) -> N
         sample_rate=_SAMPLE_RATE,
         batch_size=2,
         input_fields=[AUDIO_FIELD],
+        encode_batch_size=32,
     )
 
     assert baseline != _resume_source_identity(
@@ -1077,18 +1087,28 @@ def test_resume_source_identity_changes_with_input_contract(tmp_path: Path) -> N
         sample_rate=_SAMPLE_RATE // 2,
         batch_size=2,
         input_fields=[AUDIO_FIELD],
+        encode_batch_size=32,
     )
     assert baseline != _resume_source_identity(
         dataset,
         sample_rate=_SAMPLE_RATE,
         batch_size=1,
         input_fields=[AUDIO_FIELD],
+        encode_batch_size=32,
     )
     assert baseline != _resume_source_identity(
         dataset,
         sample_rate=_SAMPLE_RATE,
         batch_size=2,
         input_fields=[PARAM_ARRAY_FIELD],
+        encode_batch_size=32,
+    )
+    assert baseline != _resume_source_identity(
+        dataset,
+        sample_rate=_SAMPLE_RATE,
+        batch_size=2,
+        input_fields=[AUDIO_FIELD],
+        encode_batch_size=64,
     )
 
 
@@ -2147,6 +2167,32 @@ def test_load_m2l_audio_encoder_selects_expected_device(
     assert selected == [expected]
 
 
+def test_m2l_audio_encoder_threads_configured_batch_to_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The package receives the configured flattened-channel batch limit.
+
+    :param monkeypatch: Fixture replacing the package encoder boundary.
+    """
+    seen_limits: list[int] = []
+
+    class Encoder:
+        def __init__(self, *, device: str) -> None:
+            del device
+
+        def encode(self, audio: np.ndarray, *, max_batch_size: int) -> torch.Tensor:
+            seen_limits.append(max_batch_size)
+            return torch.zeros(len(audio), 2, 1)
+
+    monkeypatch.setattr("music2latent.EncoderDecoder", Encoder)
+    encode = load_m2l_audio_encoder("cpu", batch_size=3)
+
+    latents = encode(np.zeros((2, 2, 16), dtype=np.float32))
+
+    assert seen_limits == [3]
+    assert latents.shape == (2, 4, 1)
+
+
 @pytest.mark.mps
 @pytest.mark.slow
 def test_m2l_audio_encoder_on_mps_produces_finite_latents() -> None:
@@ -2290,6 +2336,58 @@ def test_load_clap_audio_encoder_uses_processor_sample_rate(
 
     assert embedding.shape == (1, CLAP_EMBEDDING_DIM)
     assert embedding[0, 0] == 32_000
+
+
+def test_clap_audio_encoder_respects_configured_batch_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CLAP forwards never exceed the configured inference batch.
+
+    :param monkeypatch: Fixture installing a batch-recording Transformers boundary.
+    """
+    seen_sizes: list[int] = []
+
+    class Model:
+        def to(self, device: str) -> Model:
+            del device
+            return self
+
+        def eval(self) -> Model:
+            return self
+
+        def get_audio_features(self, input_features: torch.Tensor) -> SimpleNamespace:
+            seen_sizes.append(len(input_features))
+            return SimpleNamespace(
+                pooler_output=torch.zeros(len(input_features), CLAP_EMBEDDING_DIM)
+            )
+
+    class Processor:
+        feature_extractor = SimpleNamespace(sampling_rate=16_000)
+
+        def __call__(
+            self, *, audio: list[np.ndarray], sampling_rate: int, return_tensors: str
+        ) -> dict[str, torch.Tensor]:
+            del sampling_rate, return_tensors
+            return {"input_features": torch.zeros(len(audio), 1)}
+
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings._resolve_clap_checkpoint",
+        lambda _checkpoint: "/cache/clap",
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(
+            ClapModel=SimpleNamespace(from_pretrained=lambda _checkpoint: Model()),
+            ClapProcessor=SimpleNamespace(from_pretrained=lambda _checkpoint: Processor()),
+        ),
+    )
+    encode = load_clap_audio_encoder(device="cpu", batch_size=2)
+
+    embedding = encode(np.zeros((5, 16_000), dtype=np.float32), 16_000)
+
+    assert embedding.shape == (5, CLAP_EMBEDDING_DIM)
+    assert seen_sizes == [2, 2, 1]
 
 
 def test_resolve_clap_checkpoint_with_existing_local_path_returns_it(
@@ -2785,16 +2883,16 @@ def test_load_same_audio_encoder_uses_sa3_factory_and_preserves_inference_contra
 
     _install_sa3_factory(monkeypatch, factory)
     _write_same_checkpoint(tmp_path, model.state_dict())
-    encode = load_same_audio_encoder(str(tmp_path), device="cpu")
+    encode = load_same_audio_encoder(str(tmp_path), device="cpu", batch_size=8)
     audio = np.ones((17, 2, 8), dtype=np.float32)
 
     latents = encode(audio)
 
     assert factory_calls == [({"family": "same"}, SAME_SAMPLE_RATE)]
-    assert model.chunk_sizes == [16, 1]
-    assert model.grad_enabled == [False, False]
-    assert model.training_states == [False, False]
-    assert model.parameter_grad_states == [False, False]
+    assert model.chunk_sizes == [8, 8, 1]
+    assert model.grad_enabled == [False, False, False]
+    assert model.training_states == [False, False, False]
+    assert model.parameter_grad_states == [False, False, False]
     assert next(model.parameters()).device.type == "cpu"
     assert latents.shape == (17, 1, 8)
     assert latents.dtype == np.float32
@@ -2875,7 +2973,7 @@ def test_add_embeddings_threads_device_and_debug_to_loaders_and_progress(
     """
     uri = tmp_path / "device-debug.lance"
     write_minimal_lance_shard(uri, build_lance_smoke_spec())
-    selected: list[tuple[str, str | None]] = []
+    selected: list[tuple[str, str | None, int]] = []
 
     for name in ("clap", "m2l"):
         spec = _fake_spec(name)
@@ -2884,17 +2982,27 @@ def test_add_embeddings_threads_device_and_debug_to_loaders_and_progress(
             checkpoint: str, config: AddEmbeddingsConfig, *, registry_name: str = name
         ) -> Callable[..., np.ndarray]:
             del checkpoint
-            selected.append((registry_name, config.device))
+            selected.append((registry_name, config.device, config.encode_batch_size))
             return _encoder_for(registry_name)
 
         monkeypatch.setitem(EMBEDDING_REGISTRY, name, replace(spec, load_encoder=load))
 
     with capture_logs() as logs:
         add_embeddings(
-            AddEmbeddingsConfig(lance_uri=str(uri), device="mps", debug=True, build_index=False)
+            AddEmbeddingsConfig(
+                lance_uri=str(uri),
+                device="mps",
+                debug=True,
+                build_index=False,
+                encode_batch_size=7,
+            )
         )
 
-    assert selected == [("clap", "mps"), ("m2l", "mps")]
+    assert selected == [("clap", "mps", 7), ("m2l", "mps", 7)]
+    assert any(
+        entry["event"] == "adding_embeddings" and entry["encode_batch_size"] == 7
+        for entry in logs
+    )
     assert any(entry["event"] == "embedding_progress" for entry in logs)
 
 
@@ -3548,62 +3656,80 @@ def test_add_embeddings_config_composition_defaults_the_text_normalizer() -> Non
     assert (config.param_spec_name, config.param_text_normalizer) == (None, "param_names")
 
 
-def test_load_m2l_spec_encoder_passes_the_configured_device(
+def test_load_m2l_spec_encoder_passes_device_and_encode_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The registry adapter threads the run config's device to the m2l loader.
+    """The registry adapter threads M2L runtime policy to the package loader.
 
     :param monkeypatch: Fixture replacing the heavyweight encoder load.
     """
-    seen: list[str | None] = []
+    seen: list[tuple[str | None, int]] = []
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_m2l_audio_encoder",
-        lambda device: seen.append(device) or (lambda audio: audio),
-    )
-
-    _load_m2l_spec_encoder("ignored", AddEmbeddingsConfig(lance_uri="x.lance", device="mps"))
-
-    assert seen == ["mps"]
-
-
-def test_load_clap_spec_encoder_passes_the_checkpoint_and_configured_device(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The registry adapter threads both checkpoint and device to the CLAP loader.
-
-    :param monkeypatch: Fixture replacing the heavyweight encoder load.
-    """
-    seen: list[tuple[str, str | None]] = []
-    monkeypatch.setattr(
-        "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder",
-        lambda checkpoint, device: (
-            seen.append((checkpoint, device)) or (lambda audio, rate: audio)
+        lambda device, *, batch_size: (
+            seen.append((device, batch_size)) or (lambda audio: audio)
         ),
     )
+    config = AddEmbeddingsConfig(
+        lance_uri="x.lance",
+        device="mps",
+        encode_batch_size=7,
+    )
 
-    _load_clap_spec_encoder("custom/clap", AddEmbeddingsConfig(lance_uri="x.lance", device="cpu"))
+    _load_m2l_spec_encoder("ignored", config)
 
-    assert seen == [("custom/clap", "cpu")]
+    assert seen == [("mps", 7)]
 
 
-def test_load_same_spec_encoder_passes_the_checkpoint_and_configured_device(
+def test_load_clap_spec_encoder_passes_checkpoint_device_and_encode_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The registry adapter threads both checkpoint and device to the SAME loader.
+    """The registry adapter threads CLAP artifact and runtime policy.
 
     :param monkeypatch: Fixture replacing the heavyweight encoder load.
     """
-    seen: list[tuple[str, str | None]] = []
+    seen: list[tuple[str, str | None, int]] = []
+    monkeypatch.setattr(
+        "synth_setter.pipeline.data.add_embeddings.load_clap_audio_encoder",
+        lambda checkpoint, device, *, batch_size: (
+            seen.append((checkpoint, device, batch_size))
+            or (lambda audio, rate: audio)
+        ),
+    )
+    config = AddEmbeddingsConfig(
+        lance_uri="x.lance",
+        device="cpu",
+        encode_batch_size=-1,
+    )
+
+    _load_clap_spec_encoder("custom/clap", config)
+
+    assert seen == [("custom/clap", "cpu", -1)]
+
+
+def test_load_same_spec_encoder_passes_checkpoint_device_and_encode_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SAME-S registry adapter threads artifact and runtime policy.
+
+    :param monkeypatch: Fixture replacing the heavyweight encoder load.
+    """
+    seen: list[tuple[str, str | None, int]] = []
     monkeypatch.setattr(
         "synth_setter.pipeline.data.add_embeddings.load_same_audio_encoder",
-        lambda checkpoint, device: seen.append((checkpoint, device)) or (lambda audio: audio),
+        lambda checkpoint, device, *, batch_size: (
+            seen.append((checkpoint, device, batch_size)) or (lambda audio: audio)
+        ),
+    )
+    config = AddEmbeddingsConfig(
+        lance_uri="x.lance",
+        device="cpu",
+        encode_batch_size=3,
     )
 
-    _load_same_spec_encoder(
-        "custom/same-s", AddEmbeddingsConfig(lance_uri="x.lance", device="cpu")
-    )
+    _load_same_spec_encoder("custom/same-s", config)
 
-    assert seen == [("custom/same-s", "cpu")]
+    assert seen == [("custom/same-s", "cpu", 3)]
 
 
 def test_load_t5gemma_spec_encoder_without_a_param_spec_raises() -> None:
@@ -3742,42 +3868,10 @@ def test_sketch_encode_column_with_out_of_bounds_output_raises(row: int, value: 
         EMBEDDING_REGISTRY["sketch"].encode_column({AUDIO_FIELD: audio}, _SAMPLE_RATE, poisoned)
 
 
-def test_sketch_encode_never_exceeds_extraction_batch_cap(
+def test_sketch_encode_with_custom_batch_size_caps_extractor_batches(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every extractor invocation stays within SKETCH_ENCODE_MAX_BATCH.
-
-    :param monkeypatch: Fixture recording extractor input batch sizes.
-    """
-    import synth_setter.features.sketch_controls as sketch_controls
-    from synth_setter.pipeline.data.add_embeddings import (
-        SKETCH_ENCODE_MAX_BATCH,
-        _sketch_encode,
-    )
-
-    seen_sizes: list[int] = []
-
-    def record(batch: torch.Tensor, sample_rate: int, device: str = "cpu") -> torch.Tensor:
-        del sample_rate, device
-        seen_sizes.append(len(batch))
-        return torch.zeros(len(batch), NUM_SKETCH_CONTROLS, 1)
-
-    monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
-    rows = 2 * SKETCH_ENCODE_MAX_BATCH + 5
-    audio = np.zeros((rows, 1, _FIXTURE_SAMPLES), dtype=np.float32)
-
-    controls = _sketch_encode(audio, _SAMPLE_RATE)
-
-    assert len(controls) == rows
-    assert sum(seen_sizes) == rows
-    assert max(seen_sizes) == SKETCH_ENCODE_MAX_BATCH
-    assert all(size <= SKETCH_ENCODE_MAX_BATCH for size in seen_sizes)
-
-
-def test_sketch_encode_with_custom_max_batch_caps_extractor_batches(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A configured max batch overrides the default extraction cap.
+    """A configured batch size caps extraction calls.
 
     :param monkeypatch: Fixture recording extractor input batch sizes.
     """
@@ -3794,32 +3888,36 @@ def test_sketch_encode_with_custom_max_batch_caps_extractor_batches(
     monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
     audio = np.zeros((20, 1, _FIXTURE_SAMPLES), dtype=np.float32)
 
-    controls = _sketch_encode(audio, _SAMPLE_RATE, max_batch=8)
+    controls = _sketch_encode(audio, _SAMPLE_RATE, batch_size=8)
 
     assert len(controls) == 20
     assert seen_sizes == [8, 8, 4]
 
 
-def test_add_embeddings_config_with_non_positive_sketch_batch_raises() -> None:
-    """The sketch extraction batch validates as a positive row count."""
-    with pytest.raises(ValidationError):
-        AddEmbeddingsConfig(lance_uri=_LANCE_URI, sketch_encode_batch=0)
+@pytest.mark.parametrize("batch_size", [0, -2])
+def test_add_embeddings_config_with_invalid_encode_batch_raises(batch_size: int) -> None:
+    """Encoder batches accept positive limits or the unlimited sentinel.
+
+    :param batch_size: Invalid encoder batch limit.
+    """
+    with pytest.raises(ValidationError, match="encode_batch_size"):
+        AddEmbeddingsConfig(lance_uri=_LANCE_URI, encode_batch_size=batch_size)
 
 
-def test_add_embeddings_config_composition_overrides_sketch_encode_batch() -> None:
-    """The shipped Hydra config exposes the sketch extraction batch as a tunable."""
-    cfg = _compose_add_embeddings("sketch_encode_batch=128")
+def test_add_embeddings_config_composition_overrides_encoder_batch() -> None:
+    """Hydra exposes one inference batch shared by offline encoders."""
+    cfg = _compose_add_embeddings("encode_batch_size=128")
     try:
         config = AddEmbeddingsConfig.from_hydra_cfg(cfg)
     finally:
         GlobalHydra.instance().clear()
-    assert config.sketch_encode_batch == 128
+    assert config.encode_batch_size == 128
 
 
 def test_sketch_spec_encoder_binds_config_batch_and_logs_device(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The registry loader threads the configured max batch and logs the resolved device.
+    """The registry loader threads the configured batch and logs the resolved device.
 
     :param monkeypatch: Fixture stubbing PESTO load and recording extractor batch sizes.
     """
@@ -3839,7 +3937,10 @@ def test_sketch_spec_encoder_binds_config_batch_and_logs_device(
     monkeypatch.setattr(sketch_controls, "load_pesto_model", lambda *args, **kwargs: None)
     monkeypatch.setattr(sketch_controls, "extract_sketch_controls_batch", record)
     config = AddEmbeddingsConfig(
-        lance_uri=_LANCE_URI, embeddings=("sketch",), device="cpu", sketch_encode_batch=4
+        lance_uri=_LANCE_URI,
+        embeddings=("sketch",),
+        device="cpu",
+        encode_batch_size=4,
     )
 
     with capture_logs() as logs:
@@ -3847,7 +3948,10 @@ def test_sketch_spec_encoder_binds_config_batch_and_logs_device(
     encode(np.zeros((10, 1, _FIXTURE_SAMPLES), dtype=np.float32), _SAMPLE_RATE)
 
     assert seen_sizes == [4, 4, 2]
-    assert any(log.get("device") == "cpu" and log.get("encode_batch") == 4 for log in logs)
+    assert any(
+        log.get("device") == "cpu" and log.get("encode_batch_size") == 4
+        for log in logs
+    )
 
 
 @pytest.mark.slow
@@ -3856,19 +3960,17 @@ def test_sketch_encode_sub_batched_matches_single_pass() -> None:
 
     Torch reduction kernels can vary by batch shape at approximately 1e-6.
     """
-    from synth_setter.pipeline.data.add_embeddings import (
-        SKETCH_ENCODE_MAX_BATCH,
-        _sketch_encode,
-    )
+    from synth_setter.pipeline.data.add_embeddings import _sketch_encode
 
-    rows = SKETCH_ENCODE_MAX_BATCH + 3
+    batch_size = 5
+    rows = batch_size + 3
     # Clips long enough for PESTO's CQT and the loudness STFT windows.
     samples = 8192
     audio = (
         (np.random.default_rng(23).random((rows, 1, samples)) - 0.5) * 0.8
     ).astype(np.float32)
 
-    chunked = _sketch_encode(audio, _SAMPLE_RATE)
+    chunked = _sketch_encode(audio, _SAMPLE_RATE, batch_size=batch_size)
 
     full = (
         extract_sketch_controls_batch(torch.from_numpy(audio), _SAMPLE_RATE).cpu().numpy()
@@ -4043,6 +4145,7 @@ def test_add_embeddings_main_with_sketch_selection_writes_control_columns(
             "logger=[]",
             f"lance_uri={uri}",
             "embeddings=[sketch]",
+            "encode_batch_size=1",
             "build_index=false",
             f"paths.log_dir={tmp_path}",
             f"hydra.run.dir={tmp_path / 'run'}",

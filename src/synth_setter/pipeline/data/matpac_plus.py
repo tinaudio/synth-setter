@@ -27,6 +27,7 @@ import structlog
 from synth_setter.data.vst.shapes import AUDIO_FIELD, MATPAC_PLUS_FIELD
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.pipeline import r2_io
+from synth_setter.pipeline.data.embedding_batches import resolve_encode_batch_size
 from synth_setter.utils.logging_utils import resolve_git_sha
 
 if TYPE_CHECKING:
@@ -43,8 +44,6 @@ DEFAULT_MATPAC_PLUS_CHECKPOINT = (
     "r2://intermediate-data/tinymu/source/pretrained/AndreasXi/TinyMU/"
     f"{MATPAC_PLUS_CHECKPOINT_REVISION}/{MATPAC_PLUS_CHECKPOINT_NAME}"
 )
-
-MATPAC_PLUS_ENCODE_MAX_BATCH = 16
 
 
 @dataclass(frozen=True)
@@ -480,11 +479,13 @@ def load_matpac_plus_audio_encoder(
     checkpoint: str = DEFAULT_MATPAC_PLUS_CHECKPOINT,
     *,
     device: str = "cpu",
+    batch_size: int = -1,
 ) -> MatpacPlusEncodeFn:
     """Load frozen MATPAC weights through TinyMU's public package API.
 
     :param checkpoint: Exact pinned R2 URI or a hash-identical local file.
     :param device: Explicit Torch device.
+    :param batch_size: Prepared rows per model call, or ``-1`` for the full input.
     :returns: Encoder accepting finite normalized ``(B, C, T)`` audio and returning
         ``(B, 3840, T_tokens)`` float32 sequences.
     """
@@ -511,13 +512,14 @@ def load_matpac_plus_audio_encoder(
         :returns: Contiguous float32 embedding sequences.
         """
         prepared = matpac_plus_encoder_input(audio, sample_rate)
+        resolved_batch_size = resolve_encode_batch_size(batch_size, len(prepared))
         chunks = [
             _encode_matpac_plus_chunk(
                 model,
-                prepared[start : start + MATPAC_PLUS_ENCODE_MAX_BATCH],
+                prepared[start : start + resolved_batch_size],
                 device,
             )
-            for start in range(0, len(prepared), MATPAC_PLUS_ENCODE_MAX_BATCH)
+            for start in range(0, len(prepared), resolved_batch_size)
         ]
         return np.concatenate(chunks, axis=0)
 

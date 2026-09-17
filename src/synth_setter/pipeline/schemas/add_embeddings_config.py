@@ -17,7 +17,6 @@ from synth_setter.pipeline.data.add_embeddings import (
     DEFAULT_INDEX_METRIC,
     DEFAULT_LANCE_BATCH_SIZE,
     EMBEDDING_REGISTRY,
-    SKETCH_ENCODE_MAX_BATCH,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig
 
@@ -58,9 +57,9 @@ class AddEmbeddingsConfig(BaseModel):
 
         Worker processes for CPU-bound registry encoders; ``1`` keeps them in-process.
 
-    .. attribute :: sketch_encode_batch
+    .. attribute :: encode_batch_size
 
-        Rows per sketch extractor invocation.
+        Rows per offline encoder call; ``-1`` processes the current Lance batch.
 
     .. attribute :: build_index
 
@@ -122,10 +121,9 @@ class AddEmbeddingsConfig(BaseModel):
         ge=1,
         description="Worker processes for CPU-bound encoders; torch/GPU encoders ignore it.",
     )
-    sketch_encode_batch: int = Field(
-        default=SKETCH_ENCODE_MAX_BATCH,
-        ge=1,
-        description="Rows per sketch extractor invocation; sizes memory and GPU utilization.",
+    encode_batch_size: int = Field(
+        default=-1,
+        description="Rows per offline encoder call; -1 processes the current Lance batch.",
     )
     build_index: bool = Field(
         default=True, description="Build indexes declared by selected embedding specs."
@@ -178,6 +176,19 @@ class AddEmbeddingsConfig(BaseModel):
         if len(set(embeddings)) != len(embeddings):
             raise ValueError(f"embeddings {list(embeddings)} has duplicate entries")
         return embeddings
+
+    @field_validator("encode_batch_size")
+    @classmethod
+    def _check_encode_batch_size(cls, value: int) -> int:
+        """Reject inference batch sizes outside positive integers or ``-1``.
+
+        :param value: Shared offline encoder batch size.
+        :returns: Validated batch size unchanged.
+        :raises ValueError: The batch size is neither positive nor ``-1``.
+        """
+        if value != -1 and value < 1:
+            raise ValueError(f"encode_batch_size must be positive or -1, got {value}")
+        return value
 
     @field_validator("checkpoints")
     @classmethod
