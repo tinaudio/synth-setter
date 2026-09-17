@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import math
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import cast
@@ -16,7 +15,7 @@ from omegaconf import DictConfig, open_dict
 
 from synth_setter.cli import eval as eval_module
 from synth_setter.cli.eval import evaluate
-from synth_setter.cli.train import train
+from synth_setter.cli.train import _upload_best_checkpoint, train
 
 
 @pytest.fixture()
@@ -132,6 +131,94 @@ def test_eval_checkpoint_digest_without_checkpoint_raises() -> None:
     """A digest cannot silently accompany an in-memory model evaluation."""
     with pytest.raises(ValueError, match="ckpt_sha256 requires ckpt_path"):
         eval_module._localize_eval_checkpoint(None, "0" * 64)
+
+
+def test_eval_checkpoint_filename_validation_derives_digest() -> None:
+    """Enabled filename validation derives the pin before localization."""
+    digest = hashlib.sha256(b"checkpoint").hexdigest()
+
+    resolved = eval_module._resolve_checkpoint_sha256(
+        f"r2://bucket/runs/model-{digest}.ckpt", None, validate_chekpoint_sha=True
+    )
+
+    assert resolved == digest
+
+
+def test_eval_checkpoint_filename_validation_rejects_malformed_name() -> None:
+    """Enabled filename validation requires a trailing SHA-256 before ``.ckpt``."""
+    with pytest.raises(ValueError, match="checkpoint filename must end with"):
+        eval_module._resolve_checkpoint_sha256(
+            "r2://bucket/runs/model.ckpt", None, validate_chekpoint_sha=True
+        )
+
+
+def test_eval_checkpoint_filename_validation_rejects_conflicting_explicit_digest() -> None:
+    """A separate pin cannot contradict the digest encoded in the filename."""
+    with pytest.raises(ValueError, match="ckpt_sha256 does not match"):
+        eval_module._resolve_checkpoint_sha256(
+            f"model-{'a' * 64}.ckpt",
+            "b" * 64,
+            validate_chekpoint_sha=True,
+        )
+
+
+def test_eval_checkpoint_filename_validation_rejects_digest_mismatch(
+    fake_r2_remote: Path,
+    storage_credentials: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Filename-derived validation rejects remote bytes with another digest.
+
+    :param fake_r2_remote: Local filesystem backing the real rclone remote.
+    :param storage_credentials: Dummy application credentials for the local backend.
+    :param monkeypatch: Routes the shared cache into the temporary directory.
+    """
+    uri = f"r2://bucket/runs/model-{'0' * 64}.ckpt"
+    source = fake_r2_remote / "bucket" / "runs" / uri.rsplit("/", 1)[-1]
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"different checkpoint")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
+    digest = eval_module._resolve_checkpoint_sha256(uri, None, validate_chekpoint_sha=True)
+
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+        eval_module._localize_eval_checkpoint(uri, digest)
+
+
+def test_eval_checkpoint_filename_validation_rejects_local_digest_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Filename-derived validation rejects local bytes with another digest.
+
+    :param tmp_path: Temporary checkpoint and cache directory.
+    :param monkeypatch: Routes the shared cache into the temporary directory.
+    """
+    checkpoint = tmp_path / f"model-{'0' * 64}.ckpt"
+    checkpoint.write_bytes(b"different checkpoint")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    digest = eval_module._resolve_checkpoint_sha256(
+        str(checkpoint), None, validate_chekpoint_sha=True
+    )
+
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+        eval_module._localize_eval_checkpoint(str(checkpoint), digest)
+
+
+def test_eval_checkpoint_filename_validation_rejects_non_boolean_flag() -> None:
+    """Filename validation cannot be enabled by a truthy non-boolean value."""
+    with pytest.raises(ValueError, match="validate_chekpoint_sha must be a boolean"):
+        eval_module._resolve_checkpoint_sha256(
+            "model.ckpt", None, validate_chekpoint_sha=cast(bool, "true")
+        )
+
+
+def test_eval_checkpoint_filename_validation_disabled_preserves_unpinned_name() -> None:
+    """The disabled rollout flag keeps a digest-free checkpoint unpinned."""
+    assert (
+        eval_module._resolve_checkpoint_sha256(
+            "r2://bucket/runs/model.ckpt", None, validate_chekpoint_sha=False
+        )
+        is None
+    )
 
 
 def test_eval_checkpoint_remote_uri_without_digest_downloads_checkpoint(
@@ -443,13 +530,14 @@ def test_evaluate_consumes_real_checkpoint_downloaded_from_r2(
     train(cfg_train)
 
     local_checkpoint = Path(cfg_train.paths.output_dir) / "checkpoints" / "last.ckpt"
-    remote_checkpoint = fake_r2_remote / "bucket" / "runs" / "last.ckpt"
-    remote_checkpoint.parent.mkdir(parents=True)
-    shutil.copyfile(local_checkpoint, remote_checkpoint)
-    original_uri = "r2://bucket/runs/last.ckpt"
+    with open_dict(cfg_train):
+        cfg_train.training.upload_checkpoints_uri = "r2://bucket/runs/model.ckpt"
+    original_uri = _upload_best_checkpoint(cfg_train, str(local_checkpoint), "eval-e2e", "launch")
+    assert original_uri is not None
     with open_dict(cfg_eval):
         cfg_eval.ckpt_path = original_uri
-        cfg_eval.ckpt_sha256 = hashlib.sha256(local_checkpoint.read_bytes()).hexdigest()
+        cfg_eval.ckpt_sha256 = None
+        cfg_eval.validate_chekpoint_sha = True
     monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
 
     HydraConfig().set_config(cfg_eval)
@@ -457,5 +545,6 @@ def test_evaluate_consumes_real_checkpoint_downloaded_from_r2(
 
     assert math.isfinite(metrics["test/param_mse"].item())
     assert cfg_eval.ckpt_path == original_uri
+    assert cfg_eval.ckpt_sha256 == hashlib.sha256(local_checkpoint.read_bytes()).hexdigest()
     assert Path(objects["trainer"].ckpt_path).is_file()
     assert objects["trainer"].ckpt_path != original_uri
