@@ -2938,9 +2938,12 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
             rendered_params.at["a_amp_eg_attack", "target"]
         )
 
+    # compute_audio_metrics scores mid/side only for stereo pairs, so the expected key
+    # set follows the render's channel count rather than a frozen literal (#3328).
+    stereo_only = ("mldr_mid_side",) if cfg_surge_real_train.render.channels == 2 else ()
     assert set(metrics) == {
         f"val_audio/{name}_{stat}"
-        for name in ("mss", "wmfcc", "sot", "rms", "mldr")
+        for name in ("mss", "wmfcc", "sot", "rms", "mldr", *stereo_only)
         for stat in ("mean", "std")
     }
     bounds = ORACLE_AUDIO_METRIC_BOUNDS
