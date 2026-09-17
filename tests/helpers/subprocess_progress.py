@@ -23,15 +23,15 @@ _READY_BYTE = b"1"
 _MAX_POLL_SECONDS = 1.0
 
 
-def _cpu_seconds(child: psutil.Process, last: float) -> float:
+def _cpu_seconds(pid: int, last: float) -> float:
     """Return the child's accumulated CPU time, or ``last`` once it is gone.
 
-    :param child: Handle on the running child.
+    :param pid: Process id of the child.
     :param last: Reading to keep when the process can no longer be sampled.
     :returns: User plus system CPU seconds.
     """
     try:
-        times = child.cpu_times()
+        times = psutil.Process(pid).cpu_times()
     except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
         return last
     return times.user + times.system
@@ -54,12 +54,13 @@ def await_ready_signal(
     :raises AssertionError: If the child stalls, exits early, or outlasts ``hard_cap_s``.
     """
     assert process.stdout is not None, "child must be started with stdout=subprocess.PIPE"
-    child = psutil.Process(process.pid)
     output: list[str] = []
-    cpu_seconds = _cpu_seconds(child, 0.0)
+    cpu_seconds = _cpu_seconds(process.pid, 0.0)
     last_progress = time.monotonic()
     hard_deadline = last_progress + hard_cap_s
     poll_s = min(_MAX_POLL_SECONDS, stall_timeout_s / 4)
+    # Dropped on EOF, so a closed pipe cannot spin the loop by staying readable.
+    watched: list[object] = [ready_fd, process.stdout]
 
     while True:
         remaining_s = hard_deadline - time.monotonic()
@@ -67,22 +68,20 @@ def await_ready_signal(
             raise AssertionError(
                 f"child did not signal readiness within {hard_cap_s:g}s:\n{''.join(output)}"
             )
-        readable, _, _ = select.select(
-            [ready_fd, process.stdout], [], [], min(poll_s, remaining_s)
-        )
-        if ready_fd in readable and os.read(ready_fd, 1) == _READY_BYTE:
-            return "".join(output)
+        readable, _, _ = select.select(watched, [], [], min(poll_s, remaining_s))
         if process.stdout in readable:
             line = process.stdout.readline()
             if line:
                 output.append(line)
                 last_progress = time.monotonic()
                 continue
-            if process.poll() is not None:
-                raise AssertionError(
-                    f"child exited before signalling readiness:\n{''.join(output)}"
-                )
-        sampled = _cpu_seconds(child, cpu_seconds)
+            watched.remove(process.stdout)
+        # Checked after stdout so a child that signals and exits keeps its output.
+        if ready_fd in readable and os.read(ready_fd, 1) == _READY_BYTE:
+            return "".join(output)
+        if process.stdout not in watched and process.poll() is not None:
+            raise AssertionError(f"child exited before signalling readiness:\n{''.join(output)}")
+        sampled = _cpu_seconds(process.pid, cpu_seconds)
         if sampled > cpu_seconds:
             cpu_seconds = sampled
             last_progress = time.monotonic()

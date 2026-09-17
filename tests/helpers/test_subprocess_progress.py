@@ -32,6 +32,14 @@ os.write(fd, b"1")
 time.sleep(30)
 """
 
+_SIGNAL_READY_THEN_EXIT = """
+import os, sys
+print("starting", flush=True)
+fd = os.open(sys.argv[1], os.O_WRONLY)
+os.write(fd, b"1")
+sys.exit(0)
+"""
+
 _SLEEP_SILENTLY = """
 import time
 time.sleep(30)
@@ -108,6 +116,34 @@ def test_await_ready_signal_when_the_child_signals_returns_its_earlier_output(
     process = _run_child(_SIGNAL_READY, ready_fifo)
 
     output = _await(process, ready_fifo, stall_s=_STALL_TIMEOUT_SECONDS)
+
+    assert "starting" in output
+
+
+def test_await_ready_signal_when_the_child_exits_after_signalling_returns_its_output(
+    ready_fifo: Path,
+) -> None:
+    """A child that signals and then exits is ready, not an early exit.
+
+    :param ready_fifo: FIFO the child signals on.
+    """
+    read_fd = os.open(ready_fifo, os.O_RDONLY | os.O_NONBLOCK)
+    write_fd = os.open(ready_fifo, os.O_WRONLY | os.O_NONBLOCK)
+    process = _run_child(_SIGNAL_READY_THEN_EXIT, ready_fifo)
+    try:
+        process.wait(timeout=10)
+
+        output = await_ready_signal(
+            process,
+            read_fd,
+            stall_timeout_s=_STALL_TIMEOUT_SECONDS,
+            hard_cap_s=_HARD_CAP_SECONDS,
+        )
+    finally:
+        os.close(write_fd)
+        os.close(read_fd)
+        process.kill()
+        process.wait(timeout=10)
 
     assert "starting" in output
 
