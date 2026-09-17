@@ -262,7 +262,7 @@ link-plugins: ## Link installed Studiorack packages into the checkout's plugins/
 	central="$$primary/plugins"; \
 	linked=""; \
 	if [[ -L "$$here/plugins" ]]; then \
-		linked="$$($(RESOLVE_LINK) "$$here/plugins")"; \
+		linked="$$($(RESOLVE_LINK) "$$here/plugins")" || exit 1; \
 	fi; \
 	if [[ "$$primary" != "$$here" && -n "$$linked" && "$$linked" == "$$central" ]]; then \
 		[[ -d "$$central" ]] || { echo "ERROR: primary plugins directory is unavailable: $$central" >&2; exit 1; }; \
@@ -287,7 +287,8 @@ link-thoughts: ## Symlink this worktree's thoughts/ to the primary checkout's ce
 	central="$$primary/thoughts"; \
 	mkdir -p "$$central"; \
 	if [ -L "$$here/thoughts" ]; then \
-		if [ "$$($(RESOLVE_LINK) "$$here/thoughts")" = "$$central" ]; then \
+		linked="$$($(RESOLVE_LINK) "$$here/thoughts")" || exit 1; \
+		if [ "$$linked" = "$$central" ]; then \
 			echo "thoughts/ already linked -> $$central"; exit 0; \
 		fi; \
 		rm -f "$$here/thoughts"; \
