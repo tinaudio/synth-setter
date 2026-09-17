@@ -941,7 +941,7 @@ def test_train_torchsynth_flow_audio_one_step_writes_metrics_and_checkpoint(
         assert values, f"no {prefix} metric in {sorted(metric_dict)}"
         assert all(torch.isfinite(value).all() for value in values)
     assert torch.isfinite(
-        metric_dict["val/number_group_optimal_assignment_mse/adsr_1.attack"]
+        metric_dict["val/number_group_optimal_assignment_mse/adsr_N.attack"]
     ).all()
 
     checkpoint = tmp_path / "checkpoints" / "last.ckpt"
