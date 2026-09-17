@@ -16,6 +16,7 @@ Typical usage::
 """
 
 import librosa
+import numpy as np
 import torch
 import torchaudio
 from beartype import beartype
@@ -173,7 +174,10 @@ def _a_weighting_db(device: torch.device) -> torch.Tensor:
     global _a_weights
     if _a_weights is None:
         freqs = librosa.fft_frequencies(sr=_LOUDNESS_SAMPLE_RATE, n_fft=_LOUDNESS_N_FFT)
-        curve = librosa.A_weighting(freqs, min_db=None) - _LOUDNESS_REF_DB
+        # A-weighting is -inf at DC and librosa reaches it through log10(0); the value is
+        # exact, the warning is not, so only the audible bins go through the library.
+        curve = np.full(freqs.shape, -np.inf)
+        curve[1:] = librosa.A_weighting(freqs[1:], min_db=None) - _LOUDNESS_REF_DB
         _a_weights = torch.tensor(curve, dtype=torch.float32)[:, None]
     return _a_weights.to(device)
 
