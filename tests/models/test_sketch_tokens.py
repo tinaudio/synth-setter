@@ -456,12 +456,12 @@ class TestPyFDNReverbSketchControlTokens:
             )
 
 
-def _field(pe_type: str = "none") -> ApproxEquivTransformer:
+def _field(
+    pe_type: Literal["initial", "layerwise", "none"] = "none",
+) -> ApproxEquivTransformer:
     """Build a tiny vector field for injection tests.
 
-    :param pe_type: Parameter-token positional-encoding mode; ``"none"`` is a
-        valid runtime value ``model/vst_flow.yaml`` ships, although the
-        constructor's ``Literal`` annotation omits it (hence the cast).
+    :param pe_type: Parameter-token positional-encoding mode.
     :returns: Small CPU field with live (non-zero-init) blocks, as configured
         by ``model/vst_flow.yaml``.
     """
@@ -479,7 +479,7 @@ def _field(pe_type: str = "none") -> ApproxEquivTransformer:
         num_heads=2,
         d_ff=_D_MODEL,
         num_tokens=5,
-        pe_type=cast(Literal["initial", "layerwise"], pe_type),
+        pe_type=pe_type,
         time_encoding="scalar",
         learn_projection=True,
         zero_init=False,

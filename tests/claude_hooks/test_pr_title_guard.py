@@ -220,6 +220,29 @@ class TestCommandModeScoping:
         )
         assert "release-triggering" in result.stdout
 
+    def test_newline_separated_pr_create_is_gated(self) -> None:
+        """Check that newline separated pr create is gated."""
+        result = _run_command_mode('cd /tmp\ngh pr create --title "feat: x" --body y')
+        assert "release-triggering" in result.stdout
+
+    def test_heredoc_body_before_pr_create_is_gated(self) -> None:
+        """Check that heredoc body before pr create is gated."""
+        result = _run_command_mode(
+            "cat > body.md <<'EOF'\nbody prose\nEOF\n"
+            'gh pr create --title "feat: x" --body-file body.md'
+        )
+        assert "release-triggering" in result.stdout
+
+    def test_newline_before_non_gh_command_is_not_gated(self) -> None:
+        """Check that newline before non gh command is not gated."""
+        result = _run_command_mode('gh pr view 1\necho "feat: x"')
+        assert result.stdout == ""
+
+    def test_newline_inside_quoted_title_is_not_a_separator(self) -> None:
+        """Check that newline inside quoted title is not a separator."""
+        result = _run_command_mode('gh pr create --title "feat: x\ntrailer" --body y')
+        assert "release-triggering" in result.stdout
+
     def test_repo_flag_between_gh_and_pr_is_gated(self) -> None:
         """Check that repo flag between gh and pr is gated."""
         result = _run_command_mode(
