@@ -94,12 +94,15 @@ jobs:
       - name: Install rclone
         uses: ./.github/actions/install-rclone
 
+      # The lane budget is enforced in-process (tests/conftest.py, #2274) and
+      # reports which tests ran; this timeout only backstops a hang, so it gets
+      # headroom rather than racing that diagnostic to a bare exit 137 (#3344).
       - name: Run strict fast tier (two-minute wall-clock limit)
         env:
           HYDRA_FULL_ERROR: "1"
         run: |
           budget_seconds="$(make --no-print-directory -s fast-test-budget)"
-          timeout --signal=KILL "${budget_seconds}s" make test-fast
+          timeout --signal=KILL "$((budget_seconds * 3))s" make test-fast
 
       # Marker filter + coverage flags live in `make test-ci-unit` so they
       # can't drift from cpu-slow.yml / nightly.yml — see #1353.
