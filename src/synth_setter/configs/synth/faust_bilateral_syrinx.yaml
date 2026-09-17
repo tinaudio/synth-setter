@@ -1,0 +1,7 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "faust_bilateral_syrinx"
+param_spec_name: "faust_bilateral_syrinx"
+plugin_path: "registry://faust/faust_bilateral_syrinx"
+plugin_state_path: ""
+synth_version: "1"
+source_sha256: "a6b383ecaa2a133ba34f4ed4a9d1756854960ea6af41f905175e0c86135aab86"

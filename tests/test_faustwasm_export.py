@@ -14,10 +14,13 @@ import pytest
 from hydra import compose, initialize_config_module
 
 from synth_setter.data.vst import faustwasm_artifacts
+from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.faustwasm_artifacts import (
     compile_faustwasm_artifact,
     run_faustwasm_render_worker,
 )
+from synth_setter.data.vst.param_spec import ContinuousParameter
+from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.resources import faustwasm_dir
 from synth_setter.synth_spec import SYNTHS, SynthName
 from synth_setter.tools.export_faustwasm import main
@@ -32,6 +35,22 @@ def _configured_backend_version() -> str:
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         return str(compose(config_name="render/faustwasm").render.backend_version)
+
+
+def _flatten_compiler_controls(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return leaf controls from nested compiler-owned UI metadata.
+
+    :param items: Faust UI metadata nodes.
+    :returns: Leaf control descriptors in compiler order.
+    """
+    controls: list[dict[str, Any]] = []
+    for item in items:
+        children = item.get("items")
+        if children is None:
+            controls.append(item)
+        else:
+            controls.extend(_flatten_compiler_controls(children))
+    return controls
 
 
 def test_faustwasm_resources_include_pinned_runtime() -> None:
@@ -53,8 +72,10 @@ def test_faustwasm_resources_include_pinned_runtime() -> None:
 @pytest.mark.parametrize(
     ("identity", "expected_mode", "expected_outputs"),
     [
+        ("faust_bilateral_syrinx", "mono", 1),
         ("faust_bright_organ", "poly", 2),
         ("faust_filter_osc", "mono", 1),
+        ("faust_single_syrinx", "mono", 1),
     ],
 )
 def test_export_cli_persists_hashed_artifact_consumed_by_real_runtime(
@@ -109,6 +130,41 @@ def test_export_cli_persists_hashed_artifact_consumed_by_real_runtime(
 
     assert np.isfinite(audio).all()
     assert float(np.max(np.abs(audio))) > 1e-6
+
+
+@pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
+@pytest.mark.parametrize(
+    "identity",
+    ["faust_bilateral_syrinx", "faust_single_syrinx"],
+)
+def test_birdsong_compiler_metadata_matches_parameter_spec(
+    tmp_path: Path,
+    identity: str,
+) -> None:
+    """Compiler-owned birdsong controls match every modeled address and domain.
+
+    :param tmp_path: Isolated artifact destination.
+    :param identity: Registered autonomous birdsong source.
+    """
+    output_dir = tmp_path / identity
+    compile_faustwasm_artifact(
+        SYNTHS[SynthName(identity)],
+        output_dir,
+        backend_version=_configured_backend_version(),
+    )
+    manifest = json.loads((output_dir / "manifest.json").read_text())
+    controls = _flatten_compiler_controls(manifest["dspMeta"]["ui"])
+    compiled_domains = {
+        control["address"]: (control["min"], control["max"], control["type"])
+        for control in controls
+    }
+    spec = resolve_faust_param_spec(ParamSpecName(identity))
+    expected_domains = {}
+    for parameter in spec.synth_params:
+        assert isinstance(parameter, ContinuousParameter)
+        expected_domains[parameter.name] = (parameter.min, parameter.max, "hslider")
+
+    assert compiled_domains == expected_domains
 
 
 @pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
