@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789678466467,
+  "lastUpdate": 1789678470821,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -29922,6 +29922,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.856144425000002,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b6756890d19ee69c02eba14185c41f309321d004",
+          "message": "test(evaluation): pin missing-checkpoint eval test to CPU trainer (#3607)\n\neval.yaml defaults to trainer=gpu and the surge eval experiment does not\noverride it, while evaluate() instantiates the Trainer before it reads\nckpt_path. On a CPU-only runner Lightning raised \"No supported gpu\nbackend found!\" first, so the test never reached the assertion and the\nUbuntu fast tier stayed red.\n\nCompose the test with trainer=cpu, as the rest of the eval suite already\ndoes. The assertion is unchanged and still requires the missing-value\nerror.\n\nFixes #3553\nFixes #3565\nRefs #3537\nRefs #3529\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-17T15:48:01-04:00",
+          "tree_id": "ea85b055e5c8ceb64356b92b3903c71bc5fc885d",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b6756890d19ee69c02eba14185c41f309321d004"
+        },
+        "date": 1789678469917,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.142088890075684,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.31972593575716,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.088391974568367,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.009789228439331055,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.0835258960723877,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.593894384600025,
             "unit": "seconds"
           }
         ]
