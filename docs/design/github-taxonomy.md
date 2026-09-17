@@ -303,7 +303,7 @@ mutation {
   addBlockedBy(input: {
     issueId: \"$BLOCKED\"
     blockingIssueId: \"$BLOCKER\"
-  }) { blockedIssue { number } }
+  }) { issue { number } blockingIssue { number } }
 }"
 ```
 
