@@ -80,6 +80,7 @@ from tests.conftest import (
     _SURGE_FIXTURE_CHANNELS,
     _SURGE_FIXTURE_DURATION_SECONDS,
     _SURGE_FIXTURE_SAMPLE_RATE,
+    EMBEDDING_E2E_KEYS,
     FAKE_VST_VARIANTS,
     NUM_FIXTURE_SAMPLES,
     REAL_VST_VARIANTS,
@@ -3426,18 +3427,6 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     assert second_logger_cfg.resume is None
 
 
-_ALL_EMBEDDING_CONDITIONING_PROFILES = (
-    "clap",
-    "m2l",
-    "same_s",
-    "same_l",
-    "ssondo",
-    "t5gemma",
-    "matpac_plus",
-    "meanaudio_16k",
-)
-
-
 def _assert_conditioning_checkpoint_validates(cfg: DictConfig, output_dir: Path) -> None:
     """Validate a trained embedding-conditioned checkpoint.
 
@@ -3762,7 +3751,7 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
     )
     assert_embedding_columns(dataset_root)
 
-    for conditioning in _ALL_EMBEDDING_CONDITIONING_PROFILES:
+    for conditioning in EMBEDDING_E2E_KEYS:
         cfg = build_surge_xt_embedding_train_cfg(
             tmp_path / conditioning,
             dataset_root,
