@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789705635048,
+  "lastUpdate": 1789705639186,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -30494,6 +30494,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.886391129499952,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ffa8cde3aebce94b1551cbbb6025b0954fda142a",
+          "message": "internal-fix(data-pipeline): rename the add-embeddings debug switch (#3676)\n\nHydra resolves `name=value` against the config groups on the search path\nbefore the composed fields, so add_embeddings.yaml's top-level `debug`\nfield was shadowed by the `configs/debug/` group that train.yaml selects.\nEvery override form failed: `debug=true` and `+debug=true` raised \"Config\ngroup override must be a string or a list. Got bool\", and `++debug=true`\nraised \"force-add of config groups is not supported\". The documented\nswitch was reachable only by editing the YAML.\n\nRenaming it to `debug_logging` restores the CLI override. A contract test\nasserts no endpoint config declares a top-level field named after a group,\nso the collision cannot come back through another field.\n\nFixes #3128",
+          "timestamp": "2026-09-17T21:43:57-04:00",
+          "tree_id": "80ba56b81c3eceaef30c9003261a60553bd6abd0",
+          "url": "https://github.com/tinaudio/synth-setter/commit/ffa8cde3aebce94b1551cbbb6025b0954fda142a"
+        },
+        "date": 1789705638368,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 9.351187705993652,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.548222517371178,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.1033918559551239,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.002042114734649658,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.478259563446045,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.811598953700013,
             "unit": "seconds"
           }
         ]
