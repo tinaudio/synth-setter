@@ -9,6 +9,7 @@ from typing import cast
 import pytest
 import torch
 import torchaudio.functional as audio_fn
+from jaxtyping import TypeCheckError
 from transformers import ClapConfig, ClapFeatureExtractor, ClapModel
 
 from synth_setter.clap import clap_checkpoint_sha256
@@ -19,6 +20,7 @@ from synth_setter.models.components.pretrained_encoder import (
 )
 from synth_setter.models.components.vector_field import VectorField
 from synth_setter.models.components.vector_projection import VectorProjection
+from synth_setter.models.dynamo_typecheck import install_dynamo_typecheck_bypass
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
 _SAMPLE_RATE = 48_000
@@ -390,6 +392,47 @@ def test_pretrained_conditioning_encoder_exposes_metric_and_conditioning_taps(
     assert embedding.shape == (1, _PROJECTION_DIM)
     assert conditioning.shape == (1, 6)
     assert torch.equal(conditioning, encoder(audio))
+
+
+def test_compiled_pretrained_encoder_conditions_channelized_audio_like_eager(
+    clap_encoder: ClapAudioEncoder,
+) -> None:
+    """``torch.compile`` must not change what the encoder returns for ``(B, C, T)`` audio.
+
+    Regression test for #3572: the jaxtyping/beartype wrapper desynchronized under Dynamo and
+    rejected audio that satisfies its own annotation.
+
+    :param clap_encoder: Small frozen CLAP encoder under test.
+    """
+    encoder = PretrainedConditioningEncoder(
+        backbone=clap_encoder,
+        head=VectorProjection(input_dim=_PROJECTION_DIM, d_model=6),
+        out_dim=6,
+    )
+    audio = torch.sin(torch.arange(4_800, dtype=torch.float32) * 0.01).reshape(1, 1, 4_800)
+    expected = encoder(audio)
+
+    install_dynamo_typecheck_bypass()
+    encoder.compile(backend="eager")
+
+    assert torch.allclose(encoder(audio), expected)
+
+
+def test_uncompiled_pretrained_encoder_still_rejects_integer_audio(
+    clap_encoder: ClapAudioEncoder,
+) -> None:
+    """Dropping the Dynamo type-check bypass into eager calls would hide real shape bugs.
+
+    :param clap_encoder: Small frozen CLAP encoder under test.
+    """
+    encoder = PretrainedConditioningEncoder(
+        backbone=clap_encoder,
+        head=VectorProjection(input_dim=_PROJECTION_DIM, d_model=6),
+        out_dim=6,
+    )
+
+    with pytest.raises(TypeCheckError):
+        encoder(torch.zeros(1, 4_800, dtype=torch.int64))
 
 
 def test_pretrained_conditioning_encoder_requires_dimension_metadata() -> None:

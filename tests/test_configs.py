@@ -754,7 +754,8 @@ def test_cqt_online_profile_routes_audio_through_canonical_temporal_pool() -> No
     )
 
     assert cfg.datamodule.conditioning == "audio"
-    assert cfg.model.compile is False
+    # #3572 lifted the compile block this profile carried at introduction.
+    assert cfg.model.compile is True
     assert cfg.model.conditioning == "audio"
     assert (
         cfg.model.encoder.backbone._target_

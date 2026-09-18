@@ -11,6 +11,7 @@ from synth_setter.conditioning import (
     conditioning_batch_key,
     resolve_embedding_conditioning,
 )
+from synth_setter.models.dynamo_typecheck import install_dynamo_typecheck_bypass
 
 
 class VSTFeedForwardModule(LightningModule):
@@ -116,6 +117,7 @@ class VSTFeedForwardModule(LightningModule):
 
     def setup(self, stage: str) -> None:
         if self.hparams.compile and stage == "fit":
+            install_dynamo_typecheck_bypass()
             self.net.compile()
 
     def on_before_optimizer_step(self, optimizer) -> None:

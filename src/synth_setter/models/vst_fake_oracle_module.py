@@ -12,6 +12,8 @@ import torch
 from lightning import LightningModule
 from torch import nn
 
+from synth_setter.models.dynamo_typecheck import install_dynamo_typecheck_bypass
+
 
 class FakeOracleNet(nn.Module):
     """Trivial ``nn.Module`` standing in for the real feature extractor.
@@ -165,6 +167,7 @@ class VSTFakeOracleModule(LightningModule):
         :param stage: Lightning lifecycle stage ("fit", "validate", "test", "predict").
         """
         if self.hparams["compile"] and stage == "fit":
+            install_dynamo_typecheck_bypass()
             self.net.compile()
 
     def configure_optimizers(self) -> dict[str, Any]:
