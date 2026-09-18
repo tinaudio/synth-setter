@@ -824,6 +824,24 @@ def _adopt_native_transaction(
     return True
 
 
+class StudiorackInstallError(subprocess.CalledProcessError):
+    """A Studiorack process failure whose message carries its captured stderr.
+
+    Stderr is piped for :func:`_is_retryable_studiorack_exit` to classify, and
+    ``CalledProcessError.__str__`` renders only the exit code — so Studiorack's
+    reason never reached any caller that renders the message (#3623).
+    """
+
+    def __str__(self) -> str:
+        """Render the base message followed by Studiorack's own output.
+
+        :returns: Exit-code summary, plus the captured stderr when non-empty.
+        """
+        summary = super().__str__()
+        detail = (self.stderr or "").strip()
+        return f"{summary}\n{detail}" if detail else summary
+
+
 def _invoke_studiorack(argv: Sequence[str], env: dict[str, str]) -> None:
     result = subprocess.run(  # noqa: S603 — fixed executable and validated argv
         argv,
@@ -837,7 +855,7 @@ def _invoke_studiorack(argv: Sequence[str], env: dict[str, str]) -> None:
         return
     stderr = result.stderr or ""
     # Studiorack 3.0.6 shares one exit code; retry policy matches only its stable stderr contracts.
-    raise subprocess.CalledProcessError(result.returncode, argv, stderr=stderr)
+    raise StudiorackInstallError(result.returncode, argv, stderr=stderr)
 
 
 def _is_retryable_studiorack_exit(exc: BaseException) -> bool:
