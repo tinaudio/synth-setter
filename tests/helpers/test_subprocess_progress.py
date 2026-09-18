@@ -14,9 +14,12 @@ from tests.helpers.subprocess_progress import await_progress, await_ready_signal
 
 _STALL_TIMEOUT_SECONDS = 0.3
 _HARD_CAP_SECONDS = 20.0
-# Several stall windows of descendant-only work: the gap a fake Pi child opens
+# Descendant-only work outlasting its stall bound: the gap a fake Pi child opens
 # while its supervisor sits in wait() consuming nothing.
 _DESCENDANT_BUSY_SECONDS = 1.5
+# Spans two interpreter launches under load, yet below the busy span so an uncounted
+# descendant still stalls out.
+_DESCENDANT_STALL_TIMEOUT_SECONDS = 1.0
 _SPINNER_CAP_SECONDS = 0.5
 
 _SIGNAL_READY = """
@@ -271,7 +274,7 @@ def test_await_progress_when_the_work_happens_in_a_descendant_is_not_a_stall(
             marker.exists,
             process.pid,
             description=f"marker {marker}",
-            stall_timeout_s=_STALL_TIMEOUT_SECONDS,
+            stall_timeout_s=_DESCENDANT_STALL_TIMEOUT_SECONDS,
             hard_cap_s=_HARD_CAP_SECONDS,
         )
     finally:
