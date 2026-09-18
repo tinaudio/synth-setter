@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -28,6 +29,7 @@ from synth_setter.pipeline.data.meanaudio import (
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.subprocess_stream import check_call_streamed
+from tests.helpers.parity_digests import DIGEST_PRELUDE, describe_digest_divergence
 
 pytestmark = [pytest.mark.slow, pytest.mark.network, pytest.mark.meanaudio_e2e]
 
@@ -107,14 +109,17 @@ def test_meanaudio_public_adapter_matches_direct_upstream_posterior_mean(
     implementation under comparison.
 
     :param tmp_path: Isolated audio and output-array location.
+    :raises AssertionError: If the latents differ; names the stage digests that diverged.
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     checkpoint = resolve_meanaudio_checkpoint()
     audio_path = tmp_path / "audio.npy"
     direct_path = tmp_path / "direct.npy"
     adapter_path = tmp_path / "adapter.npy"
+    digest_paths = {name: tmp_path / f"{name}.json" for name in ("direct", "adapter")}
     np.save(audio_path, _deterministic_audio()[:1], allow_pickle=False)
-    direct_program = """
+    direct_program = (
+        """
 import sys
 
 import numpy as np
@@ -122,9 +127,11 @@ import torch
 import torchaudio.functional as audio_fn
 from meanaudio.ext.autoencoder.vae import get_my_vae
 from meanaudio.ext.mel_converter import get_mel_converter
-
+"""
+        + DIGEST_PRELUDE
+        + """
 audio = np.load(sys.argv[1], allow_pickle=False)
-checkpoint, output, device = sys.argv[2:]
+checkpoint, output, digests, device = sys.argv[2:]
 mono = audio_fn.resample(torch.from_numpy(audio[:, 0]), 44_100, 16_000)
 mel_converter = get_mel_converter("16k").to(device).eval()
 with torch.device("meta"):
@@ -136,20 +143,52 @@ del state
 vae.remove_weight_norm()
 vae = vae.to(device).eval().requires_grad_(False)
 with torch.inference_mode():
-    latents = vae.encode(mel_converter(mono.to(device))).mode().float().cpu().numpy()
+    mel = mel_converter(mono.to(device))
+    latents = vae.encode(mel).mode().float().cpu().numpy()
+record_digests(digests, checkpoint, vae, mel)
 np.save(output, latents, allow_pickle=False)
 """
-    adapter_program = """
+    )
+    adapter_program = (
+        """
 import sys
 
 import numpy as np
 import torch
 import torchaudio.functional as audio_fn
+import meanaudio.ext.autoencoder.vae as upstream_vae
+import meanaudio.ext.mel_converter as upstream_mel_converter
 
 from synth_setter.pipeline.data.meanaudio import load_meanaudio_audio_encoder
+"""
+        + DIGEST_PRELUDE
+        + """
+# The adapter is left untouched: the upstream entrypoints it calls are what report the stages.
+observed = {}
+build_vae = upstream_vae.get_my_vae
+build_mel_converter = upstream_mel_converter.get_mel_converter
+
+
+def traced_vae(name):
+    # State loads into this object with assign=True, and .to() returns it, so it stays the one
+    # the adapter encodes with.
+    observed["vae"] = build_vae(name)
+    return observed["vae"]
+
+
+def traced_mel_converter(name):
+    converter = build_mel_converter(name)
+    converter.register_forward_hook(
+        lambda module, inputs, output: observed.setdefault("mel", output)
+    )
+    return converter
+
+
+upstream_vae.get_my_vae = traced_vae
+upstream_mel_converter.get_mel_converter = traced_mel_converter
 
 audio = np.load(sys.argv[1], allow_pickle=False)
-checkpoint, output, device = sys.argv[2:]
+checkpoint, output, digests, device = sys.argv[2:]
 encode = load_meanaudio_audio_encoder(checkpoint, device=device)
 first = encode(audio, 44_100)
 second = encode(audio, 44_100)
@@ -158,19 +197,41 @@ native_mono = audio_fn.resample(torch.from_numpy(audio[:, 0]), 44_100, 16_000).n
 native_stereo = np.repeat(native_mono, 2, axis=1)
 np.testing.assert_allclose(encode(native_mono, 16_000), first, rtol=1e-6, atol=1e-6)
 np.testing.assert_allclose(encode(native_stereo, 16_000), first, rtol=1e-6, atol=1e-6)
+record_digests(digests, checkpoint, observed["vae"], observed["mel"])
 np.save(output, first, allow_pickle=False)
 """
-    for program, output in ((direct_program, direct_path), (adapter_program, adapter_path)):
+    )
+    for program, output, name in (
+        (direct_program, direct_path, "direct"),
+        (adapter_program, adapter_path, "adapter"),
+    ):
         check_call_streamed(
-            [sys.executable, "-c", program, str(audio_path), str(checkpoint), str(output), device],
+            [
+                sys.executable,
+                "-c",
+                program,
+                str(audio_path),
+                str(checkpoint),
+                str(output),
+                str(digest_paths[name]),
+                device,
+            ],
             timeout=1_800,
         )
 
     direct = np.load(direct_path, allow_pickle=False)
     actual = np.load(adapter_path, allow_pickle=False)
     assert actual.shape == direct.shape == (1, MEANAUDIO_EMBEDDING_DIM, 125)
-    # Both paths execute the same pinned float32 kernels; tolerance admits only kernel-order jitter.
-    np.testing.assert_allclose(actual, direct, rtol=_PARITY_RTOL, atol=_PARITY_ATOL)
+    try:
+        # Both paths run the same pinned float32 kernels; tolerance admits only kernel-order jitter.
+        np.testing.assert_allclose(actual, direct, rtol=_PARITY_RTOL, atol=_PARITY_ATOL)
+    except AssertionError as mismatch:
+        # The lane's logs expire before anyone can ask which stage diverged (#3692).
+        divergence = describe_digest_divergence(
+            json.loads(digest_paths["direct"].read_text()),
+            json.loads(digest_paths["adapter"].read_text()),
+        )
+        raise AssertionError(f"{mismatch}\n\nstage digests:\n{divergence}") from None
 
 
 def test_add_embeddings_real_meanaudio_lance_conditions_embedding_pool(
