@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789710747219,
+  "lastUpdate": 1789710750696,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -41629,6 +41629,140 @@ window.BENCHMARK_DATA = {
           {
             "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
             "value": 0.000004708766937255859,
+            "unit": "1-cos"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b7923f67dfab6264dfc2261217b06e57835744ff",
+          "message": "internal-fix(training): let torch.compile trace jaxtyped model code (#3615)\n\n* internal-fix(training): let torch.compile trace jaxtyped model code\n\n`jaxtyped` binds axis sizes in a thread-local memo stack it pushes on entry\nand pops on exit. Dynamo re-executes a traced frame after a graph break\nwithout unwinding that stack, so the next pass checks against a\ndesynchronized memo and rejects arguments that satisfy their own\nannotation. `PretrainedConditioningEncoder.compile(backend=\"eager\")` then\nfailed on valid `(B, C, T)` float32 audio, which cost the online CQT\nprofile its `torch.compile`.\n\nEvery `jaxtyped` function reached while tracing has to bypass — a scoped\ndecorator on the encoder only moves the failure into the backbone — so flip\njaxtyping's own `jaxtyping_disable` switch, which its wrapper reads per\ncall, for the duration of tracing. Eager execution keeps full runtime type\nchecking, and an explicit `JAXTYPING_DISABLE=1` still silences it. Nothing\nis lost while tracing: Dynamo already guards the compiled graph on dtype\nand shape.\n\nWith the block lifted, `conditioning=cqt_online` no longer pins\n`model.compile: false`.\n\nFixes #3572\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n\n* internal-fix(training): install the jaxtyping bypass per compile site\n\nInstalling the bypass from `synth_setter/models/__init__.py` made the models\npackage root import torch. `coverage --source=synth_setter.models.<submodule>`\nresolves that source by importing the parent package before conftest runs, so\ntorch began initializing there and `tests/conftest.py`'s own `import torch`\nre-entered `torch/__init__`, aborting the interpreter in `torch._C`:\n\n    RuntimeError: THPDtypeType.tp_dict == nullptr INTERNAL ASSERT FAILED\n\nThat reproduces locally with the Browser SurgePy flow E2E job's own pytest\ninvocation, and stops reproducing when only the package `__init__` is reverted.\n\nThe bypass only has to be in place before a module is compiled, so each of the\nfive `setup()` sites that compiles now installs it and the package root is a\ndocstring again. An AST guard fails if a compile site is added without it,\nnaming the offending module.\n\nRefs #3572\n\n* internal-fix(training): install the jaxtyping bypass in compiling tests\n\nThe bypass is installed per compile site, so a test that compiles a\ntyped module itself must install it too. The channelized-audio encoder\ntest compiled without it and hit the #3572 memo desynchronization on\nboth CI lanes; a SiameseArm case pins the nested-jaxtyped shape.\n\n---------\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-17T23:08:22-04:00",
+          "tree_id": "637716af6f4f6bdfd634e8ec6f5b433ba545f1e6",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b7923f67dfab6264dfc2261217b06e57835744ff"
+        },
+        "date": 1789710750021,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "surge-host-parity/repeated-patch/render-count",
+            "value": 30,
+            "unit": "renders"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard/dataset-seconds-per-render",
+            "value": 12.485572961633329,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard/dataset-realtime-factor",
+            "value": 3.121393240408332,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer/dataset-seconds-per-render",
+            "value": 5.652857449199996,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer/dataset-realtime-factor",
+            "value": 1.413214362299999,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/surgepy/dataset-seconds-per-render",
+            "value": 0.2844679284333324,
+            "unit": "seconds"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/surgepy/dataset-realtime-factor",
+            "value": 0.0711169821083331,
+            "unit": "ratio"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/mel_rmse-max",
+            "value": 2.0942091941833496,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/mss-max",
+            "value": 0.5659157633781433,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/sot-max",
+            "value": 0.0061666411347687244,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/wmfcc-max",
+            "value": 1.30968982195016,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-dawdreamer/rms-envelope-cosine-distance-max",
+            "value": 0.0000069141387939453125,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/mel_rmse-max",
+            "value": 2.0439610481262207,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/mss-max",
+            "value": 0.5779160857200623,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/sot-max",
+            "value": 0.006147386971861124,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/wmfcc-max",
+            "value": 1.32735620200634,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/pedalboard-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.000010251998901367188,
+            "unit": "1-cos"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/mel_rmse-max",
+            "value": 2.0103511810302734,
+            "unit": "mel_rmse"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/mss-max",
+            "value": 0.525866687297821,
+            "unit": "mss"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/sot-max",
+            "value": 0.006039302796125412,
+            "unit": "sot"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/wmfcc-max",
+            "value": 1.3074014267264282,
+            "unit": "wmfcc"
+          },
+          {
+            "name": "surge-host-parity/repeated-patch/dawdreamer-vs-surgepy/rms-envelope-cosine-distance-max",
+            "value": 0.000004649162292480469,
             "unit": "1-cos"
           }
         ]
