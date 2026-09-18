@@ -64,7 +64,7 @@ on:
       - ".github/workflows/test-param-shift-embedder.yml"
 
 concurrency:
-  group: param-shift-embedder-${{ github.ref }}
+  group: param-shift-embedder-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 permissions:
