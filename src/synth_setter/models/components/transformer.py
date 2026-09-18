@@ -788,6 +788,8 @@ class AudioSpectrogramTransformer(nn.Module):
         """
         super().__init__()
 
+        # None under token_embed, which takes no spectrogram, so SpecEncoder leaves it alone.
+        self.input_channels = None if token_embed is not None else input_channels
         # Attribute stays "patch_embed" so existing AST checkpoint state dicts keep loading.
         self.patch_embed = (
             token_embed

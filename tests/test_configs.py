@@ -1590,7 +1590,7 @@ def test_pyfdn_flow_ast_online_resolves_waveform_ast_conditioning() -> None:
     assert cfg.model.encoder.frontend.in_dim == 176_400
     assert cfg.model.encoder.frontend.sample_rate == 44_100
     assert cfg.model.encoder.backbone._target_.endswith("AudioSpectrogramTransformer")
-    assert cfg.model.encoder.backbone.input_channels == 1
+    assert cfg.model.encoder.backbone.input_channels == 2
     assert cfg.model.encoder.backbone.n_conditioning_outputs == 8
 
 

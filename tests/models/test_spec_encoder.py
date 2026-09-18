@@ -511,6 +511,61 @@ def test_normalized_online_and_stored_mel_paths_match_ast_outputs() -> None:
     torch.testing.assert_close(online_output, stored_output, atol=1e-3, rtol=1e-3)
 
 
+def test_spec_encoder_encodes_a_mono_render_like_its_dual_mono_stored_mel() -> None:
+    """One AST geometry serves both paths: a mono render is dual-mono stereo (#2751)."""
+    time = torch.arange(4_410) / 44_100
+    audio = torch.sin(2 * torch.pi * 440 * time).unsqueeze(0)
+    frontend = _frontend()
+    ast = AudioSpectrogramTransformer(
+        d_model=8,
+        n_heads=2,
+        n_layers=1,
+        n_conditioning_outputs=2,
+        patch_size=4,
+        patch_stride=2,
+        input_channels=2,
+        spec_shape=(128, 11),
+    ).eval()
+    encoder = SpecEncoder(frontend=frontend, backbone=ast).eval()
+
+    with torch.no_grad():
+        online = encoder(audio)
+        mono_grid = frontend(audio)
+        stored = ast(torch.cat([mono_grid, mono_grid], dim=1))
+
+    torch.testing.assert_close(online, stored)
+
+
+def test_spec_encoder_rejects_a_grid_the_backbone_cannot_be_given() -> None:
+    """A multi-channel grid narrower than the backbone would be silently mis-projected."""
+    ast = AudioSpectrogramTransformer(
+        d_model=8,
+        n_heads=2,
+        n_layers=1,
+        n_conditioning_outputs=2,
+        patch_size=4,
+        patch_stride=2,
+        input_channels=4,
+        spec_shape=(128, 11),
+    ).eval()
+    encoder = SpecEncoder(frontend=_StereoGrid(), backbone=ast).eval()
+
+    with pytest.raises(ValueError, match="channels"):
+        encoder(torch.zeros(1, 4_410))
+
+
+class _StereoGrid(torch.nn.Module):
+    """Front end emitting a fixed two-channel grid, standing in for the stored-mel column."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Emit one two-channel grid per row.
+
+        :param x: Waveforms shaped ``(batch, samples)``.
+        :returns: Grids shaped ``(batch, 2, 128, 11)``.
+        """
+        return torch.zeros(x.shape[0], 2, 128, 11)
+
+
 def test_spec_encoder_with_cnn_backbone_returns_pooled_embedding() -> None:
     """The CNN backbone reduces the front end's grid to one vector per row."""
     encoder = SpecEncoder(
