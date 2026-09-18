@@ -39,7 +39,7 @@ on:
       - ".github/workflows/test-same-encoder.yml"
 
 concurrency:
-  group: same-encoder-${{ github.ref }}
+  group: same-encoder-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 permissions:

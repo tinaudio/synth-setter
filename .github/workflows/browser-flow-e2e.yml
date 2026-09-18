@@ -23,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: browser-flow-e2e-${{ github.event.pull_request.number || github.ref }}
+  group: browser-flow-e2e-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
