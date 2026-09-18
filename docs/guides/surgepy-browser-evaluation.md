@@ -193,8 +193,8 @@ uv run --extra cpu pytest tests/models/test_flow_onnx.py \
   tests/test_sketch_render.py \
   tests/integration/test_browser_surgepy_e2e.py -v \
   --basetemp=logs/browser-e2e --junitxml=logs/browser-e2e.xml \
-  --cov=synth_setter.evaluation.browser_flow --cov=synth_setter.models.flow_onnx \
-  --cov=synth_setter.cli.sketch_render --cov-report=xml:coverage.xml
+  --cov=src/synth_setter/evaluation --cov=src/synth_setter/models \
+  --cov=src/synth_setter/cli --cov-report=xml:coverage.xml
 ```
 
 The E2E test generates distinct real SurgePy inputs, invokes the installed CLI, drives

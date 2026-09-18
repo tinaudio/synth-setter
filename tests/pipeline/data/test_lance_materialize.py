@@ -844,6 +844,44 @@ def test_materialize_without_txid_source_advance_rejects_stale_cache(
         materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
 
 
+def test_materialize_version_pin_matching_unpinned_cache_reuses_it(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """Pinning the version an unpinned run resolved keeps that run's cache valid.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, _ = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+    version_after_first = lance.dataset(str(dest)).version
+
+    result = materialize_lance_subset(
+        source, dest, txid=None, version=2, columns=("a",), limit=4
+    )
+
+    assert result == dest
+    assert lance.dataset(str(dest)).version == version_after_first
+
+
+def test_materialize_version_pin_after_source_advance_yields_pinned_rows(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A version pin reads its snapshot even after the source has advanced.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, _ = two_version_source
+    lance.write_dataset(pa.table({"a": [6], "b": ["r"]}), source, mode="append")
+    dest = tmp_path / "out" / "train.lance"
+
+    materialize_lance_subset(source, dest, txid=None, version=2, columns=("a",))
+
+    assert lance.dataset(str(dest)).to_table().column("a").to_pylist() == [1, 2, 3, 4, 5]
+
+
 def test_materialize_row_limit_limit_two_row_count_matches(
     two_version_source: tuple[str, str], tmp_path: Path
 ) -> None:
