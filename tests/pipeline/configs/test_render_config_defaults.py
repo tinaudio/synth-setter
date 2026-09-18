@@ -8,6 +8,7 @@ import pytest
 from hydra import compose, initialize_config_module
 from omegaconf import DictConfig
 
+from synth_setter.data.vst.surgepy_runtime import surgepy_version_matches
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.renderer_backend import FlushBlocks
@@ -373,7 +374,7 @@ def test_surgepy_render_group_composes_to_validated_isolated_configs(
         _compose_render_group("surgepy"), _compose_synth_group(synth_group)
     )
 
-    assert config.synth.synth_version == surgepy.getVersion()
+    assert surgepy_version_matches(surgepy.getVersion(), config.synth.synth_version)
     assert config.renderer_backend == "surgepy"
     assert config.plugin_path == "surgepy"
     assert config.param_spec_name == param_spec_name

@@ -33,6 +33,7 @@ from synth_setter.data.vst.surgepy_runtime import (
     SurgePySynth,
     import_surgepy,
     iter_surgepy_named_params,
+    surgepy_version_matches,
 )
 from synth_setter.data.vst.torchsynth_param_spec import (
     DEFAULT_NORMALIZED_PATCH,
@@ -444,7 +445,7 @@ class SurgePyRenderer(AudioRenderer):
         if snapshot is None:
             raise ValueError("parameter map has no SurgePy snapshot")
         version = self._surgepy.getVersion()
-        if version != snapshot.plugin_version:
+        if not surgepy_version_matches(version, snapshot.plugin_version):
             raise ValueError(f"SurgePy version {version!r} != map {snapshot.plugin_version!r}")
         by_id: dict[int, SurgePyNamedParam] = {}
         for parameter in iter_surgepy_named_params(self.synth.getPatch()):
