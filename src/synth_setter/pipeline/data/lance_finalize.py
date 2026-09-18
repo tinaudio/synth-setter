@@ -64,7 +64,12 @@ from synth_setter.pipeline.data.lance_staging import (
     invalidate_staged_attempt,
     split_for_shard,
 )
-from synth_setter.pipeline.data.stats import WelfordState, merge_welford, save_welford
+from synth_setter.pipeline.data.stats import (
+    WelfordState,
+    WelfordValue,
+    merge_welford,
+    save_welford,
+)
 from synth_setter.pipeline.data.stats import finalize as finalize_welford
 from synth_setter.pipeline.schemas.lance_attempt import (
     LanceDatasetCard,
@@ -519,10 +524,32 @@ def _reduce_and_upload_welford(
     return state
 
 
+def _save_stats_npz(
+    stats_path: Path,
+    mean: WelfordValue,
+    std: WelfordValue,
+    train_attempts: tuple[SelectedLanceAttempt, ...],
+) -> None:
+    """Stage a statistics archive carrying the train attempts it describes.
+
+    Every archive this pipeline writes is stamped, so a later finalize reading no provenance can
+    conclude the artifact is foreign rather than its own.
+
+    :param stats_path: Local path the archive is staged at.
+    :param mean: Per-bin mean over training mel rows.
+    :param std: Per-bin standard deviation over training mel rows.
+    :param train_attempts: Train attempts the statistics were derived from.
+    """
+    provenance = LanceStatsProvenance(schema_version=1, train_attempts=train_attempts)
+    provenance_field: dict[str, Any] = {STATS_TRAIN_ATTEMPTS_KEY: provenance.model_dump_json()}
+    np.savez(stats_path, mean=mean, std=std, **provenance_field)
+
+
 def _upload_stats_from_welford(
     spec: DatasetSpec,
     state: WelfordState,
     work_dir: Path,
+    train_attempts: tuple[SelectedLanceAttempt, ...],
     progress_callback: FinalizeProgressCallback | None = None,
 ) -> None:
     """Derive and upload ``stats.npz`` from cumulative Welford state.
@@ -530,11 +557,12 @@ def _upload_stats_from_welford(
     :param spec: Validated dataset spec.
     :param state: Reduced training statistics state.
     :param work_dir: Scratch directory the archive is staged in.
+    :param train_attempts: Train attempts the statistics were derived from.
     :param progress_callback: Optional sink receiving the upload event.
     """
     mean, std = finalize_welford(state, mask_degenerate=spec.mask_degenerate_bins)
     stats_npz = work_dir / STATS_NPZ_FILENAME
-    np.savez(stats_npz, mean=mean, std=std)
+    _save_stats_npz(stats_npz, mean, std, train_attempts)
     r2_io.upload(stats_npz, spec.r2.stats_uri())
     report_finalize_progress(progress_callback, "artifact_uploaded")
     logger.info("uploaded_stats", uri=spec.r2.stats_uri())
@@ -697,9 +725,7 @@ def _estimate_and_upload_stats(  # noqa: DOC502
         mask_degenerate=spec.mask_degenerate_bins,
     )
     stats_path = work_dir / STATS_NPZ_FILENAME
-    provenance = LanceStatsProvenance(schema_version=1, train_attempts=train_attempts)
-    provenance_field: dict[str, Any] = {STATS_TRAIN_ATTEMPTS_KEY: provenance.model_dump_json()}
-    np.savez(stats_path, mean=mean, std=std, **provenance_field)
+    _save_stats_npz(stats_path, mean, std, train_attempts)
     if _reuses_existing_stats(spec, train_attempts):
         _validate_existing_stats(spec)
         logger.info("reused_normalization_stats", uri=spec.r2.stats_uri())
@@ -813,6 +839,8 @@ def finalize_lance_fragments(  # noqa: DOC502
 
     welford = _reduce_and_upload_welford(spec, winners, work_dir, progress_callback)
     if not estimate_normalization_stats:
-        _upload_stats_from_welford(spec, welford, work_dir, progress_callback)
+        _upload_stats_from_welford(
+            spec, welford, work_dir, _selected_train_attempts(spec, winners), progress_callback
+        )
     _write_dataset_card(spec, winners, work_dir)
     report_finalize_progress(progress_callback, "artifact_uploaded")
