@@ -639,8 +639,10 @@ def test_ram_checkpoint_load_rebuilds_the_reference_field_from_the_base(
     _assert_same(_state(loaded.reference_field), _state(module.reference_field))
 
 
-def test_ram_checkpoint_load_without_the_pinned_base_raises(tmp_path: Path) -> None:
-    """Dropping the base leaves the reference unrecoverable, so the load refuses it.
+def test_ram_checkpoint_load_without_the_pinned_base_samples_like_the_saved_run(
+    tmp_path: Path,
+) -> None:
+    """Sampling never reads the reference, so eval can load a run without its base.
 
     :param tmp_path: Directory for the base and RAM checkpoints.
     """
@@ -650,15 +652,49 @@ def test_ram_checkpoint_load_without_the_pinned_base_raises(tmp_path: Path) -> N
     trainer.fit(module, datamodule=_data())
     checkpoint = tmp_path / "ram.ckpt"
     trainer.save_checkpoint(checkpoint)
+    noise = torch.randn(2, _WIDTH)
+    sample_kwargs = {
+        "noise": noise,
+        "content_cfg_strength": 1.0,
+        "sketch_cfg_strength": 0.0,
+        "sample_steps": 2,
+    }
+    expected = module.sample_batch(_batch(2), **sample_kwargs)
+
+    loaded = VSTFlowRAMModule.load_from_checkpoint(
+        checkpoint,
+        encoder=_WaveformEncoder(),
+        reward=_NormReward(),
+        base_checkpoint=None,
+        weights_only=False,
+    )
+
+    torch.testing.assert_close(loaded.sample_batch(_batch(2), **sample_kwargs), expected)
+
+
+def test_ram_fit_from_a_checkpoint_loaded_without_the_pinned_base_raises(
+    tmp_path: Path,
+) -> None:
+    """Without the base the reference is a placeholder, so training against it refuses.
+
+    :param tmp_path: Directory for the base and RAM checkpoints.
+    """
+    torch.manual_seed(46)
+    module = _ram(_base_checkpoint(tmp_path), overrides={"reward": _NormReward()})
+    trainer = _trainer()
+    trainer.fit(module, datamodule=_data())
+    checkpoint = tmp_path / "ram.ckpt"
+    trainer.save_checkpoint(checkpoint)
+    loaded = VSTFlowRAMModule.load_from_checkpoint(
+        checkpoint,
+        encoder=_WaveformEncoder(),
+        reward=_NormReward(),
+        base_checkpoint=None,
+        weights_only=False,
+    )
 
     with pytest.raises(ValueError, match="base_checkpoint"):
-        VSTFlowRAMModule.load_from_checkpoint(
-            checkpoint,
-            encoder=_WaveformEncoder(),
-            reward=_NormReward(),
-            base_checkpoint=None,
-            weights_only=False,
-        )
+        _trainer().fit(loaded, datamodule=_data())
 
 
 def test_ram_checkpoint_load_with_another_base_raises(tmp_path: Path) -> None:
