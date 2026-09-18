@@ -45,6 +45,8 @@ _BACKEND_VERSIONS: dict[FaustBackend, str] = {
 }
 _NOTE_PARAMS = {"pitch": 60, "note_start_and_end": (0.1, 0.35)}
 _ONSET_AMPLITUDE = 1e-8
+# DawDreamer recompiles drift A by <=4.5e-8 (a few float32 ULPs at a 0.166 peak); B shifts it by 0.5.
+_REPEAT_ATOL = 1e-6
 _ONSET_ALIGNMENT_TOLERANCE_SAMPLES = 1
 _REQUESTED_ONSET_SAMPLE = 4_410
 _VOLUME_ADDRESS = "/Sequencer/DSP1/brightOrgan/Main/volume"
@@ -211,13 +213,13 @@ def test_faust_host_a_b_a_dataset_is_state_isolated(
     host_results: dict[FaustBackend, _HostResult],
     backend: FaustBackend,
 ) -> None:
-    """Each real host repeats A exactly while preserving B's causal change.
+    """Each real host repeats A within float32 drift while preserving B's causal change.
 
     :param host_results: Shared production Lance results.
     :param backend: Host whose persisted state is checked.
     """
     audio = host_results[backend].audio
-    assert np.array_equal(audio[0], audio[2])
+    np.testing.assert_allclose(audio[2], audio[0], rtol=0, atol=_REPEAT_ATOL)
     assert not np.array_equal(audio[0], audio[1])
 
 
