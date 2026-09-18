@@ -32,17 +32,20 @@ _STARVED_LAUNCH_SECONDS = 1.0
 
 
 def _starved_launch_interpreter(directory: Path, seconds: float) -> str:
-    """Write an interpreter wrapper that sleeps before exec'ing the real one.
+    """Write an interpreter wrapper that burns briefly, then sleeps before exec'ing the real one.
 
-    The delay consumes no CPU, so it reproduces a runner that descheduled the probe rather than one
-    that is slow because it is working.
+    The burn is the wrapper's own startup CPU, which macOS accounts and Linux can round to zero;
+    the sleep consumes none, so it reproduces a runner that descheduled the probe after it started.
 
     :param directory: Directory the wrapper is written to.
     :param seconds: Seconds to sleep before handing over to the interpreter.
     :returns: Path to the wrapper, usable as an interpreter.
     """
     wrapper = directory / "starved-launch"
-    wrapper.write_text(f'#!/bin/sh\nsleep {seconds}\nexec {sys.executable} "$@"\n')
+    wrapper.write_text(
+        f"#!/bin/sh\ni=0\nwhile [ $i -lt 200000 ]; do i=$((i+1)); done\n"
+        f'sleep {seconds}\nexec {sys.executable} "$@"\n'
+    )
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
     return str(wrapper)
 

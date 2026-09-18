@@ -93,7 +93,8 @@ def _await_ready(
     cpu_seconds = accumulated_cpu_seconds(pid, 0.0)
     last_progress = time.monotonic()
     cap_deadline = last_progress + cap_s
-    poll_s = min(_MAX_POLL_SECONDS, stall_timeout_s / 4)
+    # Sampled within the tighter bound, or launch CPU from the wrapper lands after the window.
+    poll_s = min(_MAX_POLL_SECONDS, stall_timeout_s / 4, launch_timeout_s / 4)
     while True:
         remaining_s = cap_deadline - time.monotonic()
         if remaining_s <= 0:
