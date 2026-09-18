@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789700493360,
+  "lastUpdate": 1789705623466,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -17718,6 +17718,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.04194915294647217,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ffa8cde3aebce94b1551cbbb6025b0954fda142a",
+          "message": "internal-fix(data-pipeline): rename the add-embeddings debug switch (#3676)\n\nHydra resolves `name=value` against the config groups on the search path\nbefore the composed fields, so add_embeddings.yaml's top-level `debug`\nfield was shadowed by the `configs/debug/` group that train.yaml selects.\nEvery override form failed: `debug=true` and `+debug=true` raised \"Config\ngroup override must be a string or a list. Got bool\", and `++debug=true`\nraised \"force-add of config groups is not supported\". The documented\nswitch was reachable only by editing the YAML.\n\nRenaming it to `debug_logging` restores the CLI override. A contract test\nasserts no endpoint config declares a top-level field named after a group,\nso the collision cannot come back through another field.\n\nFixes #3128",
+          "timestamp": "2026-09-17T21:43:57-04:00",
+          "tree_id": "80ba56b81c3eceaef30c9003261a60553bd6abd0",
+          "url": "https://github.com/tinaudio/synth-setter/commit/ffa8cde3aebce94b1551cbbb6025b0954fda142a"
+        },
+        "date": 1789705618285,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.057504653930664,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.085586548540741,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.030629100278019905,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.0389481782913208,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.935096025466919,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.49351874249995,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.306399822235107,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.6381723370659165,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03261592239141464,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.03936570882797241,
             "unit": "1-cos"
           },
           {
