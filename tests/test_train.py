@@ -752,6 +752,52 @@ def test_train_torchsynth_experiment_renders_audio_online(
 
 
 @pytest.mark.slow
+def test_train_torchsynth_val_audio_probe_scores_online_renders(
+    cfg_torchsynth_train: DictConfig,
+) -> None:
+    """The probe scores a torchsynth arm's online renders instead of failing silently.
+
+    ``ValAudioProbe`` swallows its own failures by design, so a probe that never
+    scores anything shows up as absent ``val_audio/*`` metrics and nothing goes
+    red. That is how a row-width mismatch went unnoticed on every torchsynth
+    validation until #2639; this asserts the probe's real return value.
+
+    :param cfg_torchsynth_train: Composed CPU TorchSynth smoke configuration.
+    """
+    import concurrent.futures
+
+    from synth_setter.utils.callbacks import ValAudioProbe
+
+    with open_dict(cfg_torchsynth_train):
+        cfg_torchsynth_train.training.val_audio_probe = True
+        cfg_torchsynth_train.training.val_audio_probe_samples = 1
+        cfg_torchsynth_train.trainer.val_check_interval = 1
+        cfg_torchsynth_train.trainer.num_sanity_val_steps = 0
+    HydraConfig().set_config(cfg_torchsynth_train)
+
+    _, object_dict = train(cfg_torchsynth_train)
+
+    probes = [cb for cb in object_dict["trainer"].callbacks if isinstance(cb, ValAudioProbe)]
+    assert len(probes) == 1, "val_audio_probe=true did not wire exactly one ValAudioProbe"
+    probe = probes[0]
+    assert probe._future is not None, "validation ran but no probe was launched"
+    concurrent.futures.wait([probe._future], timeout=600)
+    metrics = probe._future.result()
+
+    stereo_only = ("mldr_mid_side",) if cfg_torchsynth_train.render.channels == 2 else ()
+    expected = {
+        f"val_audio/{name}" for name in ("mss", "wmfcc", "sot", "rms", "mldr", *stereo_only)
+    }
+    # One staged sample leaves every ``_std`` undefined, so the means carry the signal.
+    assert {key.removesuffix("_mean") for key in metrics if key.endswith("_mean")} == expected
+    assert all(
+        torch.isfinite(torch.as_tensor(value)).all()
+        for key, value in metrics.items()
+        if key.endswith("_mean")
+    )
+
+
+@pytest.mark.slow
 def test_train_torchsynth_clap_online_advances_one_cpu_step(
     cfg_torchsynth_clap_online_train: DictConfig,
 ) -> None:
