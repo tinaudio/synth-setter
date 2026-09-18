@@ -6,7 +6,7 @@ in a fixed scorer, to isolate the loss algebra from the reward's variance.
 
 from functools import partial
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from unittest.mock import PropertyMock, patch
 
 import lightning
@@ -686,6 +686,70 @@ def test_ram_checkpoint_load_with_another_base_raises(tmp_path: Path) -> None:
             reward=_NormReward(),
             base_checkpoint=_base_checkpoint(other, divergent),
             weights_only=False,
+        )
+
+
+def test_ram_checkpoint_without_a_pinned_base_keeps_the_reference_weights() -> None:
+    """With no base to re-derive from, the weights are the only copy, so they stay."""
+    module = _ram(None, overrides={"reward": _NormReward()})  # pyright: ignore[reportArgumentType]
+    checkpoint: dict[str, object] = {"state_dict": dict(module.state_dict())}
+
+    module.on_save_checkpoint(checkpoint)
+
+    state = checkpoint["state_dict"]
+    assert isinstance(state, dict)
+    assert [name for name in state if name.startswith("reference_field.")] != []
+    assert "ram_reference_field_base_sha256" not in checkpoint
+
+
+def test_ram_checkpoint_save_with_a_malformed_state_dict_raises(tmp_path: Path) -> None:
+    """Dropping the reference needs a writable payload; a silent no-op would store it.
+
+    :param tmp_path: Directory for the base checkpoint.
+    """
+    module = _ram(_base_checkpoint(tmp_path), overrides={"reward": _NormReward()})
+
+    with pytest.raises(TypeError, match="mutable mapping"):
+        module.on_save_checkpoint({"state_dict": []})
+
+
+def test_ram_unstamped_checkpoint_load_keeps_the_stored_reference_weights(
+    tmp_path: Path,
+) -> None:
+    """A checkpoint cut before #3257 carries its own reference, which must win.
+
+    :param tmp_path: Directory for the base checkpoint.
+    """
+    module = _ram(_base_checkpoint(tmp_path), overrides={"reward": _NormReward()})
+    state = {name: value.clone() for name, value in module.state_dict().items()}
+    stored = next(name for name in state if name.startswith("reference_field."))
+    state[stored] = torch.zeros_like(state[stored])
+
+    module.on_load_checkpoint({"state_dict": state})
+
+    torch.testing.assert_close(state[stored], torch.zeros_like(state[stored]))
+
+
+def test_ram_stamped_checkpoint_load_with_an_immutable_state_dict_raises(
+    tmp_path: Path,
+) -> None:
+    """The reference is restored by writing it back, so a read-only payload is refused.
+
+    :param tmp_path: Directory for the base checkpoint.
+    """
+    module = _ram(_base_checkpoint(tmp_path), overrides={"reward": _NormReward()})
+    state = {
+        name: value
+        for name, value in module.state_dict().items()
+        if not name.startswith("reference_field.")
+    }
+
+    with pytest.raises(TypeError, match="mutable mapping"):
+        module.on_load_checkpoint(
+            {
+                "state_dict": MappingProxyType(state),
+                "ram_reference_field_base_sha256": module.base_checkpoint_sha256,
+            }
         )
 
 
