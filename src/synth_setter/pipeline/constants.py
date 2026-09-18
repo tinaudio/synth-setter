@@ -10,6 +10,10 @@ INPUT_SPEC_FILENAME = "input_spec.json"
 # Normalization statistics (mel-spec mean / std) written by finalize.
 STATS_NPZ_FILENAME = "stats.npz"
 
+# Archive key inside `stats.npz` binding estimated statistics to the train
+# attempts they were derived from; absent on user-supplied artifacts (#3360).
+STATS_TRAIN_ATTEMPTS_KEY = "train_attempts"
+
 # Zero-byte trust-anchor marker; presence under ``r2.prefix`` is the canonical
 # "this run is ready to consume" signal. Written strictly last by finalize.
 DATASET_COMPLETE_FILENAME = "dataset.complete"

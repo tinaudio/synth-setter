@@ -46,7 +46,7 @@ def _approx_equiv_transformer() -> ApproxEquivTransformer:
         d_ff=4,
         num_tokens=2,
         learn_projection=True,
-        pe_type="none",  # pyright: ignore[reportArgumentType]
+        pe_type="none",
     )
 
 
