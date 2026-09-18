@@ -12,6 +12,7 @@ from jaxtyping import Float, TypeCheckError, jaxtyped
 from jaxtyping import _config as jaxtyping_config
 from torch import Tensor, nn
 
+from synth_setter.models.components.slap import SiameseArm
 from synth_setter.models.dynamo_typecheck import install_dynamo_typecheck_bypass
 
 _MODELS_DIR = Path(__file__).resolve().parents[2] / "src/synth_setter/models"
@@ -50,6 +51,22 @@ def test_repeated_installation_keeps_eager_type_checking_on() -> None:
 
     with pytest.raises(TypeCheckError):
         _Doubler()(torch.zeros(2, 3, dtype=torch.int64))
+
+
+def test_compiled_siamese_arm_accepts_input_its_annotation_allows() -> None:
+    """A real nested-typed component must compile and run, not just a local stand-in (#3225).
+
+    `SiameseArm.forward` reaches further `jaxtyped` calls while tracing, which is the shape
+    that desynchronizes jaxtyping's memo stack; a flat stand-in cannot exercise it.
+    """
+    install_dynamo_typecheck_bypass()
+    arm = SiameseArm(nn.Linear(2, 4), nn.Linear(4, 3))
+
+    representation, projection, prediction = torch.compile(arm, backend="eager")(torch.randn(2, 2))
+
+    assert representation.shape == (2, 4)
+    assert projection.shape == (2, 3)
+    assert prediction.shape == (2, 3)
 
 
 def test_importing_the_models_package_does_not_import_torch() -> None:

@@ -20,6 +20,7 @@ from synth_setter.models.components.pretrained_encoder import (
 )
 from synth_setter.models.components.vector_field import VectorField
 from synth_setter.models.components.vector_projection import VectorProjection
+from synth_setter.models.dynamo_typecheck import install_dynamo_typecheck_bypass
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
 _SAMPLE_RATE = 48_000
@@ -411,6 +412,7 @@ def test_compiled_pretrained_encoder_conditions_channelized_audio_like_eager(
     audio = torch.sin(torch.arange(4_800, dtype=torch.float32) * 0.01).reshape(1, 1, 4_800)
     expected = encoder(audio)
 
+    install_dynamo_typecheck_bypass()
     encoder.compile(backend="eager")
 
     assert torch.allclose(encoder(audio), expected)
