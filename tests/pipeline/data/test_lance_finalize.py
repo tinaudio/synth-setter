@@ -36,6 +36,7 @@ from synth_setter.pipeline.data.lance_staging import (
 )
 from synth_setter.pipeline.schemas.lance_attempt import (
     LanceDatasetCard,
+    LanceStatsProvenance,
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from tests.pipeline.data.test_lance_staging import (
@@ -214,7 +215,7 @@ def test_finalize_entrypoint_estimates_stats_from_real_fragments(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The config entrypoint writes estimated stats from committed train audio.
+    """The config entrypoint writes estimated stats bound to the committed train attempts.
 
     :param fake_r2_remote: Root the ``r2:`` remote resolves to.
     :param tmp_path: Scratch dir for the spec and finalized artifacts.
@@ -242,7 +243,15 @@ def test_finalize_entrypoint_estimates_stats_from_real_fragments(
 
     run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
     with np.load(run_root / "stats.npz") as stats:
-        assert set(stats.files) == {"mean", "std"}
+        assert set(stats.files) == {"mean", "std", "train_attempts"}
+        recorded = LanceStatsProvenance.model_validate_json(str(stats["train_attempts"]))
+    card = LanceDatasetCard.model_validate_json((run_root / "dataset.json").read_text())
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    assert recorded.train_attempts == tuple(
+        selected
+        for selected in card.selected_attempts
+        if train_lo <= selected.shard_id < train_hi
+    )
     with np.load(run_root / "welford.npz") as welford:
         assert set(welford.files) == {"count", "mean", "m2"}
 
@@ -1343,3 +1352,90 @@ def test_finalize_rerun_preserves_recorded_winner_across_tied_straggler(
     np.testing.assert_array_equal(
         decoded[MEL_SPEC_FIELD][:2], shard_arrays(spec, 0)[MEL_SPEC_FIELD]
     )
+
+
+def stage_train_replacement_attempts(spec: DatasetSpec, tmp_path: Path) -> None:
+    """Stage a second healthy train attempt per shard, holding different audio.
+
+    Staged after the first attempt, so finalize's oldest-first reconciliation only selects these
+    once the original attempt is gone.
+
+    :param spec: Spec whose train shard range gains a second attempt.
+    :param tmp_path: Scratch dir for the replacement shard datasets.
+    """
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    for shard_id in range(train_lo, train_hi):
+        local = write_local_shard(spec, shard_id, tmp_path / f"b-{shard_id}", value_offset=64)
+        stage_lance_shard_attempt(
+            spec,
+            spec.shards[shard_id],
+            local,
+            worker_id="pod-b",
+            attempt_uuid=f"v{shard_id:04d}",
+        )
+
+
+def retire_train_attempts(spec: DatasetSpec, fake_r2_remote: Path, worker_id: str) -> None:
+    """Remove one worker's staged train artifacts, leaving its shards to another attempt.
+
+    :param spec: Spec whose train shard range is pruned.
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param worker_id: Worker whose staged attempts become unavailable.
+    """
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    for shard_id in range(train_lo, train_hi):
+        for staged in staging_dir(fake_r2_remote, spec, shard_id).iterdir():
+            if staged.name.startswith(f"{worker_id}-"):
+                staged.unlink()
+
+
+def train_attempt_workers(run_root: Path, spec: DatasetSpec) -> set[str]:
+    """Read back which worker rendered each committed train attempt.
+
+    :param run_root: Local path of the finalized run prefix.
+    :param spec: Spec supplying the train shard range.
+    :returns: Worker ids named by the dataset card for the train shards.
+    """
+    card = LanceDatasetCard.model_validate_json((run_root / "dataset.json").read_text())
+    train_lo, train_hi = spec.split_shard_ranges["train"]
+    return {
+        selected.attempt.rsplit("-", 1)[0]
+        for selected in card.selected_attempts
+        if train_lo <= selected.shard_id < train_hi
+    }
+
+
+def test_finalize_estimation_retry_onto_a_replacement_train_attempt_recomputes_stats(
+    fake_r2_remote: Path, tmp_path: Path
+) -> None:
+    """Statistics surviving a partial finalize must match the audio the retry commits.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param tmp_path: Scratch dir for local shard datasets.
+    """
+    spec = mono_tiny_lance_spec()
+    stage_all_shards(spec, tmp_path, worker_id="pod-a")
+    stage_train_replacement_attempts(spec, tmp_path)
+    finalize_from_spec(spec, tmp_path / "work-a", estimate_normalization_stats=True, seed=5)
+    run_root = fake_r2_remote / spec.r2.bucket / spec.r2.prefix
+    assert train_attempt_workers(run_root, spec) == {"pod-a"}
+    with np.load(run_root / "stats.npz") as stats:
+        first_attempt_mean = np.array(stats["mean"], copy=True)
+    (run_root / "dataset.complete").unlink()
+    (run_root / "dataset.json").unlink()
+    retire_train_attempts(spec, fake_r2_remote, "pod-a")
+
+    finalize_from_spec(spec, tmp_path / "work-b", estimate_normalization_stats=True, seed=5)
+
+    assert train_attempt_workers(run_root, spec) == {"pod-b"}
+    train = lance.dataset(str(split_dataset_path(fake_r2_remote, spec, "train")))
+    audio = train.take(list(range(train.count_rows())), columns=[AUDIO_FIELD])[AUDIO_FIELD]
+    waveform = torch.from_numpy(audio.combine_chunks().to_numpy_ndarray()[:, 0].astype(np.float32))
+    frontend = LogMelFrontend(waveform.shape[-1], sample_rate=spec.render.sample_rate)
+    expected_mean, expected_std = estimate_log_mel_statistics(
+        [waveform], frontend, mask_degenerate=True
+    )
+    with np.load(run_root / "stats.npz") as stats:
+        np.testing.assert_array_equal(stats["mean"], expected_mean)
+        np.testing.assert_array_equal(stats["std"], expected_std)
+    assert not np.array_equal(expected_mean, first_attempt_mean)
