@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789710757757,
+  "lastUpdate": 1789710762051,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -30637,6 +30637,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.811598953700013,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b7923f67dfab6264dfc2261217b06e57835744ff",
+          "message": "internal-fix(training): let torch.compile trace jaxtyped model code (#3615)\n\n* internal-fix(training): let torch.compile trace jaxtyped model code\n\n`jaxtyped` binds axis sizes in a thread-local memo stack it pushes on entry\nand pops on exit. Dynamo re-executes a traced frame after a graph break\nwithout unwinding that stack, so the next pass checks against a\ndesynchronized memo and rejects arguments that satisfy their own\nannotation. `PretrainedConditioningEncoder.compile(backend=\"eager\")` then\nfailed on valid `(B, C, T)` float32 audio, which cost the online CQT\nprofile its `torch.compile`.\n\nEvery `jaxtyped` function reached while tracing has to bypass — a scoped\ndecorator on the encoder only moves the failure into the backbone — so flip\njaxtyping's own `jaxtyping_disable` switch, which its wrapper reads per\ncall, for the duration of tracing. Eager execution keeps full runtime type\nchecking, and an explicit `JAXTYPING_DISABLE=1` still silences it. Nothing\nis lost while tracing: Dynamo already guards the compiled graph on dtype\nand shape.\n\nWith the block lifted, `conditioning=cqt_online` no longer pins\n`model.compile: false`.\n\nFixes #3572\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n\n* internal-fix(training): install the jaxtyping bypass per compile site\n\nInstalling the bypass from `synth_setter/models/__init__.py` made the models\npackage root import torch. `coverage --source=synth_setter.models.<submodule>`\nresolves that source by importing the parent package before conftest runs, so\ntorch began initializing there and `tests/conftest.py`'s own `import torch`\nre-entered `torch/__init__`, aborting the interpreter in `torch._C`:\n\n    RuntimeError: THPDtypeType.tp_dict == nullptr INTERNAL ASSERT FAILED\n\nThat reproduces locally with the Browser SurgePy flow E2E job's own pytest\ninvocation, and stops reproducing when only the package `__init__` is reverted.\n\nThe bypass only has to be in place before a module is compiled, so each of the\nfive `setup()` sites that compiles now installs it and the package root is a\ndocstring again. An AST guard fails if a compile site is added without it,\nnaming the offending module.\n\nRefs #3572\n\n* internal-fix(training): install the jaxtyping bypass in compiling tests\n\nThe bypass is installed per compile site, so a test that compiles a\ntyped module itself must install it too. The channelized-audio encoder\ntest compiled without it and hit the #3572 memo desynchronization on\nboth CI lanes; a SiameseArm case pins the nested-jaxtyped shape.\n\n---------\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-17T23:08:22-04:00",
+          "tree_id": "637716af6f4f6bdfd634e8ec6f5b433ba545f1e6",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b7923f67dfab6264dfc2261217b06e57835744ff"
+        },
+        "date": 1789710761422,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.594864845275879,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.543809987157584,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08784889429807663,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.007712721824645996,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.302150011062622,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.673730757100111,
             "unit": "seconds"
           }
         ]
