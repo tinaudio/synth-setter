@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import re
 import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -66,6 +67,27 @@ def _load_pending(uri: str) -> PendingRefreshRequest:
     """
     with r2_io.downloaded_to_tempfile(uri) as path:
         return PendingRefreshRequest.model_validate_json(path.read_bytes())
+
+
+def _load_pending_if_present(
+    spec: DatasetSpec, branch: str, uri: str
+) -> PendingRefreshRequest | None:
+    """Read ``pending.json`` from a worker that races the driver's clear.
+
+    :param spec: Frozen producer specification.
+    :param branch: Native branch name.
+    :param uri: R2 URI of ``pending.json``.
+    :returns: The request, or ``None`` when absent or cleared before the read finished.
+    :raises subprocess.CalledProcessError: The download failed while the marker still exists.
+    """
+    if not _pending_exists(spec, branch):
+        return None
+    try:
+        return _load_pending(uri)
+    except subprocess.CalledProcessError:
+        if _pending_exists(spec, branch):
+            raise
+        return None
 
 
 def _publish_metadata(spec: DatasetSpec, snapshot: GrowingSnapshot, version_dir: Path) -> None:
@@ -267,7 +289,7 @@ def generate(args: argparse.Namespace) -> None:
         if expected is None:
             logger.info("growing_branch_at_capacity", branch=args.branch)
             return
-        pending = _load_pending(pending_uri) if _pending_exists(spec, args.branch) else None
+        pending = _load_pending_if_present(spec, args.branch, pending_uri)
         if pending is not None and pending == expected:
             generate_pending_shards(spec, current, pending, work_dir=args.work_dir)
         else:
