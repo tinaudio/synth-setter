@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789695536677,
+  "lastUpdate": 1789695541288,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -30208,6 +30208,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 7.926390520500036,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c10d9cf7f1e46957feb043cced86c14ba8f5492f",
+          "message": "internal-fix(vst): bound the heartbeat wait by budget, not wall clock (#3675)\n\nThe overshoot test scored a remaining-aware wait by elapsed time against a\n0.45s threshold sitting 0.15s above the correct behaviour and 0.05s below the\ndefect, so macOS runner contention tripped it before a regression could.\n\nName the clamp as `_heartbeat_wait_seconds` and assert it directly; the\nintegration test keeps only a crash-guard bound.\n\nRefs #3667\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-17T20:12:26-04:00",
+          "tree_id": "f40e8d1851c339f00ced108aba915aaa2adbe977",
+          "url": "https://github.com/tinaudio/synth-setter/commit/c10d9cf7f1e46957feb043cced86c14ba8f5492f"
+        },
+        "date": 1789695540381,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.72307300567627,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.415670212507248,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.10397689044475555,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.002985715866088867,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2971432209014893,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.793510290799986,
             "unit": "seconds"
           }
         ]
