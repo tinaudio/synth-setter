@@ -17,6 +17,7 @@ import sys
 import time
 import tomllib
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -27,6 +28,39 @@ from tests.helpers.package_available import _SH_AVAILABLE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _DETACHED_FOLLOW_UP_TIMEOUT_SECONDS = 10.0
+
+
+def _resolved_launcher_json(
+    launcher: Path, *args: object, env: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Run a review launcher's dry run and decode the JSON it writes to stdout.
+
+    ``sh`` defaults to a pty for stdout, and a macOS pty can report EIO before a
+    short-lived child's bytes are drained, which surfaced as an empty capture
+    with a zero exit status (#3680). A pipe has no such race, and the JSON needs
+    byte-exact capture anyway, which a tty's newline translation does not give.
+
+    :param launcher: Shell launcher to execute.
+    :param *args: Arguments forwarded to the launcher.
+    :param env: Replacement environment, or ``None`` to inherit the caller's.
+    :returns: The launcher's resolved command payload.
+    """
+    sh = importlib.import_module("sh")
+    stderr = io.StringIO()
+    extra = {} if env is None else {"_env": env}
+    result = sh.Command(str(launcher))(
+        *args,
+        _cwd=REPO_ROOT,
+        _tty_out=False,
+        _err=stderr,
+        **extra,
+    )
+
+    captured = str(result)
+    # An empty capture makes ``sh`` hand back a plain str, which carries no exit code.
+    exit_code = getattr(result, "exit_code", 0)
+    assert captured, f"launcher exited {exit_code} with no stdout; stderr: {stderr.getvalue()!r}"
+    return json.loads(captured)
 
 
 def _process_state(pid: int) -> str | None:
@@ -1265,17 +1299,10 @@ def test_codex_review_orchestrator_default_timeout_launches(tmp_path: Path) -> N
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
 def test_codex_review_shell_launcher_dry_run_e2e() -> None:
     """Run the user-facing shell launcher without starting model inference."""
-    sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
-    result = sh.Command(str(launcher))(
-        "pr-review-worker-deep",
-        "--prompt",
-        "routing probe",
-        "--dry-run",
-        _cwd=REPO_ROOT,
+    resolved = _resolved_launcher_json(
+        launcher, "pr-review-worker-deep", "--prompt", "routing probe", "--dry-run"
     )
-
-    resolved = json.loads(str(result))
     assert resolved["command"][3] == "gpt-5.6-sol"
     assert 'model_reasoning_effort="high"' in resolved["command"]
     assert resolved["prompt"].endswith("routing probe")
@@ -1287,20 +1314,13 @@ def test_codex_review_shell_launcher_reads_prompt_file(tmp_path: Path) -> None:
 
     :param tmp_path: Temporary directory for the worker prompt file.
     """
-    sh = importlib.import_module("sh")
     launcher = REPO_ROOT / "agent" / "_shared" / "run_codex_review_agent.sh"
     prompt_file = tmp_path / "worker-prompt.txt"
     prompt_file.write_text("prompt-file routing probe")
 
-    result = sh.Command(str(launcher))(
-        "pr-review-worker-fast",
-        "--prompt-file",
-        prompt_file,
-        "--dry-run",
-        _cwd=REPO_ROOT,
+    resolved = _resolved_launcher_json(
+        launcher, "pr-review-worker-fast", "--prompt-file", prompt_file, "--dry-run"
     )
-
-    resolved = json.loads(str(result))
     assert resolved["command"][3] == "gpt-5.6-terra"
     assert resolved["prompt"].endswith("prompt-file routing probe")
 
@@ -1659,20 +1679,36 @@ def test_opencode_shell_launcher_dry_run_without_binary_round_trips_json(tmp_pat
 
     :param tmp_path: Temporary directory for the restricted PATH.
     """
-    sh = importlib.import_module("sh")
 
-    result = sh.Command(str(_OPENCODE_LAUNCHER_SH))(
+    resolved = _resolved_launcher_json(
+        _OPENCODE_LAUNCHER_SH,
         "pr-review-worker-deep",
         "--prompt",
         "routing probe",
         "--dry-run",
-        _cwd=REPO_ROOT,
-        _env={"PATH": _path_without_opencode(tmp_path), "HOME": os.environ["HOME"]},
+        env={"PATH": _path_without_opencode(tmp_path), "HOME": os.environ["HOME"]},
     )
-
-    resolved = json.loads(str(result))
     assert resolved["command"][resolved["command"].index("-m") + 1] == "opencode-go/kimi-k2.7-code"
     assert resolved["prompt"].endswith("routing probe")
+
+
+@pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
+def test_launcher_json_capture_names_a_silent_zero_exit(tmp_path: Path) -> None:
+    """A launcher that exits zero writing nothing must name itself, not the decoder.
+
+    #3680 surfaced as a bare ``JSONDecodeError`` on an empty string, which says
+    nothing about which stage produced no output.
+
+    :param tmp_path: Temporary directory holding the silent stub launcher.
+    """
+    stub = tmp_path / "silent-launcher.sh"
+    stub.write_text('#!/bin/bash\necho "stub diagnostic" >&2\nexit 0\n')
+    stub.chmod(0o755)
+
+    with pytest.raises(AssertionError, match="no stdout") as excinfo:
+        _resolved_launcher_json(stub)
+
+    assert "stub diagnostic" in str(excinfo.value)
 
 
 @pytest.mark.skipif(not _SH_AVAILABLE, reason="requires the sh package")
@@ -1681,19 +1717,12 @@ def test_opencode_shell_launcher_reads_prompt_file(tmp_path: Path) -> None:
 
     :param tmp_path: Temporary directory for the worker prompt file.
     """
-    sh = importlib.import_module("sh")
     prompt_file = tmp_path / "worker-prompt.txt"
     prompt_file.write_text("prompt-file routing probe")
 
-    result = sh.Command(str(_OPENCODE_LAUNCHER_SH))(
-        "pr-review-worker-fast",
-        "--prompt-file",
-        prompt_file,
-        "--dry-run",
-        _cwd=REPO_ROOT,
+    resolved = _resolved_launcher_json(
+        _OPENCODE_LAUNCHER_SH, "pr-review-worker-fast", "--prompt-file", prompt_file, "--dry-run"
     )
-
-    resolved = json.loads(str(result))
     assert resolved["command"][resolved["command"].index("-m") + 1] == "opencode-go/glm-5.2"
     assert resolved["prompt"].endswith("prompt-file routing probe")
 
