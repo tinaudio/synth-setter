@@ -21,7 +21,11 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from synth_setter.cli.introspect_plugin import _load_plugin_loudly, main
+from synth_setter.cli.introspect_plugin import (
+    _heartbeat_wait_seconds,
+    _load_plugin_loudly,
+    main,
+)
 from synth_setter.data.vst.param_spec import ParamSpec
 from tests.data.vst._introspect_fakes import (
     IntrospectFakeParameter,
@@ -519,8 +523,30 @@ def test_plugin_load_timeout_is_not_overshot_by_the_heartbeat_interval() -> None
             hard_timeout_handler=lambda _message: release_loader.set(),
         )
 
-    # Two 0.25s waits would take 0.5s; remaining-aware waits stop at ~0.3s.
-    assert time.monotonic() - started < 0.45
+    # A wall-clock bound here cannot separate the two behaviours under load (#3667);
+    # _heartbeat_wait_seconds is asserted directly below.
+    assert time.monotonic() - started < 5.0
+
+
+@pytest.mark.parametrize(
+    ("remaining", "heartbeat", "expected"),
+    [
+        (0.05, 0.25, 0.05),
+        (0.25, 0.25, 0.25),
+        (10.0, 0.25, 0.25),
+    ],
+    ids=["remaining_shorter", "equal", "heartbeat_shorter"],
+)
+def test_heartbeat_wait_is_clamped_to_the_remaining_budget(
+    remaining: float, heartbeat: float, expected: float
+) -> None:
+    """The watchdog never asks for a wait that would outlast the load budget.
+
+    :param remaining: Seconds left before the soft timeout fires.
+    :param heartbeat: Requested heartbeat spacing.
+    :param expected: The wait the watchdog should request.
+    """
+    assert _heartbeat_wait_seconds(remaining, heartbeat) == expected
 
 
 def test_plugin_load_timeout_binds_when_the_watchdog_thread_is_scheduled_late(

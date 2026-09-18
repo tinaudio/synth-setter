@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.metadata
 import json
 import os
 import re
@@ -387,3 +388,33 @@ def test_macos_deflake_installs_into_project_environment(project_root: Path) -> 
 
     assert "uv sync --frozen --group dev" in workflow
     assert "uv pip install --system" not in workflow
+
+
+def _precommit_hook_rev(project_root: Path, repo_suffix: str) -> str:
+    """Return the pinned rev of a pre-commit hook repository, without its ``v``.
+
+    :param project_root: Repository root fixture.
+    :param repo_suffix: Trailing path of the hook repo URL, e.g. ``astral-sh/ruff-pre-commit``.
+    :returns: Version string as pinned in ``.pre-commit-config.yaml``.
+    """
+    config = yaml.safe_load((project_root / ".pre-commit-config.yaml").read_text())
+    revs = [
+        str(repo["rev"]) for repo in config["repos"] if str(repo["repo"]).endswith(repo_suffix)
+    ]
+
+    assert len(revs) == 1, revs
+    return revs[0].removeprefix("v")
+
+
+def test_precommit_ruff_rev_matches_the_environment_ruff(project_root: Path) -> None:
+    """``make format`` and the format-clean contract tests run one ruff version.
+
+    Contract tests such as ``test_registry_with_spec_output_is_ruff_format_clean``
+    shell out to the environment's ruff, so a differing pre-commit pin lets
+    ``make format`` pass text that CI then rejects (#3527).
+
+    :param project_root: Repository root fixture.
+    """
+    pinned = _precommit_hook_rev(project_root, "astral-sh/ruff-pre-commit")
+
+    assert pinned == importlib.metadata.version("ruff")
