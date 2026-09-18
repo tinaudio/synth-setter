@@ -44,7 +44,8 @@ def _starved_launch_interpreter(directory: Path, seconds: float) -> str:
     wrapper = directory / "starved-launch"
     wrapper.write_text(
         f"#!/bin/sh\ni=0\nwhile [ $i -lt 200000 ]; do i=$((i+1)); done\n"
-        f'sleep {seconds}\nexec {sys.executable} "$@"\n'
+        # Detached from the probe's pipes, so a killed launch is not held open by the sleep.
+        f'sleep {seconds} </dev/null >/dev/null 2>&1\nexec {sys.executable} "$@"\n'
     )
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
     return str(wrapper)
