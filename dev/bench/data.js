@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789715799692,
+  "lastUpdate": 1789715804202,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -30780,6 +30780,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.673730757100111,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0fd0093da94f209348b597c4360700d2aaa8e4a2",
+          "message": "internal-fix(testing): bound Faust A-B-A repeat to float32 drift (#3716)\n\nThe DawDreamer leg recompiles the Faust graph for every render, and\nrepeat compiles of patch A differ by up to 4.5e-8 (a few float32 ULPs at\na 0.166 peak) with no B render in between: 40 A-only renders produced 5\ndistinct outputs. Within one compile, renders are bit-stable. Exact\nequality was therefore flaky, not a state-isolation signal.\n\nCompare A with A at atol 1e-6 instead. B still moves A by 0.5, so any\nleak at B's scale still fails.\n\nFixes #3715",
+          "timestamp": "2026-09-18T01:31:14-04:00",
+          "tree_id": "5f767666ffc5528f34b14da001f664f7f2485c5c",
+          "url": "https://github.com/tinaudio/synth-setter/commit/0fd0093da94f209348b597c4360700d2aaa8e4a2"
+        },
+        "date": 1789715803580,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.758758544921875,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.878228494822979,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.09662488102912903,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.008239209651947021,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.3674356937408447,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.996266288700008,
             "unit": "seconds"
           }
         ]
