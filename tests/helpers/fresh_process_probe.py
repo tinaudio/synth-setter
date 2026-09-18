@@ -22,6 +22,9 @@ from typing import IO
 from tests.helpers.subprocess_progress import accumulated_cpu_seconds
 
 _STARTUP_STALL_TIMEOUT_SECONDS = 30.0
+# Launch spans fork/exec and interpreter boot, which report nothing and may be descheduled
+# entirely on a saturated runner, so it is bounded apart from the stages it precedes (#3673).
+_LAUNCH_TIMEOUT_SECONDS = 60.0
 # Absolute bound on startup, so CPU time buys a silent stage time without retiring the hang bound.
 _STARTUP_CAP_SECONDS = 300.0
 _BEHAVIOR_TIMEOUT_SECONDS = 30.0
@@ -68,25 +71,30 @@ def _await_ready(
     stages: queue.Queue[str | None],
     pid: int,
     *,
+    launch_timeout_s: float,
     stall_timeout_s: float,
     cap_s: float,
 ) -> None:
     """Consume startup stages until the probe reports readiness.
 
     A stage counts as progressing while it emits markers or accumulates CPU time, so one long
-    import is bounded by ``cap_s`` rather than read as a stall.
+    import is bounded by ``cap_s`` rather than read as a stall. The interval before the first
+    marker is launch, not a stage, and is bounded and reported as such.
 
     :param stages: Queue of stdout progress markers.
     :param pid: Probe process id, sampled for CPU time between markers.
+    :param launch_timeout_s: Seconds the probe may take to emit its first marker.
     :param stall_timeout_s: Seconds one startup stage may run without marker or CPU time.
     :param cap_s: Absolute seconds startup may take, however busy the probe is.
-    :raises AssertionError: If a stage stalls, startup outlasts ``cap_s``, or the probe exits.
+    :raises AssertionError: If launch reports nothing, a stage stalls, startup outlasts
+        ``cap_s``, or the probe exits.
     """
     reached: list[str] = []
     cpu_seconds = accumulated_cpu_seconds(pid, 0.0)
     last_progress = time.monotonic()
     cap_deadline = last_progress + cap_s
-    poll_s = min(_MAX_POLL_SECONDS, stall_timeout_s / 4)
+    # Sampled within the tighter bound, or launch CPU from the wrapper lands after the window.
+    poll_s = min(_MAX_POLL_SECONDS, stall_timeout_s / 4, launch_timeout_s / 4)
     while True:
         remaining_s = cap_deadline - time.monotonic()
         if remaining_s <= 0:
@@ -101,7 +109,11 @@ def _await_ready(
             if sampled > cpu_seconds:
                 cpu_seconds = sampled
                 last_progress = time.monotonic()
-            elif time.monotonic() - last_progress >= stall_timeout_s:
+            elif not reached and time.monotonic() - last_progress >= launch_timeout_s:
+                raise AssertionError(
+                    f"probe launch produced no output within {launch_timeout_s:g}s"
+                ) from None
+            elif reached and time.monotonic() - last_progress >= stall_timeout_s:
                 raise AssertionError(
                     f"probe startup made no progress for {stall_timeout_s}s "
                     f"after stages {reached} (no marker, no CPU time)"
@@ -136,6 +148,7 @@ def _await_clean_exit(process: subprocess.Popen[str], behavior_timeout_s: float)
 def run_fresh_process_probe(
     body: str,
     *,
+    launch_timeout_s: float = _LAUNCH_TIMEOUT_SECONDS,
     startup_stall_timeout_s: float = _STARTUP_STALL_TIMEOUT_SECONDS,
     startup_cap_s: float = _STARTUP_CAP_SECONDS,
     behavior_timeout_s: float = _BEHAVIOR_TIMEOUT_SECONDS,
@@ -147,6 +160,7 @@ def run_fresh_process_probe(
     then runs against its own budget.
 
     :param body: Probe source, dedented before execution.
+    :param launch_timeout_s: Seconds the probe may take to emit its first marker.
     :param startup_stall_timeout_s: Seconds one startup stage may run without marker or CPU time.
     :param startup_cap_s: Absolute seconds startup may take, however busy the probe is.
     :param behavior_timeout_s: Seconds the probe may run after reporting readiness.
@@ -167,6 +181,7 @@ def run_fresh_process_probe(
                 _await_ready(
                     _start_stage_reader(process.stdout),
                     process.pid,
+                    launch_timeout_s=launch_timeout_s,
                     stall_timeout_s=startup_stall_timeout_s,
                     cap_s=startup_cap_s,
                 )
