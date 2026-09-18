@@ -5,14 +5,19 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
-from tests.helpers.subprocess_progress import await_ready_signal
+from tests.helpers.subprocess_progress import await_progress, await_ready_signal
 
 _STALL_TIMEOUT_SECONDS = 0.3
 _HARD_CAP_SECONDS = 20.0
+# Several stall windows of descendant-only work: the gap a fake Pi child opens
+# while its supervisor sits in wait() consuming nothing.
+_DESCENDANT_BUSY_SECONDS = 1.5
+_SPINNER_CAP_SECONDS = 0.5
 
 _SIGNAL_READY = """
 import os, sys
@@ -209,3 +214,115 @@ def test_await_ready_signal_when_the_child_spins_forever_stops_at_the_hard_cap(
         os.close(read_fd)
         process.kill()
         process.wait(timeout=10)
+
+
+_BURN_CPU = """
+import sys, time
+
+deadline = time.monotonic() + float(sys.argv[1])
+while time.monotonic() < deadline:
+    pass
+"""
+
+# The grandchild burns the CPU; the child only waits, as a supervisor does.
+_BURN_CPU_IN_A_GRANDCHILD = """
+import subprocess, sys
+
+subprocess.run(  # noqa: S603 — fixed interpreter plus test-owned source
+    [sys.executable, "-c", sys.argv[1], sys.argv[2]],
+    check=True,
+)
+open(sys.argv[3], "w").write("done")
+"""
+
+
+def test_await_progress_when_the_condition_holds_returns_without_waiting() -> None:
+    """A condition already satisfied costs no wall clock."""
+    started_at = time.monotonic()
+
+    await_progress(lambda: True, os.getpid(), description="already true", stall_timeout_s=30.0)
+
+    assert time.monotonic() - started_at < 1.0
+
+
+def test_await_progress_when_the_work_happens_in_a_descendant_is_not_a_stall(
+    tmp_path: Path,
+) -> None:
+    """A parent idle in wait() while its child burns CPU counts as progressing.
+
+    :param tmp_path: Directory holding the marker the parent writes at the end.
+    """
+    marker = tmp_path / "done"
+    process = subprocess.Popen(  # noqa: S603 — fixed interpreter plus test-owned source
+        [
+            sys.executable,
+            "-c",
+            _BURN_CPU_IN_A_GRANDCHILD,
+            _BURN_CPU,
+            str(_DESCENDANT_BUSY_SECONDS),
+            str(marker),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        await_progress(
+            marker.exists,
+            process.pid,
+            description=f"marker {marker}",
+            stall_timeout_s=_STALL_TIMEOUT_SECONDS,
+            hard_cap_s=_HARD_CAP_SECONDS,
+        )
+    finally:
+        process.kill()
+        process.wait(timeout=10)
+
+    assert marker.exists()
+
+
+def test_await_progress_when_nothing_runs_reports_the_description() -> None:
+    """An idle process cannot buy time, and the failure names what was awaited."""
+    process = subprocess.Popen(  # noqa: S603 — fixed interpreter plus test-owned source
+        [sys.executable, "-c", _SLEEP_SILENTLY, ""],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        with pytest.raises(AssertionError, match=r"no progress.*the marker"):
+            await_progress(
+                lambda: False,
+                process.pid,
+                description="the marker",
+                stall_timeout_s=_STALL_TIMEOUT_SECONDS,
+                hard_cap_s=_HARD_CAP_SECONDS,
+            )
+    finally:
+        process.kill()
+        process.wait(timeout=10)
+
+
+def test_await_progress_when_the_process_spins_forever_stops_at_the_hard_cap() -> None:
+    """CPU time buys time, not an unbounded wait."""
+    process = subprocess.Popen(  # noqa: S603 — fixed interpreter plus test-owned source
+        [sys.executable, "-c", _SPIN_FOREVER],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    started_at = time.monotonic()
+    try:
+        with pytest.raises(AssertionError, match=r"for over 0.5s"):
+            await_progress(
+                lambda: False,
+                process.pid,
+                description="the marker",
+                stall_timeout_s=_HARD_CAP_SECONDS,
+                hard_cap_s=_SPINNER_CAP_SECONDS,
+            )
+    finally:
+        process.kill()
+        process.wait(timeout=10)
+
+    assert time.monotonic() - started_at < _HARD_CAP_SECONDS
