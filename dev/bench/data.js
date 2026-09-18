@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789705639186,
+  "lastUpdate": 1789710747219,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -17802,6 +17802,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.03936570882797241,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b7923f67dfab6264dfc2261217b06e57835744ff",
+          "message": "internal-fix(training): let torch.compile trace jaxtyped model code (#3615)\n\n* internal-fix(training): let torch.compile trace jaxtyped model code\n\n`jaxtyped` binds axis sizes in a thread-local memo stack it pushes on entry\nand pops on exit. Dynamo re-executes a traced frame after a graph break\nwithout unwinding that stack, so the next pass checks against a\ndesynchronized memo and rejects arguments that satisfy their own\nannotation. `PretrainedConditioningEncoder.compile(backend=\"eager\")` then\nfailed on valid `(B, C, T)` float32 audio, which cost the online CQT\nprofile its `torch.compile`.\n\nEvery `jaxtyped` function reached while tracing has to bypass — a scoped\ndecorator on the encoder only moves the failure into the backbone — so flip\njaxtyping's own `jaxtyping_disable` switch, which its wrapper reads per\ncall, for the duration of tracing. Eager execution keeps full runtime type\nchecking, and an explicit `JAXTYPING_DISABLE=1` still silences it. Nothing\nis lost while tracing: Dynamo already guards the compiled graph on dtype\nand shape.\n\nWith the block lifted, `conditioning=cqt_online` no longer pins\n`model.compile: false`.\n\nFixes #3572\n\nCo-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n\n* internal-fix(training): install the jaxtyping bypass per compile site\n\nInstalling the bypass from `synth_setter/models/__init__.py` made the models\npackage root import torch. `coverage --source=synth_setter.models.<submodule>`\nresolves that source by importing the parent package before conftest runs, so\ntorch began initializing there and `tests/conftest.py`'s own `import torch`\nre-entered `torch/__init__`, aborting the interpreter in `torch._C`:\n\n    RuntimeError: THPDtypeType.tp_dict == nullptr INTERNAL ASSERT FAILED\n\nThat reproduces locally with the Browser SurgePy flow E2E job's own pytest\ninvocation, and stops reproducing when only the package `__init__` is reverted.\n\nThe bypass only has to be in place before a module is compiled, so each of the\nfive `setup()` sites that compiles now installs it and the package root is a\ndocstring again. An AST guard fails if a compile site is added without it,\nnaming the offending module.\n\nRefs #3572\n\n* internal-fix(training): install the jaxtyping bypass in compiling tests\n\nThe bypass is installed per compile site, so a test that compiles a\ntyped module itself must install it too. The channelized-audio encoder\ntest compiled without it and hit the #3572 memo desynchronization on\nboth CI lanes; a SiameseArm case pins the nested-jaxtyped shape.\n\n---------\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-17T23:08:22-04:00",
+          "tree_id": "637716af6f4f6bdfd634e8ec6f5b433ba545f1e6",
+          "url": "https://github.com/tinaudio/synth-setter/commit/b7923f67dfab6264dfc2261217b06e57835744ff"
+        },
+        "date": 1789710742009,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 3.898930788040161,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.177176619917154,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.02565903030335903,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.027878284454345703,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.609579563140869,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 12.614703516583328,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.047358989715576,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.456532675977797,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.028853263705968857,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.04174482822418213,
             "unit": "1-cos"
           },
           {
