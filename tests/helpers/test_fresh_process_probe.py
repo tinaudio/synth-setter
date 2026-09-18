@@ -16,6 +16,13 @@ _STALLED_PROBE_SLEEP_SECONDS = 30.0
 # prevent.
 _STAGE_STALL_BOUND_SECONDS = 2.0
 _STAGE_GAP_SECONDS = _STAGE_STALL_BOUND_SECONDS / 4
+# A silent import that outlasts the stall bound several times over: the gap a
+# real dependency opens on a saturated runner (#3666), not a marginal overshoot.
+_SILENT_BUSY_SECONDS = 1.5
+_BUSY_STALL_BOUND_SECONDS = 0.3
+# Work before the first marker: on a loaded runner interpreter startup alone
+# outlasts a sub-second bound, and the failure then names no stage at all.
+_PRE_MARKER_BUSY_SECONDS = 1.0
 
 
 def test_run_fresh_process_probe_steady_startup_progress_outlasts_the_stall_bound() -> None:
@@ -82,3 +89,54 @@ def test_run_fresh_process_probe_failing_probe_reports_its_stderr() -> None:
             startup_stall_timeout_s=5.0,
             behavior_timeout_s=5.0,
         )
+
+
+def test_run_fresh_process_probe_silent_busy_stage_counts_cpu_time_as_progress() -> None:
+    """A stage burning CPU inside one long import outlasts the stall bound and passes."""
+    run_fresh_process_probe(
+        f"""
+        import time
+
+        progress("torch")
+        deadline = time.monotonic() + {_SILENT_BUSY_SECONDS}
+        while time.monotonic() < deadline:
+            pass
+        ready()
+        """,
+        startup_stall_timeout_s=_BUSY_STALL_BOUND_SECONDS,
+        behavior_timeout_s=_STALLED_PROBE_SLEEP_SECONDS,
+    )
+
+
+def test_run_fresh_process_probe_spinning_startup_fails_against_the_absolute_cap() -> None:
+    """CPU time buys a stage time, not an unbounded startup: the cap still kills a spinner."""
+    started_at = time.monotonic()
+    with pytest.raises(AssertionError, match=r"startup did not reach readiness within"):
+        run_fresh_process_probe(
+            """
+            progress("torch")
+            while True:
+                pass
+            """,
+            startup_stall_timeout_s=_STALLED_PROBE_SLEEP_SECONDS,
+            startup_cap_s=_BUSY_STALL_BOUND_SECONDS,
+            behavior_timeout_s=_STALLED_PROBE_SLEEP_SECONDS,
+        )
+    assert time.monotonic() - started_at < _STALLED_PROBE_SLEEP_SECONDS
+
+
+def test_run_fresh_process_probe_busy_start_before_the_first_marker_is_not_a_stall() -> None:
+    """Startup CPU spent before any marker counts, so an empty stage list is never the verdict."""
+    run_fresh_process_probe(
+        f"""
+        import time
+
+        deadline = time.monotonic() + {_PRE_MARKER_BUSY_SECONDS}
+        while time.monotonic() < deadline:
+            pass
+        progress("torch")
+        ready()
+        """,
+        startup_stall_timeout_s=_BUSY_STALL_BOUND_SECONDS,
+        behavior_timeout_s=_STALLED_PROBE_SLEEP_SECONDS,
+    )
