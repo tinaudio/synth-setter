@@ -6,6 +6,45 @@ on:
   workflow_dispatch:
 
 jobs:
+  # npm audit queries the registry, so it lives on a scheduled lane: a registry
+  # blip or a newly published advisory must not red a merge-gating lane (#3634).
+  npm-advisories:
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        lockfile-dir:
+          - .
+          - scripts/faustwasm/browser
+          - src/synth_setter/web
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      # Audits package-lock.json directly; no install, so a patched node_modules
+      # cannot change the verdict.
+      - name: Audit the checked-in npm lockfile
+        id: audit
+        working-directory: ${{ matrix.lockfile-dir }}
+        run: npm audit --audit-level=high
+
+      # Scoped to the audit step so a checkout or setup failure is not reported
+      # as an advisory. The annotation carries the remediation; the audit's own
+      # output does not.
+      - name: Notify on advisories
+        if: failure() && steps.audit.conclusion == 'failure'
+        run: |
+          echo "::error::npm audit reports a high-severity advisory in ${{ matrix.lockfile-dir }}. Run 'npm audit fix' there and check in the lockfile."
+
   nightly-full-suite:
     runs-on: ubuntu-latest
 
