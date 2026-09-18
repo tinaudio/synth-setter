@@ -124,5 +124,9 @@ def test_doom_emacs_available() -> None:
     reason="set SYNTH_SETTER_RUN_DEVCONTAINER_SMOKE=1 inside the built devcontainer image",
 )
 def test_infisical_cli_installed_with_pinned_version() -> None:
-    """Validate the image runs the pinned Infisical CLI version."""
-    assert _run_text("infisical", "--version") == "infisical version 0.38.0"
+    """Validate the image runs the pinned Infisical CLI version.
+
+    The expected version is a literal because this runs inside the built image, where the
+    repository is not on disk; a static test keeps it equal to the pin.
+    """
+    assert _run_text("infisical", "--version") == "infisical version 0.41.90"

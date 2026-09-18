@@ -575,19 +575,21 @@ RUN --mount=type=cache,id=apt-cache,target=/var/cache/apt,sharing=locked \
       > /etc/apt/sources.list.d/github-cli.list \
   && apt-get update && apt-get install -y --no-install-recommends gh
 
-# Secret injection needs Infisical; Cloudsmith's versioned .deb avoids an apt repo.
-# When bumping, download both packages, then run `sha256sum infisical_*.deb` to refresh pins.
+# Secret injection needs Infisical. The CLI releases under its own `infisical-cli/v*`
+# tag, so this pins that tag rather than the repo's `latest`, which is the platform.
+# When bumping, refresh both pins from the release's `checksums.txt`, and keep them
+# equal to the ones in scripts/runpod/bootstrap-vastai-pytorch-pod.sh.
 ARG TARGETARCH
-ARG INFISICAL_VERSION=0.38.0
-ARG INFISICAL_SHA256_AMD64=b77813070e5b59ecdebd399f2d7efbb0158aabbf5d6fba679a1f32e6f3e9d03f
-ARG INFISICAL_SHA256_ARM64=503883eab614f544ed228ab6aadd7ed92124ff37ee31179ce3186d6043f22da7
+ARG INFISICAL_VERSION=0.41.90
+ARG INFISICAL_SHA256_AMD64=43e5c251ce5ba078f3751f76971a816f7b9f99c2fe4a938848af5cf5b087bf3c
+ARG INFISICAL_SHA256_ARM64=993bd2217ef7f9d8e276f313a90571efda5f29308bb73d2626be178cd03013b3
 RUN case "${TARGETARCH:-}" in \
       amd64) infisical_sha=${INFISICAL_SHA256_AMD64} ;; \
       arm64) infisical_sha=${INFISICAL_SHA256_ARM64} ;; \
       *) echo "ERROR: unsupported TARGETARCH for infisical: ${TARGETARCH:-<unset>}" >&2; exit 1 ;; \
     esac && \
     package="infisical_${INFISICAL_VERSION}_linux_${TARGETARCH}.deb" && \
-    url="https://dl.cloudsmith.io/public/infisical/infisical-cli/deb/debian/pool/any-version/main/i/in/infisical_${INFISICAL_VERSION}/${package}" && \
+    url="https://github.com/Infisical/infisical/releases/download/infisical-cli/v${INFISICAL_VERSION}/${package}" && \
     curl -fsSL "$url" -o "/tmp/${package}" && \
     echo "${infisical_sha}  /tmp/${package}" | sha256sum -c - && \
     dpkg -i "/tmp/${package}" && \
