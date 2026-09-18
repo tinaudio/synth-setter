@@ -33,12 +33,15 @@ jobs:
       # Audits package-lock.json directly; no install, so a patched node_modules
       # cannot change the verdict.
       - name: Audit the checked-in npm lockfile
+        id: audit
         working-directory: ${{ matrix.lockfile-dir }}
         run: npm audit --audit-level=high
 
-      # The annotation carries the remediation; the audit's own output does not.
+      # Scoped to the audit step so a checkout or setup failure is not reported
+      # as an advisory. The annotation carries the remediation; the audit's own
+      # output does not.
       - name: Notify on advisories
-        if: failure()
+        if: failure() && steps.audit.conclusion == 'failure'
         run: |
           echo "::error::npm audit reports a high-severity advisory in ${{ matrix.lockfile-dir }}. Run 'npm audit fix' there and check in the lockfile."
 
