@@ -602,6 +602,10 @@ def _load_plugin_loudly[PluginT](
         watchdog.join(timeout=max(heartbeat_seconds, hard_timeout_grace_seconds))
     if timed_out.is_set():
         raise click.UsageError(timeout_messages[0])
+    # Judged here too: a watchdog woken only after the load returned never saw the overrun (#3705).
+    elapsed = time.monotonic() - started
+    if elapsed >= timeout_seconds:
+        raise click.UsageError(_plugin_load_timeout_message(plugin_path, timeout_seconds, elapsed))
     error = outcome.get("error")
     if isinstance(error, ValueError):
         raise click.UsageError(str(error)) from error
