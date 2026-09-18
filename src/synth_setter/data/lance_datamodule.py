@@ -48,6 +48,10 @@ from synth_setter.data.vst_datamodule import (
 from synth_setter.features.tiv import extract_tiv_batch
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot, GrowingSnapshot
+from synth_setter.pipeline.data.lance_shard import (
+    SHARD_METADATA_SCHEMA_KEY,
+    read_shard_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +92,32 @@ def _fixed_embedding_shape(field: pa.Field) -> tuple[int, ...]:
             f"got {value_type}"
         )
     return shape
+
+
+def _validate_audio_geometry(shard_path: Path, sample_rate: int, signal_length: int) -> None:
+    """Check one split's recorded render geometry against the configured geometry.
+
+    Online conditioning encoders are built from ``datamodule.sample_rate`` and
+    ``datamodule.signal_length`` at composition, before any dataset is opened, so a
+    disagreement would otherwise surface as mis-framed encoder input, not an error. Splits written without shard
+    metadata — third-party imports — carry no recorded geometry and pass.
+
+    :param shard_path: Lance dataset selected for a Lightning split.
+    :param sample_rate: Configured rate of the stored audio, in Hz.
+    :param signal_length: Configured samples per stored row.
+    :raises ValueError: If either recorded value differs from the configured one.
+    """
+    schema = lance.dataset(str(shard_path)).schema
+    if SHARD_METADATA_SCHEMA_KEY not in (schema.metadata or {}):
+        return
+    metadata = read_shard_metadata(schema)
+    stored_length = round(metadata.sample_rate * metadata.signal_duration_seconds)
+    if (metadata.sample_rate, stored_length) != (sample_rate, signal_length):
+        raise ValueError(
+            f"{shard_path} stores {stored_length} samples at {metadata.sample_rate} Hz, "
+            f"but the datamodule is configured for {signal_length} samples at "
+            f"{sample_rate} Hz"
+        )
 
 
 def _validate_embedding_column(
@@ -564,6 +594,8 @@ class LanceVSTDataModule(VSTDataModule):
         high_memory_materialization: bool = False,
         growing_active_record: str | Path | None = None,
         eval_sample_ids: bool = False,
+        sample_rate: int = 44_100,
+        signal_length: int = 176_400,
     ) -> None:
         """Store map-style Lance loader configuration.
 
@@ -593,12 +625,16 @@ class LanceVSTDataModule(VSTDataModule):
         :param high_memory_materialization: Whether to use high-memory Lance tuning.
         :param growing_active_record: Atomic active-record path for train-only snapshots.
         :param eval_sample_ids: Include pinned source row identities in validation and test.
+        :param sample_rate: Rate of the stored audio in Hz, checked against each split.
+        :param signal_length: Samples per stored row, checked against each split.
         :raises ValueError: Growing refresh is combined with persistent workers, or
             identity-bearing evaluation is requested for random fake data.
         """
         if eval_sample_ids and fake:
             raise ValueError("eval_sample_ids requires real source rows, not fake data")
         self.eval_sample_ids = eval_sample_ids
+        self.sample_rate = sample_rate
+        self.signal_length = signal_length
         super().__init__(
             dataset_root=dataset_root,
             download_dataset_root_uri=download_dataset_root_uri,
@@ -689,6 +725,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param include_sample_id: Add transient source row identities to this split.
         :returns: Sample-indexed dataset and collate operation.
         """
+        _validate_audio_geometry(shard_path, self.sample_rate, self.signal_length)
         spec = self.embedding_conditioning
         if spec is not None:
             _validate_embedding_column(shard_path, spec)

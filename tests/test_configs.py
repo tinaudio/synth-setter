@@ -2149,3 +2149,26 @@ def test_add_embeddings_debug_logging_is_overridable_from_the_cli() -> None:
         )
 
     assert cfg.debug_logging is True
+
+
+def _conditioning_profiles() -> list[str]:
+    """List the shipped ``conditioning/`` profile names.
+
+    :returns: Profile names selectable as ``conditioning=<name>``.
+    """
+    with as_file(configs_dir()) as root:
+        return sorted(path.stem for path in (Path(root) / "conditioning").glob("*.yaml"))
+
+
+@pytest.mark.parametrize("profile", _conditioning_profiles())
+def test_conditioning_profile_resolves_against_a_lance_experiment(profile: str) -> None:
+    """Every profile composes on the Lance-backed experiment it is meant to swap into.
+
+    Profiles needing waveform geometry read ``datamodule.sample_rate`` and
+    ``datamodule.signal_length``, so the VST datamodule must declare both.
+
+    :param profile: Conditioning profile under test.
+    """
+    cfg = _compose("train.yaml", ["experiment=surge/flow_simple", f"conditioning={profile}"])
+
+    OmegaConf.to_container(cfg.model, resolve=True)

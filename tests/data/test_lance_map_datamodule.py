@@ -28,12 +28,18 @@ from synth_setter.data.lance_torch import LanceMapDataset
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot
+from synth_setter.pipeline.data.lance_shard import (
+    SHARD_METADATA_SCHEMA_KEY,
+    write_lance_dataset,
+)
+from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from tests.helpers.lance_fixtures import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLES,
     MEL_SHAPE,
     NUM_PARAMS,
     make_shard_columns,
+    shard_record_batch,
     write_mel_stats,
     write_seeded_lance_shard,
 )
@@ -1446,3 +1452,92 @@ class TestTrainerFlowsAcrossParamSpecs:
             trainer.predict(probe, datamodule=module)
 
         assert probe.flows_seen == {"fit", "validate", "test", "predict"}
+
+
+def _write_shard_with_recorded_geometry(
+    path: Path, *, sample_rate: int, num_samples: int
+) -> None:
+    """Write a fixture split carrying the render geometry in its schema metadata.
+
+    :param path: Output ``.lance`` dataset directory.
+    :param sample_rate: Rate recorded in the shard metadata.
+    :param num_samples: Samples per row the recorded duration describes.
+    """
+    batch = shard_record_batch(make_shard_columns(2, seed=3))
+    metadata = ShardMetadata(
+        velocity=64,
+        signal_duration_seconds=num_samples / sample_rate,
+        sample_rate=sample_rate,
+        channels=AUDIO_CHANNELS,
+        min_loudness=-100.0,
+    )
+    schema = batch.schema.with_metadata(
+        {SHARD_METADATA_SCHEMA_KEY: metadata.model_dump_json().encode("utf-8")}
+    )
+    write_lance_dataset(path, schema, [batch.select(schema.names)])
+
+
+def test_setup_rejects_a_split_whose_recorded_rate_differs(tmp_path: Path) -> None:
+    """A split rendered at another rate must fail rather than feed online encoders.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    for split in ("train", "val"):
+        _write_shard_with_recorded_geometry(
+            tmp_path / f"{split}.lance", sample_rate=16_000, num_samples=AUDIO_SAMPLES
+        )
+    module = LanceVSTDataModule(
+        dataset_root=tmp_path,
+        param_spec_name=ParamSpecName("surge_xt"),
+        use_saved_mean_and_variance=False,
+        sample_rate=44_100,
+        signal_length=AUDIO_SAMPLES,
+    )
+
+    with pytest.raises(ValueError, match="16000 Hz.*configured for .* at 44100 Hz"):
+        module.setup("fit")
+
+
+def test_setup_rejects_a_split_whose_recorded_length_differs(tmp_path: Path) -> None:
+    """A split whose rows are shorter than the configured window must fail.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    for split in ("train", "val"):
+        _write_shard_with_recorded_geometry(
+            tmp_path / f"{split}.lance", sample_rate=44_100, num_samples=AUDIO_SAMPLES // 2
+        )
+    module = LanceVSTDataModule(
+        dataset_root=tmp_path,
+        param_spec_name=ParamSpecName("surge_xt"),
+        use_saved_mean_and_variance=False,
+        sample_rate=44_100,
+        signal_length=AUDIO_SAMPLES,
+    )
+
+    with pytest.raises(ValueError, match=f"stores {AUDIO_SAMPLES // 2} samples"):
+        module.setup("fit")
+
+
+def test_setup_accepts_a_split_matching_the_configured_geometry(tmp_path: Path) -> None:
+    """Matching recorded geometry builds the splits.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    for split in ("train", "val"):
+        _write_shard_with_recorded_geometry(
+            tmp_path / f"{split}.lance", sample_rate=44_100, num_samples=AUDIO_SAMPLES
+        )
+    module = LanceVSTDataModule(
+        dataset_root=tmp_path,
+        param_spec_name=ParamSpecName("surge_xt"),
+        use_saved_mean_and_variance=False,
+        sample_rate=44_100,
+        signal_length=AUDIO_SAMPLES,
+    )
+
+    module.setup("fit")
+
+    dataset = module.train_dataloader().dataset
+    assert isinstance(dataset, LanceMapDataset)
+    assert len(dataset) == 2
