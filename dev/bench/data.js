@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789700489689,
+  "lastUpdate": 1789700493360,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -30351,6 +30351,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 14.793510290799986,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e55596ca6fb9f8a1936cdd7cbcf8b596217c59bc",
+          "message": "test(training): guard the val audio probe on torchsynth arms (#3639)\n\nThe probe swallows its own failures, so when torchsynth rows were narrower\nthan the param spec the probe failed on every validation and the only\nsymptom was val_audio metrics never appearing. The row width was aligned by\n#2827, but nothing asserts the probe's return value on an online arm, so the\nsame class of breakage would again be silent.\n\nThis runs the torchsynth smoke through train and asserts the probe's real\nresult, and truncating the staged rows back to the pre-#2827 width makes it\nfail.\n\nFixes #2639\n\nCo-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-09-17T20:28:06-04:00",
+          "tree_id": "fb728dbb1f5177540db7883e742bf91b6943311f",
+          "url": "https://github.com/tinaudio/synth-setter/commit/e55596ca6fb9f8a1936cdd7cbcf8b596217c59bc"
+        },
+        "date": 1789700492835,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.377839088439941,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.925833898484706,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08379654586315155,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0032837390899658203,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.193761110305786,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 14.886391129499952,
             "unit": "seconds"
           }
         ]
