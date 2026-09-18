@@ -291,6 +291,22 @@ def _clear_hydra_config_singleton() -> Iterator[None]:
     reset_hydra_config_singleton()
 
 
+@pytest.fixture(autouse=True)
+def _clear_operator_workspace_cache() -> Iterator[None]:
+    """Drop the cached operator workspace after every test.
+
+    ``operator_workspace`` is ``@cache``d, so a test that points
+    ``$SYNTH_SETTER_WORKSPACE`` at its ``tmp_path`` leaves that directory
+    cached process-wide even after ``monkeypatch`` restores the env var;
+    later tests in the same worker then resolve workspace-relative paths
+    under a deleted temp directory (#3188).
+
+    :yields None: Control to the test, then clears the cache on teardown.
+    """
+    yield
+    operator_workspace.cache_clear()
+
+
 def _set_workspace_root(cfg: DictConfig) -> None:
     """Pin ``paths.root_dir`` to the operator workspace, in place.
 

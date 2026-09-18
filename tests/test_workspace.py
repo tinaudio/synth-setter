@@ -17,6 +17,10 @@ import pytest
 
 from synth_setter import workspace
 
+# Enables the ``pytester`` fixture used by the cache-teardown regression test
+# below, which needs a second, order-pinned pytest session.
+pytest_plugins = ["pytester"]
+
 
 @pytest.fixture(autouse=True)
 def _reset_workspace_cache(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -260,3 +264,47 @@ def test_launcher_probe_when_the_import_raises_reports_failure(tmp_path: Path) -
     assert proc.returncode != 0
     assert "FileNotFoundError" in proc.stderr
     assert proc.stdout.strip() == ""
+
+
+def test_project_autouse_teardown_clears_a_leaked_workspace_for_the_following_test(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The project's real autouse teardown drops a leaked workspace between tests.
+
+    ``operator_workspace`` is ``@cache``d, so a test that points
+    ``$SYNTH_SETTER_WORKSPACE`` at its ``tmp_path`` leaves that directory
+    cached process-wide; ``monkeypatch`` restores the env var but cannot
+    restore the cache. Later tests in the same xdist worker then resolve
+    workspace-relative paths under a deleted temp directory (#3188).
+
+    Runs a controlled two-test session (deterministic order, ``-p
+    no:randomly``) that loads the project's real ``tests/conftest.py`` as a
+    plugin, so the production autouse teardown — not a stand-in — is what
+    governs cleanup. The first test leaks its ``tmp_path``; the second
+    asserts the resolved workspace is a real checkout. It passes only
+    because the real fixture cleared the cache in between, so removing or
+    breaking that fixture fails this check.
+
+    :param pytester: Pytest fixture that runs the order-pinned sub-session.
+    :param monkeypatch: Puts the repo root on ``PYTHONPATH`` so the
+        subprocess can import ``tests.conftest`` as a plugin.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    monkeypatch.setenv("PYTHONPATH", str(repo_root))
+    pytester.makepyfile("""
+        from synth_setter import workspace
+
+        def test_1_leak_a_temp_workspace(monkeypatch, tmp_path):
+            monkeypatch.setenv("SYNTH_SETTER_WORKSPACE", str(tmp_path))
+            assert workspace.operator_workspace() == tmp_path.resolve()
+
+        def test_2_resolution_falls_back_to_the_checkout():
+            resolved = workspace.operator_workspace()
+            assert (resolved / ".project-root").is_file(), resolved
+    """)
+
+    result = pytester.runpytest_subprocess(
+        "-p", "tests.conftest", "-p", "no:randomly", "-p", "no:cacheprovider"
+    )
+
+    result.assert_outcomes(passed=2)
