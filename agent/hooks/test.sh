@@ -2462,7 +2462,7 @@ it "link-plugins: intact link under a symlinked path → reported as already lin
 #   0 when the existing link is recognized, non-zero otherwise.
 #######################################
 T_link_thoughts_existing_link_under_symlinked_path_is_recognized() {
-  local out physical base primary target
+  local out setup_out physical base primary target
   physical="$TEST_DIR/thoughts-symlink-real-$$"
   base="$TEST_DIR/thoughts-symlink-alias-$$"
   mkdir -p "$physical"
@@ -2474,7 +2474,10 @@ T_link_thoughts_existing_link_under_symlinked_path_is_recognized() {
   git -C "$primary" config user.name test
   git -C "$primary" commit -q --allow-empty -m init
   mkdir -p "$primary/thoughts"
-  git -C "$primary" worktree add --detach "$target" >/dev/null 2>&1
+  # Keep git's stderr: every other setup call already surfaces its own failure.
+  setup_out=$(git -C "$primary" worktree add --detach "$target" 2>&1) || {
+    echo "setup: git worktree add failed: $setup_out"; return 1
+  }
   ln -s "$primary/thoughts" "$target/thoughts"
 
   out=$(cd "$target" && make -f "$REPO_ROOT/Makefile" link-thoughts 2>&1) || {
