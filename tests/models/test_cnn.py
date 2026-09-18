@@ -7,8 +7,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from synth_setter.models.components.cnn import MelCNN
-from synth_setter.models.components.residual_mlp import LogMelCNNResidualMLP
+from synth_setter.models.components.cnn import MelCNN, ResidualEncoder
+from synth_setter.models.components.residual_mlp import CNNResidualMLP, LogMelCNNResidualMLP
 
 _mel_cnn = partial(MelCNN, hidden_dim=4, out_dim=5, num_blocks=1, kernel_size=3)
 _log_mel_model = partial(
@@ -156,3 +156,59 @@ def test_log_mel_model_overfits_fixed_envelope_examples() -> None:
     with torch.no_grad():
         final_loss = F.mse_loss(model(audio), targets).item()
     assert final_loss < initial_loss / 100
+
+
+def test_fft_encoder_sizes_only_its_input_projection_from_the_waveform_length() -> None:
+    """Every width but the flattened-feature projection comes from the design dims (#3677)."""
+    short = ResidualEncoder(in_dim=4_410, hidden_dim=4, out_dim=3, num_blocks=2, kernel_size=3)
+    long = ResidualEncoder(in_dim=8_820, hidden_dim=4, out_dim=3, num_blocks=2, kernel_size=3)
+
+    short_shapes = {name: tuple(p.shape) for name, p in short.named_parameters()}
+    length_dependent = sorted(
+        name
+        for name, parameter in long.named_parameters()
+        if short_shapes[name] != tuple(parameter.shape)
+    )
+
+    assert len(length_dependent) == 1, length_dependent
+
+
+def test_fft_model_four_second_audio_returns_bounded_prediction() -> None:
+    """The shipped waveform length yields a trainable model, not a 166 GiB head (#3677)."""
+    model = CNNResidualMLP(
+        in_dim=176_400,
+        channels=4,
+        encoder_blocks=2,
+        trunk_blocks=1,
+        hidden_dim=16,
+        out_dim=3,
+        kernel_size=3,
+        norm="bn",
+    )
+    model.eval()
+
+    with torch.no_grad():
+        prediction = model(torch.zeros(2, 176_400))
+
+    assert prediction.shape == (2, 3)
+    assert sum(parameter.numel() for parameter in model.parameters()) < 10_000_000
+
+
+def test_fft_model_backward_reaches_every_parameter() -> None:
+    """A prediction loss sends finite, non-zero gradients through the resized head."""
+    model = CNNResidualMLP(
+        in_dim=4_410,
+        channels=4,
+        encoder_blocks=1,
+        trunk_blocks=1,
+        hidden_dim=8,
+        out_dim=2,
+        kernel_size=3,
+    )
+
+    F.mse_loss(model(torch.randn(2, 4_410)), torch.rand(2, 2)).backward()
+
+    for name, parameter in model.named_parameters():
+        assert parameter.grad is not None, name
+        assert torch.isfinite(parameter.grad).all(), name
+        assert torch.count_nonzero(parameter.grad), name
