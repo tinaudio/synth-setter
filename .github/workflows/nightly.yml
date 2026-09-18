@@ -48,7 +48,9 @@ jobs:
   nightly-full-suite:
     runs-on: ubuntu-latest
 
-    timeout-minutes: 60
+    # Must outlast `make test-ci-nightly`'s own 4800 s session budget, or the
+    # runner cancels the job before pytest can report a verdict — #3653.
+    timeout-minutes: 90
 
     steps:
       - name: Checkout

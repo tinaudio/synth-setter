@@ -517,6 +517,16 @@ def _exit_due_to_plugin_load_timeout(message: str) -> None:
     os._exit(_LOAD_TIMEOUT_EXIT_CODE)
 
 
+def _heartbeat_wait_seconds(remaining: float, heartbeat_seconds: float) -> float:
+    """Clamp the next heartbeat wait so it cannot outlast the load budget.
+
+    :param remaining: Seconds left before the soft timeout fires.
+    :param heartbeat_seconds: Interval the operator asked heartbeats to be spaced by.
+    :returns: The wait the watchdog should request next.
+    """
+    return min(heartbeat_seconds, remaining)
+
+
 def _load_plugin_loudly[PluginT](
     plugin_path: str,
     plugin_name: str | None,
@@ -570,7 +580,7 @@ def _load_plugin_loudly[PluginT](
                 if not finished.wait(timeout=hard_timeout_grace_seconds):
                     hard_timeout_handler(message)
                 return
-            if finished.wait(timeout=min(heartbeat_seconds, remaining)):
+            if finished.wait(timeout=_heartbeat_wait_seconds(remaining, heartbeat_seconds)):
                 return
             elapsed = time.monotonic() - started
             if elapsed >= timeout_seconds:
