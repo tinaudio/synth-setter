@@ -945,3 +945,42 @@ def test_vst_flow_config_defaults_endpoint_loss_to_mse() -> None:
 
     assert config.endpoint_loss == "mse"
     assert config.endpoint_time_weighting == "uniform"
+
+
+def test_training_step_field_without_penalty_returns_the_endpoint_loss_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A field defining no ``penalty()`` trains, since the term is added only when present.
+
+    :param monkeypatch: Detaches Lightning logging from a Trainer.
+    """
+    module = _module()
+    monkeypatch.setattr(module, "log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "log_dict", lambda *args, **kwargs: None)
+    batch = _batch(_target())
+    expected = module._train_step(batch)  # noqa: SLF001
+    assert expected.penalty is None
+
+    total = module.training_step(batch, batch_idx=0)
+
+    assert total.ndim == 0
+    assert torch.isfinite(total)
+    assert total.item() == pytest.approx(expected.loss.item())
+
+
+def test_training_step_field_with_penalty_adds_it_to_the_endpoint_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard skips a missing penalty without discarding a present one.
+
+    :param monkeypatch: Detaches Lightning logging from a Trainer.
+    """
+    module = _module(vector_field=_PenaltyField(torch.zeros(_WIDTH)))
+    monkeypatch.setattr(module, "log", lambda *args, **kwargs: None)
+    monkeypatch.setattr(module, "log_dict", lambda *args, **kwargs: None)
+    batch = _batch(_target())
+    expected = module._train_step(batch)  # noqa: SLF001
+
+    total = module.training_step(batch, batch_idx=0)
+
+    assert total.item() == pytest.approx(expected.loss.item() + 5.0)
