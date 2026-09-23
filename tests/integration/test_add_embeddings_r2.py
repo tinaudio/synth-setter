@@ -5,11 +5,9 @@ Drives the two production CLIs back to back: the real VST renderer
 unique R2 prefix, then ``synth-setter-add-embeddings`` runs the real
 music2latent, LAION-CLAP, and SA3 T5Gemma encoders against that remote URI. The
 augmented dataset is reopened from R2 and its embedding columns, indexability,
-and ``nearest=`` query path are asserted. The prefix is purged on teardown
-regardless of pass/fail.
-
-Auto-skips when the VST plugin is absent (``requires_vst``) or R2 credentials
-are missing (``integration_r2``); also skips when R2 is unreachable at runtime.
+and ``nearest=`` query path are asserted. The IVF-PQ test writes deterministic,
+schema-compatible vectors through the production Lance writer so index coverage
+stays independent of VST rendering. Every unique R2 prefix is purged on teardown.
 """
 
 from __future__ import annotations
@@ -43,10 +41,15 @@ from synth_setter.pipeline.data.add_embeddings import (
     CLAP_EMBEDDING_DIM,
     MIN_ROWS_FOR_INDEX,
 )
+from synth_setter.pipeline.data.lance_shard import (
+    SHARD_METADATA_SCHEMA_KEY,
+    write_lance_dataset,
+)
 from synth_setter.pipeline.data.t5gemma import (
     T5GEMMA_EMBEDDING_DIM,
     T5GEMMA_MAX_LENGTH,
 )
+from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
 from synth_setter.pipeline.schemas.spec import DatasetSpec, ShardSpec
 from synth_setter.resources import as_file, vst_headless_wrapper
 from tests._vst import (
@@ -57,12 +60,7 @@ from tests._vst import (
     VST_SUBPROCESS_TIMEOUT_SECONDS,
 )
 
-pytestmark = [
-    pytest.mark.slow,
-    pytest.mark.requires_vst,
-    pytest.mark.integration_r2,
-    pytest.mark.r2,
-]
+pytestmark = [pytest.mark.slow, pytest.mark.integration_r2, pytest.mark.r2]
 
 # Kept tiny so the real encoders stay fast: one 4-row shard. 4 < MIN_ROWS_FOR_INDEX,
 # so the IVF_PQ build is skipped and the test asserts the exact ``nearest`` fallback.
@@ -72,6 +70,13 @@ _SAMPLES_PER_SHARD = 4
 _SIGNAL_DURATION_SECONDS = 1.0
 _SAMPLE_RATE = 44100
 _CHANNELS = 2
+_R2_BUCKET = "intermediate-data"
+_INDEX_M2L_FRAMES = 2
+_INDEX_NUM_PARTITIONS = 4
+_INDEX_NUM_SUB_VECTORS = 16
+_INDEX_RANDOM_SEED = 0
+_INDEX_SUBPROCESS_TIMEOUT_SECONDS = 90
+_INDEX_TEST_TIMEOUT_SECONDS = 120
 
 # The add_embeddings CLI is the system under test; invoke it as the console
 # script the operator runs, against the uploaded ``r2://`` dataset directory.
@@ -115,7 +120,7 @@ def _lance_embed_spec(prefix: str, rows: int = _SAMPLES_PER_SHARD) -> DatasetSpe
         "base_seed": 42,
         # Constant mel bins over so few samples; mask so the spec stays valid.
         "mask_degenerate_bins": True,
-        "r2": {"bucket": "intermediate-data", "prefix": prefix},
+        "r2": {"bucket": _R2_BUCKET, "prefix": prefix},
         "render": {
             "synth": {
                 "name": TEST_PARAM_SPEC_NAME,
@@ -209,15 +214,77 @@ def remote_lance_dataset_uri() -> Iterator[str]:
     yield from _render_and_upload(_SAMPLES_PER_SHARD)
 
 
+def _indexable_embedding_table() -> pa.Table:
+    """Build deterministic embedding columns at the IVF-PQ row floor.
+
+    :returns: Schema-compatible CLAP, M2L, and pooled M2L vectors.
+    """
+    rng = np.random.default_rng(_INDEX_RANDOM_SEED)
+    clap = rng.standard_normal((MIN_ROWS_FOR_INDEX, CLAP_EMBEDDING_DIM), dtype=np.float32)
+    m2l = rng.standard_normal(
+        (MIN_ROWS_FOR_INDEX, CLAP_EMBEDDING_DIM, _INDEX_M2L_FRAMES),
+        dtype=np.float32,
+    )
+    metadata = ShardMetadata(
+        velocity=100,
+        signal_duration_seconds=_SIGNAL_DURATION_SECONDS,
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        min_loudness=-55.0,
+    )
+    schema = pa.schema(
+        [
+            pa.field(CLAP_FIELD, pa.list_(pa.float32(), CLAP_EMBEDDING_DIM), nullable=False),
+            pa.field(
+                M2L_FIELD,
+                pa.fixed_shape_tensor(pa.float32(), m2l.shape[1:]),
+                nullable=False,
+            ),
+            pa.field(
+                f"{M2L_FIELD}_vec",
+                pa.list_(pa.float32(), CLAP_EMBEDDING_DIM),
+                nullable=False,
+            ),
+        ],
+        metadata={SHARD_METADATA_SCHEMA_KEY: metadata.model_dump_json().encode()},
+    )
+    return pa.Table.from_arrays(
+        [
+            pa.FixedSizeListArray.from_arrays(pa.array(clap.reshape(-1)), CLAP_EMBEDDING_DIM),
+            pa.FixedShapeTensorArray.from_numpy_ndarray(m2l),
+            pa.FixedSizeListArray.from_arrays(
+                pa.array(m2l.mean(axis=-1, dtype=np.float32).reshape(-1)),
+                CLAP_EMBEDDING_DIM,
+            ),
+        ],
+        schema=schema,
+    )
+
+
 @pytest.fixture()
 def remote_indexed_lance_dataset_uri() -> Iterator[str]:
-    """Yield an uploaded Lance dataset URI with ``>= MIN_ROWS_FOR_INDEX`` rows.
-
-    Enough rows that the downstream IVF_PQ build trains rather than skips.
+    """Yield a real-R2 Lance dataset with index-ready embedding columns.
 
     :yields str: ``r2://`` URI of the uploaded dataset.
     """
-    yield from _render_and_upload(MIN_ROWS_FOR_INDEX)
+    if not r2_io.is_r2_reachable():
+        pytest.skip("R2 not reachable (rclone not on PATH or rclone lsd r2: failed)")
+    r2_io.ensure_r2_env_loaded()
+
+    prefix = _unique_test_prefix()
+    shard_uri = r2_io.shard_uri(_R2_BUCKET, prefix, "shard-000000.lance")
+    table = _indexable_embedding_table()
+    try:
+        write_lance_dataset(
+            r2_io.to_s3_uri(shard_uri),
+            table.schema,
+            table.to_batches(),
+            storage_options=r2_io.r2_storage_options(),
+        )
+        assert _open_remote_dataset(shard_uri).count_rows() == MIN_ROWS_FOR_INDEX
+        yield shard_uri
+    finally:
+        r2_io.purge_prefix(_R2_BUCKET, prefix)
 
 
 def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
@@ -229,6 +296,7 @@ def _open_remote_dataset(r2_uri: str) -> lance.LanceDataset:
     return lance.dataset(r2_io.to_s3_uri(r2_uri), storage_options=r2_io.r2_storage_options())
 
 
+@pytest.mark.requires_vst
 def test_add_embeddings_matpac_plus_against_real_r2_uses_registry_path(
     remote_lance_dataset_uri: str,
 ) -> None:
@@ -261,6 +329,7 @@ def test_add_embeddings_matpac_plus_against_real_r2_uses_registry_path(
     assert np.isfinite(values.combine_chunks().to_numpy_ndarray()).all()
 
 
+@pytest.mark.requires_vst
 def test_add_embeddings_cli_against_real_r2_writes_clap_m2l_and_t5gemma(
     remote_lance_dataset_uri: str,
 ) -> None:
@@ -371,17 +440,17 @@ def test_add_embeddings_cli_against_real_r2_writes_clap_m2l_and_t5gemma(
     assert neighbours.num_rows >= 1, "nearest query returned no rows"
 
 
+@pytest.mark.timeout(_INDEX_TEST_TIMEOUT_SECONDS)
 def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
     remote_indexed_lance_dataset_uri: str,
 ) -> None:
     """``synth-setter-add-embeddings build_index=true`` trains an IVF_PQ index on a real R2 dataset.
 
-    Renders + uploads a ``MIN_ROWS_FOR_INDEX``-row shard via the VST renderer,
-    runs the real ``add_embeddings`` CLI with ``build_index=true`` and tuning sized
-    for the row count (so PQ training succeeds rather than skips), then reopens
-    the remote dataset and asserts IVF_PQ indexes exist on ``clap`` and
-    ``m2l_vec``; a CLAP ANN ``nearest=`` query returns a stored row's own vector
-    as the top hit.
+    Writes ``MIN_ROWS_FOR_INDEX`` schema-compatible vectors through the
+    production Lance writer, runs the real ``add_embeddings`` CLI with
+    ``build_index=true``, then reopens the remote dataset and asserts IVF_PQ
+    indexes exist on ``clap`` and ``m2l_vec``; a CLAP ANN ``nearest=`` query
+    returns a close vector.
 
     :param remote_indexed_lance_dataset_uri: Fixture-provided ``r2://`` URI of a
         dataset with enough rows to train the index.
@@ -396,13 +465,13 @@ def test_add_embeddings_cli_against_real_r2_builds_ivf_pq_index(
             "logger=[]",
             f"lance_uri={remote_indexed_lance_dataset_uri}",
             "build_index=true",
-            "num_partitions=4",
-            "num_sub_vectors=16",
+            f"num_partitions={_INDEX_NUM_PARTITIONS}",
+            f"num_sub_vectors={_INDEX_NUM_SUB_VECTORS}",
         ],
         check=False,
         capture_output=True,
         text=True,
-        timeout=_EMBED_SUBPROCESS_TIMEOUT_SECONDS,
+        timeout=_INDEX_SUBPROCESS_TIMEOUT_SECONDS,
     )
     assert result.returncode == 0, (
         f"{_ADD_EMBEDDINGS_CMD} exited {result.returncode}\n"
