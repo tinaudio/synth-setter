@@ -294,7 +294,7 @@ def test_ultramaster_kr106_spec_round_trip_preserves_values() -> None:
     ["ultramaster_kr106", "ultramaster_kr106_onehot", "ultramaster_kr106_single_note"],
 )
 def test_ultramaster_kr106_gain_ranges(spec_name: str) -> None:
-    """KR-106 identities keep panel volume above -2 dB and master gain at -22.1 dB.
+    """KR-106 identities sample the full panel range and hold master gain at -18.2 dB.
 
     :param spec_name: Registered KR-106 parameter-spec identity.
     """
@@ -302,9 +302,9 @@ def test_ultramaster_kr106_gain_ranges(spec_name: str) -> None:
     volume = cast(ContinuousParameter, params["volume"])
     master_volume = cast(ContinuousParameter, params["master_volume"])
 
-    assert (volume.min, volume.max) == (0.4, 1.0)
+    assert (volume.min, volume.max) == (0.0, 1.0)
     assert master_volume.constant_val_p == 1.0
-    assert master_volume.constant_val == 0.28
+    assert master_volume.constant_val == 0.35
 
 
 def test_ultramaster_kr106_command_and_silence_states_are_not_sampled() -> None:
