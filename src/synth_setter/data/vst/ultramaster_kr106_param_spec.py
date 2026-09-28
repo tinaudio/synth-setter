@@ -168,7 +168,7 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         ContinuousParameter(name="vcf_env"),
         ContinuousParameter(name="vcf_lfo"),
         ContinuousParameter(name="vcf_kbd"),
-        ContinuousParameter(name="volume", min=0.2, max=1.0),
+        ContinuousParameter(name="volume", min=0.4, max=1.0),
         ContinuousParameter(name="attack"),
         ContinuousParameter(name="decay"),
         ContinuousParameter(name="sustain"),
@@ -213,9 +213,9 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         CategoricalParameter(
             name="transpose_offset", values=list(range(-24, 37)), encoding="scalar"
         ),
-        # Hold final output at -19.3 dB; the panel volume carries gain variation.
+        # Hold final output at -22.1 dB; the panel volume carries gain variation.
         ContinuousParameter(
-            name="master_volume", min=0.0, max=1.0, constant_val_p=1.0, constant_val=0.33
+            name="master_volume", min=0.0, max=1.0, constant_val_p=1.0, constant_val=0.28
         ),
         CategoricalParameter(name="voices", values=[6, 7, 8, 9, 10], encoding="scalar"),
         CategoricalParameter(
