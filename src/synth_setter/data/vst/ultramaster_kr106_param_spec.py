@@ -213,9 +213,9 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         CategoricalParameter(
             name="transpose_offset", values=list(range(-24, 37)), encoding="scalar"
         ),
-        # Keep final output fully open; the panel volume carries gain variation.
+        # Hold final output at -12 dB; the panel volume carries gain variation.
         ContinuousParameter(
-            name="master_volume", min=0.0, max=1.0, constant_val_p=1.0, constant_val=1.0
+            name="master_volume", min=0.0, max=1.0, constant_val_p=1.0, constant_val=0.5
         ),
         CategoricalParameter(name="voices", values=[6, 7, 8, 9, 10], encoding="scalar"),
         CategoricalParameter(

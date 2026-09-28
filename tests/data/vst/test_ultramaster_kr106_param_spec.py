@@ -294,7 +294,7 @@ def test_ultramaster_kr106_spec_round_trip_preserves_values() -> None:
     ["ultramaster_kr106", "ultramaster_kr106_onehot", "ultramaster_kr106_single_note"],
 )
 def test_ultramaster_kr106_gain_ranges(spec_name: str) -> None:
-    """KR-106 identities avoid quiet panel volume and hold master gain fully open.
+    """KR-106 identities avoid quiet panel volume and hold master gain at -12 dB.
 
     :param spec_name: Registered KR-106 parameter-spec identity.
     """
@@ -304,7 +304,7 @@ def test_ultramaster_kr106_gain_ranges(spec_name: str) -> None:
 
     assert (volume.min, volume.max) == (0.2, 1.0)
     assert master_volume.constant_val_p == 1.0
-    assert master_volume.constant_val == 1.0
+    assert master_volume.constant_val == 0.5
 
 
 def test_ultramaster_kr106_command_and_silence_states_are_not_sampled() -> None:
