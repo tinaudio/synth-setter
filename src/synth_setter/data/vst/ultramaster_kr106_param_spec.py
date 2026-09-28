@@ -168,7 +168,7 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         ContinuousParameter(name="vcf_env"),
         ContinuousParameter(name="vcf_lfo"),
         ContinuousParameter(name="vcf_kbd"),
-        ContinuousParameter(name="volume"),
+        ContinuousParameter(name="volume", min=0.2, max=1.0),
         ContinuousParameter(name="attack"),
         ContinuousParameter(name="decay"),
         ContinuousParameter(name="sustain"),
@@ -213,8 +213,10 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
         CategoricalParameter(
             name="transpose_offset", values=list(range(-24, 37)), encoding="scalar"
         ),
-        # Bound post-chorus gain while retaining the control's nonlinear taper.
-        ContinuousParameter(name="master_volume", max=0.25),
+        # Keep final output fully open; the panel volume carries gain variation.
+        ContinuousParameter(
+            name="master_volume", min=0.0, max=1.0, constant_val_p=1.0, constant_val=1.0
+        ),
         CategoricalParameter(name="voices", values=[6, 7, 8, 9, 10], encoding="scalar"),
         CategoricalParameter(
             name="vcf_oversample", values=["Off", "2x", "3x", "4x"], encoding="onehot"
