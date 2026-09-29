@@ -225,6 +225,34 @@ def test_default_plugins_dir_expands_environment_override(
     assert default_plugins_dir() == tmp_path / "managed"
 
 
+def test_default_plugins_dir_empty_home_raises_actionable_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty HOME must fail loudly rather than resolve under the filesystem root.
+
+    :param monkeypatch: Blanks HOME and clears the storage override.
+    """
+    monkeypatch.setenv("HOME", "")
+    monkeypatch.delenv("STUDIORACK_PLUGINS_DIR", raising=False)
+
+    with pytest.raises(RuntimeError, match="HOME.*STUDIORACK_PLUGINS_DIR"):
+        default_plugins_dir()
+
+
+def test_default_plugins_dir_empty_home_still_honors_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The override stays usable when HOME is unusable — it is the documented escape.
+
+    :param tmp_path: Scratch root supplying the override target.
+    :param monkeypatch: Blanks HOME and sets the storage override.
+    """
+    monkeypatch.setenv("HOME", "")
+    monkeypatch.setenv("STUDIORACK_PLUGINS_DIR", str(tmp_path / "managed"))
+
+    assert default_plugins_dir() == tmp_path / "managed"
+
+
 def test_manifest_load_unpinned_version_rejected(tmp_path: Path) -> None:
     """Version ranges are rejected at the manifest boundary.
 
