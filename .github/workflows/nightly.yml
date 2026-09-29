@@ -69,11 +69,17 @@ jobs:
         with:
           python-version: "3.12.13"
 
+      # A repo-scoped uv cache serves every image unless the key names one, and the env
+      # context cannot see the runner's own ImageOS — so republish it first (#3507, #3688).
+      - name: Publish the runner image id
+        run: echo "RUNNER_IMAGE_OS=${ImageOS:-unknown}" >> "$GITHUB_ENV"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.11.28"
           enable-cache: true
+          cache-suffix: ${{ env.RUNNER_IMAGE_OS }}
 
       # Frozen sync, CPU torch via [tool.uv.sources] — see test.yml for rationale.
       - name: Install dependencies (uv sync --frozen, CPU torch)
