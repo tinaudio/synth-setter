@@ -38,6 +38,7 @@ _FAUST_SOURCE_SHA256 = {
     "faust_bright_organ": "a1bf9f6e45ebbf78dd11fc18603cda048a91a778af1ad79683339b1951813465",
     "faust_bubble": "731727e725ac0336a897c18df4e8b73f1e75c3d8add40a978efb1d95f88db23c",
     "faust_church_organ": "c753731f4053210d42757acb179010185e91d37fb56a8b45e093222be688b512",
+    "faust_fdn_effect": "e5ef758031c9397fbd1a56fdc2d5b4e27ca2f4a6d707529361e0f7679d1d1190",
     "faust_filter_osc": "6ad65d28d787f08a3fa66eb4de7d4091be8d2267ad1e9edc200618effbbe588c",
     "faust_kronecker_fdn": "bb5fac0999788b73cabb7d583ad728d80aa223cd07605342c07e6551de63822e",
     "faust_shimmer_fdn": "30b485b40002bc721101c9c50ec4d84f1d96740db20df0273835d543f168a4df",
@@ -252,6 +253,12 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
     "faust_church_organ": (
         "faust_church_organ",
         "registry://faust/faust_church_organ",
+        "",
+        "1",
+    ),
+    "faust_fdn_effect": (
+        "faust_fdn_effect",
+        "registry://faust/faust_fdn_effect",
         "",
         "1",
     ),

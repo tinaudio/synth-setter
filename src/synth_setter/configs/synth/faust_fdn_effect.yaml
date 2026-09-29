@@ -1,0 +1,7 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "faust_fdn_effect"
+param_spec_name: "faust_fdn_effect"
+plugin_path: "registry://faust/faust_fdn_effect"
+plugin_state_path: ""
+synth_version: "1"
+source_sha256: "e5ef758031c9397fbd1a56fdc2d5b4e27ca2f4a6d707529361e0f7679d1d1190"

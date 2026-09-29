@@ -128,6 +128,7 @@ def _render_in_batches(
             render_cfg.input_audio_source,
             sample_rate=render_cfg.sample_rate,
             frames=int(render_cfg.sample_rate * render_cfg.signal_duration_seconds),
+            input_channels=2 if render_cfg.renderer_backend == "faustwasm" else 1,
         )
         if render_cfg.input_audio_source is not None
         else None

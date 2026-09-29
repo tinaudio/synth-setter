@@ -54,6 +54,7 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("faust_church_organ"): resolve_faust_param_spec(
         ParamSpecName("faust_church_organ")
     ),
+    ParamSpecName("faust_fdn_effect"): resolve_faust_param_spec(ParamSpecName("faust_fdn_effect")),
     ParamSpecName("faust_filter_osc"): resolve_faust_param_spec(ParamSpecName("faust_filter_osc")),
     ParamSpecName("faust_kronecker_fdn"): resolve_faust_param_spec(
         ParamSpecName("faust_kronecker_fdn")

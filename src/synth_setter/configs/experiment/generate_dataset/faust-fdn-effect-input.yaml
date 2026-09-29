@@ -1,0 +1,23 @@
+# @package _global_
+
+# Replace both placeholders with one finalized dataset root and its train snapshot txid.
+defaults:
+  - override /datamodule: vst
+  - override /synth: faust_fdn_effect
+  - override /render: faustwasm
+  - _self_
+
+task_name: faust-fdn-effect-input
+train_val_test_sizes: [2, 0, 0]
+mask_degenerate_bins: true
+
+render:
+  input_audio_source:
+    dataset_uri: /path/to/finalized-dataset
+    split: train
+    snapshot_txid: REPLACE_WITH_FINALIZED_TRAIN_SNAPSHOT_TXID
+    sampling_seed: 0
+  min_loudness: -100.0
+  audio_dtype: float32
+  samples_per_render_batch: 1
+  samples_per_shard: 2
