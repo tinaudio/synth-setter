@@ -8,9 +8,12 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 from synth_setter.models.components.same_encoder import SameAudioEncoder
+from synth_setter.models.components.transformer import (
+    AudioSpectrogramTransformer,
+    TemporalPatchEmbed,
+)
 from synth_setter.same import SAME_SAMPLE_RATE
 from tests.helpers.same_reference import (
     SAME_HF_CHECKPOINTS,
@@ -31,6 +34,25 @@ def _encoder(checkpoint: Path, sample_rate: int = SAME_SAMPLE_RATE) -> SameAudio
     :returns: Frozen differentiable encoder.
     """
     return SameAudioEncoder.from_pretrained(sample_rate=sample_rate, checkpoint=str(checkpoint))
+
+
+def _ast_head(n_conditioning_outputs: int) -> AudioSpectrogramTransformer:
+    """Build the tiny temporal AST used by online SAME behavior tests.
+
+    :param n_conditioning_outputs: Number of layerwise conditioning tokens.
+    :returns: AST over all eight tiny-SAME latent frames.
+    """
+    return AudioSpectrogramTransformer(
+        d_model=8,
+        n_heads=1,
+        n_layers=1,
+        n_conditioning_outputs=n_conditioning_outputs,
+        token_embed=TemporalPatchEmbed(
+            input_dim=TINY_SAME_LATENT_DIM,
+            d_model=8,
+            num_tokens=8,
+        ),
+    )
 
 
 def test_encoder_returns_one_latent_sequence_per_waveform(tiny_same_checkpoint: Path) -> None:
@@ -60,26 +82,21 @@ def test_encoder_exposes_latent_width(tiny_same_checkpoint: Path) -> None:
     assert _encoder(tiny_same_checkpoint).out_dim == TINY_SAME_LATENT_DIM
 
 
-def test_pretrained_conditioning_pools_same_latent_sequence(
+def test_pretrained_conditioning_encodes_same_frames_as_ast_tokens(
     tiny_same_checkpoint: Path,
 ) -> None:
-    """The generic pretrained wrapper accepts SAME's temporal latent layout.
+    """The online path preserves SAME frames through AST self-attention.
 
     :param tiny_same_checkpoint: Loadable SAME checkpoint.
     """
-    head = EmbeddingPool(
-        embed_dim=TINY_SAME_LATENT_DIM,
-        d_model=8,
-        num_heads=1,
-        max_seq_len=8,
-    )
+    head = _ast_head(n_conditioning_outputs=2)
     encoder = PretrainedConditioningEncoder(
         backbone=_encoder(tiny_same_checkpoint), head=head, out_dim=8
     )
 
     conditioning = encoder(torch.randn(_ROWS, _LENGTH).clamp(-1.0, 1.0))
 
-    assert conditioning.shape == (_ROWS, 8)
+    assert conditioning.shape == (_ROWS, 2, 8)
     assert torch.isfinite(conditioning).all()
     assert not torch.equal(conditioning[0], conditioning[1])
 
@@ -92,12 +109,7 @@ def test_same_conditioning_batch_rows_are_independent(tiny_same_checkpoint: Path
     torch.manual_seed(0)
     encoder = PretrainedConditioningEncoder(
         backbone=_encoder(tiny_same_checkpoint),
-        head=EmbeddingPool(
-            embed_dim=TINY_SAME_LATENT_DIM,
-            d_model=8,
-            num_heads=1,
-            max_seq_len=8,
-        ),
+        head=_ast_head(n_conditioning_outputs=2),
         out_dim=8,
     )
     audio = torch.randn(_ROWS, _LENGTH).clamp(-1.0, 1.0).requires_grad_()
@@ -108,23 +120,18 @@ def test_same_conditioning_batch_rows_are_independent(tiny_same_checkpoint: Path
     assert torch.equal(gradient[1], torch.zeros_like(gradient[1]))
 
 
-def test_same_conditioning_updates_pool_without_backbone_gradients(
+def test_same_conditioning_updates_ast_without_backbone_gradients(
     tiny_same_checkpoint: Path,
 ) -> None:
-    """Training adapts the pool while the pretrained SAME weights remain fixed.
+    """Training adapts the AST while the pretrained SAME weights remain fixed.
 
     :param tiny_same_checkpoint: Loadable SAME checkpoint.
     """
     torch.manual_seed(0)
-    head = EmbeddingPool(
-        embed_dim=TINY_SAME_LATENT_DIM,
-        d_model=8,
-        num_heads=1,
-        max_seq_len=8,
-    )
+    head = _ast_head(n_conditioning_outputs=2)
     backbone = _encoder(tiny_same_checkpoint)
     encoder = PretrainedConditioningEncoder(backbone=backbone, head=head, out_dim=8)
-    original_query = head.query.detach().clone()
+    original_tokens = head.embed_tokens.detach().clone()
     optimizer = torch.optim.SGD(
         (parameter for parameter in encoder.parameters() if parameter.requires_grad), lr=0.1
     )
@@ -134,7 +141,7 @@ def test_same_conditioning_updates_pool_without_backbone_gradients(
     head_gradients = [parameter.grad for parameter in head.parameters()]
     optimizer.step()
 
-    assert not torch.equal(head.query, original_query)
+    assert not torch.equal(head.embed_tokens, original_tokens)
     assert all(gradient is not None for gradient in head_gradients)
     assert all(
         torch.isfinite(gradient).all() for gradient in head_gradients if gradient is not None
@@ -149,19 +156,14 @@ def test_same_conditioning_updates_pool_without_backbone_gradients(
 def test_same_projection_conditioning_overfits_fixed_batch(
     tiny_same_checkpoint: Path,
 ) -> None:
-    """The trainable temporal pool learns a fixed mapping from SAME latents.
+    """The trainable temporal AST learns a fixed mapping from SAME latents.
 
     :param tiny_same_checkpoint: Loadable SAME checkpoint.
     """
     torch.manual_seed(0)
     encoder = PretrainedConditioningEncoder(
         backbone=_encoder(tiny_same_checkpoint),
-        head=EmbeddingPool(
-            embed_dim=TINY_SAME_LATENT_DIM,
-            d_model=8,
-            num_heads=1,
-            max_seq_len=8,
-        ),
+        head=_ast_head(n_conditioning_outputs=1),
         out_dim=8,
     )
     predictor = torch.nn.Linear(8, 2)
@@ -169,18 +171,19 @@ def test_same_projection_conditioning_overfits_fixed_batch(
     with torch.no_grad():
         embeddings = encoder.embed(audio)
     targets = torch.tensor(((-1.0, 1.0), (1.0, -1.0)))
-    optimizer = torch.optim.Adam((*encoder.head.parameters(), *predictor.parameters()), lr=3e-3)
+    optimizer = torch.optim.Adam((*encoder.head.parameters(), *predictor.parameters()), lr=3e-4)
 
-    initial_loss = torch.nn.functional.mse_loss(predictor(encoder.project(embeddings)), targets)
+    initial_loss = torch.nn.functional.mse_loss(
+        predictor(encoder.project(embeddings)[:, 0]), targets
+    )
     loss = initial_loss
     for _ in range(3_000):
         optimizer.zero_grad()
-        loss = torch.nn.functional.mse_loss(predictor(encoder.project(embeddings)), targets)
+        loss = torch.nn.functional.mse_loss(predictor(encoder.project(embeddings)[:, 0]), targets)
         loss.backward()
         optimizer.step()
 
-    # A threefold reduction separates learning from the unchanged-loss failure mode across runners.
-    assert loss.item() < initial_loss.item() / 3
+    assert loss.item() < 1e-3
 
 
 def test_gradient_reaches_the_waveform(tiny_same_checkpoint: Path) -> None:

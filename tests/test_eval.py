@@ -56,7 +56,11 @@ from synth_setter.models.components.pretrained_encoder import (
 )
 from synth_setter.models.components.rendered_reward import SynthRenderedReward
 from synth_setter.models.components.same_encoder import SameAudioEncoder
-from synth_setter.models.components.transformer import ASTWithProjectionHead
+from synth_setter.models.components.transformer import (
+    ASTWithProjectionHead,
+    AudioSpectrogramTransformer,
+    TemporalPatchEmbed,
+)
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
@@ -1418,8 +1422,9 @@ def test_eval_torchsynth_same_online_validates_real_offline_backbone(
     encoder = model.encoder
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, SameAudioEncoder)
-    assert isinstance(encoder.head, EmbeddingPool)
-    assert encoder.head.n_conditioning_outputs == len(model.vector_field.layers) == 2
+    assert isinstance(encoder.head, AudioSpectrogramTransformer)
+    assert isinstance(encoder.head.patch_embed, TemporalPatchEmbed)
+    assert encoder.head.embed_tokens.shape[1] == len(model.vector_field.layers) == 2
 
 
 _FAKE_ORACLE_DATASETS = [
