@@ -1349,7 +1349,12 @@ class DatasetSpec(BaseModel):
     # num_shards / num_params follow the same @computed_field / @cached_property pattern.
 ```
 
-All three models (`DatasetSpec`, `RenderConfig`, `ShardSpec`) use Pydantic strict mode at the trust boundary. JSON-mode coercions (`list→tuple` for `train_val_test_sizes` / `train_val_test_seeds`, `str→datetime` for `created_at`) are handled by explicit per-field validators on `DatasetSpec`; `extra="forbid"` plus those validators keep the boundary tight without relaxing strict. `frozen=True` makes specs immutable at the type level.
+`DatasetSpec`, `RenderConfig`, `InputAudioSource`, and `ShardSpec` use Pydantic
+strict mode at the trust boundary. JSON-mode coercions (`list→tuple` for
+`train_val_test_sizes` / `train_val_test_seeds`, `str→datetime` for
+`created_at`) are handled by explicit per-field validators on `DatasetSpec`;
+`extra="forbid"` plus those validators keep the boundary tight without
+relaxing strict. `frozen=True` makes specs immutable at the type level.
 
 `RendererBackend` and `SynthSpec.format` are the source of truth for renderer
 dispatch. The `dawdreamer` + `faust` tuple accepts a
@@ -1367,7 +1372,12 @@ accepted-sample path with
 fixed zero-valued MIDI compatibility inputs. It samples complete 91-coordinate
 patches and renders native four-second, 44.1 kHz mono impulse responses by
 default. `pyfdn_excitation: chirp` opts into the canonical chirp, whose byte
-digest participates in the shard render-contract digest. Training reads
+digest participates in the shard render-contract digest. Alternatively,
+`input_audio_source` pins a Lance dataset split and transaction for deterministic
+per-sample excitation. Workers materialize the projected audio once, derive the
+source row from the sample seed, and adapt it to the pyFDN render grid by
+resampling, mono downmixing, then padding or truncating. Source identity and the
+adaptation policy participate in the render-contract digest. Training reads
 finalized Lance shards; the former on-demand pyFDN datamodule is removed.
 
 **Seed derivation:** `DatasetSpec.train_val_test_seeds` supplies independent
