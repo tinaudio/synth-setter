@@ -201,6 +201,7 @@ audio = [
   "flamo==0.2.18",
   "librosa==0.11.0",
   "mido",
+  "nnaudio2==2.0.2",
   "pedalboard",
   "pyFDN==0.4.2",
   "pyloudnorm",
@@ -293,6 +294,17 @@ conflicts = [
     { extra = "cu128" },
   ],
 ]
+# nnAudio2 2.0.2 works on NumPy 2, matching its source documentation and test suite;
+# the published wheel retains the predecessor's stale numpy<2 metadata.
+[[tool.uv.dependency-metadata]]
+name = "nnaudio2"
+version = "2.0.2"
+requires-dist = [
+  "numpy>=1.14.5",
+  "scipy>=1.2.0",
+  "torch>=1.6.0",
+]
+
 # TinyMU's MATPAC path is compatible with the modern timm pinned for PupuJEPA;
 # its upstream package metadata still requires the legacy 0.4.12 release.
 [[tool.uv.dependency-metadata]]
