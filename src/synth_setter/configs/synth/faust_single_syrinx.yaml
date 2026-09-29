@@ -1,0 +1,7 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "faust_single_syrinx"
+param_spec_name: "faust_single_syrinx"
+plugin_path: "registry://faust/faust_single_syrinx"
+plugin_state_path: ""
+synth_version: "1"
+source_sha256: "6036c893f22f7740fb5f343a3e1f83a548e075178f256a3294a008f22a31210f"

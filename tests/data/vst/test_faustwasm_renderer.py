@@ -182,11 +182,13 @@ def test_faustwasm_legacy_digest_projection_is_rejected() -> None:
 @pytest.mark.parametrize(
     ("identity", "channels"),
     [
+        ("faust_bilateral_syrinx", 1),
         ("faust_bright_organ", 2),
         ("faust_bubble", 2),
         ("faust_church_organ", 2),
         ("faust_filter_osc", 1),
         ("faust_kronecker_fdn", 1),
+        ("faust_single_syrinx", 1),
     ],
 )
 def test_faustwasm_factory_renders_real_source(identity: str, channels: int) -> None:
@@ -267,13 +269,20 @@ def test_faustwasm_bright_organ_midi_octave_doubles_dominant_frequency() -> None
 @pytest.mark.skipif(_NODE_UNAVAILABLE, reason="Node.js is unavailable")
 @pytest.mark.parametrize(
     ("identity", "channels"),
-    [("faust_bubble", 2), ("faust_church_organ", 2), ("faust_filter_osc", 1), ("faust_kronecker_fdn", 1)],
+    [
+        ("faust_bilateral_syrinx", 1),
+        ("faust_bubble", 2),
+        ("faust_church_organ", 2),
+        ("faust_filter_osc", 1),
+        ("faust_kronecker_fdn", 1),
+        ("faust_single_syrinx", 1),
+    ],
 )
-def test_faustwasm_mono_source_is_independent_of_midi_pitch(
+def test_faustwasm_mono_source_is_independent_of_midi_note(
     identity: str,
     channels: int,
 ) -> None:
-    """Mono programs use canonical controls rather than MIDI pitch.
+    """Mono programs use canonical controls rather than MIDI note values.
 
     :param identity: Checked-in monophonic Faust program identity.
     :param channels: Expected native output channel count.
@@ -291,7 +300,7 @@ def test_faustwasm_mono_source_is_independent_of_midi_pitch(
             params[f"/kroneckerFDN/Output/c{line}"] = 0.125
 
     low = renderer.render(params, 48, 100, (0.05, 0.3))
-    high = renderer.render(params, 72, 100, (0.05, 0.3))
+    high = renderer.render(params, 72, 100, (0.2, 0.25))
 
     assert float(np.max(np.abs(low))) > 1e-4
     assert np.array_equal(low, high)
