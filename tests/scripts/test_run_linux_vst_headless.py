@@ -8,6 +8,7 @@ any platform.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -49,6 +50,26 @@ set -euo pipefail
 exec sleep 600
 """
 
+# Mirrors xsettingsd: it announces the selection it took on its own output, and
+# exits when it cannot reach the display. ``XSETTINGSD_STUB_SILENT`` keeps it
+# alive without ever announcing ownership.
+_XSETTINGSD_STUB = """\
+#!/bin/bash
+set -euo pipefail
+n=$(cat "$XVFB_STUB_DIR/xsettingsd_calls" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" > "$XVFB_STUB_DIR/xsettingsd_calls"
+echo "xsettingsd: Loaded 0 settings from /dev/null"
+if [ "$n" -le "${XSETTINGSD_STUB_FAILS:-0}" ]; then
+  echo "xsettingsd: Unable to open connection to X server"
+  exit 1
+fi
+if [ "${XSETTINGSD_STUB_SILENT:-0}" != "1" ]; then
+  echo "xsettingsd: Took ownership of selection _XSETTINGS_S0"
+fi
+exec sleep 600
+"""
+
 _DBUS_STUB = """\
 #!/bin/bash
 set -euo pipefail
@@ -71,7 +92,7 @@ def stub_env(tmp_path: Path) -> dict[str, str]:
     stubs = {
         "Xvfb": _XVFB_STUB,
         "xdpyinfo": _XDPYINFO_STUB,
-        "xsettingsd": _DAEMON_STUB,
+        "xsettingsd": _XSETTINGSD_STUB,
         "openbox-session": _DAEMON_STUB,
         "dbus-run-session": _DBUS_STUB,
     }
@@ -104,6 +125,15 @@ def _run_wrapper(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _xsettingsd_calls(env: dict[str, str]) -> int:
+    """Read how many times the xsettingsd stub was invoked.
+
+    :param env: Environment carrying ``XVFB_STUB_DIR``.
+    :returns: Invocation count recorded by the stub.
+    """
+    return int((Path(env["XVFB_STUB_DIR"]) / "xsettingsd_calls").read_text())
+
+
 def _xvfb_calls(env: dict[str, str]) -> int:
     """Read how many times the Xvfb stub was invoked.
 
@@ -128,6 +158,26 @@ def _assert_stub_xvfb_pids_dead(env: dict[str, str]) -> None:
         except PermissionError:
             pytest.fail(f"stub Xvfb pid={pid} still exists (PermissionError)")
         pytest.fail(f"stub Xvfb pid={pid} still exists")
+
+
+def _path_without_xsettingsd(env: dict[str, str], sysbin: Path) -> str:
+    """Mirror the environment's PATH into one directory, minus ``xsettingsd``.
+
+    A developer host has the real daemon installed, so deleting the stub only uncovers it; masking
+    the name needs a PATH that resolves everything else.
+
+    :param env: Environment whose PATH is mirrored.
+    :param sysbin: Directory to populate with the mirrored executables.
+    :returns: PATH holding the stub directory and the xsettingsd-free mirror.
+    """
+    sysbin.mkdir()
+    stub_dir, *system_dirs = env["PATH"].split(os.pathsep)
+    for directory in system_dirs:
+        for entry in Path(directory).glob("*"):
+            if entry.name == "xsettingsd" or (sysbin / entry.name).exists():
+                continue
+            (sysbin / entry.name).symlink_to(entry)
+    return os.pathsep.join([stub_dir, str(sysbin)])
 
 
 def test_bootstrap_first_attempt_succeeds_runs_command_under_display(
@@ -366,3 +416,132 @@ def test_bootstrap_xdpyinfo_never_confirms_trusts_displayfd_and_runs_command(
     assert "ran-ok DISPLAY=:99" in result.stdout
     assert _xvfb_calls(stub_env) == 1
     _assert_stub_xvfb_pids_dead(stub_env)
+
+
+def test_bootstrap_xsettingsd_dies_once_retries_and_runs_command(
+    stub_env: dict[str, str],
+) -> None:
+    """A manager that loses the display once is restarted, and the command runs.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
+    stub_env["XSETTINGSD_STUB_FAILS"] = "1"
+    result = _run_wrapper(stub_env)
+    assert result.returncode == 0, result.stderr
+    assert "ran-ok DISPLAY=:99" in result.stdout
+    assert _xsettingsd_calls(stub_env) == 2
+
+
+def test_bootstrap_xsettingsd_dies_every_attempt_fails_with_its_log(
+    stub_env: dict[str, str],
+) -> None:
+    """No XSETTINGS manager means no render: fail loudly instead of into a fatal X error.
+
+    Without an owner of ``_XSETTINGS_S0`` the plugin queries window 0 and X
+    terminates it with ``BadWindow`` (#3152), so the wrapper must not run the
+    command — and must show why, since the daemon's log is otherwise discarded.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
+    stub_env["XSETTINGSD_STUB_FAILS"] = "99"
+    result = _run_wrapper(stub_env)
+    assert result.returncode != 0
+    assert "ran-ok" not in result.stdout
+    assert _xsettingsd_calls(stub_env) == 3
+    assert "Unable to open connection to X server" in result.stderr
+
+
+def test_bootstrap_xsettingsd_never_takes_selection_fails_without_running_command(
+    stub_env: dict[str, str],
+) -> None:
+    """A live manager that never takes the selection is still no manager.
+
+    Liveness alone is not the invariant: the plugin reads the selection, so a
+    daemon that stays up without owning it leaves the same BadWindow exposure.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
+    stub_env["XSETTINGSD_STUB_SILENT"] = "1"
+    stub_env["XSETTINGS_READY_PROBES"] = "2"
+    result = _run_wrapper(stub_env)
+    assert result.returncode != 0
+    assert "ran-ok" not in result.stdout
+    assert _xsettingsd_calls(stub_env) == 3
+
+
+@pytest.mark.skipif(
+    not all(shutil.which(tool) for tool in ("Xvfb", "xsettingsd", "dbus-run-session")),
+    reason="needs the real X stack the wrapper bootstraps",
+)
+def test_bootstrap_real_x_stack_hands_the_command_an_xsettings_owner(tmp_path: Path) -> None:
+    """A second real xsettingsd finds the wrapper's manager already owning the selection.
+
+    The only client that can report a selection owner is an XSettings manager itself, so the
+    command is one. It never exits on its own and buffers its output when piped, so the probe logs
+    to a file and stops the daemon itself.
+
+    :param tmp_path: Holds the probe daemon's log.
+    """
+    probe_log = tmp_path / "probe.log"
+    probe = f'''
+xsettingsd --config /dev/null > "{probe_log}" 2>&1 &
+daemon=$!
+for _ in $(seq 50); do
+  grep -q "Took ownership of selection" "{probe_log}" && break
+  sleep 0.1
+done
+kill "$daemon" 2>/dev/null || true
+wait "$daemon" 2>/dev/null || true
+'''
+    subprocess.run(  # noqa: S603 — argv is test-owned
+        [VST_HEADLESS_WRAPPER, "bash", "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    owner_lines = [
+        line
+        for line in probe_log.read_text().splitlines()
+        if line.startswith("xsettingsd: Selection _XSETTINGS_S0 is owned by ")
+    ]
+    assert owner_lines, probe_log.read_text()
+    assert not owner_lines[0].endswith(" 0x0")
+
+
+def test_bootstrap_without_xsettingsd_installed_still_runs_command(
+    stub_env: dict[str, str], tmp_path: Path
+) -> None:
+    """A host with no xsettingsd runs the command instead of failing the bootstrap.
+
+    GitHub's Ubuntu runners have no ``xsettingsd``, and the wrapper is used
+    there to compose Hydra configs with no plugin in sight — so an absent
+    binary must stay advisory (#3152).
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    :param tmp_path: Per-test dir for the xsettingsd-free system PATH.
+    """
+    stub_env["PATH"] = _path_without_xsettingsd(stub_env, tmp_path / "sysbin")
+    (Path(stub_env["PATH"].split(os.pathsep)[0]) / "xsettingsd").unlink()
+
+    result = _run_wrapper(stub_env)
+
+    assert result.returncode == 0, result.stderr
+    assert "ran-ok DISPLAY=:99" in result.stdout
+    assert "xsettingsd is not installed" in result.stderr
+
+
+def test_bootstrap_with_installed_xsettingsd_that_never_owns_fails(
+    stub_env: dict[str, str],
+) -> None:
+    """An installed daemon that never takes the selection still fails loudly.
+
+    :param stub_env: Wrapper environment with stub X binaries on PATH.
+    """
+    stub_env["XSETTINGSD_STUB_FAILS"] = "99"
+
+    result = _run_wrapper(stub_env)
+
+    assert result.returncode != 0
+    assert "ran-ok" not in result.stdout
+    assert _xsettingsd_calls(stub_env) == 3
