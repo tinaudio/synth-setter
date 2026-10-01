@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from synth_setter.param_spec_name import ParamSpecName, ValidatedParamSpecName
 from synth_setter.renderer_backend import (
+    DEXED_PLUGIN_NAME,
     FAUST_REGISTRY_PREFIX,
     KR106_NATIVE_PLUGIN_NAME,
     KR106_NATIVE_SOURCE_SHA256,
@@ -31,7 +32,9 @@ if TYPE_CHECKING:
     from omegaconf import DictConfig
 
 SynthName = NewType("SynthName", str)
-type SynthFormat = Literal["faust", "kr106_native", "pyfdn", "surgepy", "torchsynth", "vst3"]
+type SynthFormat = Literal[
+    "dexed", "faust", "kr106_native", "pyfdn", "surgepy", "torchsynth", "vst3"
+]
 
 _PYFDN_PARAM_SPEC_SHA256 = {
     "pyfdn_n8_mono_householder": "5d43a9eb50b10d9d91a5b748961ce3a382628abf61a797b092de377aa06a5b75",
@@ -97,7 +100,13 @@ def _legacy_synth_format(plugin_path: str) -> SynthFormat:
     :param plugin_path: Historical plugin path or in-process backend sentinel.
     :returns: Representation implied by the historical path.
     """
-    if plugin_path in {KR106_NATIVE_PLUGIN_NAME, "pyfdn", "surgepy", "torchsynth"}:
+    if plugin_path in {
+        DEXED_PLUGIN_NAME,
+        KR106_NATIVE_PLUGIN_NAME,
+        "pyfdn",
+        "surgepy",
+        "torchsynth",
+    }:
         return plugin_path  # type: ignore[return-value]
     return "vst3"
 
@@ -248,15 +257,16 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
         return self
 
     @model_validator(mode="after")
-    def _torchsynth_has_no_preset(self) -> SynthSpec:
-        """Reject a preset path on the backend that renders without a plugin host.
+    def _in_process_synth_has_no_preset(self) -> SynthSpec:
+        """Reject preset paths for in-process synths without preset loading.
 
         :returns: This identity, unchanged, when the pairing is coherent.
-        :raises ValueError: The in-process backend was given a preset path.
+        :raises ValueError: An in-process backend was given a preset path.
         """
-        if self.plugin_path == TORCHSYNTH_PLUGIN_NAME and self.plugin_state_path:
+        no_preset_backends = {DEXED_PLUGIN_NAME, TORCHSYNTH_PLUGIN_NAME}
+        if self.plugin_path in no_preset_backends and self.plugin_state_path:
             raise ValueError(
-                f"{TORCHSYNTH_PLUGIN_NAME} renders in-process and has no preset file, "
+                f"{self.plugin_path} renders in-process and has no preset file, "
                 f"but plugin_state_path is {self.plugin_state_path!r}"
             )
         return self
@@ -272,6 +282,7 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "presets/cardinal-base.vstpreset",
         "0.26.2",
     ),
+    "dexed_py": ("dexed_py", "dexed", "", "0.3.0"),
     "faust_bright_organ": (
         "faust_bright_organ",
         "registry://faust/faust_bright_organ",
