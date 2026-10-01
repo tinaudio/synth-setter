@@ -17,8 +17,8 @@ from pedalboard.io import AudioFile
 
 from synth_setter.data.vst.torchsynth_param_spec import TORCHSYNTH_PLUGIN_NAME
 from synth_setter.plugin_runtime import plugin_bundle_version, validated_bundle_lease
-from synth_setter.resources import faustwasm_dir
 from synth_setter.renderer_backend import (
+    DEXED_PLUGIN_NAME,
     FAUST_PLUGIN_NAME,
     PEDALBOARD_BLOCK_SIZE,
     PYFDN_PLUGIN_NAME,
@@ -26,6 +26,7 @@ from synth_setter.renderer_backend import (
     FlushBlocks,
     pedalboard_flush_blocks,
 )
+from synth_setter.resources import faustwasm_dir
 
 # How long the editor stays open before we signal it to close.
 _EDITOR_INIT_DELAY_SECONDS = 0.5
@@ -110,6 +111,8 @@ def extract_renderer_version(plugin_path: Path) -> str:
 
     :raises FileNotFoundError: The bundle path or required managed-integrity record is absent.
     """
+    if str(plugin_path) == DEXED_PLUGIN_NAME:
+        return importlib.metadata.version("dexed-py")
     if str(plugin_path) == FAUST_PLUGIN_NAME:
         return extract_backend_version("dawdreamer")
     if str(plugin_path) == TORCHSYNTH_PLUGIN_NAME:

@@ -13,6 +13,7 @@ from typing import Literal
 type PyFDNExcitation = Literal["chirp", "impulse"]
 type RendererBackend = Literal[
     "dawdreamer",
+    "dexed",
     "faustcpp",
     "faustwasm",
     "pedalboard",
@@ -24,6 +25,7 @@ type RendererBackend = Literal[
 # ``RenderConfig.plugin_path`` value that selects the in-process backend in
 # place of a plugin-bundle path (see ``core.extract_renderer_version``).
 TORCHSYNTH_PLUGIN_NAME = "torchsynth"
+DEXED_PLUGIN_NAME = "dexed"
 FAUST_PLUGIN_NAME = "faust"
 FAUST_REGISTRY_PREFIX = "registry://faust/"
 PYFDN_PLUGIN_NAME = "pyfdn"
@@ -102,7 +104,13 @@ def default_flush_blocks(renderer_backend: str, sample_rate: float) -> FlushBloc
 
 
 IN_PROCESS_PLUGIN_NAMES = frozenset(
-    {TORCHSYNTH_PLUGIN_NAME, FAUST_PLUGIN_NAME, PYFDN_PLUGIN_NAME, SURGEPY_PLUGIN_NAME}
+    {
+        DEXED_PLUGIN_NAME,
+        FAUST_PLUGIN_NAME,
+        PYFDN_PLUGIN_NAME,
+        SURGEPY_PLUGIN_NAME,
+        TORCHSYNTH_PLUGIN_NAME,
+    }
 )
 
 
