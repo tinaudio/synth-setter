@@ -1069,6 +1069,19 @@ wheels = [
 ]
 
 [[package]]
+name = "dexed-py"
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f6/63/6d0fa863453c9d1f2ec840b13c5158fa8bf00faa44ea87fc9e246f7f1541/dexed_py-0.3.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:368d4df241cbf758992b527a1f0e6bb149bde696893f7ff90cb974150ec8a64a", size = 105325, upload-time = "2026-08-27T18:07:23.544Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/2e/dc1b6d6a05f2d3f77fb82f7c40ac77c20c85ad3d792a853ce912ffa793f9/dexed_py-0.3.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:df58bf6833b852b047abf960a7f3c194e65b257bfe0f049533221641bda28286", size = 120194, upload-time = "2026-08-27T18:07:25.054Z" },
+    { url = "https://files.pythonhosted.org/packages/5f/a8/ec56be46047c9b233e3a893b77adafe5e4b7e6f1d7ac9bec10bc41393b56/dexed_py-0.3.0-cp312-cp312-win_amd64.whl", hash = "sha256:3c55ee31de219ef6b9bae265ce1884706a0bde6d7315b688e665f7f4c6f5d00e", size = 113668, upload-time = "2026-08-27T18:07:26.403Z" },
+]
+
+[[package]]
 name = "distlib"
 version = "0.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -5056,6 +5069,7 @@ tiv-cpu = [
 audio = [
     { name = "adac" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'darwin' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "dexed-py" },
     { name = "flamo" },
     { name = "librosa" },
     { name = "mido" },
@@ -5092,6 +5106,7 @@ dev = [
     { name = "click" },
     { name = "cqt-nsgt-pytorch" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'darwin' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "dexed-py" },
     { name = "dtw-python" },
     { name = "duckdb" },
     { name = "einops" },
@@ -5208,6 +5223,7 @@ runtime = [
     { name = "click" },
     { name = "cqt-nsgt-pytorch" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'darwin' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "dexed-py" },
     { name = "dtw-python" },
     { name = "einops" },
     { name = "flamo" },
@@ -5328,6 +5344,7 @@ provides-extras = ["tiv-cpu", "cpu", "cu128"]
 audio = [
     { name = "adac", specifier = "==0.1.0" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')", specifier = "==0.8.3" },
+    { name = "dexed-py", specifier = "==0.3.0" },
     { name = "flamo", specifier = "==0.2.18" },
     { name = "librosa", specifier = "==0.11.0" },
     { name = "mido" },
@@ -5364,6 +5381,7 @@ dev = [
     { name = "click", specifier = "<8.2" },
     { name = "cqt-nsgt-pytorch", git = "https://github.com/eloimoliner/CQT_pytorch?rev=2404597d0ccef74a93cad05d0619cb42728f987b" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')", specifier = "==0.8.3" },
+    { name = "dexed-py", specifier = "==0.3.0" },
     { name = "dtw-python", specifier = "==1.7.4" },
     { name = "duckdb", specifier = ">=1.5.4" },
     { name = "einops" },
@@ -5474,6 +5492,7 @@ runtime = [
     { name = "click", specifier = "<8.2" },
     { name = "cqt-nsgt-pytorch", git = "https://github.com/eloimoliner/CQT_pytorch?rev=2404597d0ccef74a93cad05d0619cb42728f987b" },
     { name = "dawdreamer", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')", specifier = "==0.8.3" },
+    { name = "dexed-py", specifier = "==0.3.0" },
     { name = "dtw-python", specifier = "==1.7.4" },
     { name = "einops" },
     { name = "flamo", specifier = "==0.2.18" },
