@@ -336,6 +336,86 @@ def test_render_faustcpp_composes_with_explicit_v2_contract(
     assert spec.render.plugin_reload_cadence == "render"
 
 
+@pytest.mark.parametrize(
+    ("synth_group", "param_spec_name", "plugin_state_path"),
+    [
+        ("ultramaster_kr106_native", "ultramaster_kr106", "presets/ultramaster_kr106-native.json"),
+        (
+            "ultramaster_kr106_onehot_native",
+            "ultramaster_kr106_onehot",
+            "presets/ultramaster_kr106-native.json",
+        ),
+        (
+            "ultramaster_kr106_single_note_native",
+            "ultramaster_kr106_single_note",
+            "presets/ultramaster_kr106_single_note-native.json",
+        ),
+    ],
+)
+def test_kr106_native_render_group_composes_with_explicit_v2_contract(
+    synth_group: str, param_spec_name: str, plugin_state_path: str
+) -> None:
+    """Native KR-106 groups compose without requiring a VST3 bundle.
+
+    :param synth_group: Native synth identity group.
+    :param param_spec_name: Existing KR-106 ParamSpec selected by that identity.
+    :param plugin_state_path: Native JSON baseline preset path.
+    """
+    config = RenderConfig.from_cfg_nodes(
+        _compose_render_group("kr106_native"), _compose_synth_group(synth_group)
+    )
+
+    assert config.renderer_backend == "kr106_native"
+    assert config.plugin_path == "kr106_native"
+    assert config.param_spec_name == param_spec_name
+    assert config.plugin_state_path == plugin_state_path
+    assert config.synth.synth_version == "2.5.13"
+    assert (
+        config.synth.source_sha256
+        == "eba003e0e6f295a5d884a6490b6055b1d1d0183ae74847c9bb2ffdc6e23809a5"
+    )
+    assert config.backend_version == "0.1.0"
+    assert config.block_size == 512
+    assert config.render_contract_version == 2
+    assert config.flush_blocks == FlushBlocks(post_load=0, post_param=0, post_render=0)
+
+
+@pytest.mark.parametrize(
+    ("experiment", "task_name", "sizes"),
+    [
+        (
+            "ultramaster-kr106-native-lance-smoke",
+            "ultramaster-kr106-native-lance-smoke",
+            (20, 0, 0),
+        ),
+        (
+            "ultramaster-kr106-native-lance-2m-40k-10k",
+            "ultramaster-kr106-native-lance-2m-40k-10k",
+            (2_000_000, 40_000, 10_000),
+        ),
+    ],
+)
+def test_kr106_native_dataset_experiment_composes_and_serializes(
+    experiment: str, task_name: str, sizes: tuple[int, int, int]
+) -> None:
+    """Native dataset experiments preserve their render identity through worker transport.
+
+    :param experiment: ``generate_dataset`` experiment config name.
+    :param task_name: Expected dataset task identity.
+    :param sizes: Expected train, validation, and test split sizes.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset", overrides=[f"experiment=generate_dataset/{experiment}"]
+        )
+    spec = DatasetSpec.from_hydra_cfg(cfg)
+
+    assert spec.task_name == task_name
+    assert spec.train_val_test_sizes == sizes
+    assert spec.render.synth.name == "ultramaster_kr106_native"
+    assert DatasetSpec.model_validate_json(spec.model_dump_json()) == spec
+
+
 def test_render_obxf_composes_into_valid_render_config() -> None:
     """``synth=obxf render=vst`` composes into a valid ``RenderConfig``; plugin_path stays repo-relative and num_params resolves without ``KeyError``."""
     spec = _spec_from_dataset_overrides(["synth=obxf", "render=vst"])

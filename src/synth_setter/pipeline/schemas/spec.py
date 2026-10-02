@@ -50,6 +50,7 @@ from synth_setter.pipeline.schemas.shard_metadata import (
 from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
     FLUSHING_BACKENDS,
+    KR106_NATIVE_PLUGIN_NAME,
     PYFDN_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
@@ -84,6 +85,9 @@ _PYFDN_SYNTH_NAMES = frozenset(
 )
 _PYFDN_PARAM_SPEC_NAMES = frozenset(
     synth.param_spec_name for synth in SYNTHS.values() if synth.plugin_path == PYFDN_PLUGIN_NAME
+)
+_KR106_NATIVE_SYNTH_NAMES = frozenset(
+    name for name, synth in SYNTHS.items() if synth.plugin_path == KR106_NATIVE_PLUGIN_NAME
 )
 
 # The v1 snapshot must not follow upgrades to the current Faust source registry.
@@ -755,6 +759,8 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         """
         explicit = self._explicit_flush_blocks()
         if explicit and self.renderer_backend not in FLUSHING_BACKENDS:
+            if self.renderer_backend == "kr106_native":
+                return self
             steps = ", ".join(f"{step}_flush_blocks" for step in explicit)
             raise ValueError(
                 f"{steps} require renderer_backend in {sorted(FLUSHING_BACKENDS)}; "
@@ -839,9 +845,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             blank, editor use is enabled, or checked-in source differs from the identity digest.
         """
         if self.synth.format != "faust":
-            if self.backend_version is not None:
-                raise ValueError("backend_version is supported only for format='faust'")
-            if self.block_size is not None:
+            if self.backend_version is not None and self.synth.format != "kr106_native":
+                raise ValueError(
+                    "backend_version is supported only for format='faust' or 'kr106_native'"
+                )
+            if self.block_size is not None and self.synth.format != "kr106_native":
                 raise ValueError("block_size is supported only for FaustWasm and Faust C++")
             return self
         from synth_setter.data.vst.faust_param_spec import FAUST_NOTE_DURATION_SECONDS
@@ -893,6 +901,64 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         actual_digest = hashlib.sha256(source.source.encode()).hexdigest()
         if actual_digest != self.synth.source_sha256:
             raise ValueError("registered Faust source does not match synth.source_sha256")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_kr106_native_backend(self) -> RenderConfig:
+        """Require the pinned in-process KR-106 renderer contract.
+
+        :returns: This config when its native identity and lifecycle are canonical.
+        :raises ValueError: The renderer, identity provenance, or lifecycle settings drift.
+        """
+        native_identity = (
+            self.synth.name in _KR106_NATIVE_SYNTH_NAMES
+            or self.synth.format == "kr106_native"
+            or self.plugin_path == KR106_NATIVE_PLUGIN_NAME
+        )
+        if self.renderer_backend != "kr106_native":
+            if native_identity:
+                raise ValueError(
+                    "all KR-106 native identities require renderer_backend='kr106_native'"
+                )
+            return self
+        registered = SYNTHS.get(self.synth.name)
+        registered_provenance = (
+            None
+            if registered is None
+            else (
+                registered.param_spec_name,
+                registered.format,
+                registered.synth_version,
+                registered.source_sha256,
+            )
+        )
+        actual_provenance = (
+            self.synth.param_spec_name,
+            self.synth.format,
+            self.synth.synth_version,
+            self.synth.source_sha256,
+        )
+        if (
+            registered_provenance != actual_provenance
+            or self.synth.name not in _KR106_NATIVE_SYNTH_NAMES
+        ):
+            raise ValueError("kr106_native requires a registered native KR-106 synth identity")
+        if self.plugin_path != KR106_NATIVE_PLUGIN_NAME:
+            raise ValueError('kr106_native requires plugin_path="kr106_native"')
+        if self.backend_version != "0.1.0":
+            raise ValueError('kr106_native requires backend_version="0.1.0"')
+        if self.render_contract_version != 2:
+            raise ValueError("kr106_native requires render_contract_version=2")
+        if self.block_size is None:
+            raise ValueError("kr106_native requires an explicit block_size")
+        if self.plugin_reload_cadence != "render":
+            raise ValueError('kr106_native requires plugin_reload_cadence="render"')
+        if self.gui_toggle_cadence != "never":
+            raise ValueError('kr106_native requires gui_toggle_cadence="never"')
+        if self.channels not in (1, 2):
+            raise ValueError("kr106_native supports one or two channels")
+        if self.flush_blocks != renderer_backend_contract.NO_FLUSH_BLOCKS:
+            raise ValueError("kr106_native requires zero flush blocks")
         return self
 
     @model_validator(mode="after")
@@ -950,6 +1016,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         """
         allowed = {
             "faust": {"dawdreamer", "faustcpp", "faustwasm"},
+            "kr106_native": {"kr106_native"},
             "pyfdn": {"pyfdn"},
             "surgepy": {"surgepy"},
             "torchsynth": {"torchsynth"},

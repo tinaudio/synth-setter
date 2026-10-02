@@ -71,7 +71,15 @@ on:
       - "src/synth_setter/data/render_config.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
       - "src/synth_setter/configs/render/**"
+      - "src/synth_setter/configs/synth/ultramaster_kr106*_native.yaml"
       - "src/synth_setter/configs/experiment/generate_dataset/**"
+      - "packages/kr106-native/**"
+      - "presets/*-native.json"
+      - "src/synth_setter/synth_spec.py"
+      - "scripts/generate_kr106_native_maps.py"
+      - "tests/scripts/test_generate_kr106_native_maps.py"
+      - "tests/integration/test_kr106_native_pipeline_e2e.py"
+      - "tests/pipeline/schemas/test_kr106_native_render_config.py"
       - ".github/actions/prepare-docker-storage/**"
       - ".github/workflows/test-vst-slow.yml"
       - "pyproject.toml"
@@ -102,7 +110,15 @@ on:
       - "src/synth_setter/data/render_config.py"
       - "src/synth_setter/pipeline/schemas/spec.py"
       - "src/synth_setter/configs/render/**"
+      - "src/synth_setter/configs/synth/ultramaster_kr106*_native.yaml"
       - "src/synth_setter/configs/experiment/generate_dataset/**"
+      - "packages/kr106-native/**"
+      - "presets/*-native.json"
+      - "src/synth_setter/synth_spec.py"
+      - "scripts/generate_kr106_native_maps.py"
+      - "tests/scripts/test_generate_kr106_native_maps.py"
+      - "tests/integration/test_kr106_native_pipeline_e2e.py"
+      - "tests/pipeline/schemas/test_kr106_native_render_config.py"
       - ".github/actions/prepare-docker-storage/**"
       - ".github/workflows/test-vst-slow.yml"
       - "pyproject.toml"
@@ -148,8 +164,13 @@ jobs:
           - synth: ultramaster_kr106
             plugin_path: /usr/lib/vst3/Ultramaster KR-106.vst3
             pytest_targets: >-
-              tests/data/vst/test_dawdreamer_dataset_e2e.py
-              tests/data/vst/test_generate_vst_dataset.py::test_make_dataset
+              packages/kr106-native/tests
+              tests/data/vst/test_kr106_native_map.py
+              tests/scripts/test_generate_kr106_native_maps.py
+              tests/data/vst/test_kr106_native_renderer.py
+              tests/data/vst/test_kr106_native_vst_parity_e2e.py
+              tests/pipeline/schemas/test_kr106_native_render_config.py
+              tests/integration/test_kr106_native_pipeline_e2e.py
           - synth: obxf
             plugin_path: /usr/lib/vst3/OB-Xf.vst3
             pytest_targets: tests/data/vst/test_generate_vst_dataset.py::test_make_dataset
@@ -277,7 +298,9 @@ jobs:
               git config --global --add safe.directory /home/build/synth-setter
               UV_PROJECT_ENVIRONMENT="${VIRTUAL_ENV}" \
                 uv sync --frozen --extra cu128 --no-default-groups --group dev --no-install-project
+              uv pip install --no-deps --reinstall -e packages/kr106-native
               uv pip install --no-deps -e .
+              python -c "from synth_setter.data.vst.kr106_native_runtime import import_kr106_native; import_kr106_native()"
               read -ra targets <<< "${PYTEST_TARGETS}"
               if [ "${RUN_EMBEDDING_E2E}" = "true" ]; then
                 targets+=(tests/test_eval.py::test_evaluate_ssondo_conditioning_real_e2e)
@@ -287,8 +310,17 @@ jobs:
               src/synth_setter/scripts/run-linux-vst-headless.sh \
                 pytest -vv -s \
                   --cov=src --cov-branch --cov-report=xml --cov-report=term \
+                  --junitxml=vst-slow-results.xml \
                   "${targets[@]}"
             '
+
+      - name: Upload VST test results
+        if: always() && steps.select_synth.outputs.selected == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vst-slow-results-${{ matrix.synth }}
+          path: vst-slow-results.xml
+          if-no-files-found: error
 
       # coverage.xml is written inside the container at the workspace mount,
       # so it lands at ${{ github.workspace }}/coverage.xml on the host.

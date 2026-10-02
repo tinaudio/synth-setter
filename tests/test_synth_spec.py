@@ -224,6 +224,14 @@ class TestSynthSpecValidation:
         with pytest.raises(ValidationError, match="registered source_sha256"):
             SynthSpec.model_validate(values)
 
+    def test_kr106_native_format_rejects_unregistered_source_digest(self) -> None:
+        """KR-106 native identities pin their registered source archive digest."""
+        values = SYNTHS[SynthName("ultramaster_kr106_native")].model_dump()
+        values["source_sha256"] = "0" * 64
+
+        with pytest.raises(ValidationError, match="registered source_sha256"):
+            SynthSpec.model_validate(values)
+
     def test_registry_reference_with_mismatched_explicit_format_raises(self) -> None:
         """An explicitly authored format cannot contradict a Faust registry URI."""
         values = SYNTHS[SynthName("faust_bright_organ")].model_dump()
@@ -256,6 +264,7 @@ class TestSynthsTable:
         """
         assert SYNTHS[SynthName(name)].format in {
             "faust",
+            "kr106_native",
             "pyfdn",
             "surgepy",
             "torchsynth",
@@ -336,6 +345,32 @@ class TestSynthsTable:
         assert surgepy.param_spec_name == base.param_spec_name
         assert surgepy.plugin_path == "surgepy"
         assert surgepy.plugin_state_path.endswith(".fxp")
+
+    @pytest.mark.parametrize(
+        ("variant", "base"),
+        [
+            ("ultramaster_kr106_native", "ultramaster_kr106"),
+            ("ultramaster_kr106_onehot_native", "ultramaster_kr106_onehot"),
+            ("ultramaster_kr106_single_note_native", "ultramaster_kr106_single_note"),
+        ],
+    )
+    def test_kr106_native_variant_shares_its_base_param_spec(
+        self, variant: str, base: str
+    ) -> None:
+        """Each native KR-106 variant reuses its corresponding VST parameter spec.
+
+        :param variant: Native KR-106 registry key.
+        :param base: Corresponding VST registry key.
+        """
+        native = SYNTHS[SynthName(variant)]
+
+        assert native.param_spec_name == SYNTHS[SynthName(base)].param_spec_name
+        assert native.plugin_path == "kr106_native"
+        assert native.synth_version == "2.5.13"
+        assert (
+            native.source_sha256
+            == "eba003e0e6f295a5d884a6490b6055b1d1d0183ae74847c9bb2ffdc6e23809a5"
+        )
 
 
 class TestSynthConfigGroup:

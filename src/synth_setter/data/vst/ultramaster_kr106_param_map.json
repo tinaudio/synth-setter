@@ -26,7 +26,11 @@
         "index": 57,
         "name": "Program"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 56,
+        "name": "Program"
+      }
     },
     "adsr_mode": {
       "pedalboard": {
@@ -38,7 +42,11 @@
         "index": 37,
         "name": "ADSR Mode"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 43,
+        "name": "ADSR Mode"
+      }
     },
     "bender_dco": {
       "pedalboard": {
@@ -50,7 +58,11 @@
         "index": 0,
         "name": "Bender DCO"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 0,
+        "name": "Bender DCO"
+      }
     },
     "bender_vcf": {
       "pedalboard": {
@@ -62,7 +74,11 @@
         "index": 1,
         "name": "Bender VCF"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 1,
+        "name": "Bender VCF"
+      }
     },
     "bender_lfo": {
       "pedalboard": {
@@ -74,7 +90,11 @@
         "index": 2,
         "name": "Bender LFO"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 42,
+        "name": "Bender LFO"
+      }
     },
     "arp_rate": {
       "pedalboard": {
@@ -86,7 +106,11 @@
         "index": 3,
         "name": "Arp Rate"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 2,
+        "name": "Arp Rate"
+      }
     },
     "lfo_rate": {
       "pedalboard": {
@@ -98,7 +122,11 @@
         "index": 4,
         "name": "LFO Rate"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 3,
+        "name": "LFO Rate"
+      }
     },
     "lfo_delay": {
       "pedalboard": {
@@ -110,7 +138,11 @@
         "index": 5,
         "name": "LFO Delay"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 4,
+        "name": "LFO Delay"
+      }
     },
     "dco_lfo": {
       "pedalboard": {
@@ -122,7 +154,11 @@
         "index": 6,
         "name": "DCO LFO"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 5,
+        "name": "DCO LFO"
+      }
     },
     "dco_pwm": {
       "pedalboard": {
@@ -134,7 +170,11 @@
         "index": 7,
         "name": "DCO PWM"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 6,
+        "name": "DCO PWM"
+      }
     },
     "dco_sub": {
       "pedalboard": {
@@ -146,7 +186,11 @@
         "index": 8,
         "name": "DCO Sub"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 7,
+        "name": "DCO Sub"
+      }
     },
     "dco_noise": {
       "pedalboard": {
@@ -158,7 +202,11 @@
         "index": 9,
         "name": "DCO Noise"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 8,
+        "name": "DCO Noise"
+      }
     },
     "hpf": {
       "pedalboard": {
@@ -170,7 +218,11 @@
         "index": 10,
         "name": "HPF"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 9,
+        "name": "HPF"
+      }
     },
     "vcf_freq": {
       "pedalboard": {
@@ -182,7 +234,11 @@
         "index": 11,
         "name": "VCF Freq"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 10,
+        "name": "VCF Freq"
+      }
     },
     "vcf_res": {
       "pedalboard": {
@@ -194,7 +250,11 @@
         "index": 12,
         "name": "VCF Res"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 11,
+        "name": "VCF Res"
+      }
     },
     "vcf_env": {
       "pedalboard": {
@@ -206,7 +266,11 @@
         "index": 13,
         "name": "VCF Env"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 12,
+        "name": "VCF Env"
+      }
     },
     "vcf_lfo": {
       "pedalboard": {
@@ -218,7 +282,11 @@
         "index": 14,
         "name": "VCF LFO"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 13,
+        "name": "VCF LFO"
+      }
     },
     "vcf_kbd": {
       "pedalboard": {
@@ -230,7 +298,11 @@
         "index": 15,
         "name": "VCF Kbd"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 14,
+        "name": "VCF Kbd"
+      }
     },
     "volume": {
       "pedalboard": {
@@ -242,7 +314,11 @@
         "index": 16,
         "name": "Volume"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 15,
+        "name": "Volume"
+      }
     },
     "attack": {
       "pedalboard": {
@@ -254,7 +330,11 @@
         "index": 17,
         "name": "Attack"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 16,
+        "name": "Attack"
+      }
     },
     "decay": {
       "pedalboard": {
@@ -266,7 +346,11 @@
         "index": 18,
         "name": "Decay"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 17,
+        "name": "Decay"
+      }
     },
     "sustain": {
       "pedalboard": {
@@ -278,7 +362,11 @@
         "index": 19,
         "name": "Sustain"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 18,
+        "name": "Sustain"
+      }
     },
     "release": {
       "pedalboard": {
@@ -290,7 +378,11 @@
         "index": 20,
         "name": "Release"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 19,
+        "name": "Release"
+      }
     },
     "transpose": {
       "pedalboard": {
@@ -302,7 +394,11 @@
         "index": 21,
         "name": "Transpose"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 20,
+        "name": "Transpose"
+      }
     },
     "hold": {
       "pedalboard": {
@@ -314,7 +410,11 @@
         "index": 22,
         "name": "Hold"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 21,
+        "name": "Hold"
+      }
     },
     "arpeggio": {
       "pedalboard": {
@@ -326,7 +426,11 @@
         "index": 23,
         "name": "Arpeggio"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 22,
+        "name": "Arpeggio"
+      }
     },
     "pulse": {
       "pedalboard": {
@@ -338,7 +442,11 @@
         "index": 24,
         "name": "Pulse"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 23,
+        "name": "Pulse"
+      }
     },
     "saw": {
       "pedalboard": {
@@ -350,7 +458,11 @@
         "index": 25,
         "name": "Saw"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 24,
+        "name": "Saw"
+      }
     },
     "sub_sw": {
       "pedalboard": {
@@ -362,7 +474,11 @@
         "index": 26,
         "name": "Sub Sw"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 25,
+        "name": "Sub Sw"
+      }
     },
     "chorus_off": {
       "pedalboard": {
@@ -374,7 +490,11 @@
         "index": 27,
         "name": "Chorus Off"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 26,
+        "name": "Chorus Off"
+      }
     },
     "chorus_i": {
       "pedalboard": {
@@ -386,7 +506,11 @@
         "index": 28,
         "name": "Chorus I"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 27,
+        "name": "Chorus I"
+      }
     },
     "chorus_ii": {
       "pedalboard": {
@@ -398,7 +522,11 @@
         "index": 29,
         "name": "Chorus II"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 28,
+        "name": "Chorus II"
+      }
     },
     "octave": {
       "pedalboard": {
@@ -410,7 +538,11 @@
         "index": 30,
         "name": "Octave"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 29,
+        "name": "Octave"
+      }
     },
     "arp_mode": {
       "pedalboard": {
@@ -422,7 +554,11 @@
         "index": 31,
         "name": "Arp Mode"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 30,
+        "name": "Arp Mode"
+      }
     },
     "arp_range": {
       "pedalboard": {
@@ -434,7 +570,11 @@
         "index": 32,
         "name": "Arp Range"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 31,
+        "name": "Arp Range"
+      }
     },
     "lfo_mode": {
       "pedalboard": {
@@ -446,7 +586,11 @@
         "index": 33,
         "name": "LFO Mode"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 32,
+        "name": "LFO Mode"
+      }
     },
     "pwm_mode": {
       "pedalboard": {
@@ -458,7 +602,11 @@
         "index": 34,
         "name": "PWM Mode"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 33,
+        "name": "PWM Mode"
+      }
     },
     "vcf_env_inv": {
       "pedalboard": {
@@ -470,7 +618,11 @@
         "index": 35,
         "name": "VCF Env Inv"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 34,
+        "name": "VCF Env Inv"
+      }
     },
     "vca_mode": {
       "pedalboard": {
@@ -482,7 +634,11 @@
         "index": 36,
         "name": "VCA Mode"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 35,
+        "name": "VCA Mode"
+      }
     },
     "bender": {
       "pedalboard": {
@@ -494,7 +650,11 @@
         "index": 38,
         "name": "Bender"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 36,
+        "name": "Bender"
+      }
     },
     "tuning": {
       "pedalboard": {
@@ -506,7 +666,11 @@
         "index": 39,
         "name": "Tuning"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 37,
+        "name": "Tuning"
+      }
     },
     "power": {
       "pedalboard": {
@@ -518,7 +682,11 @@
         "index": 40,
         "name": "Power"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 38,
+        "name": "Power"
+      }
     },
     "porta_mode": {
       "pedalboard": {
@@ -530,7 +698,11 @@
         "index": 41,
         "name": "Porta Mode"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 39,
+        "name": "Porta Mode"
+      }
     },
     "porta_rate": {
       "pedalboard": {
@@ -542,7 +714,11 @@
         "index": 42,
         "name": "Porta Rate"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 40,
+        "name": "Porta Rate"
+      }
     },
     "transpose_offset": {
       "pedalboard": {
@@ -554,7 +730,11 @@
         "index": 43,
         "name": "Transpose Offset"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 41,
+        "name": "Transpose Offset"
+      }
     },
     "master_volume": {
       "pedalboard": {
@@ -566,7 +746,11 @@
         "index": 44,
         "name": "Master Volume"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 44,
+        "name": "Master Volume"
+      }
     },
     "voices": {
       "pedalboard": {
@@ -578,7 +762,11 @@
         "index": 45,
         "name": "Voices"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 45,
+        "name": "Voices"
+      }
     },
     "vcf_oversample": {
       "pedalboard": {
@@ -590,7 +778,11 @@
         "index": 46,
         "name": "VCF Oversample"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 46,
+        "name": "VCF Oversample"
+      }
     },
     "ignore_velocity": {
       "pedalboard": {
@@ -602,7 +794,11 @@
         "index": 47,
         "name": "Ignore Velocity"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 47,
+        "name": "Ignore Velocity"
+      }
     },
     "arp_limit_kbd": {
       "pedalboard": {
@@ -614,7 +810,11 @@
         "index": 48,
         "name": "Arp Limit Kbd"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 48,
+        "name": "Arp Limit Kbd"
+      }
     },
     "arp_sync_host": {
       "pedalboard": {
@@ -626,7 +826,11 @@
         "index": 49,
         "name": "Arp Sync Host"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 49,
+        "name": "Arp Sync Host"
+      }
     },
     "lfo_sync_host": {
       "pedalboard": {
@@ -638,7 +842,11 @@
         "index": 50,
         "name": "LFO Sync Host"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 50,
+        "name": "LFO Sync Host"
+      }
     },
     "mono_retrigger": {
       "pedalboard": {
@@ -650,7 +858,11 @@
         "index": 51,
         "name": "Mono Retrigger"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 51,
+        "name": "Mono Retrigger"
+      }
     },
     "send_midi_sysex": {
       "pedalboard": {
@@ -662,7 +874,11 @@
         "index": 52,
         "name": "Send MIDI SysEx"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 52,
+        "name": "Send MIDI SysEx"
+      }
     },
     "arp_quantize": {
       "pedalboard": {
@@ -674,7 +890,11 @@
         "index": 53,
         "name": "Arp Quantize"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 53,
+        "name": "Arp Quantize"
+      }
     },
     "lfo_quantize": {
       "pedalboard": {
@@ -686,7 +906,11 @@
         "index": 54,
         "name": "LFO Quantize"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 54,
+        "name": "LFO Quantize"
+      }
     },
     "oscillator_mode": {
       "pedalboard": {
@@ -698,7 +922,11 @@
         "index": 55,
         "name": "Oscillator Mode"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 55,
+        "name": "Oscillator Mode"
+      }
     },
     "bypass": {
       "pedalboard": {
@@ -710,7 +938,17 @@
         "index": 56,
         "name": "Bypass"
       },
-      "surgepy": null
+      "surgepy": null,
+      "kr106_native": {
+        "native_id": 57,
+        "name": "Bypass"
+      }
     }
-  }
+  },
+  "kr106_native": {
+    "plugin_version": "2.5.13",
+    "parameter_count": 58
+  },
+  "kr106_native_preset_resource": "presets/ultramaster_kr106-native.json",
+  "kr106_native_preset_sha256": "e1b25e9f219ce643086d2558ddaa69ad6de20bb6240319871bd48bb9afbf24a5"
 }
