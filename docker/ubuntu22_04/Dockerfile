@@ -297,9 +297,8 @@ FROM python-base AS builder-install-synth-setter-deps
 ARG TARGETARCH
 # Install Python dependencies via `uv sync --frozen` against the committed
 # lockfile. uv's cache (mounted below) persists torch wheels (~2.5 GB)
-# across builds. Cache scope: only pyproject.toml + uv.lock + README.md
-# (referenced by [project].readme) enter this layer, so unrelated source
-# edits do not bust the torch-wheels cache. The .github/workflows/
+# across builds. Dependency manifests and local native packages enter this
+# layer; unrelated application edits do not bust the torch-wheels cache. The .github/workflows/
 # uv-lock-check.yml matrix guards the upstream invariant.
 #
 # TORCH_BACKEND selects the `cpu`/`cu128` extra → pytorch-* index per
@@ -308,6 +307,7 @@ ARG TARGETARCH
 COPY --from=synth-setter-src /home/build/synth-setter/pyproject.toml /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/uv.lock /artifacts/
 COPY --from=synth-setter-src /home/build/synth-setter/README.md /artifacts/
+COPY --from=synth-setter-src /home/build/synth-setter/packages/kr106-native /artifacts/packages/kr106-native
 ARG TORCH_BACKEND=cu128
 RUN --mount=type=cache,target=/root/.cache/uv \
     cd /artifacts && \
