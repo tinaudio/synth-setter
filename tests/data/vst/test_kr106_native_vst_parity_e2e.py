@@ -1,6 +1,7 @@
 """Real KR106 native/VST compatibility through the production Lance writer."""
 
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -46,6 +47,8 @@ def _config(backend: str) -> RenderConfig:
                 "render.gui_toggle_cadence=never",
             ],
         )
+    if backend != "kr106_native":
+        cfg.synth.plugin_path = os.environ.get("SYNTH_SETTER_PLUGIN_PATH") or cfg.synth.plugin_path
     return RenderConfig.from_cfg_nodes(cfg.render, cfg.synth)
 
 
