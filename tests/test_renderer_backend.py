@@ -8,6 +8,7 @@ import pytest
 
 from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
+    KR106_NATIVE_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
     missing_render_artifacts,
@@ -73,7 +74,8 @@ def test_missing_render_artifacts_reports_both_in_declaration_order(workspace: P
 
 
 @pytest.mark.parametrize(
-    "backend_name", [TORCHSYNTH_PLUGIN_NAME, FAUST_PLUGIN_NAME, SURGEPY_PLUGIN_NAME]
+    "backend_name",
+    [TORCHSYNTH_PLUGIN_NAME, FAUST_PLUGIN_NAME, KR106_NATIVE_PLUGIN_NAME, SURGEPY_PLUGIN_NAME],
 )
 def test_missing_render_artifacts_in_process_backend_name_is_not_a_path(
     backend_name: str, workspace: Path

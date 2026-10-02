@@ -1,0 +1,23 @@
+# Native KR-106 runs in process; its source archive and baseline preset belong to synth identity.
+renderer_backend: kr106_native
+backend_version: "0.1.0"
+block_size: 512
+render_contract_version: 2
+sample_rate: 44100
+channels: 2
+velocity: 100
+signal_duration_seconds: 4.0
+min_loudness: -55.0
+audio_dtype: float16
+mel_spec_dtype: float32
+samples_per_shard: 10000
+samples_per_render_batch: 32
+max_retries: 0
+parallel: false
+retain_local_shards: true
+plugin_reload_cadence: render
+gui_toggle_cadence: never
+param_sample_cadence: sample
+post_load_flush_blocks: 0
+post_param_flush_blocks: 0
+post_render_flush_blocks: 0

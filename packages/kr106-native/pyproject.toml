@@ -1,0 +1,31 @@
+[build-system]
+requires = ["scikit-build-core>=1.1", "pybind11>=2.12", "numpy>=1.26"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "kr106-native"
+version = "0.1.0"
+description = "Pinned native KR-106 offline renderer"
+requires-python = ">=3.12"
+dependencies = ["numpy>=1.26"]
+
+[tool.scikit-build]
+cmake.version = ">=3.22"
+wheel.packages = ["kr106_native"]
+sdist.include = ["kr106_native/PROVENANCE.md", "kr106_native/KR106-GPL-3.0.txt"]
+
+[tool.scikit-build.env]
+# Preserve explicit overrides; otherwise let CMake discover the installed compiler.
+CXX = { env = "CXX" }
+
+[tool.uv]
+# C++ and packaged provenance changes must invalidate cached native wheels.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "CMakeLists.txt" },
+    { file = "src/**/*.cpp" },
+    { file = "kr106_native/*" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

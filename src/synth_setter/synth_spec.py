@@ -20,18 +20,29 @@ from typing import TYPE_CHECKING, Literal, NewType
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from synth_setter.param_spec_name import ParamSpecName, ValidatedParamSpecName
-from synth_setter.renderer_backend import FAUST_REGISTRY_PREFIX, TORCHSYNTH_PLUGIN_NAME
+from synth_setter.renderer_backend import (
+    FAUST_REGISTRY_PREFIX,
+    KR106_NATIVE_PLUGIN_NAME,
+    KR106_NATIVE_SOURCE_SHA256,
+    TORCHSYNTH_PLUGIN_NAME,
+)
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
 
 SynthName = NewType("SynthName", str)
-type SynthFormat = Literal["faust", "pyfdn", "surgepy", "torchsynth", "vst3"]
+type SynthFormat = Literal["faust", "kr106_native", "pyfdn", "surgepy", "torchsynth", "vst3"]
 
 _PYFDN_PARAM_SPEC_SHA256 = {
     "pyfdn_n8_mono_householder": "5d43a9eb50b10d9d91a5b748961ce3a382628abf61a797b092de377aa06a5b75",
     "pyfdn_n8_mono_householder_vector": "51af728a411f40cf08531f1be30398717ef560136d70b76181ad87ae8b88d8fd",
     "pyfdn_n8_mono_kronecker": "66d27e7e92ba7c4b6059814647df074fd41f903f953cbb6bbc51be33263e8ee1",
+}
+
+_KR106_NATIVE_PARAM_SPEC_SHA256 = {
+    "ultramaster_kr106": KR106_NATIVE_SOURCE_SHA256,
+    "ultramaster_kr106_onehot": KR106_NATIVE_SOURCE_SHA256,
+    "ultramaster_kr106_single_note": KR106_NATIVE_SOURCE_SHA256,
 }
 
 _FAUST_SOURCE_SHA256 = {
@@ -86,7 +97,7 @@ def _legacy_synth_format(plugin_path: str) -> SynthFormat:
     :param plugin_path: Historical plugin path or in-process backend sentinel.
     :returns: Representation implied by the historical path.
     """
-    if plugin_path in {"pyfdn", "surgepy", "torchsynth"}:
+    if plugin_path in {KR106_NATIVE_PLUGIN_NAME, "pyfdn", "surgepy", "torchsynth"}:
         return plugin_path  # type: ignore[return-value]
     return "vst3"
 
@@ -120,7 +131,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
 
     .. attribute :: source_sha256
 
-        Checked-in Faust source or canonical pyFDN parameter-spec JSON digest.
+        Checked-in Faust source, canonical pyFDN parameter-spec JSON, or pinned KR-106 source archive digest.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
@@ -185,8 +196,10 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
             if _is_registry_reference(self.plugin_path):
                 validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
                 raise ValueError("a Faust registry reference requires format='faust'")
-            if self.source_sha256 is not None and self.format != "pyfdn":
-                raise ValueError("source_sha256 is supported only for format='faust' or 'pyfdn'")
+            if self.source_sha256 is not None and self.format not in {"kr106_native", "pyfdn"}:
+                raise ValueError(
+                    "source_sha256 is supported only for format='faust', 'kr106_native', or 'pyfdn'"
+                )
             return self
         if self.plugin_path:
             validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
@@ -196,6 +209,23 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
         if expected is None or self.source_sha256 != expected:
             raise ValueError(
                 f"format='faust' requires the registered source_sha256 for "
+                f"param_spec_name={self.param_spec_name!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _kr106_native_identity_has_registered_source_digest(self) -> SynthSpec:
+        """Require the pinned KR-106 source archive digest for native identities.
+
+        :returns: This identity when native source provenance is coherent.
+        :raises ValueError: The digest is absent or differs from the registered source archive.
+        """
+        if self.format != "kr106_native":
+            return self
+        expected = _KR106_NATIVE_PARAM_SPEC_SHA256.get(self.param_spec_name)
+        if expected is None or self.source_sha256 != expected:
+            raise ValueError(
+                "format='kr106_native' requires the registered source_sha256 for "
                 f"param_spec_name={self.param_spec_name!r}"
             )
         return self
@@ -328,10 +358,28 @@ _synth_rows: dict[str, tuple[str, str, str, str]] = {
         "presets/ultramaster_kr106-base.vstpreset",
         "2.5.13",
     ),
+    "ultramaster_kr106_native": (
+        "ultramaster_kr106",
+        KR106_NATIVE_PLUGIN_NAME,
+        "presets/ultramaster_kr106-native.json",
+        "2.5.13",
+    ),
+    "ultramaster_kr106_onehot_native": (
+        "ultramaster_kr106_onehot",
+        KR106_NATIVE_PLUGIN_NAME,
+        "presets/ultramaster_kr106-native.json",
+        "2.5.13",
+    ),
     "ultramaster_kr106_single_note": (
         "ultramaster_kr106_single_note",
         "plugins/Ultramaster KR-106.vst3",
         "presets/ultramaster_kr106_single_note-base.vstpreset",
+        "2.5.13",
+    ),
+    "ultramaster_kr106_single_note_native": (
+        "ultramaster_kr106_single_note",
+        KR106_NATIVE_PLUGIN_NAME,
+        "presets/ultramaster_kr106_single_note-native.json",
         "2.5.13",
     ),
 }
@@ -347,7 +395,15 @@ SYNTHS: Mapping[SynthName, SynthSpec] = MappingProxyType(
             plugin_path=plugin_path,
             plugin_state_path=preset,
             synth_version=synth_version,
-            source_sha256=_FAUST_SOURCE_SHA256.get(name) or _PYFDN_PARAM_SPEC_SHA256.get(name),
+            source_sha256=(
+                _FAUST_SOURCE_SHA256.get(name)
+                or (
+                    _KR106_NATIVE_PARAM_SPEC_SHA256.get(param_spec_name)
+                    if plugin_path == KR106_NATIVE_PLUGIN_NAME
+                    else None
+                )
+                or _PYFDN_PARAM_SPEC_SHA256.get(name)
+            ),
         )
         for name, (param_spec_name, plugin_path, preset, synth_version) in _synth_rows.items()
     }

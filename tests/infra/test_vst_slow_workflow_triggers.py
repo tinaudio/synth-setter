@@ -8,6 +8,7 @@ other event ungated (#1354).
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 from pathlib import Path
 from typing import cast
@@ -129,8 +130,8 @@ def test_vst_slow_unselected_cells_skip_work(
 
 
 @pytest.mark.infra
-def test_vst_slow_kr106_cell_runs_dawdreamer_parity_suite(project_root: Path) -> None:
-    """The KR106 matrix cell compares its real Pedalboard and DawDreamer hosts.
+def test_vst_slow_kr106_cell_runs_native_pipeline_and_parity_suites(project_root: Path) -> None:
+    """The KR106 matrix cell installs and tests the pinned native renderer.
 
     :param project_root: Repo root holding ``.github/workflows/``.
     """
@@ -139,9 +140,61 @@ def test_vst_slow_kr106_cell_runs_dawdreamer_parity_suite(project_root: Path) ->
     strategy = cast(dict[str, object], jobs["run_vst_slow_tests"]["strategy"])
     matrix = cast(dict[str, list[dict[str, str]]], strategy["matrix"])
     kr106 = next(row for row in matrix["include"] if row["synth"] == "ultramaster_kr106")
+    targets = kr106["pytest_targets"].split()
 
     assert kr106["plugin_path"] == "/usr/lib/vst3/Ultramaster KR-106.vst3"
-    assert "tests/data/vst/test_dawdreamer_dataset_e2e.py" in kr106["pytest_targets"].split()
+    assert "packages/kr106-native/tests" in targets
+    assert "tests/data/vst/test_kr106_native_renderer.py" in targets
+    assert "tests/data/vst/test_kr106_native_vst_parity_e2e.py" in targets
+    assert "tests/integration/test_kr106_native_pipeline_e2e.py" in targets
+
+
+@pytest.mark.infra
+def test_native_preflight_remains_valid_python_after_shell_quoting(project_root: Path) -> None:
+    """The Docker shell must preserve the embedded Python provenance check.
+
+    :param project_root: Repo root holding the workflow.
+    """
+    workflow = _load_workflow(project_root)
+    jobs = cast(dict[str, dict[str, object]], workflow["jobs"])
+    steps = cast(list[dict[str, object]], jobs["run_vst_slow_tests"]["steps"])
+    run = next(
+        str(step["run"]) for step in steps if "import_kr106_native" in str(step.get("run", ""))
+    )
+    inner_script = shlex.split(run.split("bash -c ", 1)[1])[0]
+    preflight = next(
+        line.strip() for line in inner_script.splitlines() if line.strip().startswith("python -c ")
+    )
+    source = shlex.split(preflight)[2]
+    compile(source, "native-preflight", "exec")
+    assert "import_kr106_native()" in source
+
+
+@pytest.mark.infra
+@pytest.mark.parametrize("event_name", ["push", "pull_request"])
+def test_vst_slow_native_package_and_pipeline_changes_trigger_kr106_ci(
+    project_root: Path, event_name: str
+) -> None:
+    """Native package and real-pipeline coverage changes select the Docker workflow.
+
+    :param project_root: Repo root holding ``.github/workflows/``.
+    :param event_name: GitHub event whose path filter is checked.
+    """
+    triggers = _load_triggers(project_root)
+
+    assert "packages/kr106-native/**" in triggers[event_name]["paths"]
+    assert "presets/*-native.json" in triggers[event_name]["paths"]
+    assert "src/synth_setter/synth_spec.py" in triggers[event_name]["paths"]
+    assert "scripts/generate_kr106_native_maps.py" in triggers[event_name]["paths"]
+    assert (
+        "src/synth_setter/configs/synth/ultramaster_kr106*_native.yaml"
+        in triggers[event_name]["paths"]
+    )
+    assert "tests/integration/test_kr106_native_pipeline_e2e.py" in triggers[event_name]["paths"]
+    assert (
+        "tests/pipeline/schemas/test_kr106_native_render_config.py"
+        in triggers[event_name]["paths"]
+    )
 
 
 @pytest.mark.infra
