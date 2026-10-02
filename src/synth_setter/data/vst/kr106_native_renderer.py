@@ -16,7 +16,11 @@ from synth_setter.data.vst.kr106_native_runtime import (
 )
 from synth_setter.data.vst.param_map import SynthParamMap
 from synth_setter.data.vst.param_spec import ParameterValue, require_scalar_synth_params
-from synth_setter.data.vst.renderers import AudioRenderer, _validate_rendered_audio
+from synth_setter.data.vst.renderers import (
+    AudioRenderer,
+    _sample_index_at_or_after,
+    _validate_rendered_audio,
+)
 from synth_setter.workspace import operator_workspace
 
 
@@ -163,8 +167,8 @@ class KR106NativeRenderer(AudioRenderer):
             {self._parameters[name].id: value for name, value in values.items()},
             midi_note,
             velocity,
-            min(samples, math.ceil(start * self.sample_rate)),
-            min(samples, math.ceil(end * self.sample_rate)),
+            min(samples, _sample_index_at_or_after(start, self.sample_rate)),
+            min(samples, _sample_index_at_or_after(end, self.sample_rate)),
             samples,
             self.sample_rate,
             self.block_size,

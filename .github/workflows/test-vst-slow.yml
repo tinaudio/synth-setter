@@ -74,6 +74,7 @@ on:
       - "src/synth_setter/configs/synth/ultramaster_kr106*_native.yaml"
       - "src/synth_setter/configs/experiment/generate_dataset/**"
       - "packages/kr106-native/**"
+      - "tests/infra/test_kr106_native_build.py"
       - "presets/*-native.json"
       - "src/synth_setter/synth_spec.py"
       - "scripts/generate_kr106_native_maps.py"
@@ -113,6 +114,7 @@ on:
       - "src/synth_setter/configs/synth/ultramaster_kr106*_native.yaml"
       - "src/synth_setter/configs/experiment/generate_dataset/**"
       - "packages/kr106-native/**"
+      - "tests/infra/test_kr106_native_build.py"
       - "presets/*-native.json"
       - "src/synth_setter/synth_spec.py"
       - "scripts/generate_kr106_native_maps.py"
@@ -167,6 +169,7 @@ jobs:
               packages/kr106-native/tests
               tests/data/vst/test_kr106_native_map.py
               tests/scripts/test_generate_kr106_native_maps.py
+              tests/infra/test_kr106_native_build.py
               tests/data/vst/test_kr106_native_renderer.py
               tests/data/vst/test_kr106_native_vst_parity_e2e.py
               tests/pipeline/schemas/test_kr106_native_render_config.py

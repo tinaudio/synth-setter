@@ -104,6 +104,14 @@ def test_render_note_honors_baseline_power_and_sync_settings() -> None:
     assert not np.array_equal(free_running, host_synced)
 
 
+def test_explicit_power_on_overrides_powered_off_baseline() -> None:
+    """An off baseline cannot mute a later explicit power-on control."""
+    restored = render(parameters={38: 1, 44: 0.35}, baseline_parameters={38: 0})
+    powered = render(parameters={38: 1, 44: 0.35}, baseline_parameters={38: 1})
+    assert np.max(np.abs(restored)) > 0.001
+    np.testing.assert_array_equal(restored, powered)
+
+
 def test_render_note_is_repeatable_across_fresh_engines() -> None:
     """Isolate repeated notes from intervening renders."""
     first = render()

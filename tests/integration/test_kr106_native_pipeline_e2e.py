@@ -181,3 +181,8 @@ def test_native_kr106_hydra_corpus_trains_and_renders_prediction_end_to_end(
         rendered = audio_file.read(audio_file.frames)
     assert rendered.shape == (2, 176_400)
     assert np.isfinite(rendered).all()
+    with AudioFile(str(train_root / "audio" / "sample_0" / "target.wav")) as audio_file:
+        target = audio_file.read(audio_file.frames)
+    assert target.shape == (2, 176_400)
+    assert np.isfinite(target).all()
+    assert np.max(np.abs(target)) > 0.0
