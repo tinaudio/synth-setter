@@ -62,7 +62,9 @@ def test_pi_review_workflow_triggers_for_pr_heads_and_cancels_stale_runs(
     assert workflow["concurrency"] == {
         "group": (
             "pi-repo-review-full-${{ github.event.pull_request.number || "
-            "github.event.issue.number }}"
+            "(github.event.comment.user.login == 'ktinubu' && "
+            "contains(github.event.comment.body, '@github-actions review') && "
+            "github.event.issue.number) || github.run_id }}"
         ),
         "cancel-in-progress": True,
     }
@@ -93,6 +95,7 @@ def test_pi_review_workflow_secrets_are_restricted_to_allowlisted_same_repo_prs(
     )
     authorization_steps = str(authorization_job["steps"])
     assert "is_trusted_pi_review_pr.py" in authorization_steps
+    assert 'elif [[ "$?" == "3" ]]' in authorization_steps
     assert "should_run_pi_review.py" in authorization_steps
     assert job["needs"] == "authorize-review"
     assert job["if"] == "${{ needs.authorize-review.outputs.should_review == 'true' }}"
