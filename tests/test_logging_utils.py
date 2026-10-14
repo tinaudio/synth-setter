@@ -79,6 +79,25 @@ def test_log_hyperparameters_interpolation_records_resolved_value() -> None:
     assert logger.experiment.config["model"]["scheduler"]["T_max"] == 400
 
 
+def test_log_hyperparameters_includes_runtime_checkpoint_identity() -> None:
+    """W&B receives the sanitized source and digest produced while loading."""
+    logger = RecordingWandbLogger()
+    model = SimpleNamespace(
+        base_checkpoint_source="r2:checkpoints/base.ckpt",
+        base_checkpoint_sha256="a" * 64,
+        parameters=lambda: (),
+    )
+    cfg = OmegaConf.create(
+        {"model": {"base_checkpoint": "base.ckpt"}, "datamodule": {}, "trainer": {}}
+    )
+    trainer = SimpleNamespace(logger=logger, loggers=[logger])
+
+    log_hyperparameters({"cfg": cfg, "model": model, "trainer": trainer})
+
+    assert logger.experiment.config["base_checkpoint_source"] == "r2:checkpoints/base.ckpt"
+    assert logger.experiment.config["base_checkpoint_sha256"] == "a" * 64
+
+
 def test_log_hyperparameters_missing_logger_skips_config_resolution() -> None:
     """A disabled logger does not force otherwise-unused config resolution."""
     cfg = OmegaConf.create(
