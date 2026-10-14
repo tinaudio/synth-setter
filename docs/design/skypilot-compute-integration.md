@@ -165,16 +165,16 @@ Anything outside the tuple is *not* forwarded to the worker, even if it's set in
 
 The storage credentials resolve **as a unit**, not per key: the launcher loads
 canonical `SYNTH_SETTER_STORAGE_*` settings via `storage_settings_from_sources`
-(dotenv values win over process env; the dotenv file is `sky_cfg.env_file`,
+(process env wins over dotenv values; the dotenv file is `sky_cfg.env_file`,
 default the workspace `.env`) and projects the whole `RCLONE_CONFIG_R2_*` block
 from the resulting `StorageConfig`. If the settings don't validate (a required
 setting missing or blank everywhere), no rclone credentials are forwarded —
 only the structural TYPE/PROVIDER defaults — and `dispatch_via_skypilot` raises
 its "No object storage settings resolved" error before submitting anything.
 
-`WANDB_API_KEY` resolves per key: the first non-blank value from the `.env`
-file, then the launcher's process env, else it is skipped. `WORKER_GIT_REF`
-uses the same explicit-value precedence, but an absent value defaults to the
+`WANDB_API_KEY` and `WANDB_PROJECT` resolve per key: the first non-blank value
+from the launcher's process env, then the `.env` file, else it is skipped.
+`WORKER_GIT_REF` uses the same explicit-value precedence, but an absent value defaults to the
 operator checkout's current `HEAD`. Before any submission, the launcher runs a
 dry-run fetch of the selected SHA from `origin`; an unpushed or unreachable
 commit rejects the launch instead of falling back to image-baked source. After
@@ -210,9 +210,8 @@ env-resolution logic described above lives inside `dispatch_via_skypilot`
 and runs the same way for every caller — one resolver, one `.env` lookup,
 one set of failure modes.
 
-The resolver finds `<repo_root>/.env`, parses it via `python-dotenv`, and
-resolves all keys from there. Process env is a non-event because a non-blank
-`.env` value wins per key — useful when you have stale shell exports.
+The resolver finds `<repo_root>/.env`, parses it via `python-dotenv`, and uses
+those values when no non-blank process-env override is exported.
 
 #### Caller-supplied worker envs
 
@@ -270,7 +269,7 @@ Notes:
 | Workflow YAML `env:` block             | `secrets.R2_*`, `secrets.WANDB_API_KEY`                                                           | GitHub-side secret materialization. Visible only to same-repo PRs (gated by the `if:` on the `generate` job).                                                                                                                                                                                                                          |
 | `docker run -e ...` flags              | Passes `SYNTH_SETTER_STORAGE_*`; launcher projects rclone env only at the worker-backend boundary | Container env is the natural place for runtime secrets. No file persists on the runner.                                                                                                                                                                                                                                                |
 | Launcher's `_WORKER_ENV_KEYS`          | projected rclone env, WANDB, worker-spec/git-ref (the keys resolved from `.env` / process env)    | Defines the forwarding contract for keys that come *from the operator's environment*. Partition rank/world (`SYNTH_SETTER_WORKER_RANK` / `SYNTH_SETTER_NUM_WORKERS`) are NOT in this tuple — they're synthesized per-rank inside `_launch_one_rank` and passed into the task env at construction.                                      |
-| Launcher's client settings             | `SKYPILOT_API_SERVER_ENDPOINT`, optional `SKYPILOT_SERVICE_ACCOUNT_TOKEN`                         | Resolves from the same `.env` before process env, projects into the launcher process, and clears SkyPilot's import-time endpoint cache before provisioning.                                                                                                                                                                            |
+| Launcher's client settings             | `SKYPILOT_API_SERVER_ENDPOINT`, optional `SKYPILOT_SERVICE_ACCOUNT_TOKEN`                         | Resolves from process env before the same `.env`, projects into the launcher process, and clears SkyPilot's import-time endpoint cache before provisioning.                                                                                                                                                                            |
 | Task env before submission             | Same keys, real values                                                                            | The launcher calls `task.update_envs(...)` after `sky.Task.from_yaml_config(...)`; compute options need no placeholder declarations.                                                                                                                                                                                                   |
 | `~/.runpod/config.toml` (in-container) | `RUNPOD_API_KEY`                                                                                  | SkyPilot's RunPod backend reads from this file specifically; env var alone is insufficient for `sky check runpod`. Written with `umask 077` so the API key is 600. Skipped entirely when `SKYPILOT_API_SERVER_ENDPOINT` is set — the remote API server holds provider creds and the local SkyPilot client only needs the endpoint URL. |
 
