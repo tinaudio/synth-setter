@@ -381,11 +381,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # A repo-scoped uv cache serves every image unless the key names one, and the env
+      # context cannot see the runner's own ImageOS — so republish it first (#3507, #3688).
+      - name: Publish the runner image id
+        run: echo "RUNNER_IMAGE_OS=${ImageOS:-unknown}" >> "$GITHUB_ENV"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.11.28"
           enable-cache: true
+          cache-suffix: ${{ env.RUNNER_IMAGE_OS }}
 
       # On squash-merge the PR title becomes the commit subject on main, yet it
       # never passes through gitlint's commit-msg hook. Lint it here against the
