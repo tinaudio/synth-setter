@@ -6,6 +6,8 @@ produced ``pred-0.pt`` + ``params.csv`` bridge artifacts.
 """
 
 import csv
+import hashlib
+import shutil
 import subprocess
 import sys
 from functools import partial
@@ -17,12 +19,14 @@ import torch
 from click.testing import CliRunner
 from lightning import LightningModule, Trainer
 from pedalboard.io import AudioFile
+from scipy.io import wavfile
 
 from synth_setter.cli.predict_capture import (
     compute_capture_mel,
     decode_and_convert,
     detect_model_class,
     main,
+    render_fxp_target,
     write_params_csv,
 )
 from synth_setter.data.audio_datamodule import AudioFolderDataset
@@ -38,8 +42,11 @@ from synth_setter.data.vst.param_spec import (
     DiscreteLiteralParameter,
     NoteDurationParameter,
     ParamSpec,
+    decode_model_output,
+    require_scalar_synth_params,
 )
 from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst.renderers import SurgePyRenderer
 from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
     ASTWithProjectionHead,
@@ -426,6 +433,38 @@ class TestWriteParamsCsv:
         assert not (tmp_path / "params.csv.tmp").exists()
 
 
+class TestInputValidation:
+    """CLI input-source validation."""
+
+    def test_missing_wav_and_fxp_reports_usage_error(self, tmp_path: Path):
+        """A run without a target source is rejected before inference.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        result = CliRunner().invoke(main, ["--prediction-dir", str(tmp_path)])
+
+        assert result.exit_code == 2
+        assert "exactly one of WAV_PATH or --fxp" in result.output
+
+    def test_wav_and_fxp_together_report_usage_error(self, tmp_path: Path):
+        """WAV and FXP targets cannot be supplied together.
+
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        wav = tmp_path / "target.wav"
+        fxp = tmp_path / "target.fxp"
+        wav.touch()
+        fxp.touch()
+
+        result = CliRunner().invoke(
+            main,
+            [str(wav), "--fxp", str(fxp), "--prediction-dir", str(tmp_path)],
+        )
+
+        assert result.exit_code == 2
+        assert "exactly one of WAV_PATH or --fxp" in result.output
+
+
 class TestComputeCaptureMel:
     """Preprocessing parity with the training data path."""
 
@@ -532,6 +571,81 @@ class TestPredictCaptureEndToEnd:
         assert not (uuid_dir / "params.csv.tmp").exists()
         _assert_valid_bridge_csv(uuid_dir / "params.csv")
 
+    def test_r2_checkpoint_download_is_consumed_by_real_inference(
+        self,
+        capture_wav: Path,
+        ff_checkpoint: Path,
+        fake_r2_remote: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A checkpoint downloaded through real rclone is loaded for real inference.
+
+        :param capture_wav: Fixture capture WAV.
+        :param ff_checkpoint: Real feed-forward checkpoint.
+        :param fake_r2_remote: Local filesystem backing the real rclone remote.
+        :param monkeypatch: Configures local-backed storage and the model cache.
+        """
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ACCESS_KEY_ID", "test-access-key")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY", "test-secret-key")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_ENDPOINT_URL", "http://localhost:0")
+        monkeypatch.setenv("SYNTH_SETTER_STORAGE_RCLONE_TYPE", "local")
+        remote = fake_r2_remote / "models" / "predict" / "ff.ckpt"
+        remote.parent.mkdir(parents=True)
+        shutil.copyfile(ff_checkpoint, remote)
+        digest = hashlib.sha256(ff_checkpoint.read_bytes()).hexdigest()
+        monkeypatch.setenv("XDG_CACHE_HOME", str(fake_r2_remote / "cache"))
+        prediction_dir = fake_r2_remote / "predictions"
+
+        result = CliRunner().invoke(
+            main,
+            [
+                str(capture_wav),
+                "--prediction-dir",
+                str(prediction_dir),
+                "--checkpoint",
+                "r2://models/predict/ff.ckpt",
+                "--checkpoint-sha256",
+                digest,
+            ],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, result.output
+        _assert_valid_bridge_csv(prediction_dir / "a3f9c2d4e5b60718" / "params.csv")
+
+    @pytest.mark.requires_surgepy
+    def test_fxp_target_renders_exact_wav_then_runs_real_inference(
+        self, ff_checkpoint: Path, tmp_path: Path
+    ):
+        """A real FXP render becomes the persisted target and model input.
+
+        :param ff_checkpoint: Real feed-forward checkpoint.
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        fxp = Path(__file__).parents[1] / "presets" / "surge-base.fxp"
+        prediction_dir = tmp_path / "predictions"
+
+        result = CliRunner().invoke(
+            main,
+            [
+                "--fxp",
+                str(fxp),
+                "--prediction-dir",
+                str(prediction_dir),
+                "--checkpoint",
+                str(ff_checkpoint),
+            ],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, result.output
+        output_dir = prediction_dir / "surge-base"
+        sample_rate, audio = wavfile.read(output_dir / "target.wav")
+        assert sample_rate == 44_100
+        assert audio.shape == (176_400, 2)
+        assert np.max(np.abs(audio)) > 0
+        _assert_valid_bridge_csv(output_dir / "params.csv")
+
     def test_contract_invocation_flow_writes_bridge_artifacts(
         self, capture_wav: Path, flow_checkpoint: Path, tmp_path: Path
     ):
@@ -637,15 +751,24 @@ class TestPredictCaptureEndToEnd:
         _assert_valid_bridge_csv(uuid_dir / "params.csv")
 
     def test_spec_name_resolves_the_matching_packaged_map(
-        self, capture_wav: Path, simple_ff_checkpoint: Path, tmp_path: Path
+        self,
+        capture_wav: Path,
+        simple_ff_checkpoint: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         """--param-spec-name alone selects that spec's packaged map end-to-end.
 
         :param capture_wav: Fixture capture WAV.
         :param simple_ff_checkpoint: Real feed-forward checkpoint sized for surge_simple.
         :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Makes an accidental default-path engine import fail.
         """
         prediction_dir = tmp_path / "param-prediction-dir"
+        monkeypatch.setattr(
+            "synth_setter.data.vst.renderers.import_surgepy",
+            lambda: pytest.fail("default inference imported SurgePy"),
+        )
 
         result = CliRunner().invoke(
             main,
@@ -664,9 +787,150 @@ class TestPredictCaptureEndToEnd:
         )
 
         assert result.exit_code == 0, result.output
-        csv_path = prediction_dir / "a3f9c2d4e5b60718" / "params.csv"
-        rows = list(csv.DictReader(csv_path.read_text().splitlines()))
+        output_dir = prediction_dir / "a3f9c2d4e5b60718"
+        rows = list(csv.DictReader((output_dir / "params.csv").read_text().splitlines()))
         assert len(rows) == len(param_specs["surge_simple"].synth_params)
+        assert not (output_dir / "pred.wav").exists()
+
+    @pytest.mark.requires_surgepy
+    def test_render_audio_uses_predictions_and_registered_base_preset(
+        self, simple_ff_checkpoint: Path, tmp_path: Path
+    ):
+        """Opt-in audio matches predicted params rendered from the selected spec's base.
+
+        :param simple_ff_checkpoint: Real feed-forward checkpoint sized for surge_simple.
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        target_fxp = Path(__file__).parents[1] / "presets" / "surge-base.fxp"
+        prediction_dir = tmp_path / "predictions"
+
+        result = CliRunner().invoke(
+            main,
+            [
+                "--fxp",
+                str(target_fxp),
+                "--prediction-dir",
+                str(prediction_dir),
+                "--checkpoint",
+                str(simple_ff_checkpoint),
+                "--model-class",
+                "ff",
+                "--param-spec-name",
+                "surge_simple",
+                "--render-audio",
+            ],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 0, result.output
+        output_dir = prediction_dir / "surge-base"
+        with AudioFile(str(output_dir / "pred.wav")) as audio_file:
+            sample_rate = audio_file.samplerate
+            pred_audio = audio_file.read(audio_file.frames)
+        assert sample_rate == 44_100
+        assert pred_audio.shape == (2, 176_400)
+        assert np.isfinite(pred_audio).all()
+        assert np.max(np.abs(pred_audio)) > 1e-4
+
+        raw_prediction = torch.load(
+            output_dir / "pred-0.pt", map_location="cpu", weights_only=True
+        )
+        synth_values, _ = decode_model_output(
+            raw_prediction[0].numpy(), param_specs["surge_simple"]
+        )
+        with as_file(param_map("surge_simple")) as map_path:
+            joint_map = load_param_map(map_path)
+        renderer = SurgePyRenderer(
+            plugin_path="surgepy",
+            sample_rate=44_100,
+            channels=2,
+            signal_duration_seconds=4.0,
+            plugin_state_path=str(Path(__file__).parents[1] / "presets" / "surge-simple.fxp"),
+            parameter_map=joint_map,
+        )
+        predicted_again = renderer.render(
+            require_scalar_synth_params(synth_values),
+            midi_note=60,
+            velocity=100,
+            note_start_and_end=(0.0, 2.0),
+        )
+        unmodified_base = renderer.render({}, 60, 100, (0.0, 2.0))
+        pred_rms = float(np.sqrt(np.mean(np.square(pred_audio))))
+        repeated_rms = float(np.sqrt(np.mean(np.square(predicted_again))))
+        base_rms = float(np.sqrt(np.mean(np.square(unmodified_base))))
+        assert pred_rms == pytest.approx(repeated_rms, rel=0.5)
+        assert pred_rms < base_rms / 10
+
+    def test_render_audio_unsupported_spec_reports_capability_error(
+        self, capture_wav: Path, simple_ff_checkpoint: Path, tmp_path: Path
+    ):
+        """A mapped non-SurgePy spec fails with an actionable capability error.
+
+        :param capture_wav: Fixture capture WAV.
+        :param simple_ff_checkpoint: Real feed-forward checkpoint.
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        result = CliRunner().invoke(
+            main,
+            [
+                str(capture_wav),
+                "--prediction-dir",
+                str(tmp_path / "predictions"),
+                "--checkpoint",
+                str(simple_ff_checkpoint),
+                "--param-spec-name",
+                "cardinal",
+                "--render-audio",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "does not support SurgePy prediction rendering" in str(result.exception)
+
+    def test_render_audio_failure_removes_stale_outputs_and_withholds_success_signal(
+        self,
+        capture_wav: Path,
+        simple_ff_checkpoint: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A failed requested render leaves neither stale audio nor params.csv.
+
+        :param capture_wav: Fixture capture WAV.
+        :param simple_ff_checkpoint: Real feed-forward checkpoint sized for surge_simple.
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        :param monkeypatch: Forces a failure at the native renderer boundary.
+        """
+        output_dir = tmp_path / "predictions" / capture_wav.stem
+        output_dir.mkdir(parents=True)
+        (output_dir / "pred.wav").write_bytes(b"stale audio")
+        (output_dir / "params.csv").write_text("stale params")
+
+        def fail_render(*args: object, **kwargs: object) -> np.ndarray:
+            del args, kwargs
+            raise RuntimeError("render failed")
+
+        monkeypatch.setattr(SurgePyRenderer, "render", fail_render)
+
+        result = CliRunner().invoke(
+            main,
+            [
+                str(capture_wav),
+                "--prediction-dir",
+                str(tmp_path / "predictions"),
+                "--checkpoint",
+                str(simple_ff_checkpoint),
+                "--model-class",
+                "ff",
+                "--param-spec-name",
+                "surge_simple",
+                "--render-audio",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert not (output_dir / "pred.wav").exists()
+        assert not (output_dir / "params.csv").exists()
 
     def test_successful_run_writes_milestones_to_the_uuid_log(
         self, capture_wav: Path, ff_checkpoint: Path, tmp_path: Path
@@ -866,6 +1130,20 @@ class TestPredictCaptureEndToEnd:
 
         assert result.exit_code != 0
         assert not (prediction_dir / "a3f9c2d4e5b60718" / "params.csv").exists()
+
+
+@pytest.mark.slow
+@pytest.mark.requires_surgepy
+def test_render_fxp_target_returns_exact_finite_stereo_audio() -> None:
+    """The native FXP helper renders the fixed four-second target contract."""
+    fxp = Path(__file__).parents[1] / "presets" / "surge-base.fxp"
+
+    audio = render_fxp_target(fxp)
+
+    assert audio.shape == (2, 176_400)
+    assert audio.dtype == np.float32
+    assert np.isfinite(audio).all()
+    assert np.max(np.abs(audio)) > 1e-4
 
 
 def _assert_valid_bridge_csv(csv_path: Path) -> None:
