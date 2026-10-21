@@ -3,6 +3,7 @@ renderer_backend: faustwasm
 backend_version: "0.18.3"
 block_size: 128
 render_contract_version: 2
+input_audio_source: null
 sample_rate: 44100
 channels: 2
 velocity: 100

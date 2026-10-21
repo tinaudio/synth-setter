@@ -1,12 +1,10 @@
 """Materialized, snapshot-pinned input audio for effect dataset generation.
 
-Foreign snapshots rarely match the renderer grid, so every row is pinned to it on
-read: resample to the renderer rate, mean downmix to mono, then first-N truncate
-with zero-pad tail. The operations mirror ``third_party_datamodule.decode`` (which
-cannot be reused directly — it consumes encoded containers, while pool rows are
-already-decoded tensors), and the versioned ``INPUT_AUDIO_ADAPTATION_POLICY``
-token enters the render-contract digest while ``snapshot_txid`` transitively pins
-the source geometry behind it.
+Mono consumers pin foreign snapshots to the renderer grid on read: resample,
+mean downmix, then first-N truncate with zero-pad tail. Multichannel consumers
+require exact renderer geometry so channel identity is preserved. The versioned
+``INPUT_AUDIO_ADAPTATION_POLICY`` token enters the render-contract digest while
+``snapshot_txid`` transitively pins the source geometry behind it.
 """
 
 from __future__ import annotations
@@ -70,7 +68,7 @@ def _pin_to_grid(
 
 
 class InputAudioPool:
-    """Expose mono rows from one locally materialized Lance snapshot.
+    """Expose renderer-native audio rows from one materialized Lance snapshot.
 
     .. attribute :: materialized_path
 
@@ -86,7 +84,7 @@ class InputAudioPool:
 
     .. attribute :: source_channels
 
-        Snapshot audio channel count, before the mono downmix.
+        Snapshot audio channel count, before adaptation.
 
     .. attribute :: source_frames
 
@@ -94,7 +92,7 @@ class InputAudioPool:
 
     .. attribute :: adapted
 
-        Whether any row needs resampling, downmix, or length pinning.
+        Whether mono rows need resampling, downmixing, or length pinning.
     """
 
     materialized_path: Path
@@ -110,13 +108,15 @@ class InputAudioPool:
         *,
         sample_rate: int,
         frames: int,
+        input_channels: int = 1,
     ) -> None:
         """Materialize and validate a source pool for one renderer geometry.
 
         :param source: Pinned dataset split identity.
-        :param sample_rate: Renderer sample rate in Hz; foreign rates resample to it.
-        :param frames: Renderer frame count; longer rows truncate, shorter ones pad.
-        :raises ValueError: The source is empty or its audio column is not 2-D.
+        :param sample_rate: Renderer sample rate in Hz.
+        :param frames: Renderer frame count.
+        :param input_channels: Renderer input channels; multichannel geometry must match exactly.
+        :raises ValueError: The source is empty or its audio geometry is incompatible.
         """
         cache_dir = synth_setter_cache_dir() / "input-audio" / _cache_key(source)
         self.materialized_path = cache_dir / f"{source.split}.lance"
@@ -137,6 +137,7 @@ class InputAudioPool:
         self._sampling_seed = source.sampling_seed
         self._sample_rate = sample_rate
         self._frames = frames
+        self._input_channels = input_channels
         self._dataset: LanceDataset = lance.dataset(str(self.materialized_path))
         self.row_count = self._dataset.count_rows()
         if self.row_count < 1:
@@ -144,14 +145,29 @@ class InputAudioPool:
 
         metadata = read_shard_metadata(self._dataset.schema)
         self.source_sample_rate = metadata.sample_rate
-        shape: tuple[int, ...] = tuple(getattr(self._dataset.schema.field(AUDIO_FIELD).type, "shape", ()))
+        shape: tuple[int, ...] = tuple(
+            getattr(self._dataset.schema.field(AUDIO_FIELD).type, "shape", ())
+        )
         if len(shape) != 2 or min(shape) < 1:
             raise ValueError(f"input audio row shape {shape} is not (channels, frames)")
         self.source_channels, self.source_frames = shape
-        self.adapted = (
-            self.source_sample_rate != sample_rate
-            or (self.source_channels, self.source_frames) != (1, frames)
-        )
+
+        if input_channels == 1:
+            self.adapted = (
+                self.source_sample_rate != sample_rate
+                or (self.source_channels, self.source_frames) != (1, frames)
+            )
+            return
+
+        expected_shape = (input_channels, frames)
+        if self.source_sample_rate != sample_rate:
+            raise ValueError(
+                f"input audio sample rate {self.source_sample_rate} "
+                f"!= renderer sample rate {sample_rate}"
+            )
+        if shape != expected_shape:
+            raise ValueError(f"input audio row shape {shape} != expected {expected_shape}")
+        self.adapted = False
 
     def adaptation_provenance(self) -> dict[str, Any]:
         """Describe the grid pinning applied to every row.
@@ -183,10 +199,13 @@ class InputAudioPool:
         )
 
     def take(self, row_index: int) -> np.ndarray:
-        """Read one source row as a finite contiguous mono waveform.
+        """Read one source row in the renderer's channel geometry.
+
+        Mono consumers receive ``(frames,)`` after grid adaptation; multichannel
+        consumers receive exact ``(channels, frames)`` source geometry.
 
         :param row_index: Zero-based row index in the materialized snapshot.
-        :returns: Float32 mono waveform shaped ``(frames,)`` pinned to the grid.
+        :returns: Contiguous finite float32 waveform in renderer-native geometry.
         :raises IndexError: The row index is outside the pool.
         :raises ValueError: The selected row contains NaN or infinity.
         """
@@ -198,6 +217,8 @@ class InputAudioPool:
         )
         if not np.isfinite(row).all():
             raise ValueError(f"input audio row {row_index} must contain only finite samples")
+        if self._input_channels > 1:
+            return np.ascontiguousarray(row)
         if not self.adapted:
             return np.ascontiguousarray(row[0])
         pinned = _pin_to_grid(

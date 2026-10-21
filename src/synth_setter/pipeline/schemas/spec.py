@@ -407,7 +407,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
     )
     input_audio_source: InputAudioSource | None = Field(
         default=None,
-        description="Pinned dataset split supplying per-sample pyFDN input audio.",
+        description="Pinned dataset split supplying per-sample effect input audio.",
     )
     sample_rate: int = Field(description="Audio sample rate in Hz.")
     channels: int = Field(description="Audio channel count.")
@@ -789,7 +789,12 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         )
         if self.renderer_backend != "pyfdn":
             if self.input_audio_source is not None:
-                raise ValueError("input_audio_source requires renderer_backend='pyfdn'")
+                if self.renderer_backend != "faustwasm":
+                    raise ValueError(
+                        "input_audio_source requires renderer_backend='pyfdn' or 'faustwasm'"
+                    )
+                if self.render_contract_version == 1:
+                    raise ValueError("input_audio_source rejects render_contract_version=1")
             if pyfdn_identity:
                 raise ValueError("all pyFDN identities require renderer_backend='pyfdn'")
             if self.pyfdn_excitation is not None:
@@ -853,6 +858,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
         )
         source = resolve_faust_dsp(source_identity)
+        if self.renderer_backend == "faustwasm":
+            if source.inputs > 0 and self.input_audio_source is None:
+                raise ValueError("FaustWasm input-bearing source requires input_audio_source")
+            if self.input_audio_source is not None and (source.inputs, source.outputs) != (2, 2):
+                raise ValueError("this FaustWasm source does not accept input_audio_source")
         isolated_backends = {"faustcpp", "faustwasm"}
         if self.renderer_backend in isolated_backends:
             if self.render_contract_version == 1:
