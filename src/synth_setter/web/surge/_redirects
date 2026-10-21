@@ -1,0 +1,5 @@
+/model/sketch.onnx https://pub-b2c36667bce24c84aa695c88ab580722.r2.dev/model/sketch.onnx 302
+/model/conditioning.onnx https://pub-b2c36667bce24c84aa695c88ab580722.r2.dev/model/conditioning.onnx 302
+/model/velocity.onnx https://pub-b2c36667bce24c84aa695c88ab580722.r2.dev/model/velocity.onnx 302
+/ort/ort-wasm-simd-threaded.asyncify.wasm https://pub-b2c36667bce24c84aa695c88ab580722.r2.dev/ort/ort-wasm-simd-threaded.asyncify.wasm 302
+/ort/ort-wasm-simd-threaded.jsep.wasm https://pub-b2c36667bce24c84aa695c88ab580722.r2.dev/ort/ort-wasm-simd-threaded.jsep.wasm 302

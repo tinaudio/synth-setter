@@ -1,9 +1,18 @@
-import { cp, mkdir, rename, rm, mkdtemp, realpath, stat } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  rename,
+  rm,
+  mkdtemp,
+  realpath,
+  stat,
+} from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const web = path.dirname(directory);
+const poster = path.join(web, "poster");
 const ort = path.join(web, "node_modules", "onnxruntime-web", "dist");
 
 async function canonicalProspectivePath(destination) {
@@ -11,7 +20,10 @@ async function canonicalProspectivePath(destination) {
   let ancestor = absolute;
   while (true) {
     try {
-      return path.resolve(await realpath(ancestor), path.relative(ancestor, absolute));
+      return path.resolve(
+        await realpath(ancestor),
+        path.relative(ancestor, absolute),
+      );
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
       const parent = path.dirname(ancestor);
@@ -25,7 +37,11 @@ export async function exportSite({ model, engine, output }) {
   const destination = await canonicalProspectivePath(output);
   for (const source of [model, engine, ort]) {
     const relative = path.relative(await realpath(source), destination);
-    if (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`)) {
+    if (
+      !path.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`)
+    ) {
       throw new Error("output must not be inside a copied source tree");
     }
   }
@@ -64,6 +80,17 @@ export async function exportSite({ model, engine, output }) {
     path.join(path.dirname(output), ".surge-site-"),
   );
   try {
+    for (const [source, destination] of [
+      ["index.html", "index.html"],
+      ["poster-demo.css", "poster-demo.css"],
+      ["poster.mjs", "poster.mjs"],
+      ["styles.css", "styles.css"],
+      ["LICENSE-template-MPL-2.0.txt", "LICENSE-poster-template-MPL-2.0.txt"],
+    ]) {
+      await cp(path.join(poster, source), path.join(staging, destination));
+    }
+    for (const name of ["_headers", "_redirects"])
+      await cp(path.join(directory, name), path.join(staging, name));
     await mkdir(path.join(staging, "surge"));
     for (const name of [
       "index.html",
@@ -87,11 +114,7 @@ export async function exportSite({ model, engine, output }) {
       path.join(web, "..", "surgewasm", "runtime.mjs"),
       path.join(staging, "engine", "runtime.mjs"),
     );
-    await cp(
-      ort,
-      path.join(staging, "ort"),
-      { recursive: true },
-    );
+    await cp(ort, path.join(staging, "ort"), { recursive: true });
     await rename(staging, output);
   } finally {
     await rm(staging, { recursive: true, force: true });
@@ -115,5 +138,7 @@ if (
   if (Object.keys(options).length !== 3)
     throw new Error("--model, --engine and --output are required");
   await exportSite(options);
-  console.log(`Static Surge evaluation: ${options.output}/surge/index.html`);
+  console.log(
+    `Static poster and Surge evaluation: ${options.output}/index.html`,
+  );
 }

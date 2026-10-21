@@ -1,0 +1,85 @@
+/* Layout adapted from christhetree/mod_discovery (docs/styles.css, MPL-2.0). */
+.player {
+    width: 100%;
+}
+
+.table {
+    display: block;
+    vertical-align: middle;
+    width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+}
+
+.table td {
+    vertical-align: middle !important;
+}
+
+.audio-col {
+    min-width: 120px;
+    width: 280px;
+}
+
+.row-grey {
+    background-color: #eeeeee;
+}
+
+.abstract {
+    margin: 0 auto !important;
+    max-width: 70%;
+    float: none !important;
+}
+
+.source {
+    color: rgb(126, 126, 126);
+    font-weight: 600;
+}
+
+.target {
+    color: rgb(67, 74, 101);
+    font-weight: 600;
+}
+
+.ours {
+    color: rgb(89, 146, 54);
+    font-weight: 600;
+}
+
+.detail {
+    font-size: small;
+    font-weight: 500;
+}
+
+.btn {
+    border-radius: 20px;
+}
+
+/* Placeholder boxes until real media is dropped in. Delete once assets exist. */
+.placeholder {
+    border: 2px dashed #adb5bd;
+    color: #6c757d;
+    background: #f8f9fa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 1rem;
+    white-space: normal;
+}
+
+.placeholder-fig {
+    min-height: 260px;
+}
+
+.placeholder-cell {
+    min-height: 90px;
+    min-width: 160px;
+    font-size: small;
+}
+
+#demo .demo-panel {
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 1.5rem;
+    background: #fafafa;
+}

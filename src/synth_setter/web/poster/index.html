@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="en" class="h-100">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <meta name="description" content="Sketch controls: sound matching with a browser-native Surge XT model and a planned preset-editing workflow.">
+    <meta name="author" content="Khaled Tinubu">
+    <title>Sketch Controls for Synth Presets</title>
+
+    <!-- Bootstrap core CSS -->
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css"
+          integrity="sha384-JcKb8q3iqJ61gNV9KGb8thSsNjpSL0n8PARn9HuZOnIxN0hoP+VmmDGMN5t9UJ0Z" crossorigin="anonymous">
+    <meta name="theme-color" content="#563d7c">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="poster-demo.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.0/font/bootstrap-icons.css">
+</head>
+
+<body>
+<!-- Header -->
+<div class="text-center">
+    <div class="row">
+        <div class="col-lg-12">
+            <br>
+            <h1 class="mt-5 mb-3">Sketch Controls for Synth Presets:<br>Editing a Surge XT Patch to Match a Target Sound</h1>
+            <p class="lead">
+                <a href="https://github.com/ktinubu" target="_blank" rel="noopener">Khaled Tinubu</a> <sup>1</sup>
+            </p>
+
+            <p class="lead">
+                <sup>1</sup> tinaudio<br>
+            </p>
+
+            <div>
+                <a class="btn btn-outline-dark" href="#demo" type="button">
+                    <i class="bi bi-play-circle"></i> Live Demo
+                </a>
+                <a class="btn btn-outline-dark" href="https://github.com/tinaudio/synth-setter" target="_blank" rel="noopener" type="button">
+                    <i class="bi bi-code-slash"></i> Code
+                </a>
+                <a class="btn btn-outline-dark" href="#examples" type="button">
+                    <i class="bi bi-soundwave"></i> Examples
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+
+    <!-- Abstract -->
+    <div class="section mt-5 mb-5">
+        <div class="abstract">
+            <h2>Abstract</h2>
+            <hr>
+            <p>
+                Sound matching asks how synthesizer controls can reproduce the audible shape of a reference.
+                The current browser demo uses a conditional flow-matching model: reference audio plus either extracted or authored music-sketch controls generate 92 encoded coordinates, which decode to 89 Surge XT synthesizer parameters.
+                Surge XT then renders the generated patch locally in the browser.
+            </p>
+            <br>
+            <div class="placeholder placeholder-fig w-100">
+                Figure 1 forthcoming: system overview diagram
+            </div>
+            <br>
+            <br>
+            <p class="text-center">Figure 1: <em>Current demo path: reference audio and extracted or authored controls feed flow inference, parameter decoding, and browser-native Surge XT rendering. The future FXP workflow enters through audio rendering, not direct source-parameter conditioning.</em></p>
+
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <div class="placeholder placeholder-fig">Figure 2a forthcoming<br>(pitch controls)</div>
+              </div>
+              <div class="col-md-6 mb-3">
+                <div class="placeholder placeholder-fig">Figure 2b forthcoming<br>(loudness controls)</div>
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <div class="placeholder placeholder-fig">Figure 2c forthcoming<br>(spectral-centroid controls)</div>
+              </div>
+              <div class="col-md-6 mb-3">
+                <div class="placeholder placeholder-fig">Figure 2d forthcoming<br>(flow trajectory)</div>
+              </div>
+            </div>
+            <p class="text-center">Figure 2: <em>Planned control-track and trajectory visualizations. These placeholders are not presented as experimental results.</em></p>
+        </div>
+    </div>
+
+    <!-- Venue -->
+    <div class="section">
+        <h2>Presented at</h2>
+        <hr>
+        <p>Virtual poster, Audio Developer Conference (ADC) 2026.</p>
+        <div style="background-color: #e9ecef;">
+  <pre><code>
+  @misc{tinubu2026sketchcontrols,
+      title={Sketch Controls for Synth Presets: Editing a Surge XT Patch to Match a Target Sound},
+      author={Khaled Tinubu},
+      howpublished={Virtual poster, Audio Developer Conference (ADC)},
+      year={2026},
+      url={https://synth.tinaudio.com/}
+  }
+  </code></pre>
+        </div>
+    </div>
+
+    <!-- Live demo -->
+    <div class="section mt-5" id="demo">
+        <h2>Live Demo</h2>
+        <hr>
+        <p>
+            The evaluator runs ONNX inference and Surge XT rendering in this page; audio stays in your browser.
+            Upload reference audio, extract or author music-sketch controls, generate a patch, and listen to the real browser render.
+            Loading is opt-in because the model and engine require about 200 MB of downloads.
+            A short, low-step run checks integration rather than sound-matching quality.
+        </p>
+        <div class="demo-panel">
+            <div class="placeholder placeholder-fig" id="demo-root">
+                <div class="demo-consent">
+                    <button class="btn btn-outline-dark" id="load-demo" type="button">Load interactive demo</button>
+                    <p class="mb-0 mt-3" id="demo-status">The model has not been downloaded.</p>
+                </div>
+            </div>
+        </div>
+        <div class="demo-actions text-right mt-3" id="demo-actions" hidden>
+            <button class="btn btn-outline-dark" id="fullscreen-demo" type="button">View demo fullscreen</button>
+            <a class="btn btn-outline-dark" href="/surge/" target="_blank" rel="noopener">Open standalone evaluator</a>
+        </div>
+        <p class="detail mt-3">
+            Inference runs on the CPU via WebAssembly. The model generates synth parameters; Surge XT renders the audio.
+            The current model does not preserve or stay near the parameters of an existing preset.
+        </p>
+    </div>
+
+    <!-- Method -->
+    <div class="section mt-5" id="method">
+        <h2>Method</h2>
+        <hr>
+        <h3>Reference representation</h3>
+        <p>
+            The model consumes stereo mel features from the reference audio and 386 music controls on 32 frames.
+            Controls can be extracted from separate sketch audio or authored as a pitch activation contour with loudness, spectral-centroid, onset, and end values.
+        </p>
+        <h3>Flow inference</h3>
+        <p>
+            Classifier-free guidance can use content and sketch together or independently.
+            A seeded RK4 sampler predicts the encoded parameter coordinates, which are decoded into a Surge XT patch and rendered by the browser engine.
+        </p>
+        <h3>Current evaluation</h3>
+        <p>
+            The page reports integration diagnostics including normalized mel MAE, waveform RMSE, RMS levels, and peak amplitude.
+            These measurements check a run's wiring and output; they are not a published perceptual evaluation or a preset-preservation result.
+        </p>
+    </div>
+
+    <!-- Listening samples -->
+    <div class="section mt-5" id="examples">
+        <h2>Listening Samples and Control Track Visualizations</h2>
+        <hr>
+        <div class="section mb-5">
+            <p>
+                Curated listening samples and control-track plots are forthcoming.
+                The live demo above provides the current supported audio path.
+            </p>
+        </div>
+
+        <h3>Experiment 1: Synthetic Targets (Perturbed Surge XT Presets)</h3>
+        <hr>
+        <div class="section mb-5">
+            <div class="placeholder placeholder-fig">
+                Synthetic-target examples forthcoming
+            </div>
+        </div>
+
+        <h3>Experiment 2: Real-world Targets (Recorded and Sampled Sounds)</h3>
+        <hr>
+        <div class="section mb-5">
+            <div class="placeholder placeholder-fig">
+                Real-world target examples forthcoming
+            </div>
+        </div>
+    </div>
+
+    <!-- Code -->
+    <div class="section mt-5" id="code">
+        <h2>Code</h2>
+        <hr>
+        <p>
+            The open-source <a href="https://github.com/tinaudio/synth-setter" target="_blank" rel="noopener">synth-setter</a> repository contains the data pipeline, training and evaluation code, ONNX export, and browser evaluator used by this page.
+        </p>
+    </div>
+
+    <!-- Limitations -->
+    <div class="section mt-5 mb-5">
+        <h2>Limitations</h2>
+        <hr>
+        <ul>
+            <li>The browser engine is an experimental Surge 1.4 port; training used SurgePy 1.3.4.</li>
+            <li>The demo is specific to Surge XT and four-second, 44.1 kHz stereo inputs.</li>
+            <li>Low-step smoke runs verify integration, not model quality or perceptual similarity.</li>
+            <li>The current model does not promise that a generated patch stays near an existing preset.</li>
+            <li>FXP upload and FXP export are not available in the current demo; current downloads are rendered WAV audio and a JSON evaluation record. FXP upload and export are planned to be added shortly.</li>
+        </ul>
+    </div>
+
+    <footer>
+        <p class="text-center">
+            Send feedback and questions to <a href="https://github.com/tinaudio/synth-setter/issues" target="_blank" rel="noopener">the synth-setter issue tracker</a>.
+            Page layout adapted from <a href="https://christhetr.ee/mod_discovery/" target="_blank" rel="noopener">mod_discovery</a> (<a href="/LICENSE-poster-template-MPL-2.0.txt">MPL-2.0</a>).
+        </p>
+        <p class="text-center"><a href="#">Scroll to top</a></p>
+    </footer>
+</div>
+
+<!-- Bootstrap core JavaScript -->
+<script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"
+        integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj"
+        crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/popper.js@1.16.0/dist/umd/popper.min.js"
+        integrity="sha384-Q6E9RHvbIyZFJoft+2mJbHaEWldlvI9IOYy5n3zV9zzTtmI3UksdQRVvoxMfooAo"
+        crossorigin="anonymous"></script>
+<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/js/bootstrap.min.js"
+        integrity="sha384-OgVRvuATP1z7JjHLkuOU7Xw704+h835Lr+6QL9UvYjZE3Ipu6Tp75j7Bh/kR0JKI"
+        crossorigin="anonymous"></script>
+<script type="module" src="poster.mjs"></script>
+</body>
+
+</html>

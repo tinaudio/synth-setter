@@ -35,9 +35,11 @@ node src/synth_setter/web/surge/export-site.mjs \
 python3 -m http.server 8765 --bind 127.0.0.1 --directory build/surge-site
 ```
 
-Open <http://127.0.0.1:8765/surge/index.html>. Export destinations must not
-already exist. The exporter uses the content-addressed real checkpoint and
-statistics in `configs/browser_surge.yaml` by default, avoiding mutable
+Open <http://127.0.0.1:8765/> for the poster or append `/surge/` for the
+standalone evaluator. Export destinations must not already exist. The exporter
+includes the poster source, its MPL-2.0 attribution, and the Cloudflare Pages
+headers and public-R2 redirects. The exporter uses the content-addressed real
+checkpoint and statistics in `configs/browser_surge.yaml` by default, avoiding mutable
 training `last.ckpt` objects. Native render settings still come from
 `configs/sketch_render.yaml`; explicit
 `--checkpoint`, `--checkpoint-sha256`, `--stats`, and `--stats-sha256`
@@ -73,6 +75,26 @@ FDN reverb metrics, the complete native sketch metric suite, or perceptual
 quality scores. The downloaded JSON retains model provenance and source
 revision, a unique run ID and UTC completion time, noise, features,
 predictions, decoded patch, renderer version, audio, and metrics.
+
+## Cloudflare Pages deployment
+
+The exported tree is also the deployment input. Cloudflare Pages rejects the
+largest model and ONNX Runtime files, so the deployment copy omits only the
+five paths already served by the checked-in public-R2 redirects:
+
+```bash
+rm -rf build/surge-site-deploy
+cp -R build/surge-site build/surge-site-deploy
+rm build/surge-site-deploy/model/{sketch,conditioning,velocity}.onnx
+rm build/surge-site-deploy/ort/ort-wasm-simd-threaded.{asyncify,jsep}.wasm
+npx wrangler pages deploy build/surge-site-deploy \
+  --project-name synth-surge-sketch --branch main
+```
+
+Use the existing `CLOUDFLARE_API_TOKEN` and account; do not create a Pages
+project or change DNS. Keep `_headers`, `_redirects`, engine licenses, and the
+poster template license in the deployment tree. The redirect destinations are
+existing public R2 objects, not Hugging Face fallbacks.
 
 ## Tailnet preview
 

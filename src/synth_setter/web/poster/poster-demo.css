@@ -1,0 +1,26 @@
+#demo-root.demo-host-loaded {
+  display: block;
+  min-height: 960px;
+  padding: 0;
+  border: 0;
+  background: #151923;
+}
+
+.demo-frame {
+  display: block;
+  width: 100%;
+  min-height: 960px;
+  border: 0;
+  background: #151923;
+}
+
+.demo-actions[hidden] {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  #demo-root.demo-host-loaded,
+  .demo-frame {
+    min-height: 1100px;
+  }
+}
