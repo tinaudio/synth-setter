@@ -117,7 +117,11 @@ apt_install() {
 # ---------------------------------------------------------- preflight ----
 [[ "$(id -u)" -eq 0 ]] || die "run as root (RunPod starts vastai/pytorch as root)"
 [[ "$(uname -m)" == x86_64 ]] || die "only x86_64 is supported (KR-106/pueue/zellij pins)"
-. /etc/os-release
+VERSION_ID="$(
+  awk -F= \
+    '$1 == "VERSION_ID" {gsub(/^"|"$/, "", $2); print $2; exit}' \
+    /etc/os-release
+)"
 log "Ubuntu ${VERSION_ID} on $(uname -m); repo=$SS_REPO_DIR ref=$SS_GIT_REF venv=$SS_VENV"
 
 # RunPod injects PUBLIC_KEY into /root/.ssh with modes sshd refuses ("bad
