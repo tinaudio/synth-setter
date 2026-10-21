@@ -1,0 +1,9 @@
+# Native dexed-py backend knobs; identity comes from `synth=dexed_py`.
+defaults:
+  - vst
+  - _self_
+
+renderer_backend: dexed
+audio_dtype: float32
+plugin_reload_cadence: render
+gui_toggle_cadence: never
