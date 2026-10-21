@@ -19,8 +19,15 @@ Nested under `DatasetSpec.render`:
 uses fixed zero-valued MIDI compatibility inputs with the common `AudioRenderer`,
 defaults `pyfdn_excitation` to a four-second impulse response, and stores mono
 44.1 kHz audio as float32. Setting `pyfdn_excitation: chirp` explicitly selects
-the locally generated canonical chirp; neither mode requires a source path, R2
-download, or SkyPilot mount.
+the locally generated canonical chirp. Setting `input_audio_source` instead
+selects deterministic rows from a transaction-pinned Lance dataset split;
+pyFDN resamples, downmixes, and pads or truncates each source row to its render
+grid. Dataset-backed input cannot be combined with the chirp or the legacy v1
+render contract.
+
+Nested under `DatasetSpec.render.input_audio_source`:
+
+::: synth_setter.pipeline.schemas.spec.InputAudioSource
 
 Nested entries inside the computed `DatasetSpec.shards` tuple:
 
