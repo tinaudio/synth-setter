@@ -15,6 +15,7 @@ type RendererBackend = Literal[
     "dawdreamer",
     "faustcpp",
     "faustwasm",
+    "kr106_native",
     "pedalboard",
     "pyfdn",
     "surgepy",
@@ -27,8 +28,11 @@ TORCHSYNTH_PLUGIN_NAME = "torchsynth"
 FAUST_PLUGIN_NAME = "faust"
 FAUST_REGISTRY_PREFIX = "registry://faust/"
 PYFDN_PLUGIN_NAME = "pyfdn"
+KR106_NATIVE_PLUGIN_NAME = "kr106_native"
 SURGEPY_PLUGIN_NAME = "surgepy"
 
+KR106_NATIVE_SOURCE_COMMIT = "bc15caee5843ab238a25d0969e68d57db2b1615f"
+KR106_NATIVE_SOURCE_SHA256 = "eba003e0e6f295a5d884a6490b6055b1d1d0183ae74847c9bb2ffdc6e23809a5"
 PYFDN_CANONICAL_SOURCE_SHA256 = "5a215ebf9c4f8300774bee0f1e8e6ce5dd4052cb8c422aeeacc16a3d0321e485"
 PYFDN_SOURCE_CHANNELS = 1
 PYFDN_SOURCE_SAMPLE_RATE_HZ = 44_100
@@ -102,7 +106,13 @@ def default_flush_blocks(renderer_backend: str, sample_rate: float) -> FlushBloc
 
 
 IN_PROCESS_PLUGIN_NAMES = frozenset(
-    {TORCHSYNTH_PLUGIN_NAME, FAUST_PLUGIN_NAME, PYFDN_PLUGIN_NAME, SURGEPY_PLUGIN_NAME}
+    {
+        TORCHSYNTH_PLUGIN_NAME,
+        FAUST_PLUGIN_NAME,
+        KR106_NATIVE_PLUGIN_NAME,
+        PYFDN_PLUGIN_NAME,
+        SURGEPY_PLUGIN_NAME,
+    }
 )
 
 

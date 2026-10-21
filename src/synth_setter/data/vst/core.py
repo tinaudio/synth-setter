@@ -58,6 +58,8 @@ def extract_backend_version(renderer_backend: str) -> str:
     :raises ValueError: The backend has no separate version contract.
     :raises RuntimeError: Host version probing or package metadata inspection fails.
     """
+    if renderer_backend == "kr106_native":
+        return importlib.metadata.version("kr106-native")
     if renderer_backend == "dawdreamer":
         return importlib.metadata.version("dawdreamer")
     if renderer_backend == "faustcpp":
@@ -110,6 +112,10 @@ def extract_renderer_version(plugin_path: Path) -> str:
 
     :raises FileNotFoundError: The bundle path or required managed-integrity record is absent.
     """
+    if str(plugin_path) == "kr106_native":
+        from synth_setter.data.vst.kr106_native_runtime import import_kr106_native
+
+        return import_kr106_native().get_version()
     if str(plugin_path) == FAUST_PLUGIN_NAME:
         return extract_backend_version("dawdreamer")
     if str(plugin_path) == TORCHSYNTH_PLUGIN_NAME:
