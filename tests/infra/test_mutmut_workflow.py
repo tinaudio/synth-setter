@@ -6,6 +6,7 @@ import ast
 import fnmatch
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -18,6 +19,8 @@ from mutmut.file_mutation import mutate_file_contents
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW_PATH = _REPO_ROOT / ".github/workflows/mutmut.yaml"
 _PREDICT_MODULE = "synth_setter.evaluation.predict_vst_audio"
+# Excludes prose: a repo-relative resource literal carries no whitespace and no leading slash.
+_RELATIVE_PATH = re.compile(r"[\w.-]+(?:/[\w.-]+)+")
 _PREDICT_SHARDS = {
     "evaluation-predict-misc": [
         f"{_PREDICT_MODULE}.x_[!_r]*",
@@ -267,6 +270,45 @@ def test_mutmut_configuration_disables_pytest_capture_for_in_process_runner() ->
         config = tomllib.load(file)["tool"]["mutmut"]
 
     assert "--capture=no" in config["pytest_add_cli_args"]
+
+
+def _resource_paths_read_by(suite: Path) -> set[str]:
+    """Collect the repo-relative non-Python files a test module names as a literal.
+
+    :param suite: Test module to scan.
+    :returns: Repo-relative paths that exist as files in the checkout.
+    """
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(suite.read_text(encoding="utf-8"))):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        literal = node.value
+        if literal.endswith(".py") or not _RELATIVE_PATH.fullmatch(literal):
+            continue
+        if (_REPO_ROOT / literal).is_file():
+            found.add(literal)
+    return found
+
+
+def test_mutmut_sandbox_copies_every_resource_its_test_selection_reads() -> None:
+    """Resources the selected suites open by repo-relative path resolve inside ``mutants/``."""
+    with (_REPO_ROOT / "pyproject.toml").open("rb") as file:
+        config = tomllib.load(file)["tool"]["mutmut"]
+    copied_roots = [Path(root) for root in config["also_copy"] + config["paths_to_mutate"]]
+
+    required: set[str] = set()
+    for tests_dir in config["tests_dir"]:
+        for suite in (_REPO_ROOT / tests_dir).rglob("test_*.py"):
+            required |= _resource_paths_read_by(suite)
+
+    # The scan is worthless if it silently matches nothing, so pin one resource it must find.
+    assert "presets/surge-base.vstpreset" in required
+    unreachable = sorted(
+        resource
+        for resource in required
+        if not any(Path(resource).is_relative_to(root) for root in copied_roots)
+    )
+    assert unreachable == []
 
 
 def test_mutmut_workflow_always_reports_each_shard_without_pr_trigger() -> None:
