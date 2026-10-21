@@ -1,0 +1,7 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "faust_augmentor"
+param_spec_name: "faust_augmentor"
+plugin_path: "registry://faust/faust_augmentor"
+plugin_state_path: ""
+synth_version: "1"
+source_sha256: "2003dbf11b0a32f8d3bfe0575cfae7394f54cdccc82c0e310227cdaa4be7a4a8"
