@@ -24,6 +24,11 @@ version = "1.0.0"
 requires-dist = ["einops>=0.6", "huggingface-hub>=0.26", "librosa>=0.8.1", "numpy>=1.21", "omegaconf", "torch>=2.5.1"]
 
 [[manifest.dependency-metadata]]
+name = "nnaudio2"
+version = "2.0.2"
+requires-dist = ["numpy>=1.14.5", "scipy>=1.2.0", "torch>=1.6.0"]
+
+[[manifest.dependency-metadata]]
 name = "stable-audio-3"
 version = "0.1.0"
 requires-dist = ["einops>=0.8.2", "einops-exts>=0.0.4", "huggingface-hub>=1.7.1", "numpy>=2.2.6", "packaging>=26.0", "safetensors>=0.7.0", "soundfile>=0.13.1", "torch>=2.7", "torchaudio>=2.7", "tqdm>=4.67.3", "transformers>=5.8.0"]
@@ -2781,6 +2786,22 @@ wheels = [
 ]
 
 [[package]]
+name = "nnaudio2"
+version = "2.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+    { name = "torch", version = "2.11.0+cu128", source = { registry = "https://download.pytorch.org/whl/cu128" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+    { name = "torch", version = "2.12.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'linux' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128')" },
+    { name = "torch", version = "2.12.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'linux' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ab/fa/6099849811a21d8c47409383f7ea45af97794de10f2a2eb6d025997ee6a4/nnaudio2-2.0.2.tar.gz", hash = "sha256:ffdb4d51b41018f61c734cb7829656c6c53f86b64163c64117fbc37c4878e240", size = 44085, upload-time = "2026-05-04T00:12:56.203Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/3a/645f4b9d632918f18d55a4e41431849772f15c5a0f12045ff581538f1e8e/nnaudio2-2.0.2-py3-none-any.whl", hash = "sha256:1804853bc1e51b007b10c2c1b39b3fbc10a3bc2b284a7b3ece45ea2025b7c3b3", size = 47131, upload-time = "2026-05-04T00:12:54.793Z" },
+]
+
+[[package]]
 name = "nodeenv"
 version = "1.10.0"
 source = { registry = "https://pypi.org/simple" }
@@ -5059,6 +5080,7 @@ audio = [
     { name = "flamo" },
     { name = "librosa" },
     { name = "mido" },
+    { name = "nnaudio2" },
     { name = "pedalboard" },
     { name = "pyfdn" },
     { name = "pyloudnorm" },
@@ -5120,6 +5142,7 @@ dev = [
     { name = "mutmut" },
     { name = "nbconvert" },
     { name = "nflows" },
+    { name = "nnaudio2" },
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "onnx" },
@@ -5224,6 +5247,7 @@ runtime = [
     { name = "meanaudio" },
     { name = "mido" },
     { name = "music2latent" },
+    { name = "nnaudio2" },
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "pandas" },
@@ -5331,6 +5355,7 @@ audio = [
     { name = "flamo", specifier = "==0.2.18" },
     { name = "librosa", specifier = "==0.11.0" },
     { name = "mido" },
+    { name = "nnaudio2", specifier = "==2.0.2" },
     { name = "pedalboard" },
     { name = "pyfdn", specifier = "==0.4.2" },
     { name = "pyloudnorm" },
@@ -5392,6 +5417,7 @@ dev = [
     { name = "mutmut", specifier = "==3.5.*" },
     { name = "nbconvert", specifier = ">=7.16" },
     { name = "nflows" },
+    { name = "nnaudio2", specifier = "==2.0.2" },
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "onnx", specifier = ">=1.17" },
@@ -5490,6 +5516,7 @@ runtime = [
     { name = "meanaudio", git = "https://github.com/xiquan-li/MeanAudio.git?rev=8740a3e8df4c891a8d9deee1f820d051584d2671" },
     { name = "mido" },
     { name = "music2latent", specifier = ">=0.1.8" },
+    { name = "nnaudio2", specifier = "==2.0.2" },
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "pandas" },

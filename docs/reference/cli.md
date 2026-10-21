@@ -184,6 +184,27 @@ It processes at most 32 rows per CQT call; override
 memory. Model compilation is disabled for this profile pending support for
 compiled frozen waveform encoders.
 
+To compute an nnAudio2 variable-Q transform from each waveform instead of
+loading `mel_spec`:
+
+```bash
+DATASET_ROOT_URI='r2://BUCKET/data/TASK_NAME/RUN_ID/'
+synth-setter-train \
+  experiment=surge/flow_simple \
+  conditioning=vqt_online \
+  "datamodule.download_dataset_root_uri=${DATASET_ROOT_URI}"
+```
+
+This additive profile leaves `conditioning=mel` and existing checkpoints
+unchanged. It averages audio channels, computes frozen float32 magnitude VQT
+features with 256 bins (32 bins per octave, 32.7 Hz minimum, `gamma=20`),
+applies `log1p`, and pools onto the canonical 401-frame grid. Extraction runs
+inside the model on its current device in batches of at most 32 rows; override
+`model.encoder.backbone.max_batch_size` to trade throughput for peak memory.
+Here, “online” means on-the-fly during `forward`, not causal streaming across
+audio chunks. The VQT profile requires raw waveform rows and cannot load a mel
+checkpoint because the feature distribution is different.
+
 To derive tonal interval vectors from each waveform during training instead of
 reading a stored sketch column:
 
