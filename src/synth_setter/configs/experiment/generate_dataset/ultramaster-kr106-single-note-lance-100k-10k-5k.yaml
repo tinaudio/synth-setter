@@ -1,0 +1,32 @@
+# @package _global_
+
+defaults:
+  - override /datamodule: vst
+  - override /synth: ultramaster_kr106_single_note
+  - override /render: vst
+  - _self_
+
+task_name: ultramaster-kr106-single-note-lance-100k-10k-5k
+
+output_format: lance
+
+train_val_test_sizes: [100000, 10000, 5000]
+
+r2:
+  bucket: experiments
+
+# Queue claims let workers join, retry, and drain the run independently.
+use_shard_queue: true
+
+render:
+  renderer_backend: dawdreamer
+  # 2500-sample shards bound retry work while avoiding excess object-store overhead.
+  samples_per_shard: 2500
+  samples_per_render_batch: 8
+  parallel: true
+  # Workers stage each shard to R2, then release its local disk immediately.
+  retain_local_shards: false
+  max_retries: 20
+  # KR-106 must reload between renders to isolate plugin state.
+  plugin_reload_cadence: render
+  gui_toggle_cadence: never

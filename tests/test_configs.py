@@ -1286,6 +1286,29 @@ def test_surge_4_generate_dataset_experiment_composes_with_inline_finalize() -> 
     assert cfg.finalize_inline is True
 
 
+def test_kr106_single_note_100k_generate_dataset_experiment_composes() -> None:
+    """The production KR-106 single-note experiment pins its render contract."""
+    cfg = _compose(
+        "dataset.yaml",
+        ["experiment=generate_dataset/ultramaster-kr106-single-note-lance-100k-10k-5k"],
+    )
+
+    assert cfg.task_name == "ultramaster-kr106-single-note-lance-100k-10k-5k"
+    assert cfg.synth.param_spec_name == "ultramaster_kr106_single_note"
+    assert cfg.datamodule.param_spec_name == "ultramaster_kr106_single_note"
+    assert cfg.output_format == "lance"
+    assert list(cfg.train_val_test_sizes) == [100000, 10000, 5000]
+    assert cfg.use_shard_queue is True
+    assert cfg.render.renderer_backend == "dawdreamer"
+    assert cfg.render.samples_per_shard == 2500
+    assert cfg.render.samples_per_render_batch == 8
+    assert cfg.render.parallel is True
+    assert cfg.render.retain_local_shards is False
+    assert cfg.render.max_retries == 20
+    assert cfg.render.plugin_reload_cadence == "render"
+    assert cfg.render.gui_toggle_cadence == "never"
+
+
 def test_surge_4_train_experiment_composes_with_surge_4_width() -> None:
     """``surge/ffn_4`` trains the FFN at the surge_4 encoded width on Lance data.
 
