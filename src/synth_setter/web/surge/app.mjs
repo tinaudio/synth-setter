@@ -4,6 +4,8 @@ import { spectrogramCanvas } from "./spectrogram.mjs";
 
 const element = (id) => document.getElementById(id);
 const number = (id) => Number(element(id).value);
+const query = new URLSearchParams(location.search);
+const modelId = query.get("model");
 const worker = new Worker(new URL("./worker.mjs", import.meta.url), {
   type: "module",
 });
@@ -43,7 +45,12 @@ function playback(title, channels, filename) {
   link.href = url;
   link.download = filename;
   link.textContent = `Download ${filename}`;
-  section.append(heading, player, link, spectrogramCanvas(channels, title, contract.sampleRate));
+  section.append(
+    heading,
+    player,
+    link,
+    spectrogramCanvas(channels, title, contract.sampleRate),
+  );
   element("results").append(section);
 }
 
@@ -76,17 +83,33 @@ function showSketch(controls) {
 
 function comparePrevious(record) {
   if (!previousRun) return null;
-  for (const key of ["mode", "contentCfg", "sketchCfg", "steps", "seed", "checkpointSha256", "statsSha256"]) {
+  for (const key of [
+    "mode",
+    "contentCfg",
+    "sketchCfg",
+    "steps",
+    "seed",
+    "checkpointSha256",
+    "statsSha256",
+  ]) {
     if (record[key] !== previousRun[key]) return null;
   }
   for (const key of ["noise", "mel", "sketch"]) {
-    if (record[key].length !== previousRun[key].length || !record[key].every((value, index) => value === previousRun[key][index])) return null;
+    if (
+      record[key].length !== previousRun[key].length ||
+      !record[key].every((value, index) => value === previousRun[key][index])
+    )
+      return null;
   }
   return {
     previousRunId: previousRun.runId,
     previousNeuralBackend: previousRun.neuralBackend,
     previousNeuralInferenceMs: previousRun.neuralInferenceMs,
-    parameterMaxAbsDifference: Math.max(...record.params.map((value, index) => Math.abs(value - previousRun.params[index]))),
+    parameterMaxAbsDifference: Math.max(
+      ...record.params.map((value, index) =>
+        Math.abs(value - previousRun.params[index]),
+      ),
+    ),
   };
 }
 
@@ -102,7 +125,18 @@ worker.onmessage = ({ data }) => {
     element("steps").value = String(contract.sampling.steps);
     element("contentCfg").value = String(contract.sampling.contentCfg);
     element("sketchCfg").value = String(contract.sampling.sketchCfg);
-    element("status").textContent = "Ready — choose content and sketch inputs";
+    if (!contract.sketch) {
+      element("mode").value = "mel_only";
+      for (const mode of ["both", "sketch_only"])
+        element("mode").querySelector(`option[value="${mode}"]`).disabled =
+          true;
+      element("sketchCfg").disabled = true;
+      element("sketchSource").disabled = true;
+      element("sketchUpload").hidden = true;
+      element("author").hidden = true;
+    }
+    element("status").textContent =
+      `Ready — ${contract.paramSpecName}, ${contract.encodedWidth} encoded outputs, ${contract.sketch ? "sketch" : "baseline"}`;
     element("run").disabled = false;
   } else if (data.type === "progress") {
     element("status").textContent = data.message;
@@ -127,28 +161,64 @@ worker.onmessage = ({ data }) => {
       const parameters = document.createElement("details");
       const summary = document.createElement("summary");
       summary.textContent = "Predicted synth parameters";
-      parameters.append(summary, table("Predicted parameters", Object.entries(record.patch.synth)));
+      parameters.append(
+        summary,
+        table("Predicted parameters", Object.entries(record.patch.synth)),
+      );
       element("results").append(parameters);
       table("Predicted note", Object.entries(record.patch.note));
-      table("Run", Object.entries({
-        ...runSettings,
-        neuralInferenceMs: record.neuralInferenceMs,
-        gpuAdapter: record.gpuAdapter,
-        frontendBackend: record.frontendBackend,
-        rendererBackend: record.rendererBackend,
-      }));
+      table(
+        "Run",
+        Object.entries({
+          ...runSettings,
+          neuralInferenceMs: record.neuralInferenceMs,
+          gpuAdapter: record.gpuAdapter,
+          frontendBackend: record.frontendBackend,
+          rendererBackend: record.rendererBackend,
+        }),
+      );
       if (record.comparisonToPrevious)
-        table("Neural comparison — previous matching inputs/settings (not audio parity)", Object.entries(record.comparisonToPrevious));
-      showSketch(record.sketch);
+        table(
+          "Neural comparison — previous matching inputs/settings (not audio parity)",
+          Object.entries(record.comparisonToPrevious),
+        );
+      if (contract.sketch) showSketch(record.sketch);
       playback("Target", target, "target.wav");
       if (runSettings.sketchSource === "extracted") {
-        playback("Sketch", [sketchAudio.slice(0, contract.frames), sketchAudio.slice(contract.frames)], "sketch.wav");
+        playback(
+          "Sketch",
+          [
+            sketchAudio.slice(0, contract.frames),
+            sketchAudio.slice(contract.frames),
+          ],
+          "sketch.wav",
+        );
       } else {
         const note = document.createElement("p");
-        note.textContent = "Authored contour: no source sketch recording or audio spectrogram.";
+        note.textContent = contract.sketch
+          ? "Authored contour: no source sketch recording or audio spectrogram."
+          : "Baseline: sketch conditioning is disabled.";
         element("results").append(note);
       }
-      playback("Prediction", record.audio, "pred.wav");
+      playback(
+        "Prediction",
+        record.audio,
+        modelId ? `${modelId}-pred.wav` : "pred.wav",
+      );
+      const patchLink = document.createElement("a");
+      const patchUrl = URL.createObjectURL(
+        new Blob([Uint8Array.from(record.fxp)], {
+          type: "application/octet-stream",
+        }),
+      );
+      urls.push(patchUrl);
+      patchLink.href = patchUrl;
+      patchLink.download = modelId ? `${modelId}.fxp` : "pred.fxp";
+      patchLink.textContent = "Download FXP patch";
+      const patchWarning = document.createElement("p");
+      patchWarning.textContent =
+        "FXP saved by Surge 1.4. Surge 1.3 reports a patch-version warning and may omit newer features.";
+      element("results").append(patchLink, patchWarning);
       window.surgeEval = record;
       previousRun = record;
       const link = document.createElement("a");
@@ -157,7 +227,7 @@ worker.onmessage = ({ data }) => {
       );
       urls.push(url);
       link.href = url;
-      link.download = `evaluation-${record.neuralBackend}.json`;
+      link.download = `evaluation-${modelId ? `${modelId}-` : ""}${record.neuralBackend}.json`;
       link.textContent = "Download evaluation record";
       element("results").append(link);
       element("status").textContent = "Evaluation complete";
@@ -168,7 +238,7 @@ worker.onmessage = ({ data }) => {
   }
 };
 worker.onerror = (event) => fail(event.message);
-worker.postMessage({ type: "load" });
+worker.postMessage({ type: "load", modelId });
 
 element("sketchSource").addEventListener("change", () => {
   const authored = element("sketchSource").value === "authored";
@@ -186,8 +256,9 @@ element("controls").addEventListener("submit", async (event) => {
   try {
     const contentFile = element("contentAudio").files[0];
     const sketchFile = element("sketchAudio").files[0];
-    const authored = element("sketchSource").value === "authored";
-    if (!contentFile || (!authored && !sketchFile))
+    const authored =
+      Boolean(contract.sketch) && element("sketchSource").value === "authored";
+    if (!contentFile || (contract.sketch && !authored && !sketchFile))
       throw new Error("choose content and sketch audio");
     element("status").textContent = "Decoding audio";
     content = await decodeStereo(
@@ -195,20 +266,23 @@ element("controls").addEventListener("submit", async (event) => {
       contract.sampleRate,
       contract.frames,
     );
-    sketchAudio = authored
-      ? new Float32Array(content.length)
-      : await decodeStereo(
-          await sketchFile.arrayBuffer(),
-          contract.sampleRate,
-          contract.frames,
-        );
+    sketchAudio =
+      authored || !contract.sketch
+        ? new Float32Array(content.length)
+        : await decodeStereo(
+            await sketchFile.arrayBuffer(),
+            contract.sampleRate,
+            contract.frames,
+          );
     runSettings = {
       mode: element("mode").value,
       contentCfg: number("contentCfg"),
-      sketchCfg: number("sketchCfg"),
+      sketchCfg: contract.sketch ? number("sketchCfg") : 0,
       steps: number("steps"),
       seed: number("seed"),
-      sketchSource: element("sketchSource").value,
+      sketchSource: contract.sketch
+        ? element("sketchSource").value
+        : "disabled",
       neuralBackend: element("webgpu").checked ? "webgpu" : "wasm",
     };
     worker.postMessage({

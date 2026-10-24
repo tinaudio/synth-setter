@@ -719,6 +719,22 @@ docs:
       - pattern: "src/synth_setter/web/fdn/fft.mjs"
         covers: "Shared FFT implementation"
 
+  - doc: docs/guides/surge-four-model-comparison.md
+    description: Concurrent checkpoint evaluation and inferred FXP downloads
+    sources:
+      - pattern: "src/synth_setter/configs/browser_surge_comparison.yaml"
+        covers: "Four checkpoint and normalization identities"
+      - pattern: "src/synth_setter/tools/export_browser_surge_comparison.py"
+        covers: "Verified multi-model catalog publication"
+      - pattern: "src/synth_setter/tools/export_browser_surge_bundle.py"
+        covers: "Model-specific graph and preset packaging"
+      - pattern: "src/synth_setter/models/flow_onnx.py"
+        covers: "Baseline and sketch guidance graphs"
+      - pattern: "src/synth_setter/web/surge/*"
+        covers: "Concurrent evaluation and artifact downloads"
+      - pattern: "src/synth_setter/surgewasm/*"
+        covers: "Native FXP state serialization"
+
   - doc: docs/guides/surgepy-browser-evaluation.md
     description: Browser-to-SurgePy evaluation playbook
     sources:

@@ -255,67 +255,42 @@ try {
     console.log(`POSTER_STYLE_PARITY_COMPLETE ${browserName}`);
   } else {
     await page.getByRole("button", { name: "Load interactive demo" }).click();
-    const frame = page.frameLocator("#demo-root iframe");
-    assert.equal(await page.locator("#demo-actions").isVisible(), true);
-    await assert.doesNotReject(() =>
-      frame
-        .getByRole("heading", { name: "Surge music-sketch evaluation" })
-        .waitFor({ timeout: 120000 }),
+    const demo = page.locator("#demo-root");
+    await page.locator("#demo-actions").waitFor({ state: "visible" });
+    assert.equal(await demo.locator("iframe").count(), 0);
+    await demo
+      .getByRole("button", { name: "Run selected models" })
+      .waitFor({ timeout: 120000 });
+    assert.equal(await demo.locator("#models input:checked").count(), 4);
+    assert.equal(
+      modelRequests.length,
+      0,
+      "mounting inline controls must not download model or engine assets",
     );
     await page.screenshot({
       path: path.join(output, `${browserName}-demo.png`),
       fullPage: true,
     });
-    const demoBox = await page.locator("#demo-root iframe").boundingBox();
+    const demoBox = await demo.boundingBox();
     assert.ok(demoBox.width <= (browserName === "webkit" ? 390 : 1440));
     assert.ok(demoBox.height >= 640);
 
     if (mode === "inference") {
-      await frame
-        .locator("#run")
-        .waitFor({ state: "visible", timeout: 120000 });
-      await frame.locator("#run").evaluate(
-        (button) =>
-          new Promise((resolve, reject) => {
-            if (!button.disabled) return resolve();
-            const deadline = setTimeout(
-              () => reject(new Error("demo did not finish loading")),
-              360000,
-            );
-            const timer = setInterval(() => {
-              if (!button.disabled || window.surgeEval?.state === "error") {
-                clearInterval(timer);
-                clearTimeout(deadline);
-                resolve();
-              }
-            }, 100);
-          }),
-      );
-      assert.notEqual(
-        await frame.locator("body").evaluate(() => window.surgeEval?.state),
-        "error",
-        await frame.locator("#status").textContent(),
-      );
-      await frame.locator("#contentAudio").setInputFiles(path.resolve(content));
-      await frame.locator("#sketchSource").selectOption("authored");
-      await frame.locator("#mode").selectOption("sketch_only");
-      await frame.locator("#steps").fill("8");
-      await frame.locator("#seed").fill("17");
-      await frame.locator("#pitch").fill("64");
-      await frame.locator("#start").fill("0.5");
-      await frame.locator("#end").fill("1.5");
-      await frame.locator("#loudness").fill("-0.25");
-      await frame.locator("#centroid").fill("0.5");
-      await frame.getByRole("button", { name: "Run evaluation" }).click();
-      await frame.locator("body").evaluate(
+      await demo.locator("#contentAudio").setInputFiles(path.resolve(content));
+      await demo.locator("#sketchAudio").setInputFiles(path.resolve(content));
+      await demo.locator("#steps").fill("8");
+      await demo.getByRole("button", { name: "Run selected models" }).click();
+      await demo.evaluate(
         () =>
           new Promise((resolve, reject) => {
             const deadline = setTimeout(
-              () => reject(new Error("inference timed out")),
+              () => reject(new Error("comparison inference timed out")),
               600000,
             );
             const timer = setInterval(() => {
-              if (["complete", "error"].includes(window.surgeEval?.state)) {
+              if (
+                ["complete", "error"].includes(window.surgeComparison?.state)
+              ) {
                 clearInterval(timer);
                 clearTimeout(deadline);
                 resolve();
@@ -324,41 +299,30 @@ try {
           }),
       );
       assert.equal(
-        await frame.locator("body").evaluate(() => window.surgeEval.state),
+        await page.evaluate(() => window.surgeComparison.state),
         "complete",
-        await frame.locator("#status").textContent(),
+        await demo.locator("#status").textContent(),
       );
-      const result = await frame.locator("body").evaluate(() => {
-        const samples = window.surgeEval.audio.flat();
-        let peak = 0;
-        for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
+      const result = await page.evaluate(() => {
+        const records = Object.values(window.surgeComparison.records);
         return {
-          coordinates: window.surgeEval.params.length,
-          synthParameters: Object.keys(window.surgeEval.patch.synth).length,
-          finite:
-            window.surgeEval.params.every(Number.isFinite) &&
-            samples.every(Number.isFinite),
-          peak,
+          count: records.length,
+          nonSilent: records.every((record) =>
+            record.audio.flat().some((sample) => Math.abs(sample) > 1e-5),
+          ),
         };
       });
-      assert.equal(result.coordinates, 92);
-      assert.equal(result.synthParameters, 89);
-      assert.equal(result.finite, true);
-      assert.ok(result.peak > 0);
+      assert.deepEqual(result, { count: 4, nonSilent: true });
 
-      const wav = page.waitForEvent("download");
-      await frame.getByRole("link", { name: "Download pred.wav" }).click();
-      await (await wav).saveAs(path.join(output, "poster-pred.wav"));
-      const record = page.waitForEvent("download");
-      await frame
-        .getByRole("link", { name: "Download evaluation record" })
+      const comparison = page.waitForEvent("download");
+      await demo
+        .getByRole("link", { name: "Download comparison records" })
         .click();
-      await (await record).saveAs(path.join(output, "poster-record.json"));
-      assert.ok((await stat(path.join(output, "poster-pred.wav"))).size > 44);
-      const savedRecord = JSON.parse(
-        await readFile(path.join(output, "poster-record.json"), "utf8"),
-      );
-      assert.equal(savedRecord.params.length, 92);
+      const recordPath = path.join(output, "poster-comparison.json");
+      await (await comparison).saveAs(recordPath);
+      assert.ok((await stat(recordPath)).size > 0);
+      const savedRecord = JSON.parse(await readFile(recordPath, "utf8"));
+      assert.equal(Object.keys(savedRecord.records).length, 4);
     }
 
     assert.deepEqual(failures, []);

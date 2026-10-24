@@ -142,7 +142,8 @@ const compileHost = async ({ source, stage, tools }) => {
         '-sEXPORT_NAME=createSurgeHost', '-sALLOW_MEMORY_GROWTH', '-sSTACK_SIZE=2097152',
         '-sINCOMING_MODULE_JS_API=locateFile,wasmBinary',
         '-sEXPORTED_RUNTIME_METHODS=cwrap,FS,HEAPF32,HEAPU8',
-        '-sEXPORTED_FUNCTIONS=_malloc,_free', '--no-entry', hostObject,
+        '-sEXPORTED_FUNCTIONS=_free,_malloc,_ss_destroy,_ss_free_fxp,_ss_fxp_data,_ss_fxp_length,_ss_load_fxp,_ss_save_fxp',
+        '--no-entry', hostObject,
         '-o', join(stage, 'surge-host.mjs'),
     ]);
 

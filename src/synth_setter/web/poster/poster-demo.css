@@ -1,17 +1,70 @@
 #demo-root.demo-host-loaded {
   display: block;
-  min-height: 960px;
-  padding: 0;
-  border: 0;
-  background: #151923;
+  min-height: 0;
+  padding: 1.5rem;
+  border: 1px solid #dee2e6;
+  background: #fff;
+  text-align: left;
 }
 
-.demo-frame {
+.poster-evaluator {
+  color: inherit;
+  font: inherit;
+}
+
+.poster-evaluator fieldset,
+.poster-evaluator .comparison-card {
+  min-width: 0;
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid #ced4da;
+  border-radius: 0.25rem;
+}
+
+.poster-evaluator legend {
+  width: auto;
+  padding: 0 0.4rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.poster-evaluator label {
+  display: block;
+  margin: 0.75rem 0;
+}
+
+.poster-evaluator input,
+.poster-evaluator select,
+.poster-evaluator button {
+  max-width: 100%;
+  margin-left: 0.35rem;
+  font: inherit;
+}
+
+.poster-evaluator audio,
+.poster-evaluator canvas {
   display: block;
   width: 100%;
-  min-height: 960px;
-  border: 0;
-  background: #151923;
+  margin: 0.75rem 0;
+}
+
+.poster-evaluator canvas {
+  height: 160px;
+  image-rendering: pixelated;
+}
+
+.poster-evaluator .comparison-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  gap: 1rem;
+}
+
+.poster-evaluator .comparison-card {
+  margin-bottom: 0;
+}
+
+.poster-evaluator .comparison-card h3 {
+  margin-top: 0;
 }
 
 .demo-actions[hidden] {
@@ -19,8 +72,7 @@
 }
 
 @media (max-width: 760px) {
-  #demo-root.demo-host-loaded,
-  .demo-frame {
-    min-height: 1100px;
+  #demo-root.demo-host-loaded {
+    padding: 1rem;
   }
 }

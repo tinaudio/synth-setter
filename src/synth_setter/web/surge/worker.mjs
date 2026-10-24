@@ -12,32 +12,66 @@ const engineCommit = "dd68c74346c828ef25bd6504867936648161b7a7";
 let model;
 
 async function bytes(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
-  return new Uint8Array(await response.arrayBuffer());
+  const name = url.pathname.split("/").at(-1);
+  const controller = new AbortController();
+  const idleTimeoutMs = 60000;
+  const progressIntervalMs = 200;
+  const bytesPerMiB = 1048576;
+  let timer;
+  const renew = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(new Error(`Download stalled for ${idleTimeoutMs / 1000} seconds: ${name}. Retry on a stable connection.`)), idleTimeoutMs);
+  };
+  postMessage({ type: "progress", message: `Downloading ${name}…` });
+  renew();
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+    const total = Number(response.headers.get("content-length"));
+    let received = 0, updated = -Infinity;
+    const stream = response.body.pipeThrough(new TransformStream({
+      transform(chunk, output) {
+        received += chunk.byteLength;
+        renew();
+        if (performance.now() - updated >= progressIntervalMs || received === total) {
+          updated = performance.now();
+          postMessage({ type: "progress", message: `Downloading ${name}: ${(received / bytesPerMiB).toFixed(1)} / ${total > 0 ? (total / bytesPerMiB).toFixed(1) : "unknown"} MiB` });
+        }
+        output.enqueue(chunk);
+      },
+    }));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch (error) {
+    if (controller.signal.aborted) throw controller.signal.reason;
+    throw new Error(`Unable to download ${name}: ${error.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-async function loadModel() {
-  const root = new URL("../model/", import.meta.url);
+async function loadModel(modelId = null) {
+  if (modelId !== null && (typeof modelId !== "string" || !/^[a-z0-9-]+$/.test(modelId)))
+    throw new Error("invalid model identifier");
+  const root = new URL(modelId === null ? "../model/" : `../models/${modelId}/`, import.meta.url);
   const manifest = JSON.parse(
     new TextDecoder().decode(await bytes(new URL("manifest.json", root))),
   );
   if (
     manifest.schemaVersion !== 1 ||
-    manifest.paramSpecName !== "surge_simple" ||
-    manifest.encodedWidth !== 92 ||
+    !["surge_simple", "surge_xt"].includes(manifest.paramSpecName) ||
+    manifest.encodedWidth !== (manifest.paramSpecName === "surge_simple" ? 92 : 300) ||
     manifest.channels !== 2 ||
     manifest.frames !== 176400 ||
     manifest.sampleRate !== 44100 ||
-    manifest.sketch.numControls !== 386 ||
-    manifest.sketch.numFrames !== 32
+    !(manifest.sketch === null || (manifest.sketch?.profile === "music" &&
+      manifest.sketch.numControls === 386 && manifest.sketch.numFrames === 32))
   ) {
     throw new Error("unsupported Surge music model contract");
   }
   const loaded = {};
   for (const name of [
     "frontend.onnx",
-    "sketch.onnx",
+    ...(manifest.sketch ? ["sketch.onnx"] : []),
     "conditioning.onnx",
     "velocity.onnx",
     "preset.fxp",
@@ -54,7 +88,8 @@ async function loadModel() {
   }
   const graphs = {};
   try {
-    for (const name of ["frontend", "sketch", "conditioning", "velocity"]) {
+    for (const name of ["frontend", "conditioning", "velocity", ...(manifest.sketch ? ["sketch"] : [])]) {
+      postMessage({ type: "progress", message: `Initializing ${name} neural graph…` });
       graphs[name] = await ort.InferenceSession.create(loaded[`${name}.onnx`], {
         executionProviders: ["wasm"],
       });
@@ -112,10 +147,13 @@ async function evaluate(input) {
     !Number.isInteger(input.steps) ||
     input.steps < 1 ||
     input.steps > 20000 ||
-    input.noise.length !== 92 ||
+    input.noise.length !== manifest.encodedWidth ||
     !input.noise.every(Number.isFinite)
   )
     throw new Error("invalid sampling contract");
+  if (!manifest.sketch && !["mel_only", "unconditional"].includes(input.mode))
+    throw new Error("baseline models support content-only or unconditional sampling");
+  const startedAt = new Date().toISOString();
   const neural = await neuralGraphs(input.neuralBackend);
   const melOut = await graphs.frontend.run({
     [graphs.frontend.inputNames[0]]: tensor(input.content, [
@@ -125,10 +163,10 @@ async function evaluate(input) {
     ]),
   });
   const mel = melOut[graphs.frontend.outputNames[0]];
-  let controls;
-  if (input.authored) {
+  let controls = new Float32Array();
+  if (manifest.sketch && input.authored) {
     controls = authorMusicSketch(input.authored);
-  } else {
+  } else if (manifest.sketch) {
     const sketchOut = await graphs.sketch.run({
       [graphs.sketch.inputNames[0]]: tensor(input.sketchAudio, [
         1,
@@ -139,14 +177,11 @@ async function evaluate(input) {
     controls = Float32Array.from(sketchOut[graphs.sketch.outputNames[0]].data);
   }
   const started = performance.now();
-  const encoded = await neural.conditioning.run({
-    mel,
-    sketch_ctrl: tensor(controls, [1, 386, 32]),
-  });
-  const weights = tensor(
-    branchWeights(input.mode, input.contentCfg, input.sketchCfg),
-    [4],
-  );
+  const encoded = await neural.conditioning.run(manifest.sketch ? {
+    mel, sketch_ctrl: tensor(controls, [1, 386, 32]),
+  } : { mel });
+  const branches = branchWeights(input.mode, input.contentCfg, input.sketchCfg);
+  const weights = tensor(manifest.sketch ? branches : [branches[0], branches[2]], [manifest.sketch ? 4 : 2]);
   const params = await integrateRK4({
     noise: input.noise,
     steps: input.steps,
@@ -155,7 +190,7 @@ async function evaluate(input) {
     field: async (state, time) => {
       const output = await neural.velocity.run({
         ...encoded,
-        x: tensor(state, [1, 92]),
+        x: tensor(state, [1, manifest.encodedWidth]),
         t: tensor(Float32Array.of(time), [1, 1]),
         branch_weights: weights,
       });
@@ -194,6 +229,9 @@ async function evaluate(input) {
   for (let index = 0; index < predictedMel.length; index++)
     melError += Math.abs(predictedMel[index] - mel.data[index]);
   return {
+    startedAt,
+    paramSpecName: manifest.paramSpecName,
+    encodedWidth: manifest.encodedWidth,
     neuralBackend: input.neuralBackend,
     frontendBackend: "wasm",
     rendererBackend: "wasm",
@@ -205,6 +243,7 @@ async function evaluate(input) {
     sketch: Array.from(controls),
     noise: Array.from(input.noise),
     patch,
+    fxp: Array.from(audio.fxp),
     audio: [Array.from(audio.left), Array.from(audio.right)],
     normalizedMelMae: melError / predictedMel.length,
     rendererVersion: audio.version,
@@ -221,7 +260,7 @@ async function evaluate(input) {
 self.onmessage = async ({ data }) => {
   try {
     if (data.type === "load") {
-      model = await loadModel();
+      model = await loadModel(data.modelId);
       postMessage({ type: "ready", manifest: model.manifest });
     } else if (data.type === "run" && model) {
       postMessage({ type: "complete", record: await evaluate(data) });

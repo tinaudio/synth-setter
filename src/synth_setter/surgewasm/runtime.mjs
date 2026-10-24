@@ -88,6 +88,9 @@ const verifyArtifact = async (root, manifest, name) => {
 
 const bindHost = (module) => ({
     destroy: module.cwrap('ss_destroy', null, []),
+    freeFxp: module.cwrap('ss_free_fxp', null, []),
+    fxpData: module.cwrap('ss_fxp_data', 'number', []),
+    fxpLength: module.cwrap('ss_fxp_length', 'number', []),
     load: module.cwrap('sh_load', 'number', ['string']),
     loadFxp: module.cwrap('ss_load_fxp', 'number', ['number', 'number']),
     note: module.cwrap('sh_note', null, ['number', 'number', 'number']),
@@ -97,6 +100,7 @@ const bindHost = (module) => ({
     pluginName: module.cwrap('sh_plugin_name', 'string', []),
     poll: module.cwrap('sh_poll', 'number', []),
     render: module.cwrap('sh_render', 'number', ['number', 'number', 'number']),
+    saveFxp: module.cwrap('ss_save_fxp', 'number', []),
     setParam: module.cwrap('sh_set_param', null, ['number', 'number']),
     start: module.cwrap('sh_start', 'number', ['number', 'number']),
 });
@@ -119,6 +123,18 @@ const verifyParameters = (host, parameters, parameterCount) => {
 
 const floorToQuantum = (frame) => Math.floor(frame / RENDER_QUANTUM) * RENDER_QUANTUM;
 const ceilToQuantum = (frame) => Math.ceil(frame / RENDER_QUANTUM) * RENDER_QUANTUM;
+
+const copyFxp = (module, host) => {
+    if (!host.saveFxp()) throw new Error('Surge state save failed');
+    try {
+        const pointer = host.fxpData() >>> 0;
+        const length = host.fxpLength() >>> 0;
+        if (!pointer || length === 0) throw new Error('Surge state save returned no data');
+        return module.HEAPU8.slice(pointer, pointer + length);
+    } finally {
+        host.freeFxp();
+    }
+};
 
 const renderAudio = ({ module, host, pointers }, request) => {
     const left = new Float32Array(request.frames);
@@ -190,9 +206,11 @@ export const renderSurge = async (request) => {
         pointers.left = module._malloc(RENDER_QUANTUM * FLOAT_BYTES);
         pointers.right = module._malloc(RENDER_QUANTUM * FLOAT_BYTES);
         const audio = renderAudio({ module, host, pointers }, request);
+        const fxp = copyFxp(module, host);
         return {
             ...audio,
             engineCommit: manifest.source.commit,
+            fxp,
             parameterCount,
             version: host.pluginName(),
         };

@@ -56,8 +56,8 @@
             <hr>
             <p>
                 Sound matching asks how synthesizer controls can reproduce the audible shape of a reference.
-                The current browser demo uses a conditional flow-matching model: reference audio plus either extracted or authored music-sketch controls generate 92 encoded coordinates, which decode to 89 Surge XT synthesizer parameters.
-                Surge XT then renders the generated patch locally in the browser.
+                The browser demo compares four conditional flow-matching models: simple models generate 92 encoded coordinates for 89 Surge XT parameters, while XT models generate 300 coordinates for 162 parameters.
+                Sketch-conditioned and content-only baselines render their generated patches locally in the browser.
             </p>
             <br>
             <div class="placeholder placeholder-fig w-100">
@@ -112,8 +112,8 @@
         <p>
             The evaluator runs ONNX inference and Surge XT rendering in this page; audio stays in your browser.
             Upload reference audio, extract or author music-sketch controls, generate a patch, and listen to the real browser render.
-            Loading is opt-in because the model and engine require about 200 MB of downloads.
-            A short, low-step run checks integration rather than sound-matching quality.
+            Loading is opt-in because running all four models requires about 800 MB of downloads.
+            A short, low-step comparison checks integration rather than sound-matching quality.
         </p>
         <div class="demo-panel">
             <div class="placeholder placeholder-fig" id="demo-root">
@@ -125,11 +125,11 @@
         </div>
         <div class="demo-actions text-right mt-3" id="demo-actions" hidden>
             <button class="btn btn-outline-dark" id="fullscreen-demo" type="button">View demo fullscreen</button>
-            <a class="btn btn-outline-dark" href="/surge/" target="_blank" rel="noopener">Open standalone evaluator</a>
+            <a class="btn btn-outline-dark" href="/surge/?compare=1" target="_blank" rel="noopener">Open standalone evaluator</a>
         </div>
         <p class="detail mt-3">
-            Inference runs on the CPU via WebAssembly. The model generates synth parameters; Surge XT renders the audio.
-            The current model does not preserve or stay near the parameters of an existing preset.
+            Neural inference runs on the CPU via WebAssembly by default, with optional WebGPU support. Each model generates synth parameters; Surge XT renders the audio and exports its resulting engine state as FXP.
+            The models do not preserve or stay near the parameters of an existing preset.
         </p>
     </div>
 
@@ -199,8 +199,8 @@
             <li>The browser engine is an experimental Surge 1.4 port; training used SurgePy 1.3.4.</li>
             <li>The demo is specific to Surge XT and four-second, 44.1 kHz stereo inputs.</li>
             <li>Low-step smoke runs verify integration, not model quality or perceptual similarity.</li>
-            <li>The current model does not promise that a generated patch stays near an existing preset.</li>
-            <li>FXP upload and FXP export are not available in the current demo; current downloads are rendered WAV audio and a JSON evaluation record. FXP upload and export are planned to be added shortly.</li>
+            <li>The models do not promise that a generated patch stays near an existing preset.</li>
+            <li>FXP downloads contain the actual Surge 1.4 engine state after generated parameters are applied. SurgePy 1.3 loaded, saved, and rendered tested patches with a newer-version warning, but full 1.3 compatibility is not claimed. FXP upload is not implemented; MIDI pitch, velocity, and note timing remain in the evaluation record and rendered WAV rather than the FXP.</li>
         </ul>
     </div>
 
