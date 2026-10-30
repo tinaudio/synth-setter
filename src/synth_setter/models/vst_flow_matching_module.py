@@ -722,6 +722,9 @@ class VSTFlowMatchingModule(LightningModule):
                 d_model=vector_field.d_model,
                 num_control_tokens=self._sketch_controls.num_control_tokens,
                 profile=self._sketch_controls.profile,
+                median_filter_max_kernel_size=(
+                    self._sketch_controls.median_filter_max_kernel_size
+                ),
             )
             if self._sketch_controls is not None
             else None

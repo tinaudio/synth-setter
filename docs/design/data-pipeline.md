@@ -1173,8 +1173,14 @@ centroid use adaptive average pooling; pitch uses adaptive average pooling and
 remains unthresholded. The `vec` child stores the pooled frame mean for
 contour-similarity search. The struct is an atomic write unit — refreshing
 one child means rewriting the whole column (requires Lance data storage 2.2).
-`sketch=on` consumes this canonical layout. Its `IndexSpec`
-fixes `num_sub_vectors=2` — the only practical PQ split for the pooled
+`sketch=on` consumes this canonical layout. During training, it uniformly samples
+one median-filter width per row from 1–5 frames and applies that width to all three
+control groups after pooling. This preserves Sketch2Sound's 1–25 frame (25–625 ms)
+policy on the four-second, 32-frame grid (125 ms/frame), and matches FlashFoley's
+released shared-width, zero-padded filter, including lower-median/trailing-truncation
+behavior for even widths. Evaluation and browser export do not filter controls; a
+maximum width of 1 disables augmentation and is the compatibility default for older
+checkpoint configs. Its `IndexSpec` fixes `num_sub_vectors=2` — the only practical PQ split for the pooled
 vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
 386\) — since the CLAP-oriented default of 16 cannot divide it; a run config
 leaves `num_sub_vectors` null to let each spec's default apply.

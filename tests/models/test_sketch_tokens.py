@@ -45,17 +45,23 @@ def _controls(batch: int = _BATCH, seed: int = 0) -> torch.Tensor:
     return controls
 
 
-def _tokens_module(seed: int = 0, profile: SketchControlProfile = "music") -> SketchControlTokens:
+def _tokens_module(
+    seed: int = 0,
+    profile: SketchControlProfile = "music",
+    median_filter_max_kernel_size: int = 1,
+) -> SketchControlTokens:
     """Build a small token module with non-zero projection weights.
 
     :param seed: RNG seed for the randomized projection weights.
     :param profile: Channel layout selected for tokenization.
+    :param median_filter_max_kernel_size: Largest sampled training-time median window.
     :returns: Module whose three projections were re-randomized after zero-init.
     """
     module = SketchControlTokens(
         d_model=_D_MODEL,
         num_control_tokens=_NUM_CONTROL_TOKENS,
         profile=profile,
+        median_filter_max_kernel_size=median_filter_max_kernel_size,
     )
     generator = torch.Generator().manual_seed(seed)
     with torch.no_grad():
@@ -103,6 +109,7 @@ class TestSketchControlSpec:
         assert spec.profile == "music"
         assert spec.num_control_tokens == 32
         assert spec.pitch_zero_threshold == 0.1
+        assert spec.median_filter_max_kernel_size == 1
 
     def test_pyfdn_reverb_profile_has_temporal_layout(self) -> None:
         """The reverb profile pins its channel and temporal-group layout."""
@@ -134,6 +141,24 @@ class TestSketchControlSpec:
         """Online extraction requires the waveform sample rate explicitly."""
         with pytest.raises(ValueError, match="sample_rate"):
             SketchControlSpec(profile="tiv", source="online", num_frames=32)
+
+    def test_nonmusic_profile_rejects_median_filter_augmentation(self) -> None:
+        """Median filtering is confined to the paper's music-control profile."""
+        with pytest.raises(ValueError, match="median filtering is supported only"):
+            SketchControlSpec(
+                num_frames=32,
+                profile="pyfdn_reverb",
+                median_filter_max_kernel_size=3,
+            )
+
+    def test_median_filter_kernel_cannot_exceed_token_grid(self) -> None:
+        """The configured training window must fit the filtered token grid."""
+        with pytest.raises(ValueError, match="cannot exceed num_control_tokens"):
+            SketchControlSpec(
+                num_frames=4,
+                num_control_tokens=4,
+                median_filter_max_kernel_size=5,
+            )
 
     def test_pyfdn_reverb_profile_rejects_noncanonical_frames(self) -> None:
         """Reverb controls retain one token for each canonical stored frame."""
@@ -176,6 +201,53 @@ class TestSketchControlSpec:
 
 class TestSketchControlTokens:
     """Behavior tests for the zero-init control tokenizer."""
+
+    def test_forward_training_applies_configured_random_median_filter(self) -> None:
+        """Training smooths music controls before their group projections."""
+        module = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=4,
+            median_filter_max_kernel_size=2,
+        )
+        with torch.no_grad():
+            cast(torch.nn.Linear, module.projections["loudness"]).weight.fill_(1.0)
+        controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 4)
+        controls[0, SKETCH_LOUDNESS_ROW, 1] = 1.0
+        keep = torch.tensor(((True, False, False),))
+
+        module.eval()
+        unfiltered = module(controls, keep) - module.unconditional(1)
+        module.train()
+        torch.manual_seed(1)
+        filtered = module(controls, keep) - module.unconditional(1)
+
+        torch.testing.assert_close(unfiltered[0, :, 0], controls[0, SKETCH_LOUDNESS_ROW])
+        torch.testing.assert_close(filtered, torch.zeros_like(filtered), rtol=0, atol=0)
+
+    def test_forward_training_same_seed_repeats_augmentation(self) -> None:
+        """Resetting the Torch seed reproduces training-time control tokens."""
+        module = _tokens_module(median_filter_max_kernel_size=4)
+        controls = _controls()
+
+        torch.manual_seed(23)
+        first = module(controls, _keep_all())
+        torch.manual_seed(23)
+        second = module(controls, _keep_all())
+
+        torch.testing.assert_close(first, second, rtol=0, atol=0)
+
+    def test_forward_eval_ignores_median_filter_policy(self) -> None:
+        """Evaluation stays deterministic and consumes controls without smoothing."""
+        module = _tokens_module(median_filter_max_kernel_size=4)
+        module.eval()
+        controls = _controls()
+
+        torch.manual_seed(3)
+        first = module(controls, _keep_all())
+        torch.manual_seed(29)
+        second = module(controls, _keep_all())
+
+        torch.testing.assert_close(first, second, rtol=0, atol=0)
 
     def test_forward_control_batch_returns_token_sequence(self) -> None:
         """The tokenizer emits the configured token sequence shape."""
