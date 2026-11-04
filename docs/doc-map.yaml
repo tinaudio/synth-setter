@@ -17,6 +17,8 @@ docs:
     sources:
       - pattern: "pyproject.toml"
         covers: "Pinned embedding-model runtime dependencies."
+      - pattern: "src/synth_setter/pipeline/data/meanaudio_generation.py"
+        covers: "Pinned S-Full source, text-encoder, weight, and pre-decode latent contracts."
       - pattern: "uv.lock"
         covers: "Committed universal lockfile (macOS + Linux + Windows resolution); regenerate with `uv lock` after pyproject edits and review the diff in PRs"
       - pattern: ".github/workflows/uv-lock-check.yml"
