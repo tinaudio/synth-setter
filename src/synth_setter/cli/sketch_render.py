@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import functools
 import hashlib
 import json
 import math
@@ -476,8 +477,11 @@ def _write_metrics(path: Path, row: dict[str, str | int | float]) -> None:
         writer.writerow(row)
 
 
+@functools.cache
 def _producer_revision() -> str:
     """Record the source checkout revision without borrowing the operator's repository.
+
+    Cached per process: the dirty check runs ``git status`` over the whole source checkout.
 
     :returns: Commit SHA with an optional ``-dirty`` suffix, or ``git-unavailable``.
     """
@@ -612,6 +616,10 @@ def main(
     settings = _load_settings()
     if sketch_groups and no_sketch_groups:
         raise click.ClickException("--sketch-group and --no-sketch-groups are mutually exclusive")
+    # Unknown names need the checkpoint's layout; duplicates are an argv error and fail here.
+    duplicate_groups = sorted({name for name in sketch_groups if sketch_groups.count(name) > 1})
+    if duplicate_groups:
+        raise click.ClickException(f"duplicate --sketch-group: {', '.join(duplicate_groups)}")
     requested_sketch_groups = () if no_sketch_groups else (sketch_groups or None)
     if duration is not None and not math.isfinite(duration):
         raise click.ClickException("--duration must be finite")
@@ -745,9 +753,6 @@ def main(
                 port=browser_port,
                 enabled_sketch_groups=resolved_sketch_groups,
             )
-            (arm_dir / "browser/provenance.json").write_text(
-                json.dumps(provenance, indent=2), encoding="utf-8"
-            )
         else:
             arm_dir.mkdir(parents=True)
             prediction = (
@@ -762,9 +767,9 @@ def main(
                 .detach()
                 .cpu()
             )
-            (arm_dir / "provenance.json").write_text(
-                json.dumps(provenance, indent=2), encoding="utf-8"
-            )
+        (arm_dir / "provenance.json").write_text(
+            json.dumps(provenance, indent=2), encoding="utf-8"
+        )
         write_wav(sketch_audio, str(arm_dir / "sketch.wav"), render.sample_rate, render.channels)
         write_wav(content_audio, str(arm_dir / "target.wav"), render.sample_rate, render.channels)
         _render_wav(prediction, render, arm_dir / "pred.wav")

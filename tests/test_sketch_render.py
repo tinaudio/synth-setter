@@ -59,6 +59,7 @@ def producer_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[
     )
     revision = str(git(["rev-parse", "HEAD"], _cwd=root)).strip()
     monkeypatch.setattr(sketch_render, "__file__", str(source))
+    sketch_render._producer_revision.cache_clear()
     return source, revision
 
 
@@ -106,6 +107,21 @@ def test_producer_revision_untracked_source_is_marked_dirty(
     assert sketch_render._producer_revision() == f"{revision}-dirty"
 
 
+def test_producer_revision_is_computed_once_per_process(
+    producer_checkout: tuple[Path, str],
+) -> None:
+    """Repeated provenance reads reuse the first result instead of re-running git.
+
+    :param producer_checkout: Real checkout whose tracked source changes after the first read.
+    """
+    source, revision = producer_checkout
+    first = sketch_render._producer_revision()
+    source.write_text("value = 2\n")
+
+    assert first == revision
+    assert sketch_render._producer_revision() == revision
+
+
 def test_producer_revision_without_source_checkout_reports_unavailable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -118,6 +134,7 @@ def test_producer_revision_without_source_checkout_reports_unavailable(
     monkeypatch.setattr(
         sketch_render, "__file__", str(tmp_path / "src/synth_setter/cli/module.py")
     )
+    sketch_render._producer_revision.cache_clear()
     assert sketch_render._producer_revision() == "git-unavailable"
 
 
@@ -863,6 +880,35 @@ def test_cli_sketch_group_and_no_sketch_groups_are_mutually_exclusive(tmp_path: 
 
     assert result.exit_code != 0
     assert "mutually exclusive" in result.output
+
+
+def test_cli_duplicate_sketch_group_fails_before_checkpoint_resolution(tmp_path: Path) -> None:
+    """A repeated group name is rejected from argv alone, before any checkpoint download.
+
+    :param tmp_path: Existing positional input paths.
+    """
+    sketch = tmp_path / "sketch.wav"
+    content = tmp_path / "content.wav"
+    sketch.write_bytes(b"input")
+    content.write_bytes(b"input")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            str(sketch),
+            str(content),
+            "--checkpoint",
+            "r2://intermediate-data/never-downloaded.ckpt",
+            "--sketch-group",
+            "pitch",
+            "--sketch-group",
+            "pitch",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "duplicate" in result.output
+    assert "pitch" in result.output
 
 
 def test_console_script_is_installed_and_callable() -> None:

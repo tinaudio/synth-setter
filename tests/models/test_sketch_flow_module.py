@@ -561,21 +561,39 @@ def test_sample_batch_invalid_enabled_sketch_groups_raises(
 
 
 def test_sample_batch_pyfdn_group_names_are_resolved_from_dynamic_layout() -> None:
-    """PyFDN inference accepts its profile groups rather than music constants."""
+    """PyFDN inference masks its own profile groups rather than music constants."""
     model = _module(SketchControlSpec(num_frames=32, profile="pyfdn_reverb"))
+    assert model.sketch_tokens is not None
+    with torch.no_grad():
+        for projection in model.sketch_tokens.projections.values():
+            assert isinstance(projection, torch.nn.Linear)
+            projection.weight.fill_(1.0)
     batch = _batch(with_sketch=False)
     batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
-
-    prediction = model.sample_batch(
+    noise = torch.zeros_like(batch["noise"])
+    masked = model.sample_batch(
         batch,
-        noise=batch["noise"],
-        content_cfg_strength=2.0,
+        noise=noise,
+        content_cfg_strength=0.0,
         sketch_cfg_strength=1.0,
         sample_steps=1,
         enabled_sketch_groups=("echo_density",),
     )
+    zeroed_batch = dict(batch)
+    zeroed_controls = batch["sketch_ctrl"].clone()
+    # pyFDN layout: edc occupies channels 0-7, echo_density 8, spectral_flatness 9.
+    zeroed_controls[:, :8] = 0
+    zeroed_controls[:, 9] = 0
+    zeroed_batch["sketch_ctrl"] = zeroed_controls
+    explicit = model.sample_batch(
+        zeroed_batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+    )
 
-    assert torch.isfinite(prediction).all()
+    torch.testing.assert_close(masked, explicit)
 
 
 def test_sample_batch_nonempty_groups_without_sketch_model_raises() -> None:

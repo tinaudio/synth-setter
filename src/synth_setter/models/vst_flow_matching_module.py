@@ -991,48 +991,47 @@ class VSTFlowMatchingModule(LightningModule):
         valid = self.sketch_tokens.layout.group_names
         if enabled_sketch_groups is None:
             return valid
-        duplicate = next((name for name in requested if requested.count(name) > 1), None)
-        if duplicate is not None:
-            raise ValueError(f"duplicate enabled sketch group {duplicate!r}")
-        unknown = next((name for name in requested if name not in valid), None)
-        if unknown is not None:
-            raise ValueError(
-                f"unknown enabled sketch group {unknown!r}; valid groups: {', '.join(valid)}"
-            )
-        requested_set = set(requested)
-        return tuple(name for name in valid if name in requested_set)
+        seen: set[str] = set()
+        for name in requested:
+            if name in seen:
+                raise ValueError(f"duplicate enabled sketch group {name!r}")
+            if name not in valid:
+                raise ValueError(
+                    f"unknown enabled sketch group {name!r}; valid groups: {', '.join(valid)}"
+                )
+            seen.add(name)
+        return tuple(name for name in valid if name in seen)
 
     @jaxtyped(typechecker=beartype)
     def _control_token_branches_from_batch(
         self,
         batch: _SampleBatch,
         *,
-        enabled_sketch_groups: Sequence[str] | None = None,
+        enabled_sketch_groups: tuple[str, ...] | None = None,
     ) -> ControlTokenBranches | None:
         """Build masked full-sketch and PE-only control branches for inference.
 
         :param batch: Model batch carrying sketch controls when configured.
-        :param enabled_sketch_groups: Group names to retain, all groups when omitted, or none for
-            an empty sequence.
+        :param enabled_sketch_groups: Names already passed through
+            :meth:`resolve_enabled_sketch_groups`; ``None`` keeps every group.
         :returns: Both control-token branches, or ``None`` without sketch support.
-        :raises ValueError: The controls or group selector violate the checkpoint contract.
+        :raises ValueError: The active sketch-control field is ``None``.
         """
-        enabled = self.resolve_enabled_sketch_groups(enabled_sketch_groups)
         if self.sketch_tokens is None:
             return None
         controls = batch["sketch_ctrl"]
         if controls is None:
             raise ValueError("batch sketch_ctrl field must contain a tensor")
-        unconditional = self.sketch_tokens.unconditional(controls.shape[0])
+        group_names = self.sketch_tokens.layout.group_names
+        enabled = group_names if enabled_sketch_groups is None else enabled_sketch_groups
         keep = torch.tensor(
-            [name in enabled for name in self.sketch_tokens.layout.group_names],
+            [name in enabled for name in group_names],
             dtype=torch.bool,
             device=controls.device,
         ).expand(controls.shape[0], -1)
-        conditional = self.sketch_tokens(controls, keep)
         return ControlTokenBranches(
-            conditional=conditional if enabled else unconditional,
-            unconditional=unconditional,
+            conditional=self.sketch_tokens(controls, keep),
+            unconditional=self.sketch_tokens.unconditional(controls.shape[0]),
         )
 
     @jaxtyped(typechecker=beartype)
@@ -1336,6 +1335,7 @@ class VSTFlowMatchingModule(LightningModule):
         :returns: Sampled model-space parameter rows.
         :raises ValueError: Noise, guidance, steps, or sketch groups violate the checkpoint contract.
         """
+        enabled = self.resolve_enabled_sketch_groups(enabled_sketch_groups)
         conditioning = self._get_conditioning_from_batch(batch)
         expected_shape = (conditioning.shape[0], self.hparams.num_params)
         if tuple(noise.shape) != expected_shape:
@@ -1363,7 +1363,7 @@ class VSTFlowMatchingModule(LightningModule):
             content_cfg_strength,
             sketch_cfg_strength=sketch_cfg_strength,
             control_tokens=self._control_token_branches_from_batch(
-                batch, enabled_sketch_groups=enabled_sketch_groups
+                batch, enabled_sketch_groups=enabled
             ),
         )
 
