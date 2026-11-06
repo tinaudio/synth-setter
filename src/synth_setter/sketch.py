@@ -52,7 +52,7 @@ def random_median_filter_sketch_controls(
 
     The sampled width is shared by all channels, preserving temporal alignment.
 
-    :param controls: Music sketch controls on the model's temporal grid.
+    :param controls: Control channels on the model's temporal grid.
     :param max_kernel_size: Inclusive upper bound sampled uniformly from ``[1, max]``.
     :returns: Randomly filtered controls with input shape, dtype, and device preserved.
     :raises ValueError: The maximum kernel size is not positive.

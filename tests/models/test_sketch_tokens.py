@@ -913,3 +913,33 @@ def test_music_tiv_spec_stored_source_rejected() -> None:
     """Combined controls cannot be read from a stored music-only column."""
     with pytest.raises(ValueError, match="music_tiv sketch requires source='online'"):
         SketchControlSpec(profile="music_tiv", num_frames=96)
+
+
+@pytest.mark.parametrize("group_index", [0, 1, 2, 3])
+def test_music_tiv_tokens_training_filters_each_group(group_index: int) -> None:
+    """The shared training median window removes isolated impulses in every group.
+
+    :param group_index: The only retained group, including the appended TIV group.
+    """
+    module = SketchControlTokens(
+        d_model=1,
+        num_control_tokens=4,
+        profile="music_tiv",
+        median_filter_max_kernel_size=3,
+    )
+    with torch.no_grad():
+        for projection in module.projections.values():
+            cast(torch.nn.Linear, projection).weight.fill_(1.0)
+    controls = torch.zeros(1, 398, 4)
+    controls[:, :, 1] = 1.0
+    keep = torch.zeros(1, 4, dtype=torch.bool)
+    keep[:, group_index] = True
+    module.eval()
+    unfiltered = module(controls, keep) - module.unconditional(1)
+    module.train()
+
+    with mock.patch.object(torch, "randint", return_value=torch.tensor([3])):
+        filtered = module(controls, keep) - module.unconditional(1)
+
+    assert torch.count_nonzero(unfiltered) > 0
+    torch.testing.assert_close(filtered, torch.zeros_like(filtered), rtol=0, atol=0)

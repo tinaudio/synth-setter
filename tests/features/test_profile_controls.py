@@ -11,7 +11,8 @@ from synth_setter.features.profile_controls import (
     extract_profile_controls,
 )
 from synth_setter.features.pyfdn_controls import extract_reverb_sketch
-from synth_setter.sketch import prepare_music_sketch_controls
+from synth_setter.features.tiv import extract_tiv_batch
+from synth_setter.sketch import prepare_music_sketch_controls, resample_sketch_controls
 
 _SAMPLE_RATE = 44_100
 
@@ -171,45 +172,101 @@ def test_music_batch_extraction_matches_single_clip_rows_without_autograd() -> N
     torch.testing.assert_close(one_row, single, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("mode", ["average", "linear"])
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
-def test_music_tiv_extraction_preserves_music_and_signed_tiv(
-    mode: SketchTemporalResampling, device: str
-) -> None:
-    """The combined profile appends unthresholded TIV on the music frame grid.
+@pytest.fixture
+def music_tiv_spec() -> SketchControlSpec:
+    """Return the combined contract with a strict pitch threshold.
 
-    :param mode: Temporal reduction shared by the four groups.
-    :param device: Waveform and extraction device.
+    :returns: Online 96-frame music and TIV contract with a pitch threshold of one.
     """
-    from synth_setter.features.tiv import extract_tiv_batch
-    from synth_setter.sketch import resample_sketch_controls
-
-    if device == "cuda" and not torch.cuda.is_available():
-        pytest.skip("requires CUDA")
-    time = torch.arange(_SAMPLE_RATE, dtype=torch.float32, device=device) / _SAMPLE_RATE
-    audio = torch.sin(2.0 * torch.pi * 440.0 * time)[None, None]
-    spec = SketchControlSpec(
+    return SketchControlSpec(
         profile="music_tiv",
         source="online",
         sample_rate=_SAMPLE_RATE,
         num_frames=96,
         num_control_tokens=96,
-        temporal_resampling=mode,
         pitch_zero_threshold=1.0,
     )
 
-    controls = extract_music_sketch_controls(audio.requires_grad_(True), _SAMPLE_RATE, spec)
+
+@pytest.fixture
+def music_tiv_audio() -> torch.Tensor:
+    """Return a one-second A4 waveform with nonzero signed TIV coordinates.
+
+    :returns: Float32 mono audio with one batch row at 44.1 kHz.
+    """
+    time = torch.arange(_SAMPLE_RATE, dtype=torch.float32) / _SAMPLE_RATE
+    return torch.sin(2.0 * torch.pi * 440.0 * time)[None, None]
+
+
+@pytest.mark.parametrize("mode", ["average", "linear"])
+def test_music_tiv_extraction_preserves_music_and_signed_tiv(
+    mode: SketchTemporalResampling,
+    music_tiv_audio: torch.Tensor,
+    music_tiv_spec: SketchControlSpec,
+) -> None:
+    """The combined profile appends unthresholded TIV on the music frame grid.
+
+    :param mode: Temporal reduction shared by the four groups.
+    :param music_tiv_audio: Tone with signed TIV coordinates.
+    :param music_tiv_spec: Combined extraction contract.
+    """
+    spec = music_tiv_spec.model_copy(update={"temporal_resampling": mode})
+
+    controls = extract_music_sketch_controls(music_tiv_audio, _SAMPLE_RATE, spec)
 
     music = extract_music_sketch_controls(
-        audio, _SAMPLE_RATE, spec.model_copy(update={"profile": "music"})
+        music_tiv_audio, _SAMPLE_RATE, spec.model_copy(update={"profile": "music"})
     )
-    tiv = resample_sketch_controls(extract_tiv_batch(audio, _SAMPLE_RATE), 96, mode)
+    tiv = resample_sketch_controls(extract_tiv_batch(music_tiv_audio, _SAMPLE_RATE), 96, mode)
     torch.testing.assert_close(controls[:, :386], music)
     torch.testing.assert_close(controls[:, 386:], tiv)
     assert (controls[:, 386:] < 0).any()
     assert controls.shape == (1, 398, 96)
-    assert controls.requires_grad is False
+
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.gpu)])
+def test_music_tiv_extraction_preserves_audio_device(
+    device: str, music_tiv_audio: torch.Tensor, music_tiv_spec: SketchControlSpec
+) -> None:
+    """All combined controls stay on the waveform device.
+
+    :param device: Waveform and extraction device.
+    :param music_tiv_audio: Tone waveform.
+    :param music_tiv_spec: Combined extraction contract.
+    """
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("requires CUDA")
+    audio = music_tiv_audio.to(device)
+
+    controls = extract_music_sketch_controls(audio, _SAMPLE_RATE, music_tiv_spec)
+
     assert controls.device == audio.device
-    offline = extract_profile_controls(audio[0].detach().cpu().numpy(), _SAMPLE_RATE, spec)
-    cpu_controls = extract_music_sketch_controls(audio.detach().cpu(), _SAMPLE_RATE, spec)
-    torch.testing.assert_close(offline, cpu_controls)
+
+
+def test_music_tiv_extraction_requires_grad_audio_detaches_controls(
+    music_tiv_audio: torch.Tensor, music_tiv_spec: SketchControlSpec
+) -> None:
+    """Feature extraction never records an autograd graph.
+
+    :param music_tiv_audio: Tone waveform.
+    :param music_tiv_spec: Combined extraction contract.
+    """
+    controls = extract_music_sketch_controls(
+        music_tiv_audio.requires_grad_(True), _SAMPLE_RATE, music_tiv_spec
+    )
+
+    assert controls.requires_grad is False
+
+
+def test_music_tiv_extraction_offline_matches_batch(
+    music_tiv_audio: torch.Tensor, music_tiv_spec: SketchControlSpec
+) -> None:
+    """Native inference extracts the same controls as online training.
+
+    :param music_tiv_audio: Tone waveform.
+    :param music_tiv_spec: Combined extraction contract.
+    """
+    offline = extract_profile_controls(music_tiv_audio[0].numpy(), _SAMPLE_RATE, music_tiv_spec)
+    batch = extract_music_sketch_controls(music_tiv_audio, _SAMPLE_RATE, music_tiv_spec)
+
+    torch.testing.assert_close(offline, batch)
