@@ -5,7 +5,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import NotRequired, Self, TypedDict
-from uuid import uuid4
 
 import numpy as np
 import torch
@@ -534,6 +533,11 @@ class VSTDataModule(LightningDataModule):
         :returns: Whether every split covers the current request.
         """
         assert self.download_dataset_root_uri is not None
+        if not all(
+            (candidate / f"{split}{self.shard_suffix}").is_dir()
+            for split in _MATERIALIZE_SPLITS
+        ):
+            return False
         try:
             for split, columns in self.projection.items():
                 materialize_lance_subset(
@@ -563,25 +567,39 @@ class VSTDataModule(LightningDataModule):
             return False
         return True
 
+    def _resolve_cache_alias(self) -> Path:
+        """Validate and resolve a published request-path alias.
+
+        :returns: Complete compatible sibling selected by the alias.
+        :raises ValueError: The alias is broken, incomplete, or incompatible.
+        """
+        if not self._requested_dataset_root.exists():
+            raise ValueError(
+                f"hydration cache alias {self._requested_dataset_root} is broken; delete it"
+            )
+        selected = self._requested_dataset_root.resolve()
+        if not self._candidate_covers_projection(selected):
+            raise ValueError(
+                f"hydration cache alias {self._requested_dataset_root} targets an incomplete "
+                "or incompatible cache; delete it"
+            )
+        return selected
+
     def _publish_cache_alias(self, candidate: Path) -> Path:
-        """Atomically alias the exact request path to a compatible sibling.
+        """Atomically publish the first compatible sibling as the alias winner.
 
         :param candidate: Compatible sibling cache selected for reuse.
-        :returns: Resolved cache root selected by the winning alias.
-        :raises OSError: Alias publication fails without a concurrent winner.
+        :returns: Complete compatible sibling selected by the winning alias.
         """
         self._configured_dataset_root.mkdir(parents=True, exist_ok=True)
-        link = self._configured_dataset_root / (
-            f".{self._requested_dataset_root.name}.{uuid4().hex}.link"
-        )
         try:
-            link.symlink_to(candidate.name, target_is_directory=True)
-            link.replace(self._requested_dataset_root)
-        except OSError:
-            link.unlink(missing_ok=True)
-            if not self._requested_dataset_root.exists():
-                raise
-        return self._requested_dataset_root.resolve()
+            self._requested_dataset_root.symlink_to(
+                candidate.name, target_is_directory=True
+            )
+        except FileExistsError:
+            if not self._requested_dataset_root.is_symlink():
+                return self._requested_dataset_root
+        return self._resolve_cache_alias()
 
     def _select_compatible_dataset_root(self) -> None:
         """Select an exact or deterministic compatible hydration cache.
@@ -589,17 +607,13 @@ class VSTDataModule(LightningDataModule):
         Complete siblings only are eligible, because adding a narrower missing split would violate
         the broader projection encoded by a sibling's name. An atomic alias gives every distributed
         rank the same resolved root.
-
-        :raises ValueError: The exact request path is a broken cache alias.
         """
         if not self.download_dataset_root_uri:
             return
-        if self._requested_dataset_root.is_symlink() and not self._requested_dataset_root.exists():
-            raise ValueError(
-                f"hydration cache alias {self._requested_dataset_root} is broken; delete it"
-            )
-        if self._requested_dataset_root.exists():
-            selected = self._requested_dataset_root.resolve()
+        if self._requested_dataset_root.is_symlink():
+            selected = self._resolve_cache_alias()
+        elif self._requested_dataset_root.exists():
+            selected = self._requested_dataset_root
         else:
             candidate = next(
                 (

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import shutil
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from pathlib import Path
 from typing import cast
 
@@ -438,6 +440,100 @@ class TestMaterializedSubsetLayout:
         narrow.prepare_data()
 
         assert narrow.dataset_root == first
+
+    def test_prepare_data_concurrent_alias_publishers_share_first_winner(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Concurrent publishers cannot retarget an established request alias.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the shared local dataset root.
+        :param monkeypatch: Fixture replacing sidecars and candidate scans.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        txids = _txids(source_root)
+        broad = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_txids=txids,
+            param_spec_name=_PARAM_SPEC,
+        )
+        broad.prepare_data()
+        first = destination / "first-compatible"
+        second = destination / "second-compatible"
+        shutil.copytree(broad.dataset_root, first)
+        shutil.copytree(broad.dataset_root, second)
+        shutil.rmtree(broad.dataset_root)
+        modules = [
+            LanceVSTDataModule(
+                dataset_root=destination,
+                download_dataset_root_uri=source_root.as_uri(),
+                download_dataset_txids=txids,
+                predict_file=tmp_path / "elsewhere" / "predict.lance",
+                param_spec_name=_PARAM_SPEC,
+            )
+            for _ in range(2)
+        ]
+        scan_barrier = Barrier(2)
+
+        def candidates(path: Path) -> Callable[[], list[Path]]:
+            def scan() -> list[Path]:
+                scan_barrier.wait()
+                return [path]
+
+            return scan
+
+        monkeypatch.setattr(modules[0], "_compatible_cache_candidates", candidates(first))
+        monkeypatch.setattr(modules[1], "_compatible_cache_candidates", candidates(second))
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            list(executor.map(lambda module: module.prepare_data(), modules))
+
+        assert modules[0].dataset_root == modules[1].dataset_root
+        assert modules[0].dataset_root in {first, second}
+
+    def test_prepare_data_existing_alias_with_missing_split_fails_closed(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A damaged superset alias cannot recreate its target with narrow columns.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the shared local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        txids = _txids(source_root)
+        broad = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_txids=txids,
+            param_spec_name=_PARAM_SPEC,
+        )
+        broad.prepare_data()
+        narrow_kwargs = {
+            "dataset_root": destination,
+            "download_dataset_root_uri": source_root.as_uri(),
+            "download_dataset_txids": txids,
+            "predict_file": tmp_path / "elsewhere" / "predict.lance",
+            "param_spec_name": _PARAM_SPEC,
+        }
+        narrow = LanceVSTDataModule(**narrow_kwargs)
+        narrow.prepare_data()
+        shutil.rmtree(broad.dataset_root / "test.lance")
+
+        repeated = LanceVSTDataModule(**narrow_kwargs)
+        with pytest.raises(ValueError, match="incomplete or incompatible"):
+            repeated.prepare_data()
+
+        assert not (broad.dataset_root / "test.lance").exists()
 
     def test_prepare_data_corrupt_compatible_sibling_is_not_reused(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
