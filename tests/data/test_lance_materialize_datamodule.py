@@ -341,14 +341,10 @@ class TestMaterializedSubsetLayout:
             "music2latent",
         ]
 
-    def test_prepare_data_differing_projections_hydrate_separate_subsets(
+    def test_prepare_data_narrower_projection_reuses_superset_and_feeds_loader(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Same conditioning, different read set — the subsets must not collide.
-
-        Moving ``predict_file`` off the test split drops its ``audio`` column
-        while leaving the conditioning column, so the directory name has to
-        separate them on the projection alone.
+        """A narrower Hydra request reuses a complete compatible sibling cache.
 
         :param source_root: Fixture-provided hydration source.
         :param tmp_path: Parent of the shared local dataset root.
@@ -359,27 +355,126 @@ class TestMaterializedSubsetLayout:
             "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
             _sidecar_copier(source_root)[0],
         )
+        txids = _txids(source_root)
+        broad = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_txids=txids,
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=_PARAM_SPEC,
+        )
+        broad.prepare_data()
+        broad_manifest = (
+            broad.dataset_root / "test.lance" / "_materialize.json"
+        ).read_bytes()
+        narrow = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_txids=txids,
+            predict_file=tmp_path / "elsewhere" / "predict.lance",
+            batch_size=2,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=_PARAM_SPEC,
+        )
 
-        def hydrate(predict_file: Path | None) -> Path:
-            module = LanceVSTDataModule(
-                dataset_root=destination,
-                download_dataset_root_uri=source_root.as_uri(),
-                predict_file=predict_file,
-                param_spec_name=_PARAM_SPEC,
-            )
-            module.prepare_data()
-            return module.dataset_root
+        narrow.prepare_data()
+        narrow.setup("test")
+        try:
+            batch = next(iter(narrow.test_dataloader()))
+        finally:
+            narrow.teardown()
 
-        serving_predict = hydrate(None)
-        predict_elsewhere = hydrate(tmp_path / "elsewhere" / "predict.lance")
-
-        assert serving_predict != predict_elsewhere
-        assert lance.dataset(str(serving_predict / "test.lance")).schema.names == [
+        assert narrow.dataset_root == broad.dataset_root
+        assert (
+            broad.dataset_root / "test.lance" / "_materialize.json"
+        ).read_bytes() == broad_manifest
+        assert lance.dataset(str(narrow.dataset_root / "test.lance")).schema.names == [
             "param_array",
             "mel_spec",
             "audio",
         ]
-        assert lance.dataset(str(predict_elsewhere / "test.lance")).schema.names == [
+        assert batch["mel"] is not None
+        assert batch["audio"] is None
+
+    def test_prepare_data_compatible_siblings_selects_lexicographically_first(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Multiple compatible sibling caches resolve deterministically by path name.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the shared local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        txids = _txids(source_root)
+        broad = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_txids=txids,
+            param_spec_name=_PARAM_SPEC,
+        )
+        broad.prepare_data()
+        first = destination / "aaa-compatible"
+        second = destination / "zzz-compatible"
+        shutil.copytree(broad.dataset_root, first)
+        shutil.copytree(broad.dataset_root, second)
+        shutil.rmtree(broad.dataset_root)
+        narrow = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_txids=txids,
+            predict_file=tmp_path / "elsewhere" / "predict.lance",
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        narrow.prepare_data()
+
+        assert narrow.dataset_root == first
+
+    def test_prepare_data_corrupt_compatible_sibling_is_not_reused(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A sibling with a corrupt manifest cannot satisfy a narrower request.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the shared local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        txids = _txids(source_root)
+        broad = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_txids=txids,
+            param_spec_name=_PARAM_SPEC,
+        )
+        broad.prepare_data()
+        manifest = broad.dataset_root / "train.lance" / "_materialize.json"
+        manifest.write_text("{not json", encoding="utf-8")
+        narrow = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_txids=txids,
+            predict_file=tmp_path / "elsewhere" / "predict.lance",
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        narrow.prepare_data()
+
+        assert narrow.dataset_root != broad.dataset_root
+        assert manifest.read_text(encoding="utf-8") == "{not json"
+        assert lance.dataset(str(narrow.dataset_root / "train.lance")).schema.names == [
             "param_array",
             "mel_spec",
         ]
@@ -596,6 +691,53 @@ class TestMaterializePrepareData:
         for split in ("train", "val", "test"):
             materialized = lance.dataset(str(datamodule.dataset_root / f"{split}.lance"))
             assert materialized.count_rows() == 4
+
+    def test_hydra_narrower_request_reuses_compatible_sibling_root(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Normal Hydra construction discovers the same compatible cache as direct use.
+
+        :param source_root: Local multi-split Lance source.
+        :param tmp_path: Fresh destination root.
+        :param monkeypatch: Replaces the rclone sidecar boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        txids = _txids(source_root)
+        dest_root = tmp_path / "root"
+        broad = LanceVSTDataModule(
+            dataset_root=dest_root,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_txids=txids,
+            param_spec_name=_PARAM_SPEC,
+        )
+        broad.prepare_data()
+        cfg = OmegaConf.create(
+            {
+                "_target_": "synth_setter.data.lance_datamodule.LanceVSTDataModule",
+                "dataset_root": str(dest_root),
+                "download_dataset_root_uri": source_root.as_uri(),
+                "download_dataset_txids": txids,
+                "predict_file": str(tmp_path / "elsewhere" / "predict.lance"),
+                "param_spec_name": "surge_xt",
+            }
+        )
+
+        narrow = hydra.utils.instantiate(cfg)
+        narrow.prepare_data()
+
+        follower = hydra.utils.instantiate(cfg)
+        follower.setup("test")
+        try:
+            batch = next(iter(follower.test_dataloader()))
+        finally:
+            follower.teardown()
+
+        assert narrow.dataset_root == broad.dataset_root
+        assert follower.dataset_root == broad.dataset_root
+        assert batch["mel"] is not None
 
     def test_prepare_data_row_limit_without_txids_feeds_train_dataloader(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -907,6 +1049,43 @@ class TestStageScopedHydration:
         assert test_module.dataset_root == fit_module.dataset_root
         assert lance.dataset(str(fit_module.dataset_root / "train.lance")).count_rows() == 8
         assert lance.dataset(str(fit_module.dataset_root / "test.lance")).count_rows() == 6
+
+    def test_incomplete_stage_cache_is_not_reused_for_narrower_request(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A partial superset stays isolated instead of gaining narrower missing splits.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the local dataset root.
+        :param monkeypatch: Fixture replacing the separately tested rclone boundary.
+        """
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        destination = tmp_path / "local"
+        broad = _hydrating_module(source_root, destination)
+        _stage_probe_trainer(tmp_path).fit(_StageProbeModule(), datamodule=broad)
+        assert not (broad.dataset_root / "test.lance").exists()
+        narrow = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            predict_file=tmp_path / "elsewhere" / "predict.lance",
+            batch_size=2,
+            ot=False,
+            num_workers=0,
+            pin_memory=False,
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        _stage_probe_trainer(tmp_path).test(_StageProbeModule(), datamodule=narrow)
+
+        assert narrow.dataset_root != broad.dataset_root
+        assert not (broad.dataset_root / "test.lance").exists()
+        assert lance.dataset(str(narrow.dataset_root / "test.lance")).schema.names == [
+            "param_array",
+            "mel_spec",
+        ]
 
     def test_prepare_data_outside_a_trainer_hydrates_every_split(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

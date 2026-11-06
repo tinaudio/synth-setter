@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import NotRequired, Self, TypedDict
+from uuid import uuid4
 
 import numpy as np
 import torch
@@ -17,8 +18,8 @@ from synth_setter.conditioning import (
     SKETCH_PITCH_SLICE,
     Conditioning,
     EmbeddingConditioningSpec,
-    SketchControls,
     SketchControlProfile,
+    SketchControls,
     SketchControlSpec,
     resolve_embedding_conditioning,
     resolve_sketch_controls,
@@ -27,6 +28,7 @@ from synth_setter.data.ot import _hungarian_match
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import (
+    materialize_lance_subset,
     materialize_splits,
     resolve_latest_versions,
     subset_dirname,
@@ -434,7 +436,11 @@ class VSTDataModule(LightningDataModule):
         self._snapshot_versions: dict[str, int] | None = None
         self.predict_split = self._predict_split(predict_file, configured_root)
         self.projection = self._derive_projection(self.predict_split)
-        self.dataset_root = self._resolve_dataset_root(configured_root, self.projection)
+        self._configured_dataset_root = configured_root
+        self._requested_dataset_root = self._resolve_dataset_root(
+            configured_root, self.projection
+        )
+        self.dataset_root = self._requested_dataset_root
         self.predict_file = self._resolve_predict_file(predict_file, self.predict_split)
 
     def _conditioning_column(self) -> str:
@@ -498,6 +504,109 @@ class VSTDataModule(LightningDataModule):
             projection=projection,
             row_limit=self.download_dataset_row_limit,
         )
+
+    def _compatible_cache_candidates(self) -> list[Path]:
+        """Return complete sibling caches in deterministic preference order.
+
+        :returns: Existing roots containing every materialized split.
+        """
+        if not self._configured_dataset_root.is_dir():
+            return []
+        return sorted(
+            path
+            for path in self._configured_dataset_root.iterdir()
+            if path.is_dir()
+            and path != self._requested_dataset_root
+            and all(
+                (path / f"{split}{self.shard_suffix}").is_dir()
+                for split in _MATERIALIZE_SPLITS
+            )
+        )
+
+    def _candidate_covers_projection(self, candidate: Path) -> bool:
+        """Validate every split in one sibling against the current request.
+
+        :param candidate: Complete sibling cache root to validate.
+        :returns: Whether every split covers the current request.
+        """
+        assert self.download_dataset_root_uri is not None
+        try:
+            for split, columns in self.projection.items():
+                materialize_lance_subset(
+                    f"{self.download_dataset_root_uri.rstrip('/')}/"
+                    f"{split}{self.shard_suffix}",
+                    candidate / f"{split}{self.shard_suffix}",
+                    txid=(
+                        self.download_dataset_txids[split]
+                        if self.download_dataset_txids is not None
+                        else None
+                    ),
+                    version=(
+                        self._snapshot_versions[split]
+                        if self._snapshot_versions is not None
+                        else None
+                    ),
+                    columns=columns,
+                    limit=self.download_dataset_row_limit,
+                )
+        except (LookupError, ValueError):
+            return False
+        return True
+
+    def _publish_cache_alias(self, candidate: Path) -> Path:
+        """Atomically alias the exact request path to a compatible sibling.
+
+        :param candidate: Compatible sibling cache selected for reuse.
+        :returns: Resolved cache root selected by the winning alias.
+        :raises OSError: Alias publication fails without a concurrent winner.
+        """
+        self._configured_dataset_root.mkdir(parents=True, exist_ok=True)
+        link = self._configured_dataset_root / (
+            f".{self._requested_dataset_root.name}.{uuid4().hex}.link"
+        )
+        try:
+            link.symlink_to(candidate.name, target_is_directory=True)
+            link.replace(self._requested_dataset_root)
+        except OSError:
+            link.unlink(missing_ok=True)
+            if not self._requested_dataset_root.exists():
+                raise
+        return self._requested_dataset_root.resolve()
+
+    def _select_compatible_dataset_root(self) -> None:
+        """Select an exact or deterministic compatible hydration cache.
+
+        Complete siblings only are eligible, because adding a narrower missing split would violate
+        the broader projection encoded by a sibling's name. An atomic alias gives every distributed
+        rank the same resolved root.
+
+        :raises ValueError: The exact request path is a broken cache alias.
+        """
+        if not self.download_dataset_root_uri:
+            return
+        if self._requested_dataset_root.is_symlink() and not self._requested_dataset_root.exists():
+            raise ValueError(
+                f"hydration cache alias {self._requested_dataset_root} is broken; delete it"
+            )
+        if self._requested_dataset_root.exists():
+            selected = self._requested_dataset_root.resolve()
+        else:
+            candidate = next(
+                (
+                    path
+                    for path in self._compatible_cache_candidates()
+                    if self._candidate_covers_projection(path)
+                ),
+                None,
+            )
+            selected = (
+                self._requested_dataset_root
+                if candidate is None
+                else self._publish_cache_alias(candidate)
+            )
+        self.dataset_root = selected
+        if self.predict_split is not None:
+            self.predict_file = selected / f"{self.predict_split}{self.shard_suffix}"
 
     def _resolve_predict_file(
         self, predict_file: str | Path | None, predict_split: str | None
@@ -575,6 +684,7 @@ class VSTDataModule(LightningDataModule):
             self._snapshot_versions = resolve_latest_versions(
                 self.download_dataset_root_uri, self.projection, self.shard_suffix
             )
+        self._select_compatible_dataset_root()
         materialize_splits(
             self.download_dataset_root_uri,
             self.dataset_root,
