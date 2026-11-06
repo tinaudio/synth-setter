@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793996084984,
+  "lastUpdate": 1793996089768,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -31352,6 +31352,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.714472217000003,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8402597777237be94b867064fa4aefaf51bda49c",
+          "message": "internal-feat(training): extract music sketches online (#3739)\n\n* internal-feat(training): extract music sketches online\n\n* internal-fix(training): unify online music-sketch path, cache front end\n\nThe raw-to-checkpoint music pipeline was hand-rolled in both datamodule hooks\nand the offline extractor with divergent autograd policy; one no_grad helper\nnow serves all three. Setup warms the canonical PESTO weights without a device\nargument so an accelerator-resident model is no longer pulled back to CPU on\nevery stage. The loudness resampler, STFT windows, and A-weighting curve are\ncached per rate, device, and dtype instead of being rebuilt every step.\n\nTests assert the hook's contract against sinusoid content rather than the\nfunctions it calls, probe the loudness projection (never zero-binned) for the\ntraining update, and use one-second fixtures so the dense frame grid is\nsatisfiable under the new minimum-frame check.\n\nRefs #3734\n\n* internal-fix(testing): patch the batched extractor in the CLI test\n\nThe CLI preparation test still monkeypatched extract_sketch_controls on\nprofile_controls, which the shared music helper no longer imports, so the\nbrowser e2e lane failed with an AttributeError. Patch the batched extractor\nthe helper actually calls.\n\nRefs #3734",
+          "timestamp": "2026-11-06T13:18:35-05:00",
+          "tree_id": "5c1204292da45411b7b7df4643e166e29c2cff28",
+          "url": "https://github.com/tinaudio/synth-setter/commit/8402597777237be94b867064fa4aefaf51bda49c"
+        },
+        "date": 1793996089127,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 7.949456691741943,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.448943513184785,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08734981715679169,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.0042324066162109375,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.191082000732422,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 11.571289418300012,
             "unit": "seconds"
           }
         ]
