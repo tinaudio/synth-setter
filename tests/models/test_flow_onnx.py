@@ -49,7 +49,11 @@ def flow_model() -> VSTFlowMatchingModule:
         scheduler=None,
         num_params=92,
         param_spec="surge_simple",
-        sketch_controls={"num_frames": 4, "num_control_tokens": 4},
+        sketch_controls={
+            "num_frames": 4,
+            "num_control_tokens": 4,
+            "median_filter_max_kernel_size": 4,
+        },
     ).eval()
     assert isinstance(model, VSTFlowMatchingModule)
     assert model.sketch_tokens is not None

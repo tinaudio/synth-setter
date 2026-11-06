@@ -23,7 +23,11 @@ from synth_setter.features.sketch_controls import (
     sketch_num_frames,
     spectral_centroid_track,
 )
-from synth_setter.sketch import pool_sketch_controls
+from synth_setter.sketch import (
+    median_filter_sketch_controls,
+    pool_sketch_controls,
+    random_median_filter_sketch_controls,
+)
 from tests.helpers.run_if import RunIf
 
 _SAMPLE_RATE = 44100
@@ -57,6 +61,47 @@ def test_sketch_num_frames_one_second_matches_mel_grid() -> None:
     """Frame counts agree with the mel hop grid."""
     samples = int(_SAMPLE_RATE * _DURATION_S)
     assert sketch_num_frames(samples, _SAMPLE_RATE) == samples // mel_hop_length(_SAMPLE_RATE) + 1
+
+
+def test_median_filter_sketch_controls_odd_kernel_zero_pads_boundaries() -> None:
+    """A centered odd window suppresses a one-frame edge transient against zero padding."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 5)
+    controls[0, SKETCH_PITCH_SLICE.start, 0] = 1.0
+
+    filtered = median_filter_sketch_controls(controls, kernel_size=3)
+
+    assert filtered.shape == controls.shape
+    assert filtered.dtype == controls.dtype
+    assert filtered.device == controls.device
+    torch.testing.assert_close(filtered, torch.zeros_like(controls), rtol=0, atol=0)
+
+
+def test_median_filter_sketch_controls_even_kernel_uses_trailing_lower_median() -> None:
+    """An even window follows FlashFoley's left-padded lower-median alignment."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 4)
+    controls[0, SKETCH_LOUDNESS_ROW] = torch.tensor((1.0, 0.0, 1.0, 0.0))
+
+    filtered = median_filter_sketch_controls(controls, kernel_size=2)
+
+    torch.testing.assert_close(filtered, torch.zeros_like(controls), rtol=0, atol=0)
+
+
+def test_random_median_filter_sketch_controls_seed_repeats_per_row_windows() -> None:
+    """A Torch seed reproduces one shared control-window draw per batch row."""
+    controls = torch.zeros(4, NUM_SKETCH_CONTROLS, 5)
+    controls[:, SKETCH_LOUDNESS_ROW, 2] = 1.0
+    controls[:, SKETCH_CENTROID_ROW, 2] = 1.0
+    controls[:, SKETCH_PITCH_SLICE.start, 2] = 1.0
+
+    torch.manual_seed(0)
+    first = random_median_filter_sketch_controls(controls, max_kernel_size=5)
+    torch.manual_seed(0)
+    second = random_median_filter_sketch_controls(controls, max_kernel_size=5)
+
+    expected = torch.zeros_like(controls)
+    expected[3] = controls[3]
+    torch.testing.assert_close(first, expected, rtol=0, atol=0)
+    torch.testing.assert_close(second, expected, rtol=0, atol=0)
 
 
 def test_pool_sketch_controls_averages_tracks_and_pitch() -> None:

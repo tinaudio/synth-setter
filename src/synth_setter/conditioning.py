@@ -230,6 +230,10 @@ class SketchControlSpec(BaseModel):
     .. attribute :: pitch_zero_threshold
 
         Pitch activations below this zero-bin at batch preparation (#2614).
+
+    .. attribute :: median_filter_max_kernel_size
+
+        Largest training-time music-control median window; one disables augmentation.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
@@ -244,6 +248,7 @@ class SketchControlSpec(BaseModel):
     # Bounded to the documented [0, 1] activation range: a negative threshold
     # silently disables binning and one above 1 zeroes the whole pitch block.
     pitch_zero_threshold: float = Field(default=0.1, ge=0.0, le=1.0)
+    median_filter_max_kernel_size: PositiveInt = 1
 
     @property
     def layout(self) -> SketchControlLayout:
@@ -255,8 +260,12 @@ class SketchControlSpec(BaseModel):
         """Reject profile configurations that lose the stored temporal contract.
 
         :returns: The validated sketch-control specification.
-        :raises ValueError: Stored frames and model token counts violate the profile.
+        :raises ValueError: Stored frames, token counts, or median policy violate the profile.
         """
+        if self.median_filter_max_kernel_size > self.num_control_tokens:
+            raise ValueError("median_filter_max_kernel_size cannot exceed num_control_tokens")
+        if self.profile != "music" and self.median_filter_max_kernel_size != 1:
+            raise ValueError("median filtering is supported only for music sketch controls")
         if self.profile == "tiv":
             if self.source != "online":
                 raise ValueError("tiv sketch requires source='online'")

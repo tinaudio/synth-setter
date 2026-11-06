@@ -529,6 +529,19 @@ def test_sample_batch_nonpositive_steps_raises() -> None:
         )
 
 
+def test_module_routes_median_filter_policy_to_music_tokenizer() -> None:
+    """The checkpointed sketch spec configures the training augmentation boundary."""
+    module = _module(
+        SketchControlSpec(
+            num_frames=_NUM_FRAMES,
+            median_filter_max_kernel_size=3,
+        )
+    )
+
+    assert module.sketch_tokens is not None
+    assert module.sketch_tokens.median_filter_max_kernel_size == 3
+
+
 def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
     """Sketch-configured training consumes ``sketch_ctrl`` and stays finite."""
     module = _module(SketchControlSpec(num_frames=_NUM_FRAMES))

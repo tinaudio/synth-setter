@@ -11,6 +11,9 @@ model:
     num_frames: 32
     num_control_tokens: 32
     pitch_zero_threshold: 0.1
+    # Sketch2Sound's 1-25 windows span up to 625 ms at 40 Hz; five frames
+    # preserve that span on this four-second, 32-frame control grid.
+    median_filter_max_kernel_size: 5
 
 datamodule:
   sketch: ${model.sketch_controls}
