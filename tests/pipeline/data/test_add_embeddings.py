@@ -2787,19 +2787,19 @@ def test_load_same_audio_encoder_uses_sa3_factory_and_preserves_inference_contra
     _install_sa3_factory(monkeypatch, factory)
     _write_same_checkpoint(tmp_path, model.state_dict())
     encode = load_same_audio_encoder(str(tmp_path), device="cpu")
-    audio = np.ones((17, 2, 8), dtype=np.float32)
+    audio = np.ones((257, 2, 8), dtype=np.float32)
 
     latents = encode(audio)
 
     assert factory_calls == [({"family": "same"}, SAME_SAMPLE_RATE)]
-    assert model.chunk_sizes == [16, 1]
-    assert model.grad_enabled == [False, False]
-    assert model.training_states == [False, False]
-    assert model.parameter_grad_states == [False, False]
+    assert model.chunk_sizes == [257]
+    assert model.grad_enabled == [False]
+    assert model.training_states == [False]
+    assert model.parameter_grad_states == [False]
     assert next(model.parameters()).device.type == "cpu"
-    assert latents.shape == (17, 1, 8)
+    assert latents.shape == (257, 1, 8)
     assert latents.dtype == np.float32
-    np.testing.assert_array_equal(latents, np.full((17, 1, 8), 2.0, dtype=np.float32))
+    np.testing.assert_array_equal(latents, np.full((257, 1, 8), 2.0, dtype=np.float32))
 
 
 def test_load_same_audio_encoder_with_incompatible_state_raises(
