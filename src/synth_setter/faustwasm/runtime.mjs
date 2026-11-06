@@ -98,6 +98,43 @@ export const applyCanonicalPatch = (synth, manifest, params) => {
     }
 };
 
+export const renderAudioInput = (synth, input, { frames }) => {
+    if (!Number.isInteger(frames) || frames < 0) {
+        throw new Error('frames must be a non-negative integer');
+    }
+    const { processor, blockSize, manifest } = synth;
+    if (!Number.isInteger(manifest.inputs) || manifest.inputs < 1) {
+        throw new Error('manifest inputs must be a positive integer');
+    }
+    if (input.length !== manifest.inputs || input.some((channel) => channel.length !== frames)) {
+        throw new Error('input audio geometry differs from manifest');
+    }
+    const output = Array.from({ length: manifest.outputs }, () => new Float32Array(frames));
+    const blockInput = Array.from(
+        { length: manifest.inputs },
+        () => new Float32Array(blockSize),
+    );
+    const blockOutput = Array.from(
+        { length: manifest.outputs },
+        () => new Float32Array(blockSize),
+    );
+    processor.start();
+    for (let blockStart = 0; blockStart < frames; blockStart += blockSize) {
+        const count = Math.min(blockSize, frames - blockStart);
+        for (let channel = 0; channel < blockInput.length; channel += 1) {
+            blockInput[channel].fill(0);
+            blockInput[channel].set(input[channel].subarray(blockStart, blockStart + count));
+        }
+        for (const channel of blockOutput) channel.fill(0);
+        processor.fDSPCode.compute(blockInput, blockOutput);
+        for (let channel = 0; channel < output.length; channel += 1) {
+            output[channel].set(blockOutput[channel].subarray(0, count), blockStart);
+        }
+    }
+    processor.stop();
+    return output;
+};
+
 export const renderNote = (synth, { frames, note, velocity, startFrame, endFrame }) => {
     if (!Number.isInteger(frames) || frames < 0) {
         throw new Error('frames must be a non-negative integer');
