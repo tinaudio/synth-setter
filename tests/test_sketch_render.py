@@ -535,7 +535,9 @@ def test_prepare_inputs_normalizes_mel_and_zeros_weak_pitch(
     controls[2, 0] = 1.0
     controls[2, 13] = 1.0
     monkeypatch.setattr(sketch_render, "make_spectrogram", lambda *args: np.full(shape, 4.0))
-    monkeypatch.setattr(profile_controls, "extract_sketch_controls", lambda *args: controls)
+    monkeypatch.setattr(
+        profile_controls, "extract_sketch_controls_batch", lambda *args: controls[None]
+    )
     model = cast(
         VSTFlowMatchingModule,
         SimpleNamespace(

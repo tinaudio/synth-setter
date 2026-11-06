@@ -356,6 +356,17 @@ def test_extract_sketch_controls_batch_rows_match_single_clip_extraction() -> No
     assert np.allclose(batch[1].numpy(), single.numpy(), atol=1e-5)
 
 
+def test_loudness_front_end_is_cached_per_rate_and_device() -> None:
+    """Per-step extraction reuses one resampler and window instead of rebuilding them."""
+    cpu = torch.device("cpu")
+    first = sketch_controls._loudness_front_end(_SAMPLE_RATE, cpu, torch.float32)
+    second = sketch_controls._loudness_front_end(_SAMPLE_RATE, cpu, torch.float32)
+    other_rate = sketch_controls._loudness_front_end(48_000, cpu, torch.float32)
+
+    assert first is second
+    assert other_rate is not first
+
+
 def test_extract_sketch_controls_repeat_calls_are_deterministic() -> None:
     """Two extractions of the same clip are bitwise identical."""
     audio = _sine(440.0)
@@ -420,6 +431,19 @@ def test_load_pesto_model_returns_weights_on_the_requested_device_after_an_exter
     assert next(model.parameters()).device.type == "cuda"
 
 
+def test_load_pesto_model_reasserts_frozen_eval_state() -> None:
+    """Every cache retrieval restores the extractor's immutable inference state."""
+    model = load_pesto_model(device="cpu")
+    model.train()
+    next(model.parameters()).requires_grad_(True)
+
+    restored = load_pesto_model(device="cpu")
+
+    assert restored is model
+    assert restored.training is False
+    assert all(not parameter.requires_grad for parameter in restored.parameters())
+
+
 def test_load_pesto_model_without_a_device_defaults_to_cpu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -439,7 +463,7 @@ def test_loudness_track_extraction_emits_no_divide_by_zero_warning(
 
     :param monkeypatch: Clears the per-process weight cache so the curve is rebuilt here.
     """
-    monkeypatch.setattr(sketch_controls, "_a_weights", None)
+    sketch_controls._a_weighting_db.cache_clear()
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -456,7 +480,7 @@ def test_a_weighting_curve_matches_librosa_above_the_dc_bin(
 
     :param monkeypatch: Clears the per-process weight cache so the curve is rebuilt here.
     """
-    monkeypatch.setattr(sketch_controls, "_a_weights", None)
+    sketch_controls._a_weighting_db.cache_clear()
     freqs = librosa.fft_frequencies(
         sr=sketch_controls._LOUDNESS_SAMPLE_RATE, n_fft=sketch_controls._LOUDNESS_N_FFT
     )
@@ -474,7 +498,7 @@ def test_dc_a_weighting_bin_floors_its_loudness_contribution(
 
     :param monkeypatch: Clears the per-process weight cache so the curve is rebuilt here.
     """
-    monkeypatch.setattr(sketch_controls, "_a_weights", None)
+    sketch_controls._a_weighting_db.cache_clear()
 
     dc_weight = sketch_controls._a_weighting_db(torch.device("cpu"))[0, 0]
 

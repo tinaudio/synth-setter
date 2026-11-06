@@ -6,8 +6,26 @@ from jaxtyping import Float
 
 from synth_setter.conditioning import SketchControlSpec
 from synth_setter.features.pyfdn_controls import extract_reverb_sketch
-from synth_setter.features.sketch_controls import extract_sketch_controls
+from synth_setter.features.sketch_controls import extract_sketch_controls_batch
 from synth_setter.sketch import prepare_music_sketch_controls
+
+
+@torch.no_grad()
+def extract_music_sketch_controls(
+    audio: torch.Tensor, sample_rate: int, spec: SketchControlSpec
+) -> Float[torch.Tensor, "batch controls num_frames"]:
+    """Extract music controls for a waveform batch on the checkpoint frame grid.
+
+    The single raw-to-checkpoint path shared by offline extraction and both online
+    datamodule hooks, so threshold, grid, and autograd policy cannot drift between them.
+
+    :param audio: ``(batch, channels, samples)`` waveforms on the extraction device.
+    :param sample_rate: Waveform sample rate in Hz.
+    :param spec: Music sketch contract selecting frame count, resampling, and threshold.
+    :returns: Float32 controls shaped ``(batch, controls, num_frames)`` on ``audio``'s device;
+        a non-music spec or a clip shorter than its grid is rejected by the preparation step.
+    """
+    return prepare_music_sketch_controls(extract_sketch_controls_batch(audio, sample_rate), spec)
 
 
 def extract_profile_controls(
@@ -28,5 +46,4 @@ def extract_profile_controls(
         return torch.from_numpy(sketch).unsqueeze(0)
     if spec.profile != "music":
         raise ValueError(f"no offline sketch extractor for profile {spec.profile!r}")
-    controls = extract_sketch_controls(torch.from_numpy(audio), sample_rate).unsqueeze(0)
-    return prepare_music_sketch_controls(controls, spec)
+    return extract_music_sketch_controls(torch.from_numpy(audio)[None], sample_rate, spec)

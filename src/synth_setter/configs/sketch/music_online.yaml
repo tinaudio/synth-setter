@@ -1,0 +1,17 @@
+# @package _global_
+
+# Explicit opt-in: extract music sketch controls from each transferred waveform.
+model:
+  sketch_controls:
+    profile: music
+    source: online
+    sample_rate: ${datamodule.sample_rate}
+    num_frames: 96
+    num_control_tokens: 96
+    temporal_resampling: average
+    pitch_zero_threshold: 0.1
+    # Five-token window at 32 tokens; scales to the selected token grid.
+    median_filter_max_window_fraction: 0.15625
+
+datamodule:
+  sketch: ${model.sketch_controls}

@@ -160,6 +160,30 @@ class TestSketchControlSpec:
                 median_filter_max_kernel_size=3,
             )
 
+    def test_music_online_source_without_sample_rate_rejected(self) -> None:
+        """Online music extraction requires the waveform rate explicitly."""
+        with pytest.raises(ValueError, match="online sketch extraction requires sample_rate"):
+            SketchControlSpec(profile="music", source="online", num_frames=96)
+
+    def test_music_online_source_with_sample_rate_is_accepted(self) -> None:
+        """Music controls may be extracted directly from waveform batches."""
+        spec = SketchControlSpec(
+            profile="music", source="online", sample_rate=44_100, num_frames=96
+        )
+
+        assert spec.source == "online"
+        assert spec.sample_rate == 44_100
+
+    def test_pyfdn_online_source_rejected(self) -> None:
+        """The reverb profile remains a stored-control-only contract."""
+        with pytest.raises(ValueError, match="pyfdn_reverb.*source='online'"):
+            SketchControlSpec(
+                profile="pyfdn_reverb",
+                source="online",
+                sample_rate=44_100,
+                num_frames=32,
+            )
+
     def test_median_filter_kernel_cannot_exceed_token_grid(self) -> None:
         """The configured training window must fit the filtered token grid."""
         with pytest.raises(ValueError, match="cannot exceed num_control_tokens"):

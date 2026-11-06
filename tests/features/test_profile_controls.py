@@ -6,7 +6,10 @@ import torch
 
 from synth_setter.conditioning import SketchControlSpec
 from synth_setter.features import profile_controls
-from synth_setter.features.profile_controls import extract_profile_controls
+from synth_setter.features.profile_controls import (
+    extract_music_sketch_controls,
+    extract_profile_controls,
+)
 from synth_setter.features.pyfdn_controls import extract_reverb_sketch
 from synth_setter.sketch import prepare_music_sketch_controls
 
@@ -61,7 +64,9 @@ def test_music_profile_pools_tracks_and_zeros_weak_pitch(monkeypatch: pytest.Mon
     controls[2, :26] = 0.0
     controls[2, 0] = 0.12 * 13
     controls[2, 13] = 0.08 * 14
-    monkeypatch.setattr(profile_controls, "extract_sketch_controls", lambda *args: controls)
+    monkeypatch.setattr(
+        profile_controls, "extract_sketch_controls_batch", lambda *args: controls[None]
+    )
     spec = SketchControlSpec(num_frames=32, pitch_zero_threshold=0.1)
     pooled = extract_profile_controls(np.zeros((2, 176400), np.float32), _SAMPLE_RATE, spec)
     assert pooled.shape == (1, 386, 32)
@@ -144,3 +149,23 @@ def test_tiv_profile_rejected() -> None:
     )
     with pytest.raises(ValueError, match="tiv"):
         extract_profile_controls(_decaying_noise(3), _SAMPLE_RATE, spec)
+
+
+def test_music_batch_extraction_matches_single_clip_rows_without_autograd() -> None:
+    """The shared batch helper is the per-clip path, row for row, and never records a graph."""
+    time = torch.arange(_SAMPLE_RATE, dtype=torch.float32) / _SAMPLE_RATE
+    audio = torch.stack(
+        [torch.sin(2.0 * torch.pi * 440.0 * time), torch.sin(2.0 * torch.pi * 660.0 * time)]
+    )[:, None]
+    spec = SketchControlSpec(num_frames=32, num_control_tokens=32)
+
+    controls = extract_music_sketch_controls(audio.requires_grad_(True), _SAMPLE_RATE, spec)
+
+    assert controls.shape == (2, 386, 32)
+    assert controls.dtype is torch.float32
+    assert controls.requires_grad is False
+    # PESTO's batched convolutions differ from single-row ones by float noise, so the
+    # exact parity check feeds both paths the same one-row batch.
+    single = extract_profile_controls(audio[1].detach().numpy(), _SAMPLE_RATE, spec)
+    one_row = extract_music_sketch_controls(audio[1:].detach(), _SAMPLE_RATE, spec)
+    torch.testing.assert_close(one_row, single, rtol=0, atol=0)
