@@ -120,6 +120,52 @@ def test_exported_velocity_same_inputs_matches_production(
     np.testing.assert_allclose(actual, expected.numpy(), rtol=2e-5, atol=2e-5)
 
 
+@pytest.mark.parametrize("enabled_groups", [("pitch",), ()])
+def test_exported_group_mask_matches_native_and_keeps_two_conditioning_inputs(
+    tmp_path: Path,
+    flow_model: VSTFlowMatchingModule,
+    enabled_groups: tuple[str, ...],
+) -> None:
+    """Fixed export masks preserve native tokens without changing the host feed contract.
+
+    :param tmp_path: Export directory.
+    :param flow_model: Small production architecture with nonzero sketch projections.
+    :param enabled_groups: One-group or all-disabled export mask.
+    """
+    assert flow_model.sketch_tokens is not None
+    batch = {
+        "mel": torch.randn(1, 2, 8, 8),
+        "sketch_ctrl": torch.rand(1, flow_model.sketch_tokens.layout.num_controls, 4),
+    }
+
+    export_flow_onnx(
+        flow_model,
+        batch,
+        tmp_path,
+        enabled_sketch_groups=enabled_groups,
+    )
+    encoder = ort.InferenceSession(str(tmp_path / "conditioning.onnx"))
+    assert [value.name for value in encoder.get_inputs()] == ["mel", "sketch_ctrl"]
+    encoded = encoder.run(None, {key: value.numpy() for key, value in batch.items()})
+    native = flow_model._control_token_branches_from_batch(  # noqa: SLF001
+        {"sketch_ctrl": batch["sketch_ctrl"]},
+        enabled_sketch_groups=enabled_groups,
+    )
+
+    assert native is not None
+    actual_controls, actual_null_controls = encoded[1:]
+    assert isinstance(actual_controls, np.ndarray)
+    assert isinstance(actual_null_controls, np.ndarray)
+    np.testing.assert_allclose(
+        actual_controls, native.conditional.detach().numpy(), rtol=2e-5, atol=2e-5
+    )
+    np.testing.assert_allclose(
+        actual_null_controls, native.unconditional.detach().numpy(), rtol=2e-5, atol=2e-5
+    )
+    if not enabled_groups:
+        np.testing.assert_array_equal(actual_controls, actual_null_controls)
+
+
 def test_exported_linear_resampling_matches_native_conditioning_and_velocity(
     tmp_path: Path,
 ) -> None:

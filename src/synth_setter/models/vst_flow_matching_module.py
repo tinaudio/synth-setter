@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 import numbers
-from collections.abc import Callable, Iterator, Mapping, MutableMapping
+from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import copyfileobj
@@ -970,29 +970,69 @@ class VSTFlowMatchingModule(LightningModule):
         return z, self.sketch_tokens(batch["sketch_ctrl"], keep.sketch_groups), keep
 
     @jaxtyped(typechecker=beartype)
+    def resolve_enabled_sketch_groups(
+        self, enabled_sketch_groups: Sequence[str] | None
+    ) -> tuple[str, ...]:
+        """Validate and resolve an inference-time sketch-group selector.
+
+        :param enabled_sketch_groups: Group names to retain, ``None`` for every checkpoint group,
+            or an empty sequence for PE-only sketch conditioning.
+        :returns: Enabled names in checkpoint layout order.
+        :raises TypeError: The selector is a bare string.
+        :raises ValueError: Names are duplicated, unknown, or requested without sketch support.
+        """
+        if isinstance(enabled_sketch_groups, str):
+            raise TypeError("enabled_sketch_groups must be a sequence of names, not a string")
+        requested = () if enabled_sketch_groups is None else tuple(enabled_sketch_groups)
+        if self.sketch_tokens is None:
+            if requested:
+                raise ValueError("checkpoint does not configure sketch controls")
+            return ()
+        valid = self.sketch_tokens.layout.group_names
+        if enabled_sketch_groups is None:
+            return valid
+        duplicate = next((name for name in requested if requested.count(name) > 1), None)
+        if duplicate is not None:
+            raise ValueError(f"duplicate enabled sketch group {duplicate!r}")
+        unknown = next((name for name in requested if name not in valid), None)
+        if unknown is not None:
+            raise ValueError(
+                f"unknown enabled sketch group {unknown!r}; valid groups: {', '.join(valid)}"
+            )
+        requested_set = set(requested)
+        return tuple(name for name in valid if name in requested_set)
+
+    @jaxtyped(typechecker=beartype)
     def _control_token_branches_from_batch(
-        self, batch: _SampleBatch
+        self,
+        batch: _SampleBatch,
+        *,
+        enabled_sketch_groups: Sequence[str] | None = None,
     ) -> ControlTokenBranches | None:
-        """Build complete full-sketch and PE-only control branches for inference.
+        """Build masked full-sketch and PE-only control branches for inference.
 
         :param batch: Model batch carrying sketch controls when configured.
+        :param enabled_sketch_groups: Group names to retain, all groups when omitted, or none for
+            an empty sequence.
         :returns: Both control-token branches, or ``None`` without sketch support.
-        :raises ValueError: The active sketch-control field is ``None``.
+        :raises ValueError: The controls or group selector violate the checkpoint contract.
         """
+        enabled = self.resolve_enabled_sketch_groups(enabled_sketch_groups)
         if self.sketch_tokens is None:
             return None
         controls = batch["sketch_ctrl"]
         if controls is None:
             raise ValueError("batch sketch_ctrl field must contain a tensor")
-        keep = torch.ones(
-            controls.shape[0],
-            len(self.sketch_tokens.layout.group_names),
+        unconditional = self.sketch_tokens.unconditional(controls.shape[0])
+        keep = torch.tensor(
+            [name in enabled for name in self.sketch_tokens.layout.group_names],
             dtype=torch.bool,
             device=controls.device,
-        )
+        ).expand(controls.shape[0], -1)
+        conditional = self.sketch_tokens(controls, keep)
         return ControlTokenBranches(
-            conditional=self.sketch_tokens(controls, keep),
-            unconditional=self.sketch_tokens.unconditional(controls.shape[0]),
+            conditional=conditional if enabled else unconditional,
+            unconditional=unconditional,
         )
 
     @jaxtyped(typechecker=beartype)
@@ -1282,6 +1322,7 @@ class VSTFlowMatchingModule(LightningModule):
         content_cfg_strength: float,
         sketch_cfg_strength: float,
         sample_steps: int | None = None,
+        enabled_sketch_groups: Sequence[str] | None = None,
     ) -> Float[torch.Tensor, "batch params"]:
         """Sample model-space parameters from explicit reusable noise.
 
@@ -1290,8 +1331,10 @@ class VSTFlowMatchingModule(LightningModule):
         :param content_cfg_strength: Non-negative content guidance scale.
         :param sketch_cfg_strength: Non-negative sketch guidance scale.
         :param sample_steps: Positive integration steps, or the checkpoint test default.
+        :param enabled_sketch_groups: Group names to retain, all groups when omitted, or none for
+            an empty sequence.
         :returns: Sampled model-space parameter rows.
-        :raises ValueError: Noise, guidance, or integration steps violate the checkpoint contract.
+        :raises ValueError: Noise, guidance, steps, or sketch groups violate the checkpoint contract.
         """
         conditioning = self._get_conditioning_from_batch(batch)
         expected_shape = (conditioning.shape[0], self.hparams.num_params)
@@ -1319,7 +1362,9 @@ class VSTFlowMatchingModule(LightningModule):
             steps,
             content_cfg_strength,
             sketch_cfg_strength=sketch_cfg_strength,
-            control_tokens=self._control_token_branches_from_batch(batch),
+            control_tokens=self._control_token_branches_from_batch(
+                batch, enabled_sketch_groups=enabled_sketch_groups
+            ),
         )
 
     @jaxtyped(typechecker=beartype)

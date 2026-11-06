@@ -85,6 +85,8 @@ def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(tmp_path:
             "3",
             "--sample-steps",
             "8",
+            "--sketch-group",
+            "pitch",
             "--seed",
             "17",
             "--output-dir",
@@ -138,6 +140,7 @@ def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(tmp_path:
         content_cfg_strength=2.0,
         sketch_cfg_strength=3.0,
         sample_steps=8,
+        enabled_sketch_groups=("pitch",),
     ).numpy()[0]
     assert actual.shape == (model.hparams["num_params"],)
     np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
@@ -153,6 +156,10 @@ def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(tmp_path:
     provenance = json.loads((arm / "browser/provenance.json").read_text())
     revision = str(sh.Command("git")(["rev-parse", "HEAD"], _cwd=repo)).strip()
     assert provenance["git_revision"].removesuffix("-dirty") == revision
+    assert provenance["sketch_groups"] == {
+        "requested": ["pitch"],
+        "resolved": ["pitch"],
+    }
     metrics = pd.read_csv(arm / "metrics.csv")
     assert len(metrics) == 1
     assert np.isfinite(

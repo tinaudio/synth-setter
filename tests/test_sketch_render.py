@@ -2,6 +2,7 @@
 
 import csv
 import hashlib
+import json
 import shutil
 import subprocess
 import sys
@@ -699,7 +700,17 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
         """
 
         hparams = {"num_params": 92}
-        calls: list[tuple[float, float, torch.Tensor]] = []
+        calls: list[tuple[float, float, torch.Tensor, tuple[str, ...] | None]] = []
+
+        def resolve_enabled_sketch_groups(
+            self, enabled: tuple[str, ...] | None
+        ) -> tuple[str, ...]:
+            """Resolve the fixture's music group selector.
+
+            :param enabled: Requested group names.
+            :returns: Requested names or every music group.
+            """
+            return ("loudness", "centroid", "pitch") if enabled is None else enabled
 
         def sample_batch(
             self,
@@ -709,6 +720,7 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
             content_cfg_strength: float,
             sketch_cfg_strength: float,
             sample_steps: int,
+            enabled_sketch_groups: tuple[str, ...] | None = None,
         ) -> torch.Tensor:
             """Record one arm and return a valid parameter row.
 
@@ -717,10 +729,18 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
             :param content_cfg_strength: Content guidance scale.
             :param sketch_cfg_strength: Sketch guidance scale.
             :param sample_steps: Flow integration steps.
+            :param enabled_sketch_groups: Host-selected sketch groups.
             :returns: One zero-valued model output row.
             """
             del batch, sample_steps
-            self.calls.append((content_cfg_strength, sketch_cfg_strength, noise.clone()))
+            self.calls.append(
+                (
+                    content_cfg_strength,
+                    sketch_cfg_strength,
+                    noise.clone(),
+                    enabled_sketch_groups,
+                )
+            )
             return torch.zeros((1, 92))
 
     model = RecordingModel()
@@ -771,6 +791,8 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
                 "1",
                 "--sample-steps",
                 "2",
+                "--sketch-group",
+                "pitch",
                 "--seed",
                 str(seed),
                 "--output-dir",
@@ -788,9 +810,11 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
     assert result.exit_code == 0, result.output
     assert repeated.exit_code == 0, repeated.output
     assert changed.exit_code == 0, changed.output
-    assert [(content_cfg, sketch_cfg) for content_cfg, sketch_cfg, _ in model.calls] == [
-        (0.0, 1.0),
-        (2.0, 1.0),
+    assert [
+        (content_cfg, sketch_cfg, groups) for content_cfg, sketch_cfg, _, groups in model.calls
+    ] == [
+        (0.0, 1.0, ("pitch",)),
+        (2.0, 1.0, ("pitch",)),
     ] * 3
     assert torch.equal(model.calls[0][2], model.calls[1][2])
     assert torch.equal(model.calls[0][2], model.calls[2][2])
@@ -801,13 +825,44 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
             "metrics.csv",
             "params.csv",
             "pred.wav",
+            "provenance.json",
             "sketch.wav",
             "target.wav",
         }
         with (arm_dir / "metrics.csv").open(newline="", encoding="utf-8") as stream:
             assert next(csv.DictReader(stream))["r2_uri"] == ""
+        provenance = json.loads((arm_dir / "provenance.json").read_text())
+        assert provenance["sketch_groups"] == {
+            "requested": ["pitch"],
+            "resolved": ["pitch"],
+        }
         with AudioFile(str(arm_dir / "pred.wav")) as audio:
             assert audio.frames == 176400
+
+
+def test_cli_sketch_group_and_no_sketch_groups_are_mutually_exclusive(tmp_path: Path) -> None:
+    """The two selector forms cannot silently override each other.
+
+    :param tmp_path: Existing positional input paths.
+    """
+    sketch = tmp_path / "sketch.wav"
+    content = tmp_path / "content.wav"
+    sketch.write_bytes(b"input")
+    content.write_bytes(b"input")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            str(sketch),
+            str(content),
+            "--sketch-group",
+            "pitch",
+            "--no-sketch-groups",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "mutually exclusive" in result.output
 
 
 def test_console_script_is_installed_and_callable() -> None:
@@ -825,3 +880,5 @@ def test_console_script_is_installed_and_callable() -> None:
     assert result.returncode == 0, result.stderr
     assert "SKETCH_WAV CONTENT_WAV" in result.stdout
     assert "--content-cfg" in result.stdout
+    assert "--no-sketch-groups" in result.stdout
+    assert "--sketch-group" in result.stdout

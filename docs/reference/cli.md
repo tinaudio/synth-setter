@@ -216,6 +216,22 @@ TIVs before temporal pooling. The frontends produce different features; choose
 one consistently for training and evaluation. Both add extraction cost to every
 train, validation, and test batch; no precomputed sketch column is required.
 
+For standalone sketch inversion, retain a checkpoint-defined subset of sketch controls by repeating
+`--sketch-group`; omit the option to use every group, or pass `--no-sketch-groups` to retain only
+the temporal positional encoding:
+
+```bash
+synth-setter-sketch sketch.wav content.wav \
+  --sketch-group loudness --sketch-group pitch \
+  --content-cfg 2 --sketch-cfg 3 --no-upload
+```
+
+Names and their order come from the loaded checkpoint (`loudness`, `centroid`, and `pitch` for the
+music profile; pyFDN checkpoints expose their own groups). Duplicate or unknown names fail instead
+of being ignored. The selection is fixed into browser ONNX exports, so browser inference has no
+runtime mask input or separate UI state. Native arms record it in `provenance.json`; browser arms
+record it in `browser/provenance.json`.
+
 For repeatable standalone flow evaluation, opt in through the model config and provide the seed
 explicitly:
 

@@ -525,6 +525,18 @@ def _run_id(sketch_path: Path, content_path: Path) -> str:
 @click.option("--stats-sha256", envvar="SYNTH_SETTER_SKETCH_MEL_STATS_SHA256")
 @click.option("--content-cfg", type=float, multiple=True, default=(2.0,), show_default=True)
 @click.option("--sketch-cfg", type=float, multiple=True, default=(2.0,), show_default=True)
+@click.option(
+    "--sketch-group",
+    "sketch_groups",
+    type=str,
+    multiple=True,
+    help="Repeat to retain only named checkpoint sketch groups.",
+)
+@click.option(
+    "--no-sketch-groups",
+    is_flag=True,
+    help="Disable every sketch group while retaining temporal positional encoding.",
+)
 @click.option("--sample-steps", type=int)
 @click.option(
     "--inference-runtime",
@@ -556,6 +568,8 @@ def main(
     stats_sha256: str | None,
     content_cfg: tuple[float, ...],
     sketch_cfg: tuple[float, ...],
+    sketch_groups: tuple[str, ...],
+    no_sketch_groups: bool,
     sample_steps: int | None,
     inference_runtime: str,
     browser_port: int,
@@ -580,6 +594,8 @@ def main(
     :param stats_sha256: Required digest for a statistics override.
     :param content_cfg: Content guidance strengths.
     :param sketch_cfg: Sketch guidance strengths.
+    :param sketch_groups: Repeated checkpoint sketch groups to retain.
+    :param no_sketch_groups: Whether to disable every sketch group.
     :param sample_steps: Optional integration-step override.
     :param inference_runtime: Native PyTorch or real browser ONNX Runtime Web inference.
     :param browser_port: Loopback port for browser inference; zero selects an available port.
@@ -594,6 +610,9 @@ def main(
     :raises click.ClickException: CLI arguments are inconsistent.
     """
     settings = _load_settings()
+    if sketch_groups and no_sketch_groups:
+        raise click.ClickException("--sketch-group and --no-sketch-groups are mutually exclusive")
+    requested_sketch_groups = () if no_sketch_groups else (sketch_groups or None)
     if duration is not None and not math.isfinite(duration):
         raise click.ClickException("--duration must be finite")
     grid = cfg_grid(content_cfg, sketch_cfg)
@@ -642,7 +661,7 @@ def main(
         click.echo("Browser runtime: ONNX Runtime Web WASM; preprocessing/export: CPU.")
     else:
         selected_device = _resolve_device(device or settings.device)
-    producer_revision = _producer_revision() if inference_runtime == "browser" else None
+    producer_revision = _producer_revision()
     selected_seed = settings.seed if seed is None else seed
     run_id = _run_id(sketch_wav, content_wav)
     pair_output = output_dir or settings.output_dir / run_id
@@ -666,6 +685,10 @@ def main(
         render,
         selected_device,
     )
+    try:
+        resolved_sketch_groups = model.resolve_enabled_sketch_groups(requested_sketch_groups)
+    except (TypeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
     sketch_audio = _load_audio(sketch_wav, render)
     content_audio = _load_audio(content_wav, render)
     batch = _prepare_inputs(
@@ -688,6 +711,21 @@ def main(
     spec = param_specs[render.param_spec_name]
     target_params_path = content_wav.with_suffix(".params.npy")
     target_params = np.load(target_params_path) if target_params_path.is_file() else None
+    provenance = {
+        "checkpoint": checkpoint_source,
+        "checkpoint_sha256": selected_checkpoint_sha256.lower(),
+        "stats": stats,
+        "stats_sha256": selected_stats_sha256.lower(),
+        "render": render.model_dump(mode="json"),
+        "seed": selected_seed,
+        "git_revision": producer_revision,
+        "sketch_groups": {
+            "requested": (
+                None if requested_sketch_groups is None else list(requested_sketch_groups)
+            ),
+            "resolved": list(resolved_sketch_groups),
+        },
+    }
     for content_strength, sketch_strength in grid:
         arm = cfg_arm_name(content_strength, sketch_strength)
         arm_dir = pair_output / "arms" / arm
@@ -705,20 +743,10 @@ def main(
                 sample_steps=selected_steps,
                 output_dir=arm_dir / "browser",
                 port=browser_port,
+                enabled_sketch_groups=resolved_sketch_groups,
             )
             (arm_dir / "browser/provenance.json").write_text(
-                json.dumps(
-                    {
-                        "checkpoint": checkpoint_source,
-                        "checkpoint_sha256": selected_checkpoint_sha256.lower(),
-                        "stats": stats,
-                        "stats_sha256": selected_stats_sha256.lower(),
-                        "render": render.model_dump(mode="json"),
-                        "seed": selected_seed,
-                        "git_revision": producer_revision,
-                    },
-                    indent=2,
-                )
+                json.dumps(provenance, indent=2), encoding="utf-8"
             )
         else:
             arm_dir.mkdir(parents=True)
@@ -729,9 +757,13 @@ def main(
                     content_cfg_strength=content_strength,
                     sketch_cfg_strength=sketch_strength,
                     sample_steps=selected_steps,
+                    enabled_sketch_groups=resolved_sketch_groups,
                 )
                 .detach()
                 .cpu()
+            )
+            (arm_dir / "provenance.json").write_text(
+                json.dumps(provenance, indent=2), encoding="utf-8"
             )
         write_wav(sketch_audio, str(arm_dir / "sketch.wav"), render.sample_rate, render.channels)
         write_wav(content_audio, str(arm_dir / "target.wav"), render.sample_rate, render.channels)
