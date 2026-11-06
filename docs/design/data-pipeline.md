@@ -1255,7 +1255,7 @@ redistribution conditions.
 
 Current generation writes `audio_mp3` and `audio_uuid` in the initial Lance fragment. `synth-setter-add-preview-columns` (`pipeline/data/add_preview_columns.py`) remains a manual utility for legacy Lance audio shards that lack those columns; there is no automated migration or compatibility path for existing datasets.
 
-Training hydration that reads only a subset of a finalized dataset's columns/rows can materialize a transaction-uuid-pinned local copy via `materialize_lance_subset` (`pipeline/data/lance_materialize.py`) instead of transferring the whole dataset directory; a sidecar manifest gates cache reuse by request hash.
+Training hydration that reads only a subset of a finalized dataset's columns/rows can materialize a transaction-uuid-pinned local copy via `materialize_lance_subset` (`pipeline/data/lance_materialize.py`) instead of transferring the whole dataset directory. A sidecar manifest gates reuse: its stored request hash must remain exact, while a new projection may reuse the cache when its columns are a subset and the source, snapshot, row limit, and local Lance identity still match.
 
 Stage order would remain static and explicit — user runs commands in sequence. If the number of stages grows to 4-6 and manual commands become unwieldy, adopt Prefect rather than building a homegrown orchestrator.
 

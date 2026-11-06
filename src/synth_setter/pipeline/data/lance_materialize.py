@@ -3,8 +3,9 @@
 Streams a projected scan of one source snapshot into a fresh local Lance
 dataset, so hydration transfers only the columns and rows a training run
 reads instead of the whole dataset directory. A manifest inside the
-materialized directory records the request and gates cache reuse: a rerun with
-the same request reuses the local copy; any drift fails loudly.
+materialized directory records the request and gates cache reuse: a request
+may reuse an intact copy containing every requested column; all other drift
+fails loudly.
 """
 
 from __future__ import annotations
@@ -334,15 +335,28 @@ def _read_manifest(manifest_path: Path) -> MaterializeManifest:
 
 def _manifest_matches_request(
     manifest: MaterializeManifest,
-    requested_hash: str,
+    *,
+    source_uri: str,
+    txid: str | None,
+    resolved_version: int,
+    columns: tuple[str, ...],
+    limit: int | None,
     resolved_txid: str | None,
 ) -> bool:
     """Return whether a sidecar covers the request and selected source identity.
 
+    The stored hash remains an exact integrity check over the manifest. Reuse
+    compatibility is separate: a materialized projection may contain extra
+    columns, but every other request field must match exactly.
+
     :param manifest: Parsed sidecar manifest.
-    :param requested_hash: Hash of the current materialization request.
+    :param source_uri: Current request's source URI.
+    :param txid: Current request's transaction uuid, or ``None``.
+    :param resolved_version: Source version selected by the current request.
+    :param columns: Current request's projected columns.
+    :param limit: Current request's row cap.
     :param resolved_txid: Current source transaction for an unpinned request.
-    :returns: Whether the manifest is internally sound and current.
+    :returns: Whether the manifest is internally sound and covers the request.
     """
     stored_hash = request_hash(
         manifest.source_uri,
@@ -352,13 +366,17 @@ def _manifest_matches_request(
         manifest.limit,
     )
     if manifest.txid is not None:
-        source_matches = manifest.resolved_txid in (None, manifest.txid)
+        source_identity_matches = manifest.resolved_txid in (None, manifest.txid)
     else:
-        source_matches = manifest.resolved_txid == resolved_txid
+        source_identity_matches = manifest.resolved_txid == resolved_txid
     return (
         manifest.request_hash == stored_hash
-        and manifest.request_hash == requested_hash
-        and source_matches
+        and manifest.source_uri == source_uri
+        and manifest.txid == txid
+        and manifest.resolved_version == resolved_version
+        and set(columns).issubset(manifest.columns)
+        and manifest.limit == limit
+        and source_identity_matches
     )
 
 
@@ -435,8 +453,15 @@ def _reuse_or_raise(
     requested_version = (
         manifest.resolved_version if resolved_version is None else resolved_version
     )
-    requested_hash = request_hash(source_uri, txid, requested_version, columns, limit)
-    if not _manifest_matches_request(manifest, requested_hash, resolved_txid):
+    if not _manifest_matches_request(
+        manifest,
+        source_uri=source_uri,
+        txid=txid,
+        resolved_version=requested_version,
+        columns=columns,
+        limit=limit,
+        resolved_txid=resolved_txid,
+    ):
         raise ValueError(
             f"materialize request hash mismatch for {dest_path}: sidecar was written "
             f"for source={manifest.source_uri!r} txid={manifest.txid!r} "

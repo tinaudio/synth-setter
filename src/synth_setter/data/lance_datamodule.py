@@ -1022,6 +1022,7 @@ class LanceVSTDataModule(VSTDataModule):
         :raises ValueError: The active record's directory does not exist, so the
             materializer was never started and the run could never grow.
         """
+        self._select_compatible_dataset_root()
         if (
             self.growing_active_record is not None
             and not self.growing_active_record.parent.is_dir()

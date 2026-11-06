@@ -99,7 +99,9 @@ train.yaml + defaults (experiment, datamodule, model, trainer, callbacks, logger
 - `datamodule.download_dataset_root_uri` hydrates a finalized `r2://` or absolute
   `file://` root into a request-addressed child of `dataset_root`. The source must
   contain `dataset.complete`; optional per-split transaction pins select snapshots,
-  and `download_dataset_row_limit` must be positive when set
+  and `download_dataset_row_limit` must be positive when set. A narrower column
+  projection reuses a complete compatible sibling cache without rewriting it;
+  source, snapshot, row-limit, manifest, and local Lance integrity checks remain exact
 - `render:` defaults to `null`; a render group (e.g. `render=vst`) is required when
   `training.val_audio_probe=true`, mirroring §2.4's eval-side `render:` requirement —
   under the default `val_audio_probe: auto` the probe just stays off without one

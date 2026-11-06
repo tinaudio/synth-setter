@@ -2077,6 +2077,59 @@ def test_evaluate_row_limited_file_uri_hydration_without_txids(
         datamodule.teardown("test")
 
 
+def test_evaluate_narrower_hydration_reuses_complete_superset_cache(
+    cfg_train_lance: DictConfig,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The eval entrypoint consumes a compatible broader hydration cache.
+
+    :param cfg_train_lance: Composed Lance config supplying the source dataset.
+    :param tmp_path: Parent of the shared local hydration destination.
+    :param monkeypatch: Replaces only the separately tested rclone sidecar boundary.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    destination = tmp_path / "local-dataset"
+
+    def copy_stats(_source_uri: str, dest_path: Path, exclude: str | None = None) -> None:
+        del _source_uri, exclude
+        dest_path.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / "stats.npz", dest_path / "stats.npz")
+
+    monkeypatch.setattr(
+        "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+        copy_stats,
+    )
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        destination,
+        mode="test",
+        param_spec_name=str(cfg_train_lance.datamodule.param_spec_name),
+        datamodule="surge_lance",
+    )
+    with open_dict(cfg):
+        cfg.datamodule.download_dataset_root_uri = source.as_uri()
+        cfg.datamodule.predict_file = None
+    broad = instantiate(cfg.datamodule)
+    broad.prepare_data()
+    broad_manifest = (broad.dataset_root / "test.lance" / "_materialize.json").read_bytes()
+    with open_dict(cfg):
+        cfg.datamodule.predict_file = str(tmp_path / "external" / "predict.lance")
+
+    HydraConfig().set_config(cfg)
+    metric_dict, object_dict = evaluate(cfg)
+
+    hydrated = object_dict["datamodule"]
+    assert hydrated.dataset_root == broad.dataset_root
+    assert torch.isfinite(metric_dict["test/param_mse"])
+    assert (broad.dataset_root / "test.lance" / "_materialize.json").read_bytes() == broad_manifest
+    assert lance.dataset(str(broad.dataset_root / "test.lance")).schema.names == [
+        "param_array",
+        "mel_spec",
+        "audio",
+    ]
+
+
 def test_evaluate_test_mode_hydrates_only_the_test_split(
     cfg_train_lance: DictConfig,
     tmp_path: Path,

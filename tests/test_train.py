@@ -1385,6 +1385,46 @@ def test_train_file_uri_hydrates_marker_staged_local_dataset_root(
 
 
 @pytest.mark.slow
+def test_train_narrower_hydration_reuses_complete_superset_cache(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """The train entrypoint consumes a compatible broader hydration cache.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the shared local hydration destination.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    destination = tmp_path / "local-dataset"
+    broad = instantiate(
+        cfg_train_lance.datamodule,
+        dataset_root=str(destination),
+        download_dataset_root_uri=source.as_uri(),
+        predict_file=None,
+    )
+    broad.prepare_data()
+    broad_manifest = (broad.dataset_root / "test.lance" / "_materialize.json").read_bytes()
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+        cfg_train_lance.datamodule.predict_file = str(tmp_path / "external" / "predict.lance")
+        cfg_train_lance.test = False
+
+    HydraConfig().set_config(cfg_train_lance)
+    metric_dict, object_dict = train(cfg_train_lance)
+
+    hydrated = object_dict["datamodule"]
+    assert hydrated.dataset_root == broad.dataset_root
+    assert object_dict["trainer"].global_step > 0
+    assert torch.isfinite(metric_dict["train/loss"])
+    assert (broad.dataset_root / "test.lance" / "_materialize.json").read_bytes() == broad_manifest
+    assert lance.dataset(str(broad.dataset_root / "test.lance")).schema.names == [
+        "param_array",
+        "mel_spec",
+        "audio",
+    ]
+
+
+@pytest.mark.slow
 def test_train_without_test_stage_never_hydrates_the_test_split(
     cfg_train_lance: DictConfig, tmp_path: Path
 ) -> None:
