@@ -797,11 +797,11 @@ def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
 
 
 @pytest.fixture
-def cfg_torchsynth_same_online_train(tmp_path: Path) -> DictConfig:
-    """Compose one CPU step through frozen SAME-S conditioning.
+def cfg_torchsynth_same_online_ast_train(tmp_path: Path) -> DictConfig:
+    """Compose one CPU step through frozen SAME-S AST conditioning.
 
     :param tmp_path: Output root and tiny SAME checkpoint parent.
-    :returns: Ready-to-run tiny SAME-S TorchSynth training configuration.
+    :returns: Ready-to-run tiny SAME-S AST TorchSynth training configuration.
     """
     from synth_setter.same import SAME_SAMPLE_RATE
     from tests.helpers.same_reference import TINY_SAME_LATENT_DIM, write_tiny_same_checkpoint

@@ -1397,14 +1397,14 @@ def test_eval_torchsynth_clap_online_validates_real_offline_backbone(
 
 
 @pytest.mark.slow
-def test_eval_torchsynth_same_online_validates_real_offline_backbone(
-    cfg_torchsynth_same_online_train: DictConfig,
+def test_eval_torchsynth_same_online_ast_validates_real_offline_backbone(
+    cfg_torchsynth_same_online_ast_train: DictConfig,
 ) -> None:
-    """The eval entrypoint validates raw audio through a real tiny SAME model.
+    """The eval entrypoint validates raw audio through a real tiny SAME AST model.
 
-    :param cfg_torchsynth_same_online_train: Offline tiny-SAME production configuration.
+    :param cfg_torchsynth_same_online_ast_train: Offline tiny-SAME AST configuration.
     """
-    cfg = cfg_torchsynth_same_online_train
+    cfg = cfg_torchsynth_same_online_ast_train
     with open_dict(cfg):
         cfg.mode = "validate"
         cfg.ckpt_path = None

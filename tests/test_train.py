@@ -829,16 +829,16 @@ def test_train_torchsynth_clap_online_advances_one_cpu_step(
 
 
 @pytest.mark.slow
-def test_train_torchsynth_same_online_advances_one_cpu_step(
-    cfg_torchsynth_same_online_train: DictConfig,
+def test_train_torchsynth_same_online_ast_advances_one_cpu_step(
+    cfg_torchsynth_same_online_ast_train: DictConfig,
 ) -> None:
-    """Run the workflow-default TorchSynth SAME experiment for one CPU step.
+    """Run the workflow-default TorchSynth SAME AST experiment for one CPU step.
 
-    :param cfg_torchsynth_same_online_train: Tiny production-path SAME configuration.
+    :param cfg_torchsynth_same_online_ast_train: Tiny production-path SAME AST configuration.
     """
-    HydraConfig().set_config(cfg_torchsynth_same_online_train)
+    HydraConfig().set_config(cfg_torchsynth_same_online_ast_train)
 
-    metric_dict, object_dict = train(cfg_torchsynth_same_online_train)
+    metric_dict, object_dict = train(cfg_torchsynth_same_online_ast_train)
 
     assert object_dict["trainer"].global_step == 1
     assert_finite_train_loss(metric_dict)
@@ -858,16 +858,16 @@ def test_train_torchsynth_same_online_advances_one_cpu_step(
 
 @pytest.mark.slow
 def test_generic_launcher_runs_workflow_default_train_entrypoint(
-    cfg_torchsynth_same_online_train: DictConfig,
+    cfg_torchsynth_same_online_ast_train: DictConfig,
     tmp_path: Path,
 ) -> None:
     """Run one workflow-default training step through the decorated launcher CLI.
 
-    :param cfg_torchsynth_same_online_train: Tiny SAME configuration supplying checkpoints.
+    :param cfg_torchsynth_same_online_ast_train: Tiny SAME AST configuration supplying checkpoints.
     :param tmp_path: Output root for launcher and worker subprocesses.
     """
     repo_root = Path(__file__).parents[1]
-    cfg = cfg_torchsynth_same_online_train
+    cfg = cfg_torchsynth_same_online_ast_train
     worker_command = shlex.join(
         [
             "exec",

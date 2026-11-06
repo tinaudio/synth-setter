@@ -1,0 +1,6 @@
+# @package _global_
+
+# Opt-in SAME-S AST conditioning preserves frozen temporal latents as patches.
+defaults:
+  - same_s_online
+  - override /model/encoder: same_online_ast
