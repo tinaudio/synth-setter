@@ -1,5 +1,6 @@
 """Shared VST datamodule configuration and model-batch preparation."""
 
+import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
@@ -33,6 +34,8 @@ from synth_setter.pipeline.data.lance_materialize import (
     resolve_latest_versions,
     subset_dirname,
 )
+
+logger = logging.getLogger(__name__)
 
 _SEED_BOUND = torch.iinfo(torch.int64).max
 _MATERIALIZE_SPLITS = ("train", "val", "test")
@@ -516,6 +519,7 @@ class VSTDataModule(LightningDataModule):
             path
             for path in self._configured_dataset_root.iterdir()
             if path.is_dir()
+            and not path.is_symlink()
             and path != self._requested_dataset_root
             and all(
                 (path / f"{split}{self.shard_suffix}").is_dir()
@@ -549,7 +553,13 @@ class VSTDataModule(LightningDataModule):
                     columns=columns,
                     limit=self.download_dataset_row_limit,
                 )
-        except (LookupError, ValueError):
+        except (LookupError, ValueError) as error:
+            logger.warning(
+                "Skipping incompatible hydration cache %s (%s)",
+                candidate,
+                type(error).__name__,
+                exc_info=error,
+            )
             return False
         return True
 

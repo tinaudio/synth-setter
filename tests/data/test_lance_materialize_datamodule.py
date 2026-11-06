@@ -425,6 +425,7 @@ class TestMaterializedSubsetLayout:
         second = destination / "zzz-compatible"
         shutil.copytree(broad.dataset_root, first)
         shutil.copytree(broad.dataset_root, second)
+        (destination / "000-alias").symlink_to(second.name, target_is_directory=True)
         shutil.rmtree(broad.dataset_root)
         narrow = LanceVSTDataModule(
             dataset_root=destination,
