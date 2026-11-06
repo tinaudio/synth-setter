@@ -95,7 +95,7 @@ class SketchControlTokens(nn.Module):
             raise ValueError("nondefault temporal resampling is supported only for music controls")
         self.median_filter_max_kernel_size = median_filter_max_kernel_size
         self.median_filter_max_window_fraction = median_filter_max_window_fraction
-        self.temporal_resampling = temporal_resampling
+        self.temporal_resampling: SketchTemporalResampling = temporal_resampling
         self.effective_median_filter_max_kernel_size = effective_median_filter_max_kernel_size(
             median_filter_max_kernel_size,
             median_filter_max_window_fraction,

@@ -15,6 +15,7 @@ from synth_setter.conditioning import (
     SKETCH_PITCH_SLICE,
     SKETCH_STORAGE_FRAMES,
     SketchControlSpec,
+    SketchTemporalResampling,
 )
 
 
@@ -80,7 +81,7 @@ def random_median_filter_sketch_controls(
 def resample_sketch_controls(
     controls: Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"],
     output_frames: int,
-    mode: str,
+    mode: SketchTemporalResampling,
 ) -> Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} output_frames"]:
     """Resample controls onto a positive temporal grid.
 
@@ -88,12 +89,10 @@ def resample_sketch_controls(
     :param output_frames: Positive output-grid length.
     :param mode: ``average`` for adaptive average pooling or ``linear`` interpolation.
     :returns: Resampled controls with input dtype and device preserved.
-    :raises ValueError: The source or output grid is empty, or the mode is unsupported.
+    :raises ValueError: The source or output grid is empty.
     """
     if controls.shape[-1] == 0 or output_frames <= 0:
         raise ValueError("Sketch resampling requires nonempty input and positive output frames")
-    if mode not in {"average", "linear"}:
-        raise ValueError("Sketch resampling mode must be 'average' or 'linear'")
     if controls.shape[-1] == output_frames:
         return controls.clone()
     if mode == "average":

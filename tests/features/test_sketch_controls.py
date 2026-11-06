@@ -6,6 +6,7 @@ import librosa
 import numpy as np
 import pytest
 import torch
+from jaxtyping import TypeCheckError
 
 from synth_setter.data.vst.shapes import mel_hop_length
 from synth_setter.features import sketch_controls
@@ -163,7 +164,7 @@ def test_resample_sketch_controls_unknown_mode_rejected(mode: str) -> None:
     :param mode: Unsupported mode under test.
     """
     controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 4)
-    with pytest.raises(ValueError, match="average.*linear"):
+    with pytest.raises(TypeCheckError, match="SketchTemporalResampling"):
         resample_sketch_controls(controls, output_frames=2, mode=mode)  # type: ignore[arg-type]
 
 

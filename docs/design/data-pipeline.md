@@ -1186,7 +1186,8 @@ fraction is `0.15625`, which yields 5, 10, and 15 frames on 32-, 64-, and 96-tok
 grids. Five frames preserve the prior duration only for the fixed four-second,
 32-token setup; the setting is a grid fraction, not milliseconds. A literal
 `median_filter_max_kernel_size` remains available for checkpoint compatibility, and
-cannot be combined with a fraction unless its value is the disabled default of 1.
+cannot be combined with a fraction unless its value is the disabled default of 1. Because `sketch=on` sets the fraction, a literal override must also clear it:
+`model.sketch_controls.median_filter_max_kernel_size=3 model.sketch_controls.median_filter_max_window_fraction=null`.
 Evaluation and browser export do not filter controls. Its `IndexSpec` fixes
 `num_sub_vectors=2` — the only practical PQ split for the pooled
 vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
