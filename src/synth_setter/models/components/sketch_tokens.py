@@ -87,11 +87,11 @@ class SketchControlTokens(nn.Module):
                 raise ValueError(
                     "median_filter_max_window_fraction requires median_filter_max_kernel_size=1"
                 )
-        if profile != "music" and (
+        if profile not in ("music", "music_tiv") and (
             median_filter_max_kernel_size != 1 or median_filter_max_window_fraction is not None
         ):
             raise ValueError("median filtering is supported only for music sketch controls")
-        if profile != "music" and temporal_resampling != "average":
+        if profile not in ("music", "music_tiv") and temporal_resampling != "average":
             raise ValueError("nondefault temporal resampling is supported only for music controls")
         self.median_filter_max_kernel_size = median_filter_max_kernel_size
         self.median_filter_max_window_fraction = median_filter_max_window_fraction
@@ -132,7 +132,7 @@ class SketchControlTokens(nn.Module):
         :returns: Control tokens with the temporal encoding added.
         """
         self._validate_inputs(controls, keep)
-        if self.layout.profile == "music":
+        if self.layout.profile in ("music", "music_tiv"):
             temporal_controls = resample_sketch_controls(
                 controls,
                 self.positional_encoding.shape[1],

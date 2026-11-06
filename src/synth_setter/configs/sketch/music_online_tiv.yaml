@@ -1,0 +1,10 @@
+# @package _global_
+
+defaults:
+  - music_online
+  - _self_
+
+model:
+  sketch_controls:
+    profile: music_tiv
+    tiv_backend: torch

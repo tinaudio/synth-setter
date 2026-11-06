@@ -187,6 +187,17 @@ It processes at most 32 rows per CQT call; override
 memory. Model compilation is disabled for this profile pending support for
 compiled frozen waveform encoders.
 
+To add TIV alongside online loudness, centroid, and pitch, select
+`sketch=music_online_tiv` (for example with `experiment=surge/flow_sketch_prelim`).
+This variant inherits `music_online`'s sample rate, 96-frame/token grid, pitch
+threshold, temporal resampling, and training-time median augmentation. It appends
+12 signed TIV coordinates to the 386 music channels, with four independently
+masked groups: `loudness`, `centroid`, `pitch`, and `tiv`. Pitch thresholding only
+affects the pitch group. All four groups share temporal reduction and the sampled
+median-filter window. TIV uses the PyTorch frontend described below on the audio
+device; no stored sketch column is needed. The four-group layout requires a new
+checkpoint; existing `music_online` checkpoints retain their three-group layout.
+
 To derive tonal interval vectors from each waveform during training instead of
 reading a stored sketch column:
 

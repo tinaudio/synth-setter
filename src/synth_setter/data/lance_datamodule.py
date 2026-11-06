@@ -1039,7 +1039,7 @@ class LanceVSTDataModule(VSTDataModule):
         self._select_compatible_dataset_root()
         if (
             self.sketch_controls is not None
-            and self.sketch_controls.profile == "music"
+            and self.sketch_controls.profile in ("music", "music_tiv")
             and self.sketch_controls.source == "online"
         ):
             # Warm the canonical weights before workers fork; no device argument, so a
@@ -1218,7 +1218,7 @@ class LanceVSTDataModule(VSTDataModule):
             raise ValueError("online sketch extraction requires batch audio")
         if sketch.sample_rate is None:
             raise ValueError("online sketch extraction requires sample_rate")
-        if sketch.profile == "music":
+        if sketch.profile in ("music", "music_tiv"):
             model_batch[SKETCH_CTRL_FIELD] = extract_music_sketch_controls(
                 audio, sketch.sample_rate, sketch
             )

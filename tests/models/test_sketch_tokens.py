@@ -883,3 +883,33 @@ class TestApproxEquivTransformerControlTokens:
         )
         assert out.shape == (_BATCH, 6)
         assert torch.isfinite(out).all()
+
+
+@pytest.mark.parametrize("mode", ["average", "linear"])
+def test_music_tiv_tokens_mask_tiv_independently(mode: Literal["average", "linear"]) -> None:
+    """Dropping TIV retains precisely the original three music projections.
+
+    :param mode: Shared temporal reduction before group projection.
+    """
+    module = _tokens_module(profile="music_tiv", temporal_resampling=mode)
+    music = _tokens_module(temporal_resampling=mode)
+    music.load_state_dict(
+        {
+            key: value
+            for key, value in module.state_dict().items()
+            if key != "projections.tiv.weight"
+        }
+    )
+    controls = torch.cat((_controls(), torch.full((_BATCH, 12, _NUM_FRAMES), -2.0)), dim=1)
+    keep_music = torch.tensor([[True, True, True, False]]).expand(_BATCH, -1)
+
+    masked = module(controls, keep_music)
+
+    torch.testing.assert_close(masked, music(controls[:, :386], _keep_all()))
+    assert not torch.equal(masked, module(controls, torch.ones(_BATCH, 4, dtype=torch.bool)))
+
+
+def test_music_tiv_spec_stored_source_rejected() -> None:
+    """Combined controls cannot be read from a stored music-only column."""
+    with pytest.raises(ValueError, match="music_tiv sketch requires source='online'"):
+        SketchControlSpec(profile="music_tiv", num_frames=96)

@@ -33,7 +33,7 @@ from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
 from lightning.pytorch import Callback, LightningModule, Trainer
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationKeyError
 from PIL import Image
 
@@ -2342,6 +2342,7 @@ def test_train_flow_sketch_cfg_ablation_returns_finite_loss(
         # Loudness is never zero-binned, so its zero-initialised projection always
         # receives a nonzero gradient; pitch bins under the threshold can leave it exactly 0.
         ("music_online", "music", "loudness"),
+        ("music_online_tiv", "music_tiv", "tiv"),
         ("tiv_online_gpu", "tiv", "tiv"),
         ("tiv_online_cpu", "tiv", "tiv"),
     ],
@@ -2361,7 +2362,7 @@ def test_train_fast_dev_run_online_sketch_extracts_audio_controls(
     """
     if profile == "tiv_online_cpu":
         pytest.importorskip("essentia")
-    if profile == "music_online":
+    if expected_profile in ("music", "music_tiv"):
         from tests.helpers.lance_fixtures import write_lance_shard
 
         dataset_root = Path(cfg_train_sketch_lance.datamodule.dataset_root)
@@ -2378,11 +2379,16 @@ def test_train_fast_dev_run_online_sketch_extracts_audio_controls(
                     "m2l": rng.standard_normal((4, 128, 42)).astype(np.float32),
                 },
             )
-    sketch_config = OmegaConf.load(
-        Path(__file__).parents[1] / "src/synth_setter/configs/sketch" / f"{profile}.yaml"
-    )
+    with hydra.initialize_config_dir(
+        config_dir=str(Path(__file__).parents[1] / "src/synth_setter/configs"),
+        version_base="1.3",
+    ):
+        sketch_config = hydra.compose(
+            config_name="train.yaml",
+            overrides=["experiment=surge/flow_sketch_prelim", f"sketch={profile}"],
+        )
     cfg_train_sketch_lance.model.sketch_controls = sketch_config.model.sketch_controls
-    if profile == "music_online":
+    if expected_profile in ("music", "music_tiv"):
         with open_dict(cfg_train_sketch_lance.callbacks):
             cfg_train_sketch_lance.callbacks.projection_snapshot = {
                 "_target_": "tests.test_train._SketchProjectionSnapshot",
@@ -2403,7 +2409,7 @@ def test_train_fast_dev_run_online_sketch_extracts_audio_controls(
     assert "sketch" not in datamodule.projection["val"]
     assert "sketch" not in datamodule.projection["test"]
     projection = model.sketch_tokens.projections[expected_group].weight.detach()
-    if profile == "music_online":
+    if expected_profile in ("music", "music_tiv"):
         snapshot = next(
             callback
             for callback in trainer.callbacks
@@ -2413,7 +2419,7 @@ def test_train_fast_dev_run_online_sketch_extracts_audio_controls(
         assert not torch.equal(projection.cpu(), snapshot.before.cpu())
     assert all("pesto" not in key.lower() for key in model.state_dict())
     assert torch.isfinite(metric_dict["train/loss"])
-    if profile == "music_online":
+    if expected_profile in ("music", "music_tiv"):
         checkpoint = Path(cfg_train_sketch_lance.paths.output_dir) / "online-music.ckpt"
         trainer.save_checkpoint(checkpoint)
         state = torch.load(checkpoint, map_location="cpu", weights_only=False)["state_dict"]
@@ -2433,7 +2439,7 @@ def test_train_fast_dev_run_online_sketch_extracts_audio_controls(
     assert isinstance(controls, torch.Tensor)
     assert torch.count_nonzero(controls) > 0
 
-    if profile == "music_online":
+    if expected_profile in ("music", "music_tiv"):
         with open_dict(cfg_train_sketch_lance):
             cfg_train_sketch_lance.ckpt_path = str(checkpoint)
             cfg_train_sketch_lance.trainer.fast_dev_run = False

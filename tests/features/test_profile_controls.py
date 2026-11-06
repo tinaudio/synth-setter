@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.conditioning import SketchControlSpec
+from synth_setter.conditioning import SketchControlSpec, SketchTemporalResampling
 from synth_setter.features import profile_controls
 from synth_setter.features.profile_controls import (
     extract_music_sketch_controls,
@@ -169,3 +169,47 @@ def test_music_batch_extraction_matches_single_clip_rows_without_autograd() -> N
     single = extract_profile_controls(audio[1].detach().numpy(), _SAMPLE_RATE, spec)
     one_row = extract_music_sketch_controls(audio[1:].detach(), _SAMPLE_RATE, spec)
     torch.testing.assert_close(one_row, single, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("mode", ["average", "linear"])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_music_tiv_extraction_preserves_music_and_signed_tiv(
+    mode: SketchTemporalResampling, device: str
+) -> None:
+    """The combined profile appends unthresholded TIV on the music frame grid.
+
+    :param mode: Temporal reduction shared by the four groups.
+    :param device: Waveform and extraction device.
+    """
+    from synth_setter.features.tiv import extract_tiv_batch
+    from synth_setter.sketch import resample_sketch_controls
+
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("requires CUDA")
+    time = torch.arange(_SAMPLE_RATE, dtype=torch.float32, device=device) / _SAMPLE_RATE
+    audio = torch.sin(2.0 * torch.pi * 440.0 * time)[None, None]
+    spec = SketchControlSpec(
+        profile="music_tiv",
+        source="online",
+        sample_rate=_SAMPLE_RATE,
+        num_frames=96,
+        num_control_tokens=96,
+        temporal_resampling=mode,
+        pitch_zero_threshold=1.0,
+    )
+
+    controls = extract_music_sketch_controls(audio.requires_grad_(True), _SAMPLE_RATE, spec)
+
+    music = extract_music_sketch_controls(
+        audio, _SAMPLE_RATE, spec.model_copy(update={"profile": "music"})
+    )
+    tiv = resample_sketch_controls(extract_tiv_batch(audio, _SAMPLE_RATE), 96, mode)
+    torch.testing.assert_close(controls[:, :386], music)
+    torch.testing.assert_close(controls[:, 386:], tiv)
+    assert (controls[:, 386:] < 0).any()
+    assert controls.shape == (1, 398, 96)
+    assert controls.requires_grad is False
+    assert controls.device == audio.device
+    offline = extract_profile_controls(audio[0].detach().cpu().numpy(), _SAMPLE_RATE, spec)
+    cpu_controls = extract_music_sketch_controls(audio.detach().cpu(), _SAMPLE_RATE, spec)
+    torch.testing.assert_close(offline, cpu_controls)
