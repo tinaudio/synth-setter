@@ -68,6 +68,7 @@ def _midpoint_patch(identity: str) -> dict[str, float]:
 @pytest.mark.parametrize(
     ("identity", "channels"),
     [
+        ("faust_augmentor", 2),
         ("faust_bright_organ", 2),
         ("faust_bubble", 2),
         ("faust_church_organ", 2),
