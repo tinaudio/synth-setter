@@ -557,7 +557,7 @@ class VSTDataModule(LightningDataModule):
                     columns=columns,
                     limit=self.download_dataset_row_limit,
                 )
-        except (LookupError, ValueError) as error:
+        except (LookupError, RuntimeError, ValueError) as error:
             logger.warning(
                 "Skipping incompatible hydration cache %s (%s)",
                 candidate,

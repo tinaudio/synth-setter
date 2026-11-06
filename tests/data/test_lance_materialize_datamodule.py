@@ -12,7 +12,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import hydra
 import lance
@@ -22,6 +22,7 @@ import torch
 from omegaconf import OmegaConf
 
 from synth_setter.conditioning import ConditioningMode
+from synth_setter.data import vst_datamodule
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.lance_shard import LANCE_DATA_STORAGE_VERSION
@@ -440,6 +441,54 @@ class TestMaterializedSubsetLayout:
         narrow.prepare_data()
 
         assert narrow.dataset_root == first
+
+    def test_prepare_data_retry_exhaustion_skips_to_next_compatible_sibling(
+        self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A transiently unreadable sibling does not hide a later compatible cache.
+
+        :param source_root: Fixture-provided hydration source.
+        :param tmp_path: Parent of the shared local dataset root.
+        :param monkeypatch: Fixture replacing sidecars and one destination probe.
+        """
+        destination = tmp_path / "local"
+        monkeypatch.setattr(
+            "synth_setter.data.vst_datamodule.r2_io.download_dir_no_overwrite",
+            _sidecar_copier(source_root)[0],
+        )
+        txids = _txids(source_root)
+        broad = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_txids=txids,
+            param_spec_name=_PARAM_SPEC,
+        )
+        broad.prepare_data()
+        first = destination / "aaa-flaky"
+        second = destination / "bbb-compatible"
+        shutil.copytree(broad.dataset_root, first)
+        shutil.copytree(broad.dataset_root, second)
+        shutil.rmtree(broad.dataset_root)
+        materialize = vst_datamodule.materialize_lance_subset
+
+        def fail_first(*args: Any, **kwargs: Any) -> Path:
+            dest_path = cast(Path, args[1])
+            if first in dest_path.parents:
+                raise RuntimeError("retry exhaustion")
+            return materialize(*args, **kwargs)
+
+        monkeypatch.setattr(vst_datamodule, "materialize_lance_subset", fail_first)
+        narrow = LanceVSTDataModule(
+            dataset_root=destination,
+            download_dataset_root_uri=source_root.as_uri(),
+            download_dataset_txids=txids,
+            predict_file=tmp_path / "elsewhere" / "predict.lance",
+            param_spec_name=_PARAM_SPEC,
+        )
+
+        narrow.prepare_data()
+
+        assert narrow.dataset_root == second
 
     def test_prepare_data_concurrent_alias_publishers_share_first_winner(
         self, source_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
