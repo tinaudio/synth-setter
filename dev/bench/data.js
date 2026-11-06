@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793991866784,
+  "lastUpdate": 1793996070501,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -18222,6 +18222,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.012003540992736816,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8402597777237be94b867064fa4aefaf51bda49c",
+          "message": "internal-feat(training): extract music sketches online (#3739)\n\n* internal-feat(training): extract music sketches online\n\n* internal-fix(training): unify online music-sketch path, cache front end\n\nThe raw-to-checkpoint music pipeline was hand-rolled in both datamodule hooks\nand the offline extractor with divergent autograd policy; one no_grad helper\nnow serves all three. Setup warms the canonical PESTO weights without a device\nargument so an accelerator-resident model is no longer pulled back to CPU on\nevery stage. The loudness resampler, STFT windows, and A-weighting curve are\ncached per rate, device, and dtype instead of being rebuilt every step.\n\nTests assert the hook's contract against sinusoid content rather than the\nfunctions it calls, probe the loudness projection (never zero-binned) for the\ntraining update, and use one-second fixtures so the dense frame grid is\nsatisfiable under the new minimum-frame check.\n\nRefs #3734\n\n* internal-fix(testing): patch the batched extractor in the CLI test\n\nThe CLI preparation test still monkeypatched extract_sketch_controls on\nprofile_controls, which the shared music helper no longer imports, so the\nbrowser e2e lane failed with an AttributeError. Patch the batched extractor\nthe helper actually calls.\n\nRefs #3734",
+          "timestamp": "2026-11-06T13:18:35-05:00",
+          "tree_id": "5c1204292da45411b7b7df4643e166e29c2cff28",
+          "url": "https://github.com/tinaudio/synth-setter/commit/8402597777237be94b867064fa4aefaf51bda49c"
+        },
+        "date": 1793996065546,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 2.945542097091675,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 4.534752856097184,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.015909144654870033,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.009578227996826172,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 2.860300064086914,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 9.718338876166627,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.199664115905762,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.919994107373059,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.02773311361670494,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.030491769313812256,
             "unit": "1-cos"
           },
           {
