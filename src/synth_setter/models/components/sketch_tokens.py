@@ -132,7 +132,6 @@ class SketchControlTokens(nn.Module):
         :returns: Control tokens with the temporal encoding added.
         """
         self._validate_inputs(controls, keep)
-        keep_values = keep.to(controls.dtype)
         if self.layout.profile == "music":
             temporal_controls = resample_sketch_controls(
                 controls,
@@ -158,8 +157,12 @@ class SketchControlTokens(nn.Module):
         for group_index, (group, channel_slice) in enumerate(
             zip(self.layout.group_names, self.layout.group_slices, strict=True)
         ):
-            channels = temporal_controls[:, channel_slice]
-            channels = channels * keep_values[:, group_index, None, None]
+            # Select rather than multiply: a dropped group may carry NaN/inf (NaN * 0 is NaN).
+            channels = torch.where(
+                keep[:, group_index, None, None],
+                temporal_controls[:, channel_slice],
+                torch.zeros((), dtype=controls.dtype, device=controls.device),
+            )
             tokens = tokens + self.projections[group](channels.transpose(1, 2))
         return tokens
 

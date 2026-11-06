@@ -92,8 +92,9 @@ jobs:
               case for case in ET.parse("logs/browser-e2e.xml").findall(".//testcase")
               if case.get("classname") == "tests.integration.test_browser_surgepy_e2e"
           ]
-          assert len(cases) == 1, "Expected the real browser E2E test"
-          assert cases[0].find("skipped") is None, "Browser E2E must execute, not skip"
+          assert cases, "Expected the real browser E2E test"
+          for case in cases:
+              assert case.find("skipped") is None, "Browser E2E must execute, not skip"
           PY
       - name: Upload production-path evidence
         if: always()
@@ -110,7 +111,7 @@ jobs:
             logs/browser-e2e/**/params.csv
             logs/browser-e2e/**/browser/input.json
             logs/browser-e2e/**/browser/prediction.json
-            logs/browser-e2e/**/browser/provenance.json
+            logs/browser-e2e/**/provenance.json
             coverage.xml
       - name: Upload browser coverage
         if: always() && hashFiles('coverage.xml') != ''

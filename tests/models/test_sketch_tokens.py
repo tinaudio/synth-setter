@@ -336,6 +336,23 @@ class TestSketchControlTokens:
 
         torch.testing.assert_close(fractional_tokens, literal_tokens, rtol=0, atol=0)
 
+    def test_forward_disabled_group_with_nonfinite_controls_matches_clean_tokens(self) -> None:
+        """Masking removes a disabled group's values entirely, so NaN there cannot leak."""
+        module = SketchControlTokens(d_model=1, num_control_tokens=4).eval()
+        for projection in module.projections.values():
+            with torch.no_grad():
+                cast(torch.nn.Linear, projection).weight.fill_(1.0)
+        clean = torch.rand(1, NUM_SKETCH_CONTROLS, 4)
+        poisoned = clean.clone()
+        poisoned[:, SKETCH_CENTROID_ROW] = float("nan")
+        poisoned[:, SKETCH_PITCH_SLICE.start] = float("inf")
+        keep = torch.tensor(((True, False, False),))
+
+        tokens = module(poisoned, keep)
+
+        assert torch.isfinite(tokens).all()
+        torch.testing.assert_close(tokens, module(clean, keep), rtol=0, atol=0)
+
     def test_forward_eval_ignores_fractional_median_policy(self) -> None:
         """Evaluation with a fractional policy equals the disabled compatibility path."""
         fractional = SketchControlTokens(

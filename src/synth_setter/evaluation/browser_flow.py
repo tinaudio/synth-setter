@@ -4,6 +4,7 @@ import json
 import mimetypes
 import secrets
 import time
+from collections.abc import Sequence
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -57,6 +58,7 @@ def sample_in_browser(
     sample_steps: int,
     output_dir: Path,
     port: int = 0,
+    enabled_sketch_groups: Sequence[str] | None = None,
 ) -> torch.Tensor:
     """Export one pair and wait up to ten minutes for real browser inference.
 
@@ -68,6 +70,7 @@ def sample_in_browser(
     :param sample_steps: RK4 steps, between one and one thousand.
     :param output_dir: Empty graph bundle destination beneath the evaluation arm.
     :param port: Loopback port; zero selects an available port.
+    :param enabled_sketch_groups: Group names fixed into the exported conditioning graph.
     :returns: Browser-produced model-space parameter row for native rendering.
     :raises ValueError: Sampling settings or noise violate the browser contract.
     """
@@ -90,7 +93,12 @@ def sample_in_browser(
     if not torch.isfinite(guidance).all() or (guidance < 0).any():
         raise ValueError("browser guidance must be finite and non-negative")
     vendor = require_browser_assets()
-    export_flow_onnx(model, batch, output_dir)
+    export_flow_onnx(
+        model,
+        batch,
+        output_dir,
+        enabled_sketch_groups=enabled_sketch_groups,
+    )
     token = secrets.token_urlsafe(32)
     payload: dict[str, object] = {
         key: {"shape": list(batch[key].shape), "data": batch[key].flatten().tolist()}

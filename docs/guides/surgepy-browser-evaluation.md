@@ -160,8 +160,8 @@ logs/browser-demo/evaluation/arms/cfg-c2-s3/
 │   ├── conditioning.onnx
 │   ├── velocity.onnx
 │   ├── input.json          # normalized inputs, noise, branch weights, steps
-│   ├── prediction.json     # accepted browser parameter vector
-│   └── provenance.json     # artifact digests, source revision, renderer, seed
+│   └── prediction.json     # accepted browser parameter vector
+├── provenance.json         # artifact digests, source revision, renderer, seed, sketch groups
 ├── sketch.wav
 ├── target.wav
 ├── pred.wav
@@ -169,10 +169,12 @@ logs/browser-demo/evaluation/arms/cfg-c2-s3/
 └── metrics.csv
 ```
 
-`provenance.json` records the producing source checkout's `git_revision`, captured
-before preprocessing. A `-dirty` suffix covers staged, unstaged, and untracked
-changes; installations without their own source checkout report `git-unavailable`
-rather than borrowing the operator's current repository.
+`provenance.json` sits at the arm level for both runtimes. It records the
+producing source checkout's `git_revision`, captured before preprocessing (a
+`-dirty` suffix covers staged, unstaged, and untracked changes; installations
+without their own source checkout report `git-unavailable` rather than borrowing
+the operator's current repository), and `sketch_groups` with the `requested`
+selector (`null` when omitted) and the `resolved` group names in checkpoint order.
 
 `metrics.csv` contains MSS, weighted MFCC, spectral optimal transport, RMS
 similarity, MLDR, and mid/side MLDR. Finite metrics and audible output establish
