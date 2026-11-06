@@ -742,7 +742,7 @@ def main(
         if inference_runtime == "browser":
             from synth_setter.evaluation.browser_flow import sample_in_browser
 
-            prediction = sample_in_browser(
+            browser_result = sample_in_browser(
                 model,
                 batch,
                 noise,
@@ -753,7 +753,10 @@ def main(
                 port=browser_port,
                 enabled_sketch_groups=resolved_sketch_groups,
             )
+            prediction = browser_result.params
+            applied_sketch_groups = browser_result.sketch_groups
         else:
+            applied_sketch_groups = resolved_sketch_groups
             arm_dir.mkdir(parents=True)
             prediction = (
                 model.sample_batch(
@@ -767,8 +770,16 @@ def main(
                 .detach()
                 .cpu()
             )
+        # The page may toggle groups per arm, so the applied selection is recorded per arm.
+        arm_provenance = {
+            **provenance,
+            "sketch_groups": {
+                **provenance["sketch_groups"],
+                "applied": list(applied_sketch_groups),
+            },
+        }
         (arm_dir / "provenance.json").write_text(
-            json.dumps(provenance, indent=2), encoding="utf-8"
+            json.dumps(arm_provenance, indent=2), encoding="utf-8"
         )
         write_wav(sketch_audio, str(arm_dir / "sketch.wav"), render.sample_rate, render.channels)
         write_wav(content_audio, str(arm_dir / "target.wav"), render.sample_rate, render.channels)

@@ -228,9 +228,11 @@ synth-setter-sketch sketch.wav content.wav \
 
 Names and their order come from the loaded checkpoint (`loudness`, `centroid`, and `pitch` for the
 music profile; pyFDN checkpoints expose their own groups). Duplicate or unknown names fail instead
-of being ignored. The selection is fixed into browser ONNX exports, so browser inference has no
-runtime mask input or separate UI state. Every arm records the requested and resolved selection
-under `sketch_groups` in its `provenance.json`.
+of being ignored. In browser mode the selection is only the page's starting state: the exported
+conditioning graph takes a `sketch_keep` runtime mask, the page shows one checkbox per group, and
+the loopback server rejects a prediction whose groups are unknown or duplicated. Every arm records
+the `requested`, `resolved`, and `applied` selection under `sketch_groups` in its
+`provenance.json`; `applied` is what the page (or, natively, the CLI) actually kept.
 
 For repeatable standalone flow evaluation, opt in through the model config and provide the seed
 explicitly:

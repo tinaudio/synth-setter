@@ -854,6 +854,7 @@ def test_cli_local_grid_writes_every_arm_with_shared_noise(
         assert provenance["sketch_groups"] == {
             "requested": ["pitch"],
             "resolved": ["pitch"],
+            "applied": ["pitch"],
         }
         with AudioFile(str(arm_dir / "pred.wav")) as audio:
             assert audio.frames == 176400

@@ -5,6 +5,7 @@ import mimetypes
 import secrets
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -30,10 +31,32 @@ class BrowserPrediction(BaseModel, strict=True, extra="forbid"):
     .. attribute :: params
 
         Finite model-space parameter coordinates; width is checked against the checkpoint.
+
+    .. attribute :: sketch_groups
+
+        Group names the page kept; membership and uniqueness are checked against the checkpoint.
     """
 
     token: str = Field(pattern=r"^[A-Za-z0-9_-]+$")
     params: list[FiniteFloat] = Field(min_length=1)
+    sketch_groups: list[str]
+
+
+@dataclass(frozen=True)
+class BrowserResult:
+    """Validated browser inference output.
+
+    .. attribute :: params
+
+        Float32 model-space parameter row for native rendering.
+
+    .. attribute :: sketch_groups
+
+        Groups the page kept, in checkpoint layout order, for provenance.
+    """
+
+    params: torch.Tensor
+    sketch_groups: tuple[str, ...]
 
 
 def require_browser_assets() -> Path:
@@ -59,7 +82,7 @@ def sample_in_browser(
     output_dir: Path,
     port: int = 0,
     enabled_sketch_groups: Sequence[str] | None = None,
-) -> torch.Tensor:
+) -> BrowserResult:
     """Export one pair and wait up to ten minutes for real browser inference.
 
     :param model: CPU evaluation checkpoint with mel/sketch conditioning.
@@ -70,9 +93,9 @@ def sample_in_browser(
     :param sample_steps: RK4 steps, between one and one thousand.
     :param output_dir: Empty graph bundle destination beneath the evaluation arm.
     :param port: Loopback port; zero selects an available port.
-    :param enabled_sketch_groups: Group names fixed into the exported conditioning graph.
-    :returns: Browser-produced model-space parameter row for native rendering.
-    :raises ValueError: Sampling settings or noise violate the browser contract.
+    :param enabled_sketch_groups: Groups the page starts with; the viewer may toggle them.
+    :returns: Browser-produced parameter row and the groups the page actually kept.
+    :raises ValueError: Sampling settings, noise, or the group selector violate the contract.
     """
     width = model.hparams["num_params"]
     if (
@@ -92,13 +115,12 @@ def sample_in_browser(
     guidance = torch.tensor([content_cfg_strength, sketch_cfg_strength], dtype=torch.float32)
     if not torch.isfinite(guidance).all() or (guidance < 0).any():
         raise ValueError("browser guidance must be finite and non-negative")
+    enabled = model.resolve_enabled_sketch_groups(enabled_sketch_groups)
+    if model.sketch_tokens is None:
+        raise ValueError("browser inference requires sketch controls")
+    group_names = model.sketch_tokens.layout.group_names
     vendor = require_browser_assets()
-    export_flow_onnx(
-        model,
-        batch,
-        output_dir,
-        enabled_sketch_groups=enabled_sketch_groups,
-    )
+    export_flow_onnx(model, batch, output_dir)
     token = secrets.token_urlsafe(32)
     payload: dict[str, object] = {
         key: {"shape": list(batch[key].shape), "data": batch[key].flatten().tolist()}
@@ -109,13 +131,21 @@ def sample_in_browser(
             "noise": noise.flatten().tolist(),
             "steps": sample_steps,
             "branch_weights": list(branch_weights("both", *guidance.tolist())),
+            "sketch_groups": {"names": list(group_names), "enabled": list(enabled)},
             "token": token,
         }
     )
     (output_dir / "input.json").write_text(json.dumps(payload, allow_nan=False))
     routes = {
         f"/{name}": _WEB_ROOT / name
-        for name in ("index.html", "app.mjs", "flow.mjs", "guidance.mjs", "rk4.mjs")
+        for name in (
+            "index.html",
+            "app.mjs",
+            "flow.mjs",
+            "guidance.mjs",
+            "rk4.mjs",
+            "sketch_groups.mjs",
+        )
     }
     routes["/"] = _WEB_ROOT / "index.html"
     routes.update(
@@ -131,7 +161,14 @@ def sample_in_browser(
             if path.suffix in {".mjs", ".wasm"}
         }
     )
-    return _receive_prediction(routes, token=token, width=width, output_dir=output_dir, port=port)
+    return _receive_prediction(
+        routes,
+        token=token,
+        width=width,
+        group_names=group_names,
+        output_dir=output_dir,
+        port=port,
+    )
 
 
 def _browser_origin(port: int) -> str:
@@ -144,20 +181,27 @@ def _browser_origin(port: int) -> str:
 
 
 def _receive_prediction(
-    routes: dict[str, Path], *, token: str, width: int, output_dir: Path, port: int
-) -> torch.Tensor:
+    routes: dict[str, Path],
+    *,
+    token: str,
+    width: int,
+    group_names: tuple[str, ...],
+    output_dir: Path,
+    port: int,
+) -> BrowserResult:
     """Serve an allowlisted bundle until one validated prediction arrives.
 
     :param routes: Exact URL paths and their local resources.
     :param token: Active session capability.
     :param width: Checkpoint parameter width.
+    :param group_names: Checkpoint sketch groups in layout order.
     :param output_dir: Prediction artifact destination.
     :param port: Loopback listening port, or zero for dynamic allocation.
-    :returns: Validated float32 prediction row.
+    :returns: Validated float32 prediction row and the groups the page kept.
     :raises TimeoutError: The browser did not finish within ten minutes.
     :raises click.ClickException: The requested loopback port cannot be bound.
     """
-    prediction: torch.Tensor | None = None
+    prediction: BrowserResult | None = None
     origin = ""
 
     class Handler(BaseHTTPRequestHandler):
@@ -215,6 +259,9 @@ def _receive_prediction(
                 result = torch.tensor([response.params], dtype=torch.float32)
                 if not torch.isfinite(result).all():
                     raise ValueError("prediction overflows float32")
+                kept = set(response.sketch_groups)
+                if len(kept) != len(response.sketch_groups) or not kept <= set(group_names):
+                    raise ValueError("prediction sketch groups mismatch")
             except (ValueError, TimeoutError):
                 self.send_error(400, "Invalid browser prediction")
                 return
@@ -222,7 +269,10 @@ def _receive_prediction(
             self.send_response(200)
             self.send_header("Content-Length", "0")
             self.end_headers()
-            prediction = result
+            prediction = BrowserResult(
+                params=result,
+                sketch_groups=tuple(name for name in group_names if name in kept),
+            )
 
     try:
         server = HTTPServer(("127.0.0.1", port), Handler)

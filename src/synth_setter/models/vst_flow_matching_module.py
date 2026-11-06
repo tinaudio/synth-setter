@@ -1005,6 +1005,51 @@ class VSTFlowMatchingModule(LightningModule):
         return tuple(name for name in valid if name in seen)
 
     @jaxtyped(typechecker=beartype)
+    def sketch_keep_mask(
+        self,
+        enabled_sketch_groups: tuple[str, ...] | None,
+        *,
+        batch_size: int,
+        device: torch.device,
+    ) -> Bool[torch.Tensor, "batch groups"]:
+        """Expand a resolved group selector into the tokenizer's per-row keep mask.
+
+        :param enabled_sketch_groups: Names already passed through
+            :meth:`resolve_enabled_sketch_groups`; ``None`` keeps every group.
+        :param batch_size: Rows the mask is broadcast over.
+        :param device: Device of the controls the mask will gate.
+        :returns: Boolean ``(batch_size, groups)`` mask in checkpoint layout order.
+        :raises ValueError: The checkpoint has no sketch controls.
+        """
+        if self.sketch_tokens is None:
+            raise ValueError("checkpoint does not configure sketch controls")
+        group_names = self.sketch_tokens.layout.group_names
+        enabled = group_names if enabled_sketch_groups is None else enabled_sketch_groups
+        return torch.tensor(
+            [name in enabled for name in group_names], dtype=torch.bool, device=device
+        ).expand(batch_size, -1)
+
+    @jaxtyped(typechecker=beartype)
+    def _control_token_branches(
+        self,
+        controls: Float[torch.Tensor, "batch channels frames"],
+        keep: Bool[torch.Tensor, "batch groups"],
+    ) -> ControlTokenBranches:
+        """Build masked full-sketch and PE-only control branches from an explicit mask.
+
+        :param controls: Sketch controls on the checkpoint frame grid.
+        :param keep: Per-row, per-group keep mask in checkpoint layout order.
+        :returns: Both control-token branches.
+        :raises ValueError: The checkpoint has no sketch controls.
+        """
+        if self.sketch_tokens is None:
+            raise ValueError("checkpoint does not configure sketch controls")
+        return ControlTokenBranches(
+            conditional=self.sketch_tokens(controls, keep),
+            unconditional=self.sketch_tokens.unconditional(controls.shape[0]),
+        )
+
+    @jaxtyped(typechecker=beartype)
     def _control_token_branches_from_batch(
         self,
         batch: _SampleBatch,
@@ -1024,17 +1069,10 @@ class VSTFlowMatchingModule(LightningModule):
         controls = batch["sketch_ctrl"]
         if controls is None:
             raise ValueError("batch sketch_ctrl field must contain a tensor")
-        group_names = self.sketch_tokens.layout.group_names
-        enabled = group_names if enabled_sketch_groups is None else enabled_sketch_groups
-        keep = torch.tensor(
-            [name in enabled for name in group_names],
-            dtype=torch.bool,
-            device=controls.device,
-        ).expand(controls.shape[0], -1)
-        return ControlTokenBranches(
-            conditional=self.sketch_tokens(controls, keep),
-            unconditional=self.sketch_tokens.unconditional(controls.shape[0]),
+        keep = self.sketch_keep_mask(
+            enabled_sketch_groups, batch_size=controls.shape[0], device=controls.device
         )
+        return self._control_token_branches(controls, keep)
 
     @jaxtyped(typechecker=beartype)
     def _is_trainer_logging_step(self) -> bool:

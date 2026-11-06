@@ -40,24 +40,40 @@ _WEB_ROOT = Path(__file__).resolve().parents[2] / "src/synth_setter/web"
     reason="Run npm ci --prefix src/synth_setter/web and install its Playwright Chromium browser",
 )
 @pytest.mark.parametrize(
-    ("selector_args", "enabled_groups", "expected_groups"),
+    ("selector_args", "unchecked", "enabled_groups", "expected_groups"),
     [
-        ([], None, {"requested": None, "resolved": ["loudness", "centroid", "pitch"]}),
-        (["--sketch-group", "pitch"], ("pitch",), {"requested": ["pitch"], "resolved": ["pitch"]}),
+        (
+            [],
+            "centroid",
+            ("loudness", "pitch"),
+            {
+                "requested": None,
+                "resolved": ["loudness", "centroid", "pitch"],
+                "applied": ["loudness", "pitch"],
+            },
+        ),
+        (
+            ["--sketch-group", "pitch"],
+            "",
+            ("pitch",),
+            {"requested": ["pitch"], "resolved": ["pitch"], "applied": ["pitch"]},
+        ),
     ],
-    ids=["all-groups", "pitch-only"],
+    ids=["page-unchecks-centroid", "cli-pitch-only"],
 )
 def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(
     tmp_path: Path,
     selector_args: list[str],
-    enabled_groups: tuple[str, ...] | None,
+    unchecked: str,
+    enabled_groups: tuple[str, ...],
     expected_groups: dict[str, list[str] | None],
 ) -> None:
     """The shipped browser's predictions reach the real SurgePy and metric consumers.
 
     :param tmp_path: Isolated input, ONNX, screenshot, audio, and metric artifacts.
     :param selector_args: Sketch-group CLI arguments under test.
-    :param enabled_groups: Matching native selector for the parity check.
+    :param unchecked: Comma-separated groups the page unticks before running.
+    :param enabled_groups: Selection the page ends up applying, for the native parity check.
     :param expected_groups: Group selection the arm provenance must record.
     """
     render = load_render_config()
@@ -109,7 +125,12 @@ def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(
             "--no-upload",
         ],
         _cwd=repo,
-        _env={**os.environ, "OMP_NUM_THREADS": "4", "MKL_NUM_THREADS": "4"},
+        _env={
+            **os.environ,
+            "OMP_NUM_THREADS": "4",
+            "MKL_NUM_THREADS": "4",
+            "BROWSER_E2E_UNCHECK": unchecked,
+        },
         _timeout=420,
         _err_to_out=True,
     )
@@ -168,6 +189,7 @@ def test_browser_flow_real_checkpoint_renders_audio_and_finite_metrics(
         saved, _ = sf.read(arm / name, dtype="float32")
         # The production WAV writer requantizes decoded samples to PCM16.
         np.testing.assert_allclose(saved, original.T, rtol=0, atol=1 / 2**15)
+    assert prediction["sketch_groups"] == list(enabled_groups)
     provenance = json.loads((arm / "provenance.json").read_text())
     revision = str(sh.Command("git")(["rev-parse", "HEAD"], _cwd=repo)).strip()
     assert provenance["git_revision"].removesuffix("-dirty") == revision
