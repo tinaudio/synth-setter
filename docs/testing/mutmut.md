@@ -25,10 +25,16 @@ must come along via `also_copy`. `also_copy` therefore
 includes the *whole* package, not just the mutated subdirs, plus `scripts/dev/`
 for research-runner imports exercised by `tests/tools/`.
 
-Revisit the `[tool.mutmut]` config when adding a *new* top-level mutate path
-or a non-package dependency imported by the selected tests. New
-`synth_setter.*` imports are covered automatically, including modules outside
-`paths_to_mutate`.
+`also_copy` also carries `presets/`: the sandbox is the working directory for
+every test, so a suite that opens `presets/surge-base.vstpreset` by its
+repo-relative path finds nothing without it and baseline stat collection fails
+for every mutation target
+([#3589](https://github.com/tinaudio/synth-setter/issues/3589)).
+
+Revisit the `[tool.mutmut]` config when adding a *new* top-level mutate path,
+a non-package dependency imported by the selected tests, or a repo-relative
+data file they read. New `synth_setter.*` imports are covered automatically,
+including modules outside `paths_to_mutate`.
 
 ## Pytest capture must stay disabled
 
