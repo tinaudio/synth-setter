@@ -98,7 +98,17 @@ def resample_sketch_controls(
         return controls.clone()
     if mode == "average":
         return F.adaptive_avg_pool1d(controls, output_frames)
-    return F.interpolate(controls, size=output_frames, mode="linear", align_corners=False)
+    if controls.shape[-1] < output_frames:
+        return F.interpolate(controls, size=output_frames, mode="linear", align_corners=False)
+    # Plain linear reduction samples two neighbours per output frame and skips the rest;
+    # anti-aliasing (bilinear-only in torch, hence the unit height axis) low-passes first.
+    return F.interpolate(
+        controls.unsqueeze(2),
+        size=(1, output_frames),
+        mode="bilinear",
+        align_corners=False,
+        antialias=True,
+    ).squeeze(2)
 
 
 @jaxtyped(typechecker=beartype)
@@ -111,19 +121,22 @@ def prepare_music_sketch_controls(
     :param controls: Raw extracted controls on a nonempty temporal grid.
     :param spec: Music sketch contract selecting frame count, resampling, and pitch threshold.
     :returns: Independent float32 controls on ``spec.num_frames`` preserving the input device.
-    :raises ValueError: The spec does not select the music profile or resampling is invalid.
+    :raises ValueError: The spec does not select the music profile, or the extracted grid is
+        sparser than the frame grid (upsampling would fabricate frames).
     """
     if spec.profile != "music":
         raise ValueError("music-control preparation requires profile='music'")
-    prepared = (
-        resample_sketch_controls(
-            controls,
-            output_frames=spec.num_frames,
-            mode=spec.temporal_resampling,
+    if controls.shape[-1] < spec.num_frames:
+        raise ValueError(
+            f"music-control preparation requires at least {spec.num_frames} frames, "
+            f"got {controls.shape[-1]}"
         )
-        .to(dtype=torch.float32)
-        .clone()
-    )
+    # resample_sketch_controls always returns fresh storage, so no clone is needed here.
+    prepared = resample_sketch_controls(
+        controls,
+        output_frames=spec.num_frames,
+        mode=spec.temporal_resampling,
+    ).to(dtype=torch.float32)
     pitch = prepared[:, SKETCH_PITCH_SLICE]
     prepared[:, SKETCH_PITCH_SLICE] = pitch.where(
         pitch >= spec.pitch_zero_threshold,
@@ -141,9 +154,7 @@ def pool_sketch_controls(
 
     :param controls: Loudness, centroid, and pitch controls on any temporal grid.
     :param output_frames: Frames retained along the pooled time axis.
-    :returns: Controls with averaged tracks and averaged pitch activations.
-    :raises ValueError: The source grid is empty or output frames are nonpositive.
+    :returns: Controls with averaged tracks and averaged pitch activations; empty or
+        nonpositive grids are rejected by :func:`resample_sketch_controls`.
     """
-    if controls.shape[-1] == 0 or output_frames <= 0:
-        raise ValueError("Sketch pooling requires nonempty input and positive output frames")
     return resample_sketch_controls(controls, output_frames, "average")

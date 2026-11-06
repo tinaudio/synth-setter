@@ -222,6 +222,26 @@ class TestSketchControlSpec:
                 temporal_resampling="linear",
             )
 
+    @pytest.mark.parametrize(
+        ("num_control_tokens", "fraction", "expected_maximum"),
+        [(32, None, 1), (32, 0.15625, 5), (96, 0.15625, 15), (32, 0.001, 1)],
+    )
+    def test_effective_median_window_resolves_fraction_on_token_grid(
+        self, num_control_tokens: int, fraction: float | None, expected_maximum: int
+    ) -> None:
+        """The spec reports the training-time window maximum its tokenizer will use.
+
+        :param num_control_tokens: Token grid under test.
+        :param fraction: Optional token-grid fraction.
+        :param expected_maximum: Effective positive window maximum.
+        """
+        spec = SketchControlSpec(
+            num_frames=num_control_tokens,
+            num_control_tokens=num_control_tokens,
+            median_filter_max_window_fraction=fraction,
+        )
+        assert spec.effective_median_filter_max_kernel_size == expected_maximum
+
     def test_fractional_median_window_rejects_ambiguous_literal_policy(self) -> None:
         """Fractional and non-disabled literal maxima cannot both select a policy."""
         with pytest.raises(ValueError, match="median_filter_max_kernel_size=1"):
@@ -349,24 +369,28 @@ class TestSketchControlTokens:
 
     def test_forward_resampling_modes_produce_distinct_projected_tokens(self) -> None:
         """Checkpoint-selected temporal modes reach nonzero projection outputs."""
-        average = SketchControlTokens(d_model=1, num_control_tokens=2)
+        average = SketchControlTokens(d_model=1, num_control_tokens=4)
         linear = SketchControlTokens(
             d_model=1,
-            num_control_tokens=2,
+            num_control_tokens=4,
             temporal_resampling="linear",
         )
         for module in (average, linear):
             with torch.no_grad():
                 cast(torch.nn.Linear, module.projections["loudness"]).weight.fill_(1.0)
-        controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 5)
-        controls[0, SKETCH_LOUDNESS_ROW, 2] = 4.0
+        controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 2)
+        controls[0, SKETCH_LOUDNESS_ROW, 1] = 1.0
         keep = torch.tensor(((True, False, False),))
 
         average_contribution = average(controls, keep) - average.unconditional(1)
         linear_contribution = linear(controls, keep) - linear.unconditional(1)
 
-        torch.testing.assert_close(average_contribution[0, :, 0], torch.tensor((4 / 3, 4 / 3)))
-        torch.testing.assert_close(linear_contribution[0, :, 0], torch.tensor((0.0, 0.0)))
+        torch.testing.assert_close(
+            average_contribution[0, :, 0], torch.tensor((0.0, 0.0, 1.0, 1.0))
+        )
+        torch.testing.assert_close(
+            linear_contribution[0, :, 0], torch.tensor((0.0, 0.25, 0.75, 1.0))
+        )
 
     def test_forward_training_applies_configured_random_median_filter(self) -> None:
         """Training smooths music controls before their group projections."""

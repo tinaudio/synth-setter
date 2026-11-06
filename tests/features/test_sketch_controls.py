@@ -107,18 +107,43 @@ def test_random_median_filter_sketch_controls_seed_repeats_per_row_windows() -> 
 
 def test_resample_sketch_controls_average_and_linear_have_distinct_values() -> None:
     """Average and linear modes preserve their documented temporal semantics."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 4)
+    controls[:, SKETCH_LOUDNESS_ROW] = torch.tensor((0.0, 1.0, 1.0, 0.0))
+
+    averaged = resample_sketch_controls(controls, output_frames=8, mode="average")
+    linear = resample_sketch_controls(controls, output_frames=8, mode="linear")
+
+    torch.testing.assert_close(
+        averaged[0, SKETCH_LOUDNESS_ROW],
+        torch.tensor((0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0)),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        linear[0, SKETCH_LOUDNESS_ROW],
+        torch.tensor((0.0, 0.25, 0.75, 1.0, 1.0, 0.75, 0.25, 0.0)),
+        rtol=0,
+        atol=1e-6,
+    )
+
+
+def test_resample_sketch_controls_linear_downsampling_keeps_short_events() -> None:
+    """Linear reduction low-passes before sampling, so no source frame is skipped."""
     controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 5)
     controls[:, SKETCH_LOUDNESS_ROW, 2] = 4.0
 
-    averaged = resample_sketch_controls(controls, output_frames=2, mode="average")
     linear = resample_sketch_controls(controls, output_frames=2, mode="linear")
 
-    torch.testing.assert_close(
-        averaged[0, SKETCH_LOUDNESS_ROW], torch.tensor((4 / 3, 4 / 3)), rtol=0, atol=0
-    )
-    torch.testing.assert_close(
-        linear[0, SKETCH_LOUDNESS_ROW], torch.tensor((0.0, 0.0)), rtol=0, atol=0
-    )
+    assert (linear[0, SKETCH_LOUDNESS_ROW] > 0).all()
+
+
+def test_resample_sketch_controls_linear_downsampling_preserves_constant_tracks() -> None:
+    """Anti-aliased reduction keeps unit DC gain across the whole output grid."""
+    controls = torch.full((1, NUM_SKETCH_CONTROLS, 11), 0.5)
+
+    linear = resample_sketch_controls(controls, output_frames=4, mode="linear")
+
+    torch.testing.assert_close(linear, torch.full((1, NUM_SKETCH_CONTROLS, 4), 0.5))
 
 
 def test_resample_sketch_controls_equal_frames_returns_independent_clone() -> None:

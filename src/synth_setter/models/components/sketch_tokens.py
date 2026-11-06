@@ -13,6 +13,7 @@ from synth_setter.conditioning import (
     SketchControlLayout,
     SketchControlProfile,
     SketchTemporalResampling,
+    effective_median_filter_max_kernel_size,
     sketch_control_layout,
 )
 from synth_setter.models.components.embed_pool import make_sin_pos_enc
@@ -95,12 +96,11 @@ class SketchControlTokens(nn.Module):
         self.median_filter_max_kernel_size = median_filter_max_kernel_size
         self.median_filter_max_window_fraction = median_filter_max_window_fraction
         self.temporal_resampling = temporal_resampling
-        self.effective_median_filter_max_kernel_size = median_filter_max_kernel_size
-        if median_filter_max_window_fraction is not None:
-            self.effective_median_filter_max_kernel_size = max(
-                1,
-                math.floor(median_filter_max_window_fraction * num_control_tokens + 0.5),
-            )
+        self.effective_median_filter_max_kernel_size = effective_median_filter_max_kernel_size(
+            median_filter_max_kernel_size,
+            median_filter_max_window_fraction,
+            num_control_tokens,
+        )
         projections = {
             group: nn.Linear(width, d_model, bias=False)
             for group, width in zip(self.layout.group_names, self.layout.group_widths, strict=True)

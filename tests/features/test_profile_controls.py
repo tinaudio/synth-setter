@@ -90,6 +90,15 @@ def test_music_preparation_thresholds_after_frame_resampling() -> None:
     assert torch.count_nonzero(prepared) == 0
 
 
+def test_music_preparation_sparser_extraction_than_frame_grid_rejected() -> None:
+    """A frame grid denser than the extractor emits is refused instead of fabricated."""
+    controls = torch.zeros(1, 386, 3)
+    spec = SketchControlSpec(num_frames=4, num_control_tokens=2)
+
+    with pytest.raises(ValueError, match="at least 4 frames"):
+        prepare_music_sketch_controls(controls, spec)
+
+
 def test_music_preparation_returns_float32_independent_storage() -> None:
     """Preparation normalizes dtype without retaining writable source storage."""
     controls = torch.ones(1, 386, 2, dtype=torch.float64)

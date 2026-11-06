@@ -14,7 +14,6 @@ from beartype import beartype
 from jaxtyping import Float, Shaped, jaxtyped
 from torch import nn
 
-from synth_setter.conditioning import resolve_sketch_controls
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
 _OPSET_VERSION = 18
@@ -138,8 +137,10 @@ def export_flow_onnx(
     """Export fixed-shape float32 graphs without unrolling the integration loop.
 
     :param model: CPU evaluation model using mel/sketch velocity parameterization.
-    :param batch: CPU float32 ``mel`` shaped ``(batch, channels, bins, frames)``
-        and ``sketch_ctrl`` shaped ``(batch, controls, sketch_frames)`` matching the checkpoint.
+    :param batch: CPU float32 ``mel`` shaped ``(batch, channels, bins, frames)`` and
+        ``sketch_ctrl`` shaped ``(batch, controls, num_frames)`` already prepared by
+        :func:`synth_setter.sketch.prepare_music_sketch_controls` (frame grid and pitch
+        zero-binning happen outside the graph; only token resampling is exported).
     :param output_dir: Empty or absent destination, atomically populated with both graphs.
     :raises FileExistsError: The destination already contains artifacts.
     :raises ValueError: Model type, conditioning, parameterization, or inputs are unsupported.
@@ -166,7 +167,7 @@ def export_flow_onnx(
         raise ValueError("ONNX export requires nonempty rank-4 mel and rank-3 sketch inputs")
     if inputs[0].shape[0] != inputs[1].shape[0]:
         raise ValueError("ONNX mel and sketch batch sizes must match")
-    sketch = resolve_sketch_controls(model.hparams.get("sketch_controls"))
+    sketch = model._sketch_controls
     if sketch is None or inputs[1].shape[-1] != sketch.num_frames:
         raise ValueError("ONNX sketch inputs must use the checkpoint frame grid")
     output_dir.parent.mkdir(parents=True, exist_ok=True)

@@ -1,5 +1,6 @@
 """Conditioning contracts shared across data and model layers."""
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
@@ -191,6 +192,21 @@ def resolve_embedding_conditioning(
     return EmbeddingConditioningSpec.model_validate(values)
 
 
+def effective_median_filter_max_kernel_size(
+    literal: int, window_fraction: float | None, num_control_tokens: int
+) -> int:
+    """Resolve the training-time median-window maximum on a token grid.
+
+    :param literal: Literal window maximum; one disables augmentation.
+    :param window_fraction: Optional token-grid fraction that replaces the literal.
+    :param num_control_tokens: Token grid the fraction scales with.
+    :returns: Positive window maximum, rounding the fraction half up.
+    """
+    if window_fraction is None:
+        return literal
+    return max(1, math.floor(window_fraction * num_control_tokens + 0.5))
+
+
 class SketchControlSpec(BaseModel):
     """Select the stored sketch-control column and its token budget.
 
@@ -265,6 +281,15 @@ class SketchControlSpec(BaseModel):
     def layout(self) -> SketchControlLayout:
         """Return the selected profile's channel layout."""
         return sketch_control_layout(self.profile)
+
+    @property
+    def effective_median_filter_max_kernel_size(self) -> int:
+        """Return the training-time median-window maximum on the token grid."""
+        return effective_median_filter_max_kernel_size(
+            self.median_filter_max_kernel_size,
+            self.median_filter_max_window_fraction,
+            self.num_control_tokens,
+        )
 
     @model_validator(mode="after")
     def temporal_layout_matches_token_budget(self) -> "SketchControlSpec":
