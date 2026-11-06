@@ -79,9 +79,7 @@ class FlowConditioning(nn.Module):
             (ONNX Runtime Web feeds float32 tensors, so the host never builds a bool tensor).
         :returns: Content and both control-token branches for the velocity graph.
         """
-        branches = self.model._control_token_branches(  # noqa: SLF001
-            sketch_ctrl, sketch_keep > 0.5
-        )
+        branches = self.model._control_token_branches(sketch_ctrl, sketch_keep > 0.5)
         return self.model.encoder(mel), branches.conditional, branches.unconditional
 
 
