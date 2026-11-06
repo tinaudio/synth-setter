@@ -150,7 +150,7 @@ PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
 _EMBEDDING_NAME_METADATA = b"synth_setter.embedding.name"
 _EMBEDDING_ARTIFACT_METADATA = b"synth_setter.embedding.artifact"
 SAME_LATENT_FRAMES: int = 44
-SAME_ENCODE_MAX_BATCH: int = 64
+SAME_ENCODE_MAX_BATCH: int = 256
 SKETCH_INDEX_SUB_VECTORS: int = 2
 # PESTO's per-clip intermediates scale with batch size: a full 128-row Lance
 # batch peaked at ~8.8 GiB RSS and drew earlyoom SIGTERMs in the field (#2707).
