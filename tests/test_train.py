@@ -2339,7 +2339,9 @@ def test_train_flow_sketch_cfg_ablation_returns_finite_loss(
 @pytest.mark.parametrize(
     ("profile", "expected_profile", "expected_group"),
     [
-        ("music_online", "music", "pitch"),
+        # Loudness is never zero-binned, so its zero-initialised projection always
+        # receives a nonzero gradient; pitch bins under the threshold can leave it exactly 0.
+        ("music_online", "music", "loudness"),
         ("tiv_online_gpu", "tiv", "tiv"),
         ("tiv_online_cpu", "tiv", "tiv"),
     ],
@@ -2370,7 +2372,8 @@ def test_train_fast_dev_run_online_sketch_extracts_audio_controls(
             write_lance_shard(
                 split_path,
                 {
-                    "audio": rng.uniform(-1.0, 1.0, (4, 2, 8193)).astype(np.float32),
+                    # One second satisfies music_online's 96-frame grid (10 ms frames).
+                    "audio": rng.uniform(-1.0, 1.0, (4, 2, 44_100)).astype(np.float32),
                     "param_array": rng.random((4, len(param_specs["surge_4"]))).astype(np.float32),
                     "m2l": rng.standard_normal((4, 128, 42)).astype(np.float32),
                 },

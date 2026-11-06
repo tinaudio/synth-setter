@@ -36,10 +36,9 @@ from synth_setter.conditioning import (
 from synth_setter.data.vst.shapes import AUDIO_FIELD, make_spectrogram
 from synth_setter.data.vst_datamodule import load_mel_statistics
 from synth_setter.features.pyfdn_controls import extract_reverb_sketch
-from synth_setter.features.sketch_controls import extract_sketch_controls_batch
+from synth_setter.features.profile_controls import extract_music_sketch_controls
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import retry_lance_read
-from synth_setter.sketch import prepare_music_sketch_controls
 
 log = logging.getLogger(__name__)
 
@@ -732,9 +731,7 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             )
             model_batch[SKETCH_CTRL_FIELD] = torch.from_numpy(controls).to(audio.device)
             return model_batch
-        controls = extract_sketch_controls_batch(audio, self.sample_rate)
-        model_batch[SKETCH_CTRL_FIELD] = prepare_music_sketch_controls(
-            controls,
-            self.sketch_controls,
+        model_batch[SKETCH_CTRL_FIELD] = extract_music_sketch_controls(
+            audio, self.sample_rate, self.sketch_controls
         )
         return model_batch

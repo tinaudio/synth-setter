@@ -45,9 +45,9 @@ from synth_setter.data.vst_datamodule import (
     prepare_batch,
     ranked_generator_seed,
 )
+from synth_setter.features.profile_controls import extract_music_sketch_controls
 from synth_setter.features.sketch_controls import (
     DEFAULT_PESTO_CHECKPOINT,
-    extract_sketch_controls_batch,
     load_pesto_model,
 )
 from synth_setter.features.tiv import extract_tiv_batch
@@ -57,7 +57,6 @@ from synth_setter.pipeline.data.lance_shard import (
     SHARD_METADATA_SCHEMA_KEY,
     read_shard_metadata,
 )
-from synth_setter.sketch import prepare_music_sketch_controls
 
 logger = logging.getLogger(__name__)
 
@@ -1043,7 +1042,9 @@ class LanceVSTDataModule(VSTDataModule):
             and self.sketch_controls.profile == "music"
             and self.sketch_controls.source == "online"
         ):
-            load_pesto_model(DEFAULT_PESTO_CHECKPOINT, device="cpu")
+            # Warm the canonical weights before workers fork; no device argument, so a
+            # model already resident on the accelerator is left where it is.
+            load_pesto_model(DEFAULT_PESTO_CHECKPOINT)
         if (
             self.growing_active_record is not None
             and not self.growing_active_record.parent.is_dir()
@@ -1218,10 +1219,9 @@ class LanceVSTDataModule(VSTDataModule):
         if sketch.sample_rate is None:
             raise ValueError("online sketch extraction requires sample_rate")
         if sketch.profile == "music":
-            with torch.no_grad():
-                raw_controls = extract_sketch_controls_batch(audio, sketch.sample_rate)
-                controls = prepare_music_sketch_controls(raw_controls, sketch)
-            model_batch[SKETCH_CTRL_FIELD] = controls
+            model_batch[SKETCH_CTRL_FIELD] = extract_music_sketch_controls(
+                audio, sketch.sample_rate, sketch
+            )
             return model_batch
         controls = extract_tiv_batch(audio, sketch.sample_rate, backend=sketch.tiv_backend)
         model_batch[SKETCH_CTRL_FIELD] = F.adaptive_avg_pool1d(controls, sketch.num_frames)

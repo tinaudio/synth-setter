@@ -1005,7 +1005,7 @@ def test_nsynth_sketch_batch_native_blob_v2_preserves_order_and_model_shapes(
         return torch.zeros(audio.shape[0], NUM_SKETCH_CONTROLS, 64, device=audio.device)
 
     monkeypatch.setattr(
-        "synth_setter.data.third_party_datamodule.extract_sketch_controls_batch",
+        "synth_setter.features.profile_controls.extract_sketch_controls_batch",
         fixed_controls,
     )
     datamodule = _datamodule(
@@ -1045,7 +1045,7 @@ def test_nsynth_sketch_batch_pools_controls_and_zeroes_weak_pitch(
     controls[:, SKETCH_PITCH_SLICE.start, :] = 0.05
     controls[:, SKETCH_PITCH_SLICE.start + 1, 1::2] = 0.5
     monkeypatch.setattr(
-        "synth_setter.data.third_party_datamodule.extract_sketch_controls_batch",
+        "synth_setter.features.profile_controls.extract_sketch_controls_batch",
         lambda audio, sample_rate: controls,
     )
     datamodule = _datamodule(
@@ -1082,7 +1082,7 @@ def test_nsynth_sketch_batch_dense_frame_grid_resamples_live_controls(
     controls[:, SKETCH_PITCH_SLICE.start, :] = 0.05
     controls[:, SKETCH_PITCH_SLICE.start + 1, 1::2] = 0.5
     monkeypatch.setattr(
-        "synth_setter.data.third_party_datamodule.extract_sketch_controls_batch",
+        "synth_setter.features.profile_controls.extract_sketch_controls_batch",
         lambda audio, sample_rate: controls,
     )
     datamodule = _datamodule(

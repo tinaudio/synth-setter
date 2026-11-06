@@ -22,13 +22,11 @@ from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.features import sketch_controls
 from synth_setter.features.sketch_controls import (
     DEFAULT_PESTO_CHECKPOINT,
-    extract_sketch_controls_batch,
     load_pesto_model,
 )
 from synth_setter.data.vst_datamodule import RawBatch, prepare_batch
 from synth_setter.models.components.sketch_tokens import SketchControlTokens
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.sketch import prepare_music_sketch_controls
 from synth_setter.pipeline.data.lance_shard import (
     pyfdn_sketch_struct_array,
     sketch_struct_array,
@@ -210,7 +208,7 @@ def test_stored_sketch_setup_does_not_load_pesto(
     """
     monkeypatch.setattr(
         "synth_setter.data.lance_datamodule.load_pesto_model",
-        lambda *, device: pytest.fail(f"unexpected PESTO load on {device}"),
+        lambda *args, **kwargs: pytest.fail(f"unexpected PESTO load {args} {kwargs}"),
     )
     module = _sketch_module(tmp_path, fake=True)
 
@@ -624,53 +622,80 @@ def test_online_music_setup_selects_canonical_pesto_after_custom_cache(
     assert calls == ["custom-checkpoint", DEFAULT_PESTO_CHECKPOINT]
 
 
-def test_online_music_setup_eagerly_loads_frozen_cpu_pesto(
+class _ResidentModel(torch.nn.Linear):
+    """Fake cached extractor that records every device move."""
+
+    def __init__(self) -> None:
+        """Build a one-weight stand-in for the PESTO network."""
+        super().__init__(1, 1)
+        self.moves: list[str] = []
+
+    def to(self, *args: object, **kwargs: object) -> "_ResidentModel":  # type: ignore[override]
+        """Record the requested destination instead of moving anything.
+
+        :param *args: Positional ``nn.Module.to`` arguments.
+        :param **kwargs: Keyword ``nn.Module.to`` arguments.
+        :returns: This module, unchanged.
+        """
+        self.moves.append(f"{args}{kwargs}")
+        return self
+
+
+def test_online_music_setup_keeps_resident_canonical_pesto_in_place(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Setup loads PESTO on CPU before dataloader workers can extract batches.
+    """Setup warms the canonical cache without relocating an already-resident model.
 
     :param tmp_path: Per-test dataset root.
-    :param monkeypatch: Replaces the model loader at the module boundary.
+    :param monkeypatch: Installs a canonical cached stand-in that records moves.
     """
-    calls: list[tuple[str, str]] = []
-    monkeypatch.setattr(
-        "synth_setter.data.lance_datamodule.load_pesto_model",
-        lambda checkpoint, *, device: calls.append((checkpoint, str(device))),
-    )
+    resident = _ResidentModel()
+    monkeypatch.setattr(sketch_controls, "_pesto_model", resident)
+    monkeypatch.setattr(sketch_controls, "_pesto_checkpoint", DEFAULT_PESTO_CHECKPOINT)
     module = _online_music_module(tmp_path)
 
     module.setup("validate")
+    module.setup("fit")
 
-    assert calls == [(DEFAULT_PESTO_CHECKPOINT, "cpu")]
+    assert load_pesto_model() is resident
+    assert resident.moves == []
 
 
-def test_online_music_after_transfer_matches_canonical_precompute(tmp_path: Path) -> None:
-    """The production hook applies the canonical raw-to-checkpoint preparation.
+def _sine_batch(*frequencies_hz: float, samples: int = 44_100) -> torch.Tensor:
+    """Build one-second mono sinusoids at 44.1 kHz, one row per frequency.
+
+    :param *frequencies_hz: Row frequencies.
+    :param samples: Samples per row; one second keeps every 32-frame grid satisfiable.
+    :returns: ``(rows, 1, samples)`` float32 waveform batch.
+    """
+    time = torch.arange(samples, dtype=torch.float32) / 44_100
+    return torch.stack(
+        [torch.sin(2.0 * torch.pi * frequency * time) for frequency in frequencies_hz]
+    )[:, None]
+
+
+def test_online_music_after_transfer_emits_checkpoint_grid_controls(tmp_path: Path) -> None:
+    """The production hook yields thresholded controls that track the audio content.
 
     :param tmp_path: Per-test dataset root.
     """
     module = _online_music_module(tmp_path)
-    samples = torch.arange(8193, dtype=torch.float32)
-    audio = torch.stack(
-        [
-            torch.sin(2.0 * torch.pi * 440.0 * samples / 44_100),
-            torch.sin(2.0 * torch.pi * 880.0 * samples / 44_100),
-        ]
-    )[:, None]
+    audio = _sine_batch(440.0, 880.0)
 
-    prepared = module.on_after_batch_transfer({"audio": audio}, 0)
+    controls = module.on_after_batch_transfer({"audio": audio}, 0)["sketch_ctrl"]
 
-    controls = prepared["sketch_ctrl"]
     assert controls is not None
-    spec = module.sketch_controls
-    assert spec is not None
-    expected = prepare_music_sketch_controls(
-        extract_sketch_controls_batch(audio, 44_100), spec
-    )
+    assert controls.shape == (2, NUM_SKETCH_CONTROLS, 32)
     assert controls.dtype == torch.float32
     assert controls.device == audio.device
-    assert torch.isfinite(controls).all()
-    torch.testing.assert_close(controls, expected, rtol=0, atol=0)
+    tracks = controls[:, : SKETCH_PITCH_SLICE.start]
+    assert ((tracks >= -1.0) & (tracks <= 1.0)).all()
+    pitch = controls[:, SKETCH_PITCH_SLICE]
+    assert ((pitch == 0.0) | ((pitch >= _THRESHOLD) & (pitch <= 1.0))).all()
+    # One octave is 12 semitones at three PESTO bins per semitone.
+    peak_bins = pitch[:, :, 4:-4].argmax(dim=1).float().mean(dim=1)
+    assert peak_bins[1] - peak_bins[0] == pytest.approx(36.0, abs=1.5)
+    assert controls[1, 1].mean() > controls[0, 1].mean()
 
 
 def test_online_music_controls_support_trainable_projection_backward(tmp_path: Path) -> None:
@@ -679,8 +704,7 @@ def test_online_music_controls_support_trainable_projection_backward(tmp_path: P
     :param tmp_path: Per-test dataset root.
     """
     module = _online_music_module(tmp_path)
-    samples = torch.arange(8193, dtype=torch.float32)
-    audio = torch.sin(2.0 * torch.pi * 440.0 * samples / 44_100)[None, None]
+    audio = _sine_batch(440.0)
     controls = module.on_after_batch_transfer({"audio": audio}, 0)["sketch_ctrl"]
     assert controls is not None
     projection = torch.nn.Linear(NUM_SKETCH_CONTROLS, 1)
@@ -699,8 +723,7 @@ def test_online_music_after_transfer_keeps_controls_on_cuda(tmp_path: Path) -> N
     :param tmp_path: Per-test dataset root.
     """
     module = _online_music_module(tmp_path)
-    samples = torch.arange(8193, dtype=torch.float32, device="cuda")
-    audio = torch.sin(2.0 * torch.pi * 440.0 * samples / 44_100)[None, None]
+    audio = _sine_batch(440.0).to("cuda")
 
     controls = module.on_after_batch_transfer({"audio": audio}, 0)["sketch_ctrl"]
 
@@ -719,8 +742,7 @@ def test_online_music_validation_then_training_reuses_canonical_cache_on_cuda(
     :param tmp_path: Per-test dataset root.
     """
     module = _online_music_module(tmp_path)
-    samples = torch.arange(8193, dtype=torch.float32, device="cuda")
-    audio = torch.sin(2.0 * torch.pi * 440.0 * samples / 44_100)[None, None]
+    audio = _sine_batch(440.0).to("cuda")
     module.setup("validate")
     validation = module.on_after_batch_transfer({"audio": audio}, 0)["sketch_ctrl"]
 
@@ -730,6 +752,7 @@ def test_online_music_validation_then_training_reuses_canonical_cache_on_cuda(
     assert validation is not None
     assert training is not None
     assert validation.device.type == "cuda"
+    assert next(load_pesto_model().parameters()).device.type == "cuda"
     assert torch.equal(training, validation)
 
 

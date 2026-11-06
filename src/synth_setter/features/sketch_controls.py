@@ -15,6 +15,8 @@ Typical usage::
     pitch_activations = controls[SKETCH_PITCH_SLICE]
 """
 
+import functools
+
 import librosa
 import numpy as np
 import torch
@@ -70,7 +72,6 @@ _LOUDNESS_PEAK_RANGE_DB = 80.0
 
 _pesto_model = None
 _pesto_checkpoint: str | None = None
-_a_weights: torch.Tensor | None = None
 
 
 def load_pesto_model(
@@ -163,21 +164,48 @@ def _fit_frames(
     return torch.cat((track, pad), dim=-1)
 
 
+@functools.cache
 def _a_weighting_db(device: torch.device) -> torch.Tensor:
-    """A-weighting curve in dB for the loudness STFT bins, cached per process.
+    """A-weighting curve in dB for the loudness STFT bins, cached per device.
 
-    :param device: Device the weights are moved to.
+    :param device: Device the weights live on.
     :returns: ``(bins, 1)`` weights relative to ``_LOUDNESS_REF_DB``.
     """
-    global _a_weights
-    if _a_weights is None:
-        freqs = librosa.fft_frequencies(sr=_LOUDNESS_SAMPLE_RATE, n_fft=_LOUDNESS_N_FFT)
-        # A-weighting is -inf at DC and librosa reaches it through log10(0); the value is
-        # exact, the warning is not, so only the audible bins go through the library.
-        curve = np.full(freqs.shape, -np.inf)
-        curve[1:] = librosa.A_weighting(freqs[1:], min_db=None) - _LOUDNESS_REF_DB
-        _a_weights = torch.tensor(curve, dtype=torch.float32)[:, None]
-    return _a_weights.to(device)
+    freqs = librosa.fft_frequencies(sr=_LOUDNESS_SAMPLE_RATE, n_fft=_LOUDNESS_N_FFT)
+    # A-weighting is -inf at DC and librosa reaches it through log10(0); the value is
+    # exact, the warning is not, so only the audible bins go through the library.
+    curve = np.full(freqs.shape, -np.inf)
+    curve[1:] = librosa.A_weighting(freqs[1:], min_db=None) - _LOUDNESS_REF_DB
+    return torch.tensor(curve, dtype=torch.float32, device=device)[:, None]
+
+
+@functools.cache
+def _loudness_front_end(
+    sample_rate: int, device: torch.device, dtype: torch.dtype
+) -> tuple[torchaudio.transforms.Resample, torch.Tensor]:
+    """Resampler and analysis window for the loudness STFT, cached per rate and device.
+
+    Rebuilding the sinc kernel and window every call dominated per-step online extraction.
+
+    :param sample_rate: Source audio rate in Hz.
+    :param device: Device the buffers live on.
+    :param dtype: Waveform dtype the sinc kernel must match.
+    :returns: ``(resampler to 16 kHz, Hann window)``.
+    """
+    resampler = torchaudio.transforms.Resample(sample_rate, _LOUDNESS_SAMPLE_RATE, dtype=dtype)
+    return resampler.to(device), torch.hann_window(_LOUDNESS_N_FFT, device=device, dtype=dtype)
+
+
+@functools.cache
+def _hamming_window(size: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    """Centroid analysis window, cached per size and device.
+
+    :param size: Window length in samples.
+    :param device: Device the window lives on.
+    :param dtype: Window dtype.
+    :returns: Hamming window.
+    """
+    return torch.hamming_window(size, device=device, dtype=dtype)
 
 
 @jaxtyped(typechecker=beartype)
@@ -195,9 +223,9 @@ def _loudness_batch(
     :returns: Loudness tracks on the 10 ms grid.
     """
     hop = mel_hop_length(sample_rate)
-    resampled = torchaudio.functional.resample(mono, sample_rate, _LOUDNESS_SAMPLE_RATE)
+    resampler, window = _loudness_front_end(sample_rate, mono.device, mono.dtype)
+    resampled = resampler(mono)
     hop = int(hop * _LOUDNESS_SAMPLE_RATE / sample_rate)
-    window = torch.hann_window(_LOUDNESS_N_FFT, device=mono.device)
     stft = torch.stft(
         resampled,
         n_fft=_LOUDNESS_N_FFT,
@@ -234,7 +262,7 @@ def _centroid_batch(
         sample_rate,
         pad=0,
         # Matches shapes.MEL_WINDOW so the centroid and mel front ends agree.
-        window=torch.hamming_window(win, device=mono.device),
+        window=_hamming_window(win, mono.device, mono.dtype),
         n_fft=win,
         hop_length=mel_hop_length(sample_rate),
         win_length=win,
