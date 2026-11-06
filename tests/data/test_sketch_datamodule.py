@@ -20,6 +20,7 @@ from synth_setter.conditioning import (
 )
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
 from synth_setter.data.vst_datamodule import RawBatch, prepare_batch
+from synth_setter.models.components.sketch_tokens import SketchControlTokens
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.lance_shard import (
     pyfdn_sketch_struct_array,
@@ -41,7 +42,7 @@ def _write_sketch_split(path: Path, values: np.ndarray) -> None:
     """Write one split carrying the nested sketch struct column.
 
     :param path: Destination Lance dataset.
-    :param values: ``(rows, NUM_SKETCH_CONTROLS, _NUM_FRAMES)`` stacked controls.
+    :param values: ``(rows, NUM_SKETCH_CONTROLS, frames)`` stacked controls.
     """
     write_lance_shard_with_sketch(path, make_shard_columns(len(values), seed=9), values)
 
@@ -159,7 +160,10 @@ def _sketch_module(root: Path, *, fake: bool) -> LanceVSTDataModule:
     return LanceVSTDataModule(
         dataset_root=root,
         batch_size=2,
-        sketch=SketchControlSpec(num_frames=_NUM_FRAMES),
+        sketch=SketchControlSpec(
+            num_frames=_NUM_FRAMES,
+            num_control_tokens=_NUM_FRAMES,
+        ),
         fake=fake,
         use_saved_mean_and_variance=False,
         num_workers=0,
@@ -220,6 +224,58 @@ def test_real_lance_split_with_sketch_struct_yields_float32_batch(
     assert sketch.dtype == torch.float32
     pitch = sketch[:, SKETCH_PITCH_SLICE]
     assert (pitch[torch.from_numpy(values[:2, SKETCH_PITCH_SLICE]) < _THRESHOLD] == 0.0).all()
+
+
+def test_dense_lance_controls_reach_model_token_grid(tmp_path: Path) -> None:
+    """Dense stored controls pass Lance validation and model tokenization.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    values = np.zeros((4, NUM_SKETCH_CONTROLS, 96), dtype=np.float32)
+    values[:, 0] = 0.25
+    values[:, SKETCH_PITCH_SLICE] = 0.05
+    values[:, SKETCH_PITCH_SLICE.start] = 0.2
+    source_values = values.copy()
+    _write_sketch_split(tmp_path / "val.lance", values)
+    spec = SketchControlSpec(num_frames=96, num_control_tokens=64)
+    module = LanceVSTDataModule(
+        dataset_root=tmp_path,
+        batch_size=2,
+        sketch=spec,
+        fake=False,
+        use_saved_mean_and_variance=False,
+        num_workers=0,
+        pin_memory=False,
+        param_spec_name=ParamSpecName("surge_xt"),
+    )
+
+    module.setup("validate")
+    try:
+        controls = next(iter(module.val_dataloader()))["sketch_ctrl"]
+    finally:
+        module.teardown()
+    assert controls is not None
+    loaded_controls = controls.clone()
+    tokenizer = SketchControlTokens(d_model=1, num_control_tokens=64)
+    loudness_projection = tokenizer.projections["loudness"]
+    pitch_projection = tokenizer.projections["pitch"]
+    assert isinstance(loudness_projection, torch.nn.Linear)
+    assert isinstance(pitch_projection, torch.nn.Linear)
+    with torch.no_grad():
+        loudness_projection.weight.fill_(1.0)
+        pitch_projection.weight.fill_(1.0)
+    keep = torch.ones(controls.shape[0], 3, dtype=torch.bool)
+
+    contribution = tokenizer(controls, keep) - tokenizer.unconditional(controls.shape[0])
+
+    torch.testing.assert_close(
+        contribution[:, :, 0],
+        torch.full((2, 64), 0.45),
+        rtol=0,
+        atol=1e-6,
+    )
+    torch.testing.assert_close(controls, loaded_controls, rtol=0, atol=0)
+    np.testing.assert_array_equal(values, source_values)
 
 
 def test_real_lance_split_reassembles_struct_bit_identical_to_stack(

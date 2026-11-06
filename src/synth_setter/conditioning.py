@@ -46,6 +46,7 @@ TIV_SKETCH_CONTROLS: int = 12
 
 type SketchControlProfile = Literal["music", "pyfdn_reverb", "tiv"]
 type SketchControlSource = Literal["stored", "online"]
+type SketchTemporalResampling = Literal["average", "linear"]
 type TIVBackend = Literal["torch", "essentia"]
 
 
@@ -227,13 +228,21 @@ class SketchControlSpec(BaseModel):
 
         Control tokens the time axis is resampled to.
 
+    .. attribute :: temporal_resampling
+
+        Music-control temporal reduction used at frame and token boundaries.
+
     .. attribute :: pitch_zero_threshold
 
         Pitch activations below this zero-bin at batch preparation (#2614).
 
     .. attribute :: median_filter_max_kernel_size
 
-        Largest training-time music-control median window; one disables augmentation.
+        Largest literal training-time music-control median window; one disables augmentation.
+
+    .. attribute :: median_filter_max_window_fraction
+
+        Optional token-grid fraction used to derive the training-time median-window maximum.
     """
 
     model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
@@ -245,10 +254,12 @@ class SketchControlSpec(BaseModel):
     tiv_backend: TIVBackend = "torch"
     num_frames: PositiveInt
     num_control_tokens: PositiveInt = 32
+    temporal_resampling: SketchTemporalResampling = "average"
     # Bounded to the documented [0, 1] activation range: a negative threshold
     # silently disables binning and one above 1 zeroes the whole pitch block.
     pitch_zero_threshold: float = Field(default=0.1, ge=0.0, le=1.0)
     median_filter_max_kernel_size: PositiveInt = 1
+    median_filter_max_window_fraction: float | None = Field(default=None, gt=0.0, le=1.0)
 
     @property
     def layout(self) -> SketchControlLayout:
@@ -264,8 +275,20 @@ class SketchControlSpec(BaseModel):
         """
         if self.median_filter_max_kernel_size > self.num_control_tokens:
             raise ValueError("median_filter_max_kernel_size cannot exceed num_control_tokens")
-        if self.profile != "music" and self.median_filter_max_kernel_size != 1:
+        if (
+            self.median_filter_max_window_fraction is not None
+            and self.median_filter_max_kernel_size != 1
+        ):
+            raise ValueError(
+                "median_filter_max_window_fraction requires median_filter_max_kernel_size=1"
+            )
+        if self.profile != "music" and (
+            self.median_filter_max_kernel_size != 1
+            or self.median_filter_max_window_fraction is not None
+        ):
             raise ValueError("median filtering is supported only for music sketch controls")
+        if self.profile != "music" and self.temporal_resampling != "average":
+            raise ValueError("nondefault temporal resampling is supported only for music controls")
         if self.profile == "tiv":
             if self.source != "online":
                 raise ValueError("tiv sketch requires source='online'")
@@ -281,14 +304,8 @@ class SketchControlSpec(BaseModel):
                 f"pyfdn_reverb sketch requires num_frames=num_control_tokens="
                 f"{SKETCH_STORAGE_FRAMES}"
             )
-        if (
-            self.profile == "music"
-            and self.num_frames == SKETCH_STORAGE_FRAMES
-            and self.num_control_tokens != SKETCH_STORAGE_FRAMES
-        ):
-            raise ValueError(
-                f"pooled sketch storage requires num_control_tokens={SKETCH_STORAGE_FRAMES}"
-            )
+        if self.profile == "music" and self.num_control_tokens > self.num_frames:
+            raise ValueError("music num_control_tokens cannot exceed num_frames")
         return self
 
 

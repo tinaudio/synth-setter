@@ -1069,16 +1069,17 @@ def test_nsynth_sketch_batch_pools_controls_and_zeroes_weak_pitch(
     assert torch.equal(pooled[0, SKETCH_PITCH_SLICE.start + 1], torch.full((32,), 0.25))
 
 
-def test_nsynth_sketch_noncanonical_frame_count_raises(tmp_path: Path) -> None:
-    """A live sketch config cannot drift from the checkpoint's 32-frame contract.
+def test_nsynth_sketch_dense_frame_grid_is_accepted(tmp_path: Path) -> None:
+    """Live music extraction follows the checkpoint's dense frame contract.
 
     :param tmp_path: Isolated placeholder corpus path.
     """
-    with pytest.raises(ValueError, match="32"):
-        _datamodule(
-            tmp_path / "unused.lance",
-            sketch={"column": "sketch", "num_frames": 64, "num_control_tokens": 64},
-        )
+    datamodule = _datamodule(
+        tmp_path / "unused.lance",
+        sketch={"column": "sketch", "num_frames": 64, "num_control_tokens": 64},
+    )
+    assert datamodule.sketch_controls is not None
+    assert datamodule.sketch_controls.num_frames == 64
 
 
 @pytest.mark.slow

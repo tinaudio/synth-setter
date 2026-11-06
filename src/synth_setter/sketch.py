@@ -10,7 +10,12 @@ import torch.nn.functional as F
 from beartype import beartype
 from jaxtyping import Float, jaxtyped
 
-from synth_setter.conditioning import NUM_SKETCH_CONTROLS, SKETCH_STORAGE_FRAMES
+from synth_setter.conditioning import (
+    NUM_SKETCH_CONTROLS,
+    SKETCH_PITCH_SLICE,
+    SKETCH_STORAGE_FRAMES,
+    SketchControlSpec,
+)
 
 
 @jaxtyped(typechecker=beartype)
@@ -72,6 +77,62 @@ def random_median_filter_sketch_controls(
 
 
 @jaxtyped(typechecker=beartype)
+def resample_sketch_controls(
+    controls: Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"],
+    output_frames: int,
+    mode: str,
+) -> Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} output_frames"]:
+    """Resample controls onto a positive temporal grid.
+
+    :param controls: Loudness, centroid, and pitch controls on any nonempty temporal grid.
+    :param output_frames: Positive output-grid length.
+    :param mode: ``average`` for adaptive average pooling or ``linear`` interpolation.
+    :returns: Resampled controls with input dtype and device preserved.
+    :raises ValueError: The source or output grid is empty, or the mode is unsupported.
+    """
+    if controls.shape[-1] == 0 or output_frames <= 0:
+        raise ValueError("Sketch resampling requires nonempty input and positive output frames")
+    if mode not in {"average", "linear"}:
+        raise ValueError("Sketch resampling mode must be 'average' or 'linear'")
+    if controls.shape[-1] == output_frames:
+        return controls.clone()
+    if mode == "average":
+        return F.adaptive_avg_pool1d(controls, output_frames)
+    return F.interpolate(controls, size=output_frames, mode="linear", align_corners=False)
+
+
+@jaxtyped(typechecker=beartype)
+def prepare_music_sketch_controls(
+    controls: Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"],
+    spec: SketchControlSpec,
+) -> Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} num_frames"]:
+    """Prepare extracted music controls on the checkpoint frame grid.
+
+    :param controls: Raw extracted controls on a nonempty temporal grid.
+    :param spec: Music sketch contract selecting frame count, resampling, and pitch threshold.
+    :returns: Independent float32 controls on ``spec.num_frames`` preserving the input device.
+    :raises ValueError: The spec does not select the music profile or resampling is invalid.
+    """
+    if spec.profile != "music":
+        raise ValueError("music-control preparation requires profile='music'")
+    prepared = (
+        resample_sketch_controls(
+            controls,
+            output_frames=spec.num_frames,
+            mode=spec.temporal_resampling,
+        )
+        .to(dtype=torch.float32)
+        .clone()
+    )
+    pitch = prepared[:, SKETCH_PITCH_SLICE]
+    prepared[:, SKETCH_PITCH_SLICE] = pitch.where(
+        pitch >= spec.pitch_zero_threshold,
+        0.0,
+    )
+    return prepared
+
+
+@jaxtyped(typechecker=beartype)
 def pool_sketch_controls(
     controls: Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"],
     output_frames: int = SKETCH_STORAGE_FRAMES,
@@ -85,6 +146,4 @@ def pool_sketch_controls(
     """
     if controls.shape[-1] == 0 or output_frames <= 0:
         raise ValueError("Sketch pooling requires nonempty input and positive output frames")
-    if controls.shape[-1] == output_frames:
-        return controls.clone()
-    return F.adaptive_avg_pool1d(controls, output_frames)
+    return resample_sketch_controls(controls, output_frames, "average")

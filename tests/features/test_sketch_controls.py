@@ -27,6 +27,7 @@ from synth_setter.sketch import (
     median_filter_sketch_controls,
     pool_sketch_controls,
     random_median_filter_sketch_controls,
+    resample_sketch_controls,
 )
 from tests.helpers.run_if import RunIf
 
@@ -102,6 +103,43 @@ def test_random_median_filter_sketch_controls_seed_repeats_per_row_windows() -> 
     expected[3] = controls[3]
     torch.testing.assert_close(first, expected, rtol=0, atol=0)
     torch.testing.assert_close(second, expected, rtol=0, atol=0)
+
+
+def test_resample_sketch_controls_average_and_linear_have_distinct_values() -> None:
+    """Average and linear modes preserve their documented temporal semantics."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 5)
+    controls[:, SKETCH_LOUDNESS_ROW, 2] = 4.0
+
+    averaged = resample_sketch_controls(controls, output_frames=2, mode="average")
+    linear = resample_sketch_controls(controls, output_frames=2, mode="linear")
+
+    torch.testing.assert_close(
+        averaged[0, SKETCH_LOUDNESS_ROW], torch.tensor((4 / 3, 4 / 3)), rtol=0, atol=0
+    )
+    torch.testing.assert_close(
+        linear[0, SKETCH_LOUDNESS_ROW], torch.tensor((0.0, 0.0)), rtol=0, atol=0
+    )
+
+
+def test_resample_sketch_controls_equal_frames_returns_independent_clone() -> None:
+    """An unchanged grid preserves values without sharing writable storage."""
+    controls = torch.randn(1, NUM_SKETCH_CONTROLS, 4)
+
+    resampled = resample_sketch_controls(controls, output_frames=4, mode="linear")
+    resampled.zero_()
+
+    assert torch.count_nonzero(controls) > 0
+
+
+@pytest.mark.parametrize("mode", ["nearest", "cubic"])
+def test_resample_sketch_controls_unknown_mode_rejected(mode: str) -> None:
+    """Only the checkpointed average and linear policies are accepted.
+
+    :param mode: Unsupported mode under test.
+    """
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 4)
+    with pytest.raises(ValueError, match="average.*linear"):
+        resample_sketch_controls(controls, output_frames=2, mode=mode)  # type: ignore[arg-type]
 
 
 def test_pool_sketch_controls_averages_tracks_and_pitch() -> None:

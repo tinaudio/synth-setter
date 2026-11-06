@@ -7,7 +7,7 @@ from jaxtyping import Float
 from synth_setter.conditioning import SketchControlSpec
 from synth_setter.features.pyfdn_controls import extract_reverb_sketch
 from synth_setter.features.sketch_controls import extract_sketch_controls
-from synth_setter.sketch import pool_sketch_controls
+from synth_setter.sketch import prepare_music_sketch_controls
 
 
 def extract_profile_controls(
@@ -29,7 +29,4 @@ def extract_profile_controls(
     if spec.profile != "music":
         raise ValueError(f"no offline sketch extractor for profile {spec.profile!r}")
     controls = extract_sketch_controls(torch.from_numpy(audio), sample_rate).unsqueeze(0)
-    controls = pool_sketch_controls(controls, spec.num_frames).to(dtype=torch.float32).clone()
-    pitch = controls[:, 2:]
-    controls[:, 2:] = pitch.where(pitch >= spec.pitch_zero_threshold, 0.0)
-    return controls
+    return prepare_music_sketch_controls(controls, spec)

@@ -30,8 +30,6 @@ from torch.utils.data import DataLoader, Dataset
 
 from synth_setter.conditioning import (
     SKETCH_CTRL_FIELD,
-    SKETCH_PITCH_SLICE,
-    SKETCH_STORAGE_FRAMES,
     SketchControls,
     resolve_sketch_controls,
 )
@@ -41,7 +39,7 @@ from synth_setter.features.pyfdn_controls import extract_reverb_sketch
 from synth_setter.features.sketch_controls import extract_sketch_controls_batch
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.lance_materialize import retry_lance_read
-from synth_setter.sketch import pool_sketch_controls
+from synth_setter.sketch import prepare_music_sketch_controls
 
 log = logging.getLogger(__name__)
 
@@ -477,14 +475,6 @@ class ThirdPartyAudioDataModule(LightningDataModule):
         self.peak_normalize = peak_normalize
         self.conditioning = conditioning
         self.sketch_controls = resolve_sketch_controls(sketch)
-        if (
-            self.sketch_controls is not None
-            and self.sketch_controls.num_frames != SKETCH_STORAGE_FRAMES
-        ):
-            raise ValueError(
-                f"live sketch extraction requires num_frames={SKETCH_STORAGE_FRAMES}, "
-                f"got {self.sketch_controls.num_frames}"
-            )
         self.mel_stats_uri = mel_stats_uri
         if mel_stats_sha256 is not None:
             if not isinstance(mel_stats_sha256, str):
@@ -743,10 +733,8 @@ class ThirdPartyAudioDataModule(LightningDataModule):
             model_batch[SKETCH_CTRL_FIELD] = torch.from_numpy(controls).to(audio.device)
             return model_batch
         controls = extract_sketch_controls_batch(audio, self.sample_rate)
-        pooled = pool_sketch_controls(controls, self.sketch_controls.num_frames)
-        pitch = pooled[:, SKETCH_PITCH_SLICE]
-        pooled[:, SKETCH_PITCH_SLICE] = pitch.where(
-            pitch >= self.sketch_controls.pitch_zero_threshold, 0.0
+        model_batch[SKETCH_CTRL_FIELD] = prepare_music_sketch_controls(
+            controls,
+            self.sketch_controls,
         )
-        model_batch[SKETCH_CTRL_FIELD] = pooled
         return model_batch
