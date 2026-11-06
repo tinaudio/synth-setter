@@ -381,28 +381,40 @@ def test_kr106_native_render_group_composes_with_explicit_v2_contract(
 
 
 @pytest.mark.parametrize(
-    ("experiment", "task_name", "sizes"),
+    ("experiment", "task_name", "sizes", "synth_name"),
     [
         (
             "ultramaster-kr106-native-lance-smoke",
             "ultramaster-kr106-native-lance-smoke",
             (20, 0, 0),
+            "ultramaster_kr106_native",
         ),
         (
             "ultramaster-kr106-native-lance-2m-40k-10k",
             "ultramaster-kr106-native-lance-2m-40k-10k",
             (2_000_000, 40_000, 10_000),
+            "ultramaster_kr106_native",
+        ),
+        (
+            "ultramaster-kr106-single-note-native-lance-2m-40k-10k",
+            "ultramaster-kr106-single-note-native-lance-2m-40k-10k",
+            (2_000_000, 40_000, 10_000),
+            "ultramaster_kr106_single_note_native",
         ),
     ],
 )
 def test_kr106_native_dataset_experiment_composes_and_serializes(
-    experiment: str, task_name: str, sizes: tuple[int, int, int]
+    experiment: str,
+    task_name: str,
+    sizes: tuple[int, int, int],
+    synth_name: str,
 ) -> None:
     """Native dataset experiments preserve their render identity through worker transport.
 
     :param experiment: ``generate_dataset`` experiment config name.
     :param task_name: Expected dataset task identity.
     :param sizes: Expected train, validation, and test split sizes.
+    :param synth_name: Expected native KR-106 synth identity.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
@@ -412,7 +424,7 @@ def test_kr106_native_dataset_experiment_composes_and_serializes(
 
     assert spec.task_name == task_name
     assert spec.train_val_test_sizes == sizes
-    assert spec.render.synth.name == "ultramaster_kr106_native"
+    assert spec.render.synth.name == synth_name
     assert DatasetSpec.model_validate_json(spec.model_dump_json()) == spec
 
 
