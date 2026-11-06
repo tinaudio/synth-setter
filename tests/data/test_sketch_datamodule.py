@@ -19,9 +19,16 @@ from synth_setter.conditioning import (
     SketchControlSpec,
 )
 from synth_setter.data.lance_datamodule import LanceVSTDataModule
+from synth_setter.features import sketch_controls
+from synth_setter.features.sketch_controls import (
+    DEFAULT_PESTO_CHECKPOINT,
+    extract_sketch_controls_batch,
+    load_pesto_model,
+)
 from synth_setter.data.vst_datamodule import RawBatch, prepare_batch
 from synth_setter.models.components.sketch_tokens import SketchControlTokens
 from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.sketch import prepare_music_sketch_controls
 from synth_setter.pipeline.data.lance_shard import (
     pyfdn_sketch_struct_array,
     sketch_struct_array,
@@ -172,6 +179,17 @@ def _sketch_module(root: Path, *, fake: bool) -> LanceVSTDataModule:
     )
 
 
+def test_stored_sketch_projection_does_not_request_training_audio(tmp_path: Path) -> None:
+    """Stored controls do not hydrate waveform audio solely for sketch extraction.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    module = _sketch_module(tmp_path, fake=True)
+
+    assert module.projection["train"] == ["param_array", "mel_spec", "sketch"]
+    assert module.projection["val"] == ["param_array", "mel_spec", "sketch"]
+
+
 def test_sketch_spec_adds_struct_column_to_loader_projection(tmp_path: Path) -> None:
     """A configured sketch spec projects its stored struct column for every split.
 
@@ -180,6 +198,23 @@ def test_sketch_spec_adds_struct_column_to_loader_projection(tmp_path: Path) -> 
     module = _sketch_module(tmp_path, fake=True)
 
     assert SKETCH_STRUCT_FIELD in module._loader_columns(read_audio=False)  # noqa: SLF001
+
+
+def test_stored_sketch_setup_does_not_load_pesto(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stored controls remain independent of the online extractor lifecycle.
+
+    :param tmp_path: Per-test dataset root.
+    :param monkeypatch: Fails if setup attempts to load PESTO.
+    """
+    monkeypatch.setattr(
+        "synth_setter.data.lance_datamodule.load_pesto_model",
+        lambda *, device: pytest.fail(f"unexpected PESTO load on {device}"),
+    )
+    module = _sketch_module(tmp_path, fake=True)
+
+    module.setup("validate")
 
 
 def test_fake_mode_with_sketch_spec_yields_sketch_batch_key(tmp_path: Path) -> None:
@@ -513,6 +548,189 @@ def test_real_pyfdn_sketch_profile_with_mis_shaped_child_raises(
 
     with pytest.raises(ValueError, match="echo_density.*has shape"):
         module.setup("validate")
+
+
+def _online_music_module(root: Path, *, sample_rate: int = 44_100) -> LanceVSTDataModule:
+    """Build an online music-sketch datamodule.
+
+    :param root: Dataset root, unused in fake mode.
+    :param sample_rate: Module waveform rate.
+    :returns: Online music-sketch datamodule.
+    """
+    return LanceVSTDataModule(
+        dataset_root=root,
+        batch_size=2,
+        sketch=SketchControlSpec(
+            profile="music",
+            source="online",
+            sample_rate=44_100,
+            num_frames=32,
+            num_control_tokens=32,
+        ),
+        fake=True,
+        use_saved_mean_and_variance=False,
+        num_workers=0,
+        pin_memory=False,
+        param_spec_name=ParamSpecName("surge_xt"),
+        sample_rate=sample_rate,
+    )
+
+
+def test_online_music_sample_rate_mismatch_rejected(tmp_path: Path) -> None:
+    """Online extraction and dataset waveform rates must agree exactly.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    with pytest.raises(ValueError, match="sketch sample_rate.*datamodule sample_rate"):
+        _online_music_module(tmp_path, sample_rate=48_000)
+
+
+def test_online_music_projects_audio_without_stored_sketch(tmp_path: Path) -> None:
+    """Online music controls hydrate audio instead of a sketch column.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    module = _online_music_module(tmp_path)
+
+    assert module.projection["train"] == ["param_array", "mel_spec", "audio"]
+    assert SKETCH_STRUCT_FIELD not in module.projection["train"]
+
+
+def test_online_music_setup_selects_canonical_pesto_after_custom_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Setup resets a process cache previously loaded with noncanonical weights.
+
+    :param tmp_path: Per-test dataset root.
+    :param monkeypatch: Records checkpoint selections without loading external weights.
+    """
+    import pesto
+
+    calls: list[str] = []
+
+    def record(checkpoint: str, *, step_size: float) -> torch.nn.Module:
+        del step_size
+        calls.append(checkpoint)
+        return torch.nn.Linear(1, 1)
+
+    monkeypatch.setattr(sketch_controls, "_pesto_model", None)
+    monkeypatch.setattr(sketch_controls, "_pesto_checkpoint", None)
+    monkeypatch.setattr(pesto, "load_model", record)
+    load_pesto_model("custom-checkpoint", device="cpu")
+    module = _online_music_module(tmp_path)
+
+    module.setup("validate")
+
+    assert calls == ["custom-checkpoint", DEFAULT_PESTO_CHECKPOINT]
+
+
+def test_online_music_setup_eagerly_loads_frozen_cpu_pesto(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Setup loads PESTO on CPU before dataloader workers can extract batches.
+
+    :param tmp_path: Per-test dataset root.
+    :param monkeypatch: Replaces the model loader at the module boundary.
+    """
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "synth_setter.data.lance_datamodule.load_pesto_model",
+        lambda checkpoint, *, device: calls.append((checkpoint, str(device))),
+    )
+    module = _online_music_module(tmp_path)
+
+    module.setup("validate")
+
+    assert calls == [(DEFAULT_PESTO_CHECKPOINT, "cpu")]
+
+
+def test_online_music_after_transfer_matches_canonical_precompute(tmp_path: Path) -> None:
+    """The production hook applies the canonical raw-to-checkpoint preparation.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    module = _online_music_module(tmp_path)
+    samples = torch.arange(8193, dtype=torch.float32)
+    audio = torch.stack(
+        [
+            torch.sin(2.0 * torch.pi * 440.0 * samples / 44_100),
+            torch.sin(2.0 * torch.pi * 880.0 * samples / 44_100),
+        ]
+    )[:, None]
+
+    prepared = module.on_after_batch_transfer({"audio": audio}, 0)
+
+    controls = prepared["sketch_ctrl"]
+    assert controls is not None
+    spec = module.sketch_controls
+    assert spec is not None
+    expected = prepare_music_sketch_controls(
+        extract_sketch_controls_batch(audio, 44_100), spec
+    )
+    assert controls.dtype == torch.float32
+    assert controls.device == audio.device
+    assert torch.isfinite(controls).all()
+    torch.testing.assert_close(controls, expected, rtol=0, atol=0)
+
+
+def test_online_music_controls_support_trainable_projection_backward(tmp_path: Path) -> None:
+    """No-grad extraction still permits weight gradients in downstream projections.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    module = _online_music_module(tmp_path)
+    samples = torch.arange(8193, dtype=torch.float32)
+    audio = torch.sin(2.0 * torch.pi * 440.0 * samples / 44_100)[None, None]
+    controls = module.on_after_batch_transfer({"audio": audio}, 0)["sketch_ctrl"]
+    assert controls is not None
+    projection = torch.nn.Linear(NUM_SKETCH_CONTROLS, 1)
+
+    loss = projection(controls.transpose(1, 2)).square().mean()
+    loss.backward()
+
+    assert projection.weight.grad is not None
+    assert torch.isfinite(projection.weight.grad).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_online_music_after_transfer_keeps_controls_on_cuda(tmp_path: Path) -> None:
+    """Online extraction follows transferred audio onto CUDA end to end.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    module = _online_music_module(tmp_path)
+    samples = torch.arange(8193, dtype=torch.float32, device="cuda")
+    audio = torch.sin(2.0 * torch.pi * 440.0 * samples / 44_100)[None, None]
+
+    controls = module.on_after_batch_transfer({"audio": audio}, 0)["sketch_ctrl"]
+
+    assert controls is not None
+    assert controls.device.type == "cuda"
+    assert controls.dtype == torch.float32
+    assert torch.isfinite(controls).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_online_music_validation_then_training_reuses_canonical_cache_on_cuda(
+    tmp_path: Path,
+) -> None:
+    """Validation and training setup preserve deterministic CUDA extraction.
+
+    :param tmp_path: Per-test dataset root.
+    """
+    module = _online_music_module(tmp_path)
+    samples = torch.arange(8193, dtype=torch.float32, device="cuda")
+    audio = torch.sin(2.0 * torch.pi * 440.0 * samples / 44_100)[None, None]
+    module.setup("validate")
+    validation = module.on_after_batch_transfer({"audio": audio}, 0)["sketch_ctrl"]
+
+    module.setup("fit")
+    training = module.on_after_batch_transfer({"audio": audio}, 0)["sketch_ctrl"]
+
+    assert validation is not None
+    assert training is not None
+    assert validation.device.type == "cuda"
+    assert torch.equal(training, validation)
 
 
 def test_tiv_online_projects_audio_without_stored_sketch(tmp_path: Path) -> None:

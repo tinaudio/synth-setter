@@ -45,6 +45,11 @@ from synth_setter.data.vst_datamodule import (
     prepare_batch,
     ranked_generator_seed,
 )
+from synth_setter.features.sketch_controls import (
+    DEFAULT_PESTO_CHECKPOINT,
+    extract_sketch_controls_batch,
+    load_pesto_model,
+)
 from synth_setter.features.tiv import extract_tiv_batch
 from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot, GrowingSnapshot
@@ -52,6 +57,7 @@ from synth_setter.pipeline.data.lance_shard import (
     SHARD_METADATA_SCHEMA_KEY,
     read_shard_metadata,
 )
+from synth_setter.sketch import prepare_music_sketch_controls
 
 logger = logging.getLogger(__name__)
 
@@ -654,6 +660,15 @@ class LanceVSTDataModule(VSTDataModule):
             download_dataset_row_limit=download_dataset_row_limit,
             high_memory_materialization=high_memory_materialization,
         )
+        if (
+            self.sketch_controls is not None
+            and self.sketch_controls.source == "online"
+            and self.sketch_controls.sample_rate != sample_rate
+        ):
+            raise ValueError(
+                f"sketch sample_rate {self.sketch_controls.sample_rate} does not match "
+                f"datamodule sample_rate {sample_rate}"
+            )
         self.val_num_workers = val_num_workers
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
@@ -1024,6 +1039,12 @@ class LanceVSTDataModule(VSTDataModule):
         """
         self._select_compatible_dataset_root()
         if (
+            self.sketch_controls is not None
+            and self.sketch_controls.profile == "music"
+            and self.sketch_controls.source == "online"
+        ):
+            load_pesto_model(DEFAULT_PESTO_CHECKPOINT, device="cpu")
+        if (
             self.growing_active_record is not None
             and not self.growing_active_record.parent.is_dir()
         ):
@@ -1179,12 +1200,12 @@ class LanceVSTDataModule(VSTDataModule):
     def on_after_batch_transfer(
         self, batch: Mapping[str, torch.Tensor | None], dataloader_idx: int
     ) -> ModelBatch:
-        """Extract online TIV sketch controls from transferred waveform audio.
+        """Extract configured online sketch controls from transferred waveform audio.
 
-        :param batch: Model batch containing projected audio for online TIV.
+        :param batch: Model batch containing projected audio for online extraction.
         :param dataloader_idx: Unused; each stage serves one loader.
-        :returns: Batch with temporal ``sketch_ctrl`` when online TIV is configured.
-        :raises ValueError: Online TIV is configured but audio is absent.
+        :returns: Batch with temporal ``sketch_ctrl`` when online extraction is configured.
+        :raises ValueError: Online extraction is configured but audio or its rate is absent.
         """
         del dataloader_idx
         model_batch = dict(batch)
@@ -1193,15 +1214,17 @@ class LanceVSTDataModule(VSTDataModule):
             return model_batch
         audio = model_batch.get("audio")
         if audio is None:
-            raise ValueError("online TIV sketch extraction requires batch audio")
+            raise ValueError("online sketch extraction requires batch audio")
         if sketch.sample_rate is None:
-            raise ValueError("online TIV sketch extraction requires sample_rate")
-        controls = extract_tiv_batch(
-            audio, sketch.sample_rate, backend=sketch.tiv_backend
-        )
-        model_batch[SKETCH_CTRL_FIELD] = F.adaptive_avg_pool1d(
-            controls, sketch.num_frames
-        )
+            raise ValueError("online sketch extraction requires sample_rate")
+        if sketch.profile == "music":
+            with torch.no_grad():
+                raw_controls = extract_sketch_controls_batch(audio, sketch.sample_rate)
+                controls = prepare_music_sketch_controls(raw_controls, sketch)
+            model_batch[SKETCH_CTRL_FIELD] = controls
+            return model_batch
+        controls = extract_tiv_batch(audio, sketch.sample_rate, backend=sketch.tiv_backend)
+        model_batch[SKETCH_CTRL_FIELD] = F.adaptive_avg_pool1d(controls, sketch.num_frames)
         return model_batch
 
     def teardown(self, stage: str | None = None) -> None:

@@ -1424,6 +1424,29 @@ def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> 
     assert sketch.datamodule.sketch == sketch.model.sketch_controls
 
 
+def test_music_online_sketch_profile_is_explicit_and_matches_datamodule_rate() -> None:
+    """The online profile opts into waveform extraction without changing stored defaults."""
+    base_overrides = [
+        "datamodule=surge_lance",
+        "synth=surge_xt",
+        "model=vst_flow",
+        "trainer=cpu",
+    ]
+    online = _compose("train.yaml", [*base_overrides, "sketch=music_online"])
+    stored = _compose("train.yaml", [*base_overrides, "sketch=on"])
+
+    assert online.model.sketch_controls.profile == "music"
+    assert online.model.sketch_controls.source == "online"
+    assert online.model.sketch_controls.sample_rate == online.datamodule.sample_rate
+    assert online.model.sketch_controls.num_frames == 96
+    assert online.model.sketch_controls.num_control_tokens == 96
+    assert online.model.sketch_controls.temporal_resampling == "average"
+    assert online.model.sketch_controls.pitch_zero_threshold == 0.1
+    assert online.model.sketch_controls.median_filter_max_window_fraction == 0.15625
+    assert online.datamodule.sketch == online.model.sketch_controls
+    assert "source" not in stored.model.sketch_controls
+
+
 def test_ffn_simple_smoke_experiment_pins_lance_fixture_and_smoke_caps() -> None:
     """``surge/ffn_simple_smoke`` bakes the RunPod smoke contract into one experiment.
 

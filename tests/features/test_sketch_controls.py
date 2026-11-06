@@ -420,6 +420,19 @@ def test_load_pesto_model_returns_weights_on_the_requested_device_after_an_exter
     assert next(model.parameters()).device.type == "cuda"
 
 
+def test_load_pesto_model_reasserts_frozen_eval_state() -> None:
+    """Every cache retrieval restores the extractor's immutable inference state."""
+    model = load_pesto_model(device="cpu")
+    model.train()
+    next(model.parameters()).requires_grad_(True)
+
+    restored = load_pesto_model(device="cpu")
+
+    assert restored is model
+    assert restored.training is False
+    assert all(not parameter.requires_grad for parameter in restored.parameters())
+
+
 def test_load_pesto_model_without_a_device_defaults_to_cpu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

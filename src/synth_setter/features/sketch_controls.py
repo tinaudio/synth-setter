@@ -100,6 +100,8 @@ def load_pesto_model(
     current = next(_pesto_model.parameters()).device
     if device is not None and torch.device(device) != current:
         _pesto_model = _pesto_model.to(device)
+    _pesto_model.requires_grad_(False)
+    _pesto_model.eval()
     return _pesto_model
 
 

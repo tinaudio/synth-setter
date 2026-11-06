@@ -314,13 +314,12 @@ class SketchControlSpec(BaseModel):
             raise ValueError("median filtering is supported only for music sketch controls")
         if self.profile != "music" and self.temporal_resampling != "average":
             raise ValueError("nondefault temporal resampling is supported only for music controls")
-        if self.profile == "tiv":
-            if self.source != "online":
-                raise ValueError("tiv sketch requires source='online'")
-            if self.sample_rate is None:
-                raise ValueError("tiv sketch requires sample_rate for audio extraction")
-        elif self.source == "online":
-            raise ValueError("source='online' is supported only by the tiv sketch profile")
+        if self.profile == "tiv" and self.source != "online":
+            raise ValueError("tiv sketch requires source='online'")
+        if self.profile == "pyfdn_reverb" and self.source == "online":
+            raise ValueError("pyfdn_reverb sketch does not support source='online'")
+        if self.source == "online" and self.sample_rate is None:
+            raise ValueError("online sketch extraction requires sample_rate")
         if self.profile == "pyfdn_reverb" and (
             self.num_frames != SKETCH_STORAGE_FRAMES
             or self.num_control_tokens != SKETCH_STORAGE_FRAMES

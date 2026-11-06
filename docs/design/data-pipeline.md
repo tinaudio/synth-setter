@@ -1173,7 +1173,10 @@ centroid use adaptive average pooling; pitch uses adaptive average pooling and
 remains unthresholded. The `vec` child stores the pooled frame mean for
 contour-similarity search. The struct is an atomic write unit — refreshing
 one child means rewriting the whole column (requires Lance data storage 2.2).
-`sketch=on` consumes this canonical layout. Music checkpoints may also require a
+`sketch=on` consumes this canonical layout. Training can instead opt into
+`sketch=music_online`, which projects waveform audio and extracts the same music
+controls after batch transfer without hydrating the stored `sketch` column.
+Music checkpoints may also require a
 dense stored grid, provided `num_control_tokens <= num_frames`; Lance validates the
 stored shape before batching. `temporal_resampling` selects adaptive averaging or
 linear interpolation first onto `num_frames` for live extraction and then onto
