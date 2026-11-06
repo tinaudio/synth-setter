@@ -270,6 +270,74 @@ def test_trainable_autoencoder_is_rejected(tiny_same_checkpoint: Path) -> None:
         SameAudioEncoder(sample_rate=SAME_SAMPLE_RATE, autoencoder=trainable)
 
 
+def test_stereo_waveform_preserves_channels(tiny_same_checkpoint: Path) -> None:
+    """Online SAME preserves distinct stereo channels used by stored extraction.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    from synth_setter.pipeline.data.add_embeddings import load_same_audio_encoder
+
+    torch.manual_seed(0)
+    stereo = torch.randn(_ROWS, 2, _LENGTH).clamp(-1.0, 1.0)
+
+    online = _encoder(tiny_same_checkpoint)(stereo).detach().numpy()
+    offline = load_same_audio_encoder(str(tiny_same_checkpoint), "cpu")(stereo.numpy())
+
+    np.testing.assert_allclose(online, offline, rtol=1e-5, atol=1e-6)
+
+
+def test_pretrained_conditioning_accepts_stereo_waveform(
+    tiny_same_checkpoint: Path,
+) -> None:
+    """The conditioning wrapper accepts the datamodule's stereo audio contract.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    encoder = PretrainedConditioningEncoder(
+        backbone=_encoder(tiny_same_checkpoint),
+        head=_ast_head(n_conditioning_outputs=2),
+        out_dim=8,
+    )
+
+    conditioning = encoder(torch.randn(_ROWS, 2, _LENGTH).clamp(-1.0, 1.0))
+
+    assert conditioning.shape == (_ROWS, 2, 8)
+
+
+def test_single_channel_waveform_encodes_as_duplicated_stereo(
+    tiny_same_checkpoint: Path,
+) -> None:
+    """A singleton channel axis has the same mono-duplication semantics.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    torch.manual_seed(0)
+    mono = torch.randn(_ROWS, _LENGTH).clamp(-1.0, 1.0)
+    encoder = _encoder(tiny_same_checkpoint)
+
+    assert torch.equal(encoder(mono[:, None, :]), encoder(mono))
+
+
+def test_waveform_without_batch_axis_raises_error(tiny_same_checkpoint: Path) -> None:
+    """Reject audio without the batch axis required by the encoder contract.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    with pytest.raises(ValueError, match="audio must have shape"):
+        _encoder(tiny_same_checkpoint)(torch.randn(_LENGTH))
+
+
+def test_waveform_with_more_than_two_channels_raises_error(
+    tiny_same_checkpoint: Path,
+) -> None:
+    """Reject channel layouts unsupported by the stereo SAME backbone.
+
+    :param tiny_same_checkpoint: Loadable SAME checkpoint.
+    """
+    with pytest.raises(ValueError, match="audio must have shape"):
+        _encoder(tiny_same_checkpoint)(torch.randn(_ROWS, 3, _LENGTH))
+
+
 def test_mono_waveform_encodes_as_duplicated_stereo(tiny_same_checkpoint: Path) -> None:
     """SAME is a stereo model, and the pipeline column duplicates mono the same way.
 
