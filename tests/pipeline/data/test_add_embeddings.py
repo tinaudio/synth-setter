@@ -2791,10 +2791,10 @@ def test_load_same_audio_encoder_uses_sa3_factory_and_preserves_inference_contra
     latents = encode(audio)
 
     assert factory_calls == [({"family": "same"}, SAME_SAMPLE_RATE)]
-    assert model.chunk_sizes == [256, 1]
-    assert model.grad_enabled == [False, False]
-    assert model.training_states == [False, False]
-    assert model.parameter_grad_states == [False, False]
+    assert model.chunk_sizes == [257]
+    assert model.grad_enabled == [False]
+    assert model.training_states == [False]
+    assert model.parameter_grad_states == [False]
     assert next(model.parameters()).device.type == "cpu"
     assert latents.shape == (257, 1, 8)
     assert latents.dtype == np.float32
