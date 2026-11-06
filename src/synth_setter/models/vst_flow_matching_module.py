@@ -725,6 +725,10 @@ class VSTFlowMatchingModule(LightningModule):
                 median_filter_max_kernel_size=(
                     self._sketch_controls.median_filter_max_kernel_size
                 ),
+                median_filter_max_window_fraction=(
+                    self._sketch_controls.median_filter_max_window_fraction
+                ),
+                temporal_resampling=self._sketch_controls.temporal_resampling,
             )
             if self._sketch_controls is not None
             else None

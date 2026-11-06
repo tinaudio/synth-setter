@@ -50,12 +50,16 @@ def _tokens_module(
     seed: int = 0,
     profile: SketchControlProfile = "music",
     median_filter_max_kernel_size: int = 1,
+    median_filter_max_window_fraction: float | None = None,
+    temporal_resampling: Literal["average", "linear"] = "average",
 ) -> SketchControlTokens:
     """Build a small token module with non-zero projection weights.
 
     :param seed: RNG seed for the randomized projection weights.
     :param profile: Channel layout selected for tokenization.
-    :param median_filter_max_kernel_size: Largest sampled training-time median window.
+    :param median_filter_max_kernel_size: Largest literal training-time median window.
+    :param median_filter_max_window_fraction: Token-grid fraction bounding the median window.
+    :param temporal_resampling: Temporal reduction used before projection.
     :returns: Module whose three projections were re-randomized after zero-init.
     """
     module = SketchControlTokens(
@@ -63,6 +67,8 @@ def _tokens_module(
         num_control_tokens=_NUM_CONTROL_TOKENS,
         profile=profile,
         median_filter_max_kernel_size=median_filter_max_kernel_size,
+        median_filter_max_window_fraction=median_filter_max_window_fraction,
+        temporal_resampling=temporal_resampling,
     )
     generator = torch.Generator().manual_seed(seed)
     with torch.no_grad():
@@ -111,6 +117,8 @@ class TestSketchControlSpec:
         assert spec.num_control_tokens == 32
         assert spec.pitch_zero_threshold == 0.1
         assert spec.median_filter_max_kernel_size == 1
+        assert spec.median_filter_max_window_fraction is None
+        assert spec.temporal_resampling == "average"
 
     def test_pyfdn_reverb_profile_has_temporal_layout(self) -> None:
         """The reverb profile pins its channel and temporal-group layout."""
@@ -189,10 +197,71 @@ class TestSketchControlSpec:
         with pytest.raises(ValueError, match="pitch_zero_threshold"):
             SketchControlSpec(num_frames=401, pitch_zero_threshold=threshold)
 
-    def test_pooled_storage_with_different_token_count_rejected(self) -> None:
-        """Stored pooled controls cannot recover a different temporal token budget."""
-        with pytest.raises(ValueError, match="pooled sketch storage requires"):
-            SketchControlSpec(num_frames=32, num_control_tokens=16)
+    @pytest.mark.parametrize("num_control_tokens", [32, 64, 96])
+    def test_music_dense_storage_accepts_equal_or_smaller_token_grid(
+        self, num_control_tokens: int
+    ) -> None:
+        """Dense music controls may retain or reduce their temporal resolution.
+
+        :param num_control_tokens: Accepted model token count.
+        """
+        spec = SketchControlSpec(num_frames=96, num_control_tokens=num_control_tokens)
+        assert spec.num_control_tokens == num_control_tokens
+
+    def test_music_storage_rejects_larger_token_grid(self) -> None:
+        """Tokenization cannot invent a denser grid than stored music controls."""
+        with pytest.raises(ValueError, match="cannot exceed num_frames"):
+            SketchControlSpec(num_frames=32, num_control_tokens=96)
+
+    def test_nonmusic_profile_rejects_nondefault_temporal_resampling(self) -> None:
+        """Linear temporal resampling is confined to music controls."""
+        with pytest.raises(ValueError, match="temporal resampling.*music"):
+            SketchControlSpec(
+                num_frames=32,
+                profile="pyfdn_reverb",
+                temporal_resampling="linear",
+            )
+
+    @pytest.mark.parametrize(
+        ("num_control_tokens", "fraction", "expected_maximum"),
+        [(32, None, 1), (32, 0.15625, 5), (96, 0.15625, 15), (32, 0.001, 1)],
+    )
+    def test_effective_median_window_resolves_fraction_on_token_grid(
+        self, num_control_tokens: int, fraction: float | None, expected_maximum: int
+    ) -> None:
+        """The spec reports the training-time window maximum its tokenizer will use.
+
+        :param num_control_tokens: Token grid under test.
+        :param fraction: Optional token-grid fraction.
+        :param expected_maximum: Effective positive window maximum.
+        """
+        spec = SketchControlSpec(
+            num_frames=num_control_tokens,
+            num_control_tokens=num_control_tokens,
+            median_filter_max_window_fraction=fraction,
+        )
+        assert spec.effective_median_filter_max_kernel_size == expected_maximum
+
+    def test_fractional_median_window_rejects_ambiguous_literal_policy(self) -> None:
+        """Fractional and non-disabled literal maxima cannot both select a policy."""
+        with pytest.raises(ValueError, match="median_filter_max_kernel_size=1"):
+            SketchControlSpec(
+                num_frames=32,
+                median_filter_max_kernel_size=5,
+                median_filter_max_window_fraction=0.15625,
+            )
+
+    @pytest.mark.parametrize("fraction", [0.0, -0.1, 1.1, float("inf"), float("nan")])
+    def test_fractional_median_window_out_of_range_rejected(self, fraction: float) -> None:
+        """The optional median-window fraction must be finite and in ``(0, 1]``.
+
+        :param fraction: Invalid fraction under test.
+        """
+        with pytest.raises(ValueError, match="median_filter_max_window_fraction"):
+            SketchControlSpec(
+                num_frames=32,
+                median_filter_max_window_fraction=fraction,
+            )
 
     def test_resolve_non_mapping_raises_type_error(self) -> None:
         """Non-mapping junk is rejected with a clear error."""
@@ -202,6 +271,126 @@ class TestSketchControlSpec:
 
 class TestSketchControlTokens:
     """Behavior tests for the zero-init control tokenizer."""
+
+    @pytest.mark.parametrize(
+        ("num_control_tokens", "expected_maximum"),
+        [(32, 5), (64, 10), (96, 15)],
+    )
+    def test_fractional_median_window_scales_with_token_grid(
+        self, num_control_tokens: int, expected_maximum: int
+    ) -> None:
+        """Fractional policy rounds to the nearest positive token-window maximum.
+
+        :param num_control_tokens: Token grid under test.
+        :param expected_maximum: Effective maximum median window.
+        """
+        module = SketchControlTokens(
+            d_model=_D_MODEL,
+            num_control_tokens=num_control_tokens,
+            median_filter_max_window_fraction=0.15625,
+        )
+        assert module.effective_median_filter_max_kernel_size == expected_maximum
+
+    @pytest.mark.parametrize(
+        ("fraction", "expected_maximum"),
+        [(0.046875, 2), (0.001, 1)],
+    )
+    def test_fractional_median_window_half_up_and_minimum_bounds(
+        self, fraction: float, expected_maximum: int
+    ) -> None:
+        """Fractional maxima round half up and never disable the one-frame baseline.
+
+        :param fraction: Token-grid fraction under test.
+        :param expected_maximum: Rounded positive window maximum.
+        """
+        module = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=32,
+            median_filter_max_window_fraction=fraction,
+        )
+        assert module.effective_median_filter_max_kernel_size == expected_maximum
+
+    def test_fractional_and_literal_median_policies_match_training_output(self) -> None:
+        """Equivalent fractional and literal maxima sample identical training filters."""
+        fractional = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=32,
+            median_filter_max_window_fraction=0.15625,
+        )
+        literal = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=32,
+            median_filter_max_kernel_size=5,
+        )
+        for module in (fractional, literal):
+            with torch.no_grad():
+                cast(torch.nn.Linear, module.projections["loudness"]).weight.fill_(1.0)
+        controls = torch.zeros(2, NUM_SKETCH_CONTROLS, 32)
+        controls[:, SKETCH_LOUDNESS_ROW, 8:24] = 1.0
+        keep = torch.tensor(((True, False, False), (True, False, False)))
+
+        torch.manual_seed(41)
+        fractional_tokens = fractional(controls, keep)
+        torch.manual_seed(41)
+        literal_tokens = literal(controls, keep)
+
+        torch.testing.assert_close(fractional_tokens, literal_tokens, rtol=0, atol=0)
+
+    def test_forward_eval_ignores_fractional_median_policy(self) -> None:
+        """Evaluation with a fractional policy equals the disabled compatibility path."""
+        fractional = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=32,
+            median_filter_max_window_fraction=0.15625,
+        ).eval()
+        disabled = SketchControlTokens(d_model=1, num_control_tokens=32).eval()
+        for module in (fractional, disabled):
+            with torch.no_grad():
+                cast(torch.nn.Linear, module.projections["loudness"]).weight.fill_(1.0)
+        controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 32)
+        controls[:, SKETCH_LOUDNESS_ROW, 15] = 1.0
+        keep = torch.tensor(((True, False, False),))
+
+        torch.manual_seed(3)
+        fractional_tokens = fractional(controls, keep)
+        torch.manual_seed(29)
+        disabled_tokens = disabled(controls, keep)
+
+        torch.testing.assert_close(fractional_tokens, disabled_tokens, rtol=0, atol=0)
+
+    def test_literal_median_window_remains_unchanged_on_larger_grid(self) -> None:
+        """Legacy literal policy remains five frames rather than scaling with tokens."""
+        module = SketchControlTokens(
+            d_model=_D_MODEL,
+            num_control_tokens=96,
+            median_filter_max_kernel_size=5,
+        )
+        assert module.effective_median_filter_max_kernel_size == 5
+
+    def test_forward_resampling_modes_produce_distinct_projected_tokens(self) -> None:
+        """Checkpoint-selected temporal modes reach nonzero projection outputs."""
+        average = SketchControlTokens(d_model=1, num_control_tokens=4)
+        linear = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=4,
+            temporal_resampling="linear",
+        )
+        for module in (average, linear):
+            with torch.no_grad():
+                cast(torch.nn.Linear, module.projections["loudness"]).weight.fill_(1.0)
+        controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 2)
+        controls[0, SKETCH_LOUDNESS_ROW, 1] = 1.0
+        keep = torch.tensor(((True, False, False),))
+
+        average_contribution = average(controls, keep) - average.unconditional(1)
+        linear_contribution = linear(controls, keep) - linear.unconditional(1)
+
+        torch.testing.assert_close(
+            average_contribution[0, :, 0], torch.tensor((0.0, 0.0, 1.0, 1.0))
+        )
+        torch.testing.assert_close(
+            linear_contribution[0, :, 0], torch.tensor((0.0, 0.25, 0.75, 1.0))
+        )
 
     def test_forward_training_applies_configured_random_median_filter(self) -> None:
         """Training smooths music controls before their group projections."""

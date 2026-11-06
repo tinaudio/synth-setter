@@ -78,10 +78,11 @@ digest verification; never accept an untrusted checkpoint and matching digest.
 
 The current export supports the standard velocity-parameterized
 `VSTFlowMatchingModule` with mel and sketch conditioning, one input pair per
-browser session, float32 CPU weights/inputs, and sketch frames already on the
-checkpoint's control-token grid. Endpoint models and sampling subclasses are
-rejected rather than silently changing their inference semantics. Exported
-shapes are fixed to the supplied pair.
+browser session, float32 CPU weights/inputs, and sketch controls already prepared
+on the checkpoint's `num_frames` grid with weak pitch zero-binned (the exported
+graph resamples frames to control tokens; it does not threshold pitch). Endpoint
+models and sampling subclasses are rejected rather than silently changing their
+inference semantics. Exported shapes are fixed to the supplied pair.
 
 ## 3. Supply audio, or produce a real SurgePy input
 

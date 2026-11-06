@@ -1069,16 +1069,41 @@ def test_nsynth_sketch_batch_pools_controls_and_zeroes_weak_pitch(
     assert torch.equal(pooled[0, SKETCH_PITCH_SLICE.start + 1], torch.full((32,), 0.25))
 
 
-def test_nsynth_sketch_noncanonical_frame_count_raises(tmp_path: Path) -> None:
-    """A live sketch config cannot drift from the checkpoint's 32-frame contract.
+def test_nsynth_sketch_batch_dense_frame_grid_resamples_live_controls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Live music extraction lands on a dense checkpoint frame grid, not the 32-frame default.
 
-    :param tmp_path: Isolated placeholder corpus path.
+    :param tmp_path: Isolated datamodule path; no corpus access occurs.
+    :param monkeypatch: Supplies deterministic full-frame controls before real resampling.
     """
-    with pytest.raises(ValueError, match="32"):
-        _datamodule(
-            tmp_path / "unused.lance",
-            sketch={"column": "sketch", "num_frames": 64, "num_control_tokens": 64},
-        )
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 128)
+    controls[:, SKETCH_LOUDNESS_ROW, 1::2] = 1.0
+    controls[:, SKETCH_PITCH_SLICE.start, :] = 0.05
+    controls[:, SKETCH_PITCH_SLICE.start + 1, 1::2] = 0.5
+    monkeypatch.setattr(
+        "synth_setter.data.third_party_datamodule.extract_sketch_controls_batch",
+        lambda audio, sample_rate: controls,
+    )
+    datamodule = _datamodule(
+        tmp_path / "unused.lance",
+        sketch={
+            "column": "sketch",
+            "num_frames": 64,
+            "num_control_tokens": 64,
+            "pitch_zero_threshold": 0.1,
+        },
+    )
+
+    batch = datamodule.on_after_batch_transfer(
+        {AUDIO_FIELD: torch.zeros(1, _TARGET_CHANNELS, _TARGET_SAMPLES)}, 0
+    )
+
+    prepared = batch[SKETCH_CTRL_FIELD]
+    assert prepared.shape == (1, NUM_SKETCH_CONTROLS, 64)
+    assert torch.equal(prepared[0, SKETCH_LOUDNESS_ROW], torch.full((64,), 0.5))
+    assert torch.count_nonzero(prepared[0, SKETCH_PITCH_SLICE.start]) == 0
+    assert torch.equal(prepared[0, SKETCH_PITCH_SLICE.start + 1], torch.full((64,), 0.25))
 
 
 @pytest.mark.slow

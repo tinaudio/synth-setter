@@ -22,11 +22,12 @@ from synth_setter.models.vst_flow_matching_module import (
     multi_cfg_velocity,
     rk4_step,
 )
+from synth_setter.sketch import prepare_music_sketch_controls
 
 _BATCH = 2
 _D_MODEL = 16
 _NUM_PARAMS = 6
-_NUM_FRAMES = 9
+_NUM_FRAMES = 32
 _MEL_SHAPE = (2, 8, 5)
 
 if TYPE_CHECKING:
@@ -529,17 +530,20 @@ def test_sample_batch_nonpositive_steps_raises() -> None:
         )
 
 
-def test_module_routes_median_filter_policy_to_music_tokenizer() -> None:
-    """The checkpointed sketch spec configures the training augmentation boundary."""
+def test_module_routes_temporal_policy_to_music_tokenizer() -> None:
+    """The checkpointed sketch spec configures resampling and training augmentation."""
     module = _module(
         SketchControlSpec(
             num_frames=_NUM_FRAMES,
-            median_filter_max_kernel_size=3,
+            median_filter_max_window_fraction=0.15625,
+            temporal_resampling="linear",
         )
     )
 
     assert module.sketch_tokens is not None
-    assert module.sketch_tokens.median_filter_max_kernel_size == 3
+    assert module.sketch_tokens.temporal_resampling == "linear"
+    assert module.sketch_tokens.median_filter_max_window_fraction == 0.15625
+    assert module.sketch_tokens.effective_median_filter_max_kernel_size == 5
 
 
 def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
@@ -726,6 +730,42 @@ def test_validation_step_with_sketch_runs_cfg_sampling() -> None:
 
     assert torch.isfinite(out["param_mse"])
     assert out["preds"].shape == (_BATCH, _NUM_PARAMS)
+
+
+def test_dense_linear_preparation_reaches_training_backward_without_input_mutation() -> None:
+    """Serving preparation and dense linear tokenization support real training gradients."""
+    spec = SketchControlSpec(
+        num_frames=32,
+        num_control_tokens=16,
+        temporal_resampling="linear",
+    )
+    module = _module(
+        spec,
+        sketch_dropout_rate=0.0,
+        all_conditioning_dropout_rate=0.0,
+        cfg_dropout_rate=0.0,
+    )
+    raw_controls = torch.zeros(_BATCH, NUM_SKETCH_CONTROLS, 64)
+    raw_controls[:, 0, 16:48] = 0.5
+    raw_controls[:, 2, 16:48] = 0.2
+    source_controls = raw_controls.clone()
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = prepare_music_sketch_controls(raw_controls, spec)
+
+    loss = module._train_step(batch).loss  # noqa: SLF001
+    loss.backward()
+
+    assert module.sketch_tokens is not None
+    projection_gradients = [
+        cast(torch.nn.Linear, projection).weight.grad
+        for projection in module.sketch_tokens.projections.values()
+    ]
+    assert any(gradient is not None for gradient in projection_gradients)
+    assert any(
+        parameter.grad is not None and torch.count_nonzero(parameter.grad) > 0
+        for parameter in module.parameters()
+    )
+    torch.testing.assert_close(raw_controls, source_controls, rtol=0, atol=0)
 
 
 @pytest.mark.slow

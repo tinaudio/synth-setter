@@ -8,6 +8,7 @@ from synth_setter.conditioning import SketchControlSpec
 from synth_setter.features import profile_controls
 from synth_setter.features.profile_controls import extract_profile_controls
 from synth_setter.features.pyfdn_controls import extract_reverb_sketch
+from synth_setter.sketch import prepare_music_sketch_controls
 
 _SAMPLE_RATE = 44_100
 
@@ -70,6 +71,70 @@ def test_music_profile_pools_tracks_and_zeros_weak_pitch(monkeypatch: pytest.Mon
     assert pooled[0, 2, 0] == pytest.approx(0.12)
     assert pooled[0, 2, 1] == 0.0
     assert torch.count_nonzero(pooled[:, 2:, 2:]) == 0
+
+
+def test_music_preparation_thresholds_after_frame_resampling() -> None:
+    """Pitch thresholding applies on the configured frame grid before tokenization."""
+    controls = torch.zeros(1, 386, 5)
+    controls[0, 2, 2] = 0.3
+    spec = SketchControlSpec(
+        num_frames=2,
+        num_control_tokens=1,
+        pitch_zero_threshold=0.15,
+    )
+
+    prepared = prepare_music_sketch_controls(controls, spec)
+
+    assert prepared.dtype is torch.float32
+    assert prepared.shape == (1, 386, 2)
+    assert torch.count_nonzero(prepared) == 0
+
+
+def test_music_preparation_sparser_extraction_than_frame_grid_rejected() -> None:
+    """A frame grid denser than the extractor emits is refused instead of fabricated."""
+    controls = torch.zeros(1, 386, 3)
+    spec = SketchControlSpec(num_frames=4, num_control_tokens=2)
+
+    with pytest.raises(ValueError, match="at least 4 frames"):
+        prepare_music_sketch_controls(controls, spec)
+
+
+def test_music_preparation_returns_float32_independent_storage() -> None:
+    """Preparation normalizes dtype without retaining writable source storage."""
+    controls = torch.ones(1, 386, 2, dtype=torch.float64)
+    spec = SketchControlSpec(num_frames=2, num_control_tokens=2)
+
+    prepared = prepare_music_sketch_controls(controls, spec)
+    prepared.zero_()
+
+    assert controls.dtype is torch.float64
+    assert torch.count_nonzero(controls) == controls.numel()
+
+
+def test_music_preparation_output_supports_trainable_projection_backward() -> None:
+    """Prepared tensors remain usable by trainable projections under autograd."""
+    controls = torch.ones(1, 386, 4, requires_grad=True)
+    spec = SketchControlSpec(num_frames=2, num_control_tokens=2)
+    projection = torch.nn.Linear(386, 1, bias=False)
+
+    prepared = prepare_music_sketch_controls(controls, spec)
+    projection(prepared.transpose(1, 2)).sum().backward()
+
+    assert projection.weight.grad is not None
+    assert controls.grad is not None
+
+
+@pytest.mark.gpu
+def test_music_preparation_preserves_cuda_device() -> None:
+    """Preparation keeps extracted controls on their source device."""
+    if not torch.cuda.is_available():
+        pytest.skip("requires CUDA")
+    controls = torch.ones(1, 386, 4, device="cuda")
+    spec = SketchControlSpec(num_frames=2, num_control_tokens=2)
+
+    prepared = prepare_music_sketch_controls(controls, spec)
+
+    assert prepared.device.type == "cuda"
 
 
 def test_tiv_profile_rejected() -> None:
