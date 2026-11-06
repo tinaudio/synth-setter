@@ -105,7 +105,13 @@ class SketchControlTokens(nn.Module):
         keep_values = keep.to(controls.dtype)
         if self.layout.profile == "music":
             temporal_controls = pool_sketch_controls(controls, self.positional_encoding.shape[1])
-            if self.training and self.median_filter_max_kernel_size > 1:
+            # sample_batch runs under inference_mode without flipping train(); fixed-noise
+            # sampling must stay deterministic, so augmentation keys off both signals.
+            if (
+                self.training
+                and not torch.is_inference_mode_enabled()
+                and self.median_filter_max_kernel_size > 1
+            ):
                 temporal_controls = random_median_filter_sketch_controls(
                     temporal_controls,
                     self.median_filter_max_kernel_size,

@@ -1,6 +1,7 @@
 """Tests for the concat sketch-control token module and its field injection."""
 
 from typing import Literal, cast
+from unittest import mock
 
 import pytest
 import torch
@@ -218,11 +219,34 @@ class TestSketchControlTokens:
         module.eval()
         unfiltered = module(controls, keep) - module.unconditional(1)
         module.train()
-        torch.manual_seed(1)
-        filtered = module(controls, keep) - module.unconditional(1)
+        # Pin the per-row draw to the two-frame window; a draw of one would leave the row unfiltered.
+        with mock.patch.object(torch, "randint", return_value=torch.tensor([2])):
+            filtered = module(controls, keep) - module.unconditional(1)
 
         torch.testing.assert_close(unfiltered[0, :, 0], controls[0, SKETCH_LOUDNESS_ROW])
         torch.testing.assert_close(filtered, torch.zeros_like(filtered), rtol=0, atol=0)
+
+    def test_forward_inference_mode_skips_augmentation_even_in_training_mode(self) -> None:
+        """Sampling under inference_mode is deterministic although the module is still training."""
+        module = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=4,
+            median_filter_max_kernel_size=4,
+        )
+        with torch.no_grad():
+            cast(torch.nn.Linear, module.projections["loudness"]).weight.fill_(1.0)
+        controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 4)
+        controls[0, SKETCH_LOUDNESS_ROW, 1] = 1.0
+        keep = torch.tensor(((True, False, False),))
+        module.train()
+
+        with (
+            torch.inference_mode(),
+            mock.patch.object(torch, "randint", return_value=torch.tensor([4])),
+        ):
+            tokens = module(controls, keep) - module.unconditional(1)
+
+        torch.testing.assert_close(tokens[0, :, 0], controls[0, SKETCH_LOUDNESS_ROW])
 
     def test_forward_training_same_seed_repeats_augmentation(self) -> None:
         """Resetting the Torch seed reproduces training-time control tokens."""
