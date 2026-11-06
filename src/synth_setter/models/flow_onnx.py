@@ -84,7 +84,7 @@ class FlowConditioning(nn.Module):
         :returns: Content and both control-token branches for the velocity graph.
         :raises ValueError: The checkpoint has no sketch controls.
         """
-        branches = self.model._control_token_branches_from_batch(  # noqa: SLF001
+        branches = self.model._control_token_branches_from_batch(
             {"sketch_ctrl": sketch_ctrl},
             enabled_sketch_groups=self.enabled_sketch_groups,
         )

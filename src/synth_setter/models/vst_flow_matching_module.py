@@ -979,13 +979,15 @@ class VSTFlowMatchingModule(LightningModule):
             or an empty sequence for PE-only sketch conditioning.
         :returns: Enabled names in checkpoint layout order.
         :raises TypeError: The selector is a bare string.
-        :raises ValueError: Names are duplicated, unknown, or requested without sketch support.
+        :raises ValueError: Names are duplicated or unknown, or any explicit selector (including an
+            empty one) targets a checkpoint without sketch support.
         """
         if isinstance(enabled_sketch_groups, str):
             raise TypeError("enabled_sketch_groups must be a sequence of names, not a string")
         requested = () if enabled_sketch_groups is None else tuple(enabled_sketch_groups)
         if self.sketch_tokens is None:
-            if requested:
+            # An explicit selector (even an empty one) would be a silent no-op here.
+            if enabled_sketch_groups is not None:
                 raise ValueError("checkpoint does not configure sketch controls")
             return ()
         valid = self.sketch_tokens.layout.group_names

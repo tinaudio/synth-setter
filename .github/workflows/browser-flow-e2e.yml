@@ -111,7 +111,7 @@ jobs:
             logs/browser-e2e/**/params.csv
             logs/browser-e2e/**/browser/input.json
             logs/browser-e2e/**/browser/prediction.json
-            logs/browser-e2e/**/browser/provenance.json
+            logs/browser-e2e/**/provenance.json
             coverage.xml
       - name: Upload browser coverage
         if: always() && hashFiles('coverage.xml') != ''

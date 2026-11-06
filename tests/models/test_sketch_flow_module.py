@@ -612,14 +612,8 @@ def test_sample_batch_nonempty_groups_without_sketch_model_raises() -> None:
         )
 
 
-@pytest.mark.parametrize("enabled", [None, ()])
-def test_sample_batch_none_or_empty_groups_without_sketch_model_is_accepted(
-    enabled: tuple[str, ...] | None,
-) -> None:
-    """Legacy checkpoints accept omitted and explicitly empty selectors.
-
-    :param enabled: Omitted or explicitly empty selector.
-    """
+def test_sample_batch_omitted_groups_without_sketch_model_is_accepted() -> None:
+    """Legacy checkpoints accept an omitted selector."""
     model = _module(None)
     batch = _batch(with_sketch=False)
 
@@ -629,10 +623,26 @@ def test_sample_batch_none_or_empty_groups_without_sketch_model_is_accepted(
         content_cfg_strength=2.0,
         sketch_cfg_strength=1.0,
         sample_steps=1,
-        enabled_sketch_groups=enabled,
+        enabled_sketch_groups=None,
     )
 
     assert prediction.shape == (_BATCH, _NUM_PARAMS)
+
+
+def test_sample_batch_empty_groups_without_sketch_model_raises() -> None:
+    """An explicit empty selector cannot silently become a no-op on a legacy checkpoint."""
+    model = _module(None)
+    batch = _batch(with_sketch=False)
+
+    with pytest.raises(ValueError, match="does not configure sketch controls"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=1,
+            enabled_sketch_groups=(),
+        )
 
 
 def test_fixed_time_diagnostics_use_conditional_sketch_tokens() -> None:
