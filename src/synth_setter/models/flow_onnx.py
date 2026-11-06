@@ -7,7 +7,6 @@ Typical usage::
 
 import os
 import tempfile
-from collections.abc import Sequence
 from pathlib import Path
 
 import torch
@@ -53,43 +52,34 @@ class FlowConditioning(nn.Module):
     """Encode content and both sketch branches once before integration."""
 
     @jaxtyped(typechecker=beartype)
-    def __init__(
-        self,
-        model: VSTFlowMatchingModule,
-        enabled_sketch_groups: Sequence[str] | None = None,
-    ) -> None:
-        """Bind trained conditioning modules and one host-selected sketch mask.
+    def __init__(self, model: VSTFlowMatchingModule) -> None:
+        """Bind trained conditioning modules.
 
         :param model: Mel/sketch flow checkpoint loaded in evaluation mode.
-        :param enabled_sketch_groups: Group names fixed into the exported graph, all when omitted.
         """
         super().__init__()
         self.model = model
-        self.enabled_sketch_groups = model.resolve_enabled_sketch_groups(enabled_sketch_groups)
 
     @jaxtyped(typechecker=beartype)
     def forward(
         self,
         mel: Float[torch.Tensor, "batch channels bins frames"],
         sketch_ctrl: Float[torch.Tensor, "batch controls sketch_frames"],
+        sketch_keep: Float[torch.Tensor, "batch groups"],
     ) -> tuple[
         Float[torch.Tensor, "batch slots dim"],
         Float[torch.Tensor, "batch tokens dim"],
         Float[torch.Tensor, "batch tokens dim"],
     ]:
-        """Return encoded content, full-sketch tokens, and PE-only tokens.
+        """Return encoded content, host-masked sketch tokens, and PE-only tokens.
 
         :param mel: Normalized spectrogram using the training dataset statistics.
-        :param sketch_ctrl: Pooled controls using the checkpoint sketch contract.
+        :param sketch_ctrl: Prepared controls using the checkpoint sketch contract.
+        :param sketch_keep: Float keep mask in checkpoint group order; ``> 0.5`` keeps a group
+            (ONNX Runtime Web feeds float32 tensors, so the host never builds a bool tensor).
         :returns: Content and both control-token branches for the velocity graph.
-        :raises ValueError: The checkpoint has no sketch controls.
         """
-        branches = self.model._control_token_branches_from_batch(
-            {"sketch_ctrl": sketch_ctrl},
-            enabled_sketch_groups=self.enabled_sketch_groups,
-        )
-        if branches is None:
-            raise ValueError("ONNX conditioning requires sketch controls")
+        branches = self.model._control_token_branches(sketch_ctrl, sketch_keep > 0.5)
         return self.model.encoder(mel), branches.conditional, branches.unconditional
 
 
@@ -143,8 +133,6 @@ def export_flow_onnx(
     model: VSTFlowMatchingModule,
     batch: dict[str, Shaped[torch.Tensor, "batch ..."]],
     output_dir: Path,
-    *,
-    enabled_sketch_groups: Sequence[str] | None = None,
 ) -> None:
     """Export fixed-shape float32 graphs without unrolling the integration loop.
 
@@ -154,7 +142,6 @@ def export_flow_onnx(
         :func:`synth_setter.sketch.prepare_music_sketch_controls` (frame grid and pitch
         zero-binning happen outside the graph; only token resampling is exported).
     :param output_dir: Empty or absent destination, atomically populated with both graphs.
-    :param enabled_sketch_groups: Group names fixed into the conditioning graph, all when omitted.
     :raises FileExistsError: The destination already contains artifacts.
     :raises ValueError: Model type, conditioning, parameterization, or inputs are unsupported.
     """
@@ -186,12 +173,7 @@ def export_flow_onnx(
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output_dir.parent) as temporary:
         staged = Path(temporary)
-        _export_graphs(
-            model,
-            inputs,
-            staged,
-            enabled_sketch_groups=enabled_sketch_groups,
-        )
+        _export_graphs(model, inputs, staged)
         os.replace(staged, output_dir)
 
 
@@ -200,25 +182,25 @@ def _export_graphs(
     model: VSTFlowMatchingModule,
     inputs: tuple[Shaped[torch.Tensor, "batch ..."], Shaped[torch.Tensor, "batch ..."]],
     output_dir: Path,
-    *,
-    enabled_sketch_groups: Sequence[str] | None,
 ) -> None:
     """Write both graphs to an unpublished staging directory.
 
     :param model: Validated CPU evaluation checkpoint.
     :param inputs: Validated normalized mel and pooled sketch inputs.
     :param output_dir: Temporary export directory.
-    :param enabled_sketch_groups: Group names fixed into the conditioning graph.
     """
-    conditioning = FlowConditioning(model, enabled_sketch_groups).eval()
+    conditioning = FlowConditioning(model).eval()
     velocity = FlowVelocity(model).eval()
+    # The traced mask keeps every group; the host supplies the real mask at runtime.
+    keep = model.sketch_keep_mask(None, batch_size=inputs[0].shape[0], device=inputs[0].device)
+    conditioning_inputs = (*inputs, keep.to(torch.float32))
     with torch.no_grad():
-        encoded = conditioning(*inputs)
+        encoded = conditioning(*conditioning_inputs)
         torch.onnx.export(
             conditioning,
-            inputs,
+            conditioning_inputs,
             output_dir / "conditioning.onnx",
-            input_names=["mel", "sketch_ctrl"],
+            input_names=["mel", "sketch_ctrl", "sketch_keep"],
             output_names=["conditioning", "controls", "null_controls"],
             opset_version=_OPSET_VERSION,
             dynamo=True,

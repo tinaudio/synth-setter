@@ -60,6 +60,19 @@ def _flow_model(sketch_controls: dict[str, object]) -> VSTFlowMatchingModule:
     return model
 
 
+def _all_groups_feed(batch: dict[str, torch.Tensor]) -> dict[str, np.ndarray]:
+    """Return the conditioning-graph feed that keeps every sketch group.
+
+    :param batch: CPU float32 ``mel`` and ``sketch_ctrl`` export inputs.
+    :returns: Named float32 inputs including an all-ones ``sketch_keep`` mask.
+    """
+    return {
+        "mel": batch["mel"].numpy(),
+        "sketch_ctrl": batch["sketch_ctrl"].numpy(),
+        "sketch_keep": np.ones((batch["mel"].shape[0], 3), dtype=np.float32),
+    }
+
+
 @pytest.fixture
 def flow_model() -> VSTFlowMatchingModule:
     """Return the default-grid ONNX test model.
@@ -92,7 +105,7 @@ def test_exported_velocity_same_inputs_matches_production(
     }
     export_flow_onnx(flow_model, batch, tmp_path)
     encoder = ort.InferenceSession(str(tmp_path / "conditioning.onnx"))
-    encoded = encoder.run(None, {key: value.numpy() for key, value in batch.items()})
+    encoded = encoder.run(None, _all_groups_feed(batch))
     x = torch.randn(1, 92)
     t = torch.tensor([[0.3]])
     field = ort.InferenceSession(str(tmp_path / "velocity.onnx"))
@@ -120,17 +133,21 @@ def test_exported_velocity_same_inputs_matches_production(
     np.testing.assert_allclose(actual, expected.numpy(), rtol=2e-5, atol=2e-5)
 
 
-@pytest.mark.parametrize("enabled_groups", [("pitch",), ()])
-def test_exported_group_mask_matches_native_and_keeps_two_conditioning_inputs(
+@pytest.mark.parametrize(
+    "enabled_groups",
+    [("loudness", "centroid", "pitch"), ("pitch",), ()],
+    ids=["all", "pitch-only", "none"],
+)
+def test_exported_runtime_group_mask_matches_native_for_one_export(
     tmp_path: Path,
     flow_model: VSTFlowMatchingModule,
     enabled_groups: tuple[str, ...],
 ) -> None:
-    """Fixed export masks preserve native tokens without changing the host feed contract.
+    """One exported graph honours any host-supplied keep mask without re-export.
 
     :param tmp_path: Export directory.
     :param flow_model: Small production architecture with nonzero sketch projections.
-    :param enabled_groups: One-group or all-disabled export mask.
+    :param enabled_groups: Groups the host keeps at runtime.
     """
     assert flow_model.sketch_tokens is not None
     batch = {
@@ -138,15 +155,18 @@ def test_exported_group_mask_matches_native_and_keeps_two_conditioning_inputs(
         "sketch_ctrl": torch.rand(1, flow_model.sketch_tokens.layout.num_controls, 4),
     }
 
-    export_flow_onnx(
-        flow_model,
-        batch,
-        tmp_path,
-        enabled_sketch_groups=enabled_groups,
-    )
+    export_flow_onnx(flow_model, batch, tmp_path)
     encoder = ort.InferenceSession(str(tmp_path / "conditioning.onnx"))
-    assert [value.name for value in encoder.get_inputs()] == ["mel", "sketch_ctrl"]
-    encoded = encoder.run(None, {key: value.numpy() for key, value in batch.items()})
+    assert [value.name for value in encoder.get_inputs()] == ["mel", "sketch_ctrl", "sketch_keep"]
+    keep = flow_model.sketch_keep_mask(enabled_groups, batch_size=1, device=torch.device("cpu"))
+    encoded = encoder.run(
+        None,
+        {
+            "mel": batch["mel"].numpy(),
+            "sketch_ctrl": batch["sketch_ctrl"].numpy(),
+            "sketch_keep": keep.to(torch.float32).numpy(),
+        },
+    )
     native = flow_model._control_token_branches_from_batch(  # noqa: SLF001
         {"sketch_ctrl": batch["sketch_ctrl"]},
         enabled_sketch_groups=enabled_groups,
@@ -201,7 +221,7 @@ def test_exported_linear_resampling_matches_native_conditioning_and_velocity(
     export_dir = tmp_path / "export"
     export_flow_onnx(model, batch, export_dir)
     session = ort.InferenceSession(str(export_dir / "conditioning.onnx"))
-    encoded = session.run(None, {key: value.numpy() for key, value in batch.items()})
+    encoded = session.run(None, _all_groups_feed(batch))
     actual_controls = encoded[1]
     assert isinstance(actual_controls, np.ndarray)
     with torch.no_grad():
@@ -542,9 +562,7 @@ def test_exported_velocity_mel_only_weights_ignore_sketch_tokens(
         :param sketch_ctrl: Sketch controls fed to the conditioning graph.
         :returns: Guided velocity row.
         """
-        encoded = encoder.run(
-            None, {"mel": batch["mel"].numpy(), "sketch_ctrl": sketch_ctrl.numpy()}
-        )
+        encoded = encoder.run(None, _all_groups_feed({**batch, "sketch_ctrl": sketch_ctrl}))
         (velocity,) = field.run(
             None,
             {

@@ -126,7 +126,10 @@ uv run --extra cpu synth-setter-sketch \
 ```
 
 1. Wait for `Browser evaluation: http://127.0.0.1:8765` in the terminal.
-2. Open that exact URL and click **Run flow evaluation**.
+2. Open that exact URL. The page lists the checkpoint's sketch groups as
+   checkboxes, pre-set from `--sketch-group` / `--no-sketch-groups`; untick a
+   group to condition on its positional encoding only. Click **Run flow
+   evaluation**.
 3. The page reports sampling progress, then displays the predicted parameter
    vector. The server validates its session token, width, and finite float32
    values before accepting it.
@@ -159,8 +162,8 @@ logs/browser-demo/evaluation/arms/cfg-c2-s3/
 ├── browser/
 │   ├── conditioning.onnx
 │   ├── velocity.onnx
-│   ├── input.json          # normalized inputs, noise, branch weights, steps
-│   └── prediction.json     # accepted browser parameter vector
+│   ├── input.json          # normalized inputs, noise, branch weights, steps, group names
+│   └── prediction.json     # accepted browser parameter vector and the groups it kept
 ├── provenance.json         # artifact digests, source revision, renderer, seed, sketch groups
 ├── sketch.wav
 ├── target.wav
@@ -174,7 +177,9 @@ producing source checkout's `git_revision`, captured before preprocessing (a
 `-dirty` suffix covers staged, unstaged, and untracked changes; installations
 without their own source checkout report `git-unavailable` rather than borrowing
 the operator's current repository), and `sketch_groups` with the `requested`
-selector (`null` when omitted) and the `resolved` group names in checkpoint order.
+selector (`null` when omitted), the `resolved` group names in checkpoint order,
+and the `applied` names the arm actually conditioned on (the page's checkboxes
+in browser mode, the resolved selector natively).
 
 `metrics.csv` contains MSS, weighted MFCC, spectral optimal transport, RMS
 similarity, MLDR, and mid/side MLDR. Finite metrics and audible output establish

@@ -54,7 +54,10 @@ digests, and the producing revision. The velocity graph takes `branch_weights` o
 unconditional, sketch-only, content-only, and full branches; `branch_weights(mode, content, sketch)`
 in `synth_setter.models.flow_onnx` (mirrored by `guidance.mjs`) maps a conditioning mode and two
 CFG strengths onto them. The sketch input is the `pyfdn_reverb` profile: `(1, 10, 32)` controls
-from `extract_reverb_sketch`.
+from `extract_reverb_sketch`. The conditioning graph also takes `sketch_keep`, a float32
+`(1, groups)` mask over the names listed under `sketch.groups` in the manifest (values above 0.5
+keep a group; feed all ones to condition on every group). `schemaVersion` is 2 since that input
+was added.
 
 ## Generate a dataset
 
@@ -228,9 +231,11 @@ synth-setter-sketch sketch.wav content.wav \
 
 Names and their order come from the loaded checkpoint (`loudness`, `centroid`, and `pitch` for the
 music profile; pyFDN checkpoints expose their own groups). Duplicate or unknown names fail instead
-of being ignored. The selection is fixed into browser ONNX exports, so browser inference has no
-runtime mask input or separate UI state. Every arm records the requested and resolved selection
-under `sketch_groups` in its `provenance.json`.
+of being ignored. In browser mode the selection is only the page's starting state: the exported
+conditioning graph takes a `sketch_keep` runtime mask, the page shows one checkbox per group, and
+the loopback server rejects a prediction whose groups are unknown or duplicated. Every arm records
+the `requested`, `resolved`, and `applied` selection under `sketch_groups` in its
+`provenance.json`; `applied` is what the page (or, natively, the CLI) actually kept.
 
 For repeatable standalone flow evaluation, opt in through the model config and provide the seed
 explicitly:

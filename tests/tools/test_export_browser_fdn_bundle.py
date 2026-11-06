@@ -109,8 +109,12 @@ def _run_bundle(bundle: Path, waveform: np.ndarray, mode: str) -> np.ndarray:
     sketch = np.zeros(
         (1, manifest["sketch"]["numControls"], manifest["sketch"]["numFrames"]), np.float32
     )
+    # A host keeps every group unless it builds its own mask from manifest["sketch"]["groups"].
+    keep = np.ones((1, len(manifest["sketch"]["groups"])), np.float32)
     encoder = ort.InferenceSession(str(bundle / "conditioning.onnx"))
-    conditioning, controls, null_controls = encoder.run(None, {"mel": mel, "sketch_ctrl": sketch})
+    conditioning, controls, null_controls = encoder.run(
+        None, {"mel": mel, "sketch_ctrl": sketch, "sketch_keep": keep}
+    )
     velocity = ort.InferenceSession(str(bundle / "velocity.onnx"))
     weights = branch_weights(
         mode, manifest["sampling"]["contentCfg"], manifest["sampling"]["sketchCfg"]
@@ -144,7 +148,7 @@ def test_export_bundle_graphs_drive_end_to_end_on_onnx_runtime(
         tiny_fdn_model, stats_path, bundle, checkpoint_sha256="a" * 64, git_revision="deadbeef"
     )
     assert json.loads((bundle / "manifest.json").read_text()) == manifest
-    assert manifest["schemaVersion"] == 1
+    assert manifest["schemaVersion"] == 2
     assert manifest["paramSpecName"] == "pyfdn_n8_mono_householder"
     assert manifest["encodedWidth"] == 27
     assert manifest["sketch"] == {
@@ -153,6 +157,7 @@ def test_export_bundle_graphs_drive_end_to_end_on_onnx_runtime(
         "numControls": 10,
         "numFrames": 32,
         "numControlTokens": 32,
+        "groups": ["edc", "echo_density", "spectral_flatness"],
     }
     assert manifest["sampleRate"] == 44_100
     assert manifest["frames"] == _FRAMES
