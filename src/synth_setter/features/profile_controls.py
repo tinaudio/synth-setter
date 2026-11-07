@@ -5,9 +5,11 @@ import torch
 from jaxtyping import Float
 
 from synth_setter.conditioning import SketchControlSpec
+from synth_setter.data.vst.shapes import mel_hop_length
 from synth_setter.features.pyfdn_controls import extract_reverb_sketch
 from synth_setter.features.sketch_controls import extract_sketch_controls_batch
-from synth_setter.sketch import prepare_music_sketch_controls
+from synth_setter.features.tiv import extract_chroma_on_grid_batch, normalize_chroma
+from synth_setter.sketch import prepare_music_sketch_controls, resample_sketch_controls
 
 
 @torch.no_grad()
@@ -23,9 +25,19 @@ def extract_music_sketch_controls(
     :param sample_rate: Waveform sample rate in Hz.
     :param spec: Music sketch contract selecting frame count, resampling, and threshold.
     :returns: Float32 controls shaped ``(batch, controls, num_frames)`` on ``audio``'s device;
-        a non-music spec or a clip shorter than its grid is rejected by the preparation step.
+        ``music_tiv`` appends normalized chroma, converted to signed TIV at the token boundary;
+        a non-music spec or a clip shorter than its grid is rejected.
     """
-    return prepare_music_sketch_controls(extract_sketch_controls_batch(audio, sample_rate), spec)
+    music = prepare_music_sketch_controls(extract_sketch_controls_batch(audio, sample_rate), spec)
+    if spec.profile == "music_tiv":
+        chroma = extract_chroma_on_grid_batch(
+            audio, sample_rate, mel_hop_length(sample_rate), backend=spec.tiv_backend
+        )
+        chroma = normalize_chroma(
+            resample_sketch_controls(chroma, spec.num_frames, spec.temporal_resampling)
+        )
+        return torch.cat((music, chroma), dim=1)
+    return music
 
 
 def extract_profile_controls(
@@ -44,6 +56,6 @@ def extract_profile_controls(
             raise ValueError("pyfdn_reverb sketch controls require a mono (1, samples) waveform")
         sketch = extract_reverb_sketch(audio[0], sample_rate)
         return torch.from_numpy(sketch).unsqueeze(0)
-    if spec.profile != "music":
+    if spec.profile not in ("music", "music_tiv"):
         raise ValueError(f"no offline sketch extractor for profile {spec.profile!r}")
     return extract_music_sketch_controls(torch.from_numpy(audio)[None], sample_rate, spec)

@@ -187,6 +187,26 @@ It processes at most 32 rows per CQT call; override
 memory. Model compilation is disabled for this profile pending support for
 compiled frozen waveform encoders.
 
+To add TIV alongside online loudness, centroid, and pitch, select
+`sketch=music_online_tiv` (for example with `experiment=surge/flow_sketch_prelim`).
+This variant inherits `music_online`'s sample rate, 96-frame/token grid, pitch
+threshold, temporal resampling, and training-time median augmentation. The extracted
+398-channel tensor contains the original music controls followed by 12 normalized
+chroma channels. Chroma uses centered,
+boundary-padded analysis and timestamp interpolation onto the music grid before
+temporal reduction. Non-silent chroma frames sum to one; silent frames remain zero.
+
+At the model token boundary, music and chroma share temporal resampling and one
+sampled median window per row during training. If the median erases a non-silent
+chroma frame, its original distribution is retained; silent input frames stay
+silent. Evaluation and inference skip random filtering. Chroma is normalized
+again and converted to signed TIV immediately before projection. The independently
+maskable groups remain `loudness`, `centroid`, `pitch`, and `tiv`; only PESTO pitch
+activations receive thresholding. Signed TIV coordinates are never thresholded.
+
+No stored sketch column is needed. Existing music-only, standalone TIV, and
+reverb profiles retain their contracts.
+
 To derive tonal interval vectors from each waveform during training instead of
 reading a stored sketch column:
 

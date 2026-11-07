@@ -17,19 +17,20 @@ from synth_setter.conditioning import (
     SketchControlSpec,
     SketchTemporalResampling,
 )
+from synth_setter.features.tiv import chroma_to_tiv, normalize_chroma
 
 
 @jaxtyped(typechecker=beartype)
 def median_filter_sketch_controls(
-    controls: Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"],
+    controls: Float[torch.Tensor, "batch channels frames"],
     kernel_size: int,
-) -> Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"]:
+) -> Float[torch.Tensor, "batch channels frames"]:
     """Apply FlashFoley's zero-padded temporal median filter.
 
     Even kernels use the lower median and discard the extra trailing frame, matching FlashFoley's
     released training implementation.
 
-    :param controls: Loudness, centroid, and pitch controls on one temporal grid.
+    :param controls: Control channels on one temporal grid.
     :param kernel_size: Positive temporal window width in control frames.
     :returns: Filtered controls with input shape, dtype, and device preserved.
     :raises ValueError: The kernel size is not positive.
@@ -45,15 +46,14 @@ def median_filter_sketch_controls(
 
 @jaxtyped(typechecker=beartype)
 def random_median_filter_sketch_controls(
-    controls: Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"],
+    controls: Float[torch.Tensor, "batch channels frames"],
     max_kernel_size: int,
-) -> Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"]:
+) -> Float[torch.Tensor, "batch channels frames"]:
     """Sample and apply one median-filter width per batch row.
 
-    The sampled width is shared by loudness, centroid, and pitch, preserving
-    their temporal alignment while varying sketch specificity per example.
+    The sampled width is shared by all channels, preserving temporal alignment.
 
-    :param controls: Music sketch controls on the model's temporal grid.
+    :param controls: Control channels on the model's temporal grid.
     :param max_kernel_size: Inclusive upper bound sampled uniformly from ``[1, max]``.
     :returns: Randomly filtered controls with input shape, dtype, and device preserved.
     :raises ValueError: The maximum kernel size is not positive.
@@ -79,13 +79,13 @@ def random_median_filter_sketch_controls(
 
 @jaxtyped(typechecker=beartype)
 def resample_sketch_controls(
-    controls: Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} frames"],
+    controls: Float[torch.Tensor, "batch channels frames"],
     output_frames: int,
     mode: SketchTemporalResampling,
-) -> Float[torch.Tensor, f"batch {NUM_SKETCH_CONTROLS} output_frames"]:
+) -> Float[torch.Tensor, "batch channels output_frames"]:
     """Resample controls onto a positive temporal grid.
 
-    :param controls: Loudness, centroid, and pitch controls on any nonempty temporal grid.
+    :param controls: Control channels on any nonempty temporal grid.
     :param output_frames: Positive output-grid length.
     :param mode: ``average`` for adaptive average pooling or ``linear`` interpolation.
     :returns: Resampled controls with input dtype and device preserved.
@@ -120,11 +120,11 @@ def prepare_music_sketch_controls(
     :param controls: Raw extracted controls on a nonempty temporal grid.
     :param spec: Music sketch contract selecting frame count, resampling, and pitch threshold.
     :returns: Independent float32 controls on ``spec.num_frames`` preserving the input device.
-    :raises ValueError: The spec does not select the music profile, or the extracted grid is
+    :raises ValueError: The spec does not select a music profile, or the extracted grid is
         sparser than the frame grid (upsampling would fabricate frames).
     """
-    if spec.profile != "music":
-        raise ValueError("music-control preparation requires profile='music'")
+    if spec.profile not in ("music", "music_tiv"):
+        raise ValueError("music-control preparation requires a music profile")
     if controls.shape[-1] < spec.num_frames:
         raise ValueError(
             f"music-control preparation requires at least {spec.num_frames} frames, "
@@ -157,3 +157,26 @@ def pool_sketch_controls(
         nonpositive grids are rejected by :func:`resample_sketch_controls`.
     """
     return resample_sketch_controls(controls, output_frames, "average")
+
+
+@jaxtyped(typechecker=beartype)
+def prepare_music_tiv_tokens(
+    controls: Float[torch.Tensor, "batch channels frames"],
+    max_kernel_size: int = 1,
+) -> Float[torch.Tensor, "batch channels frames"]:
+    """Filter music and normalized chroma together, then encode chroma as signed TIV.
+
+    :param controls: Token-grid music channels followed by nonnegative chroma.
+    :param max_kernel_size: Shared random median-window bound; one disables filtering.
+    :returns: Music channels followed by signed TIV, preserving silence and erased notes.
+    """
+    chroma = normalize_chroma(controls[:, NUM_SKETCH_CONTROLS:])
+    normalized = torch.cat((controls[:, :NUM_SKETCH_CONTROLS], chroma), dim=1)
+    filtered = random_median_filter_sketch_controls(normalized, max_kernel_size)
+    filtered_chroma = filtered[:, NUM_SKETCH_CONTROLS:]
+    # A channelwise median can erase changing notes; retain their original distribution.
+    filtered_chroma = torch.where(
+        filtered_chroma.sum(dim=1, keepdim=True) > 0, filtered_chroma, chroma
+    )
+    filtered_chroma = torch.where(chroma.sum(dim=1, keepdim=True) > 0, filtered_chroma, 0.0)
+    return torch.cat((filtered[:, :NUM_SKETCH_CONTROLS], chroma_to_tiv(filtered_chroma)), dim=1)
