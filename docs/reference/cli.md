@@ -194,7 +194,9 @@ threshold, temporal resampling, and training-time median augmentation. It append
 12 signed TIV coordinates to the 386 music channels, with four independently
 masked groups: `loudness`, `centroid`, `pitch`, and `tiv`. Pitch thresholding only
 affects the pitch group. All four groups share temporal reduction and the sampled
-median-filter window. TIV uses the PyTorch frontend described below on the audio
+median-filter window. TIV uses centered, zero-padded analysis windows and is
+interpolated onto the music timestamps before temporal reduction, including at
+the audio boundaries. It uses the PyTorch frontend described below on the audio
 device; no stored sketch column is needed. The four-group layout requires a new
 checkpoint; existing `music_online` checkpoints retain their three-group layout.
 

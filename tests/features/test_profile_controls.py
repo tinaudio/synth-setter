@@ -4,7 +4,8 @@ import numpy as np
 import pytest
 import torch
 
-from synth_setter.conditioning import SketchControlSpec, SketchTemporalResampling
+from synth_setter.conditioning import SketchControlSpec, SketchTemporalResampling, TIVBackend
+from synth_setter.data.vst.shapes import mel_hop_length
 from synth_setter.features import profile_controls
 from synth_setter.features.profile_controls import (
     extract_music_sketch_controls,
@@ -199,25 +200,37 @@ def music_tiv_audio() -> torch.Tensor:
 
 
 @pytest.mark.parametrize("mode", ["average", "linear"])
+@pytest.mark.parametrize("backend", ["torch", "essentia"])
 def test_music_tiv_extraction_preserves_music_and_signed_tiv(
+    backend: TIVBackend,
     mode: SketchTemporalResampling,
     music_tiv_audio: torch.Tensor,
     music_tiv_spec: SketchControlSpec,
 ) -> None:
     """The combined profile appends unthresholded TIV on the music frame grid.
 
+    :param backend: TIV chroma frontend.
     :param mode: Temporal reduction shared by the four groups.
     :param music_tiv_audio: Tone with signed TIV coordinates.
     :param music_tiv_spec: Combined extraction contract.
     """
-    spec = music_tiv_spec.model_copy(update={"temporal_resampling": mode})
+    spec = music_tiv_spec.model_copy(update={"temporal_resampling": mode, "tiv_backend": backend})
 
     controls = extract_music_sketch_controls(music_tiv_audio, _SAMPLE_RATE, spec)
 
     music = extract_music_sketch_controls(
         music_tiv_audio, _SAMPLE_RATE, spec.model_copy(update={"profile": "music"})
     )
-    tiv = resample_sketch_controls(extract_tiv_batch(music_tiv_audio, _SAMPLE_RATE), 96, mode)
+    centered_audio = (
+        torch.nn.functional.pad(music_tiv_audio, (1024, 1536))
+        if backend == "torch"
+        else music_tiv_audio
+    )
+    raw_tiv = extract_tiv_batch(centered_audio, _SAMPLE_RATE, backend=backend)[0].numpy()
+    source_samples = np.arange(raw_tiv.shape[-1]) * 512
+    target_samples = np.arange(0, music_tiv_audio.shape[-1] + 1, mel_hop_length(_SAMPLE_RATE))
+    aligned_tiv = np.stack([np.interp(target_samples, source_samples, row) for row in raw_tiv])
+    tiv = resample_sketch_controls(torch.from_numpy(aligned_tiv).float()[None], 96, mode)
     torch.testing.assert_close(controls[:, :386], music)
     torch.testing.assert_close(controls[:, 386:], tiv)
     assert (controls[:, 386:] < 0).any()
@@ -270,3 +283,50 @@ def test_music_tiv_extraction_offline_matches_batch(
     batch = extract_music_sketch_controls(music_tiv_audio, _SAMPLE_RATE, music_tiv_spec)
 
     torch.testing.assert_close(offline, batch)
+
+
+@pytest.mark.parametrize("backend", ["torch", "essentia"])
+def test_music_tiv_final_five_millisecond_tone_retains_boundary_energy(
+    backend: TIVBackend, music_tiv_spec: SketchControlSpec
+) -> None:
+    """TIV must analyze the same trailing audio that reaches the music controls.
+
+    :param backend: TIV chroma frontend.
+    :param music_tiv_spec: Combined extraction contract.
+    """
+    samples = torch.arange(4 * _SAMPLE_RATE, dtype=torch.float32)
+    audio = torch.sin(2 * torch.pi * 440 * samples / _SAMPLE_RATE)[None, None]
+    audio[..., :-220] = 0
+    spec = music_tiv_spec.model_copy(update={"tiv_backend": backend})
+
+    controls = extract_music_sketch_controls(audio, _SAMPLE_RATE, spec)
+
+    assert torch.count_nonzero(controls[:, 386:, -1]) > 0
+
+
+@pytest.mark.parametrize("backend", ["torch", "essentia"])
+@pytest.mark.parametrize("transition_time", [0.1, 3.9])
+def test_music_tiv_note_transition_preserves_waveform_timestamp(
+    backend: TIVBackend, transition_time: float, music_tiv_spec: SketchControlSpec
+) -> None:
+    """Changing notes near either boundary retain their physical transition time.
+
+    :param backend: TIV chroma frontend.
+    :param transition_time: A4-to-C5 transition in seconds.
+    :param music_tiv_spec: Combined extraction contract.
+    """
+    time = torch.arange(4 * _SAMPLE_RATE, dtype=torch.float32) / _SAMPLE_RATE
+    frequency = torch.where(time < transition_time, 440.0, 523.251)
+    audio = torch.sin(2 * torch.pi * frequency * time)[None, None]
+    spec = music_tiv_spec.model_copy(update={"tiv_backend": backend, "num_frames": 401})
+
+    tiv = extract_music_sketch_controls(audio, _SAMPLE_RATE, spec)[0, 386:]
+
+    before = tiv[:, 2:5].mean(dim=1)
+    after = tiv[:, 396:399].mean(dim=1)
+    direction = after - before
+    progress = ((tiv - before[:, None]) * direction[:, None]).sum(dim=0) / direction.square().sum()
+    crossing = int(torch.nonzero(progress >= 0.5)[0, 0])
+    fraction = (0.5 - progress[crossing - 1]) / (progress[crossing] - progress[crossing - 1])
+    observed_time = (crossing - 1 + float(fraction)) * 0.01
+    assert observed_time == pytest.approx(transition_time, abs=0.012)

@@ -113,7 +113,9 @@ def _audio_hpcp(
         np.stack(
             [
                 np.roll(hpcp(*peaks(spectrum(windowing(frame)))), -3)
-                for frame in standard.FrameGenerator(waveform, frameSize=1024, hopSize=512)
+                for frame in standard.FrameGenerator(
+                    waveform, frameSize=1024, hopSize=_CHROMA_HOP_LENGTH
+                )
             ],
             axis=-1,
         )
@@ -142,3 +144,35 @@ def extract_tiv_batch(
         else _audio_chroma(audio, sample_rate)
     )
     return chroma_to_tiv(chroma).to(audio.device)
+
+
+@jaxtyped(typechecker=beartype)
+def extract_tiv_on_grid_batch(
+    audio: Float[torch.Tensor, "batch channels samples"],
+    sample_rate: int,
+    hop_length: int,
+    *,
+    backend: TIVBackend = "torch",
+) -> Float[torch.Tensor, "batch 12 frames"]:
+    """Interpolate centered, zero-padded TIV onto a sample-spaced control grid.
+
+    :param audio: Waveforms shaped ``(batch, channels, samples)``.
+    :param sample_rate: Waveform sample rate in Hz.
+    :param hop_length: Target frame spacing in samples, starting at sample zero.
+    :param backend: Device-local STFT chroma or CPU Essentia HPCP extraction.
+    :returns: Signed TIV at each target timestamp up to the waveform duration.
+    :raises ValueError: The target hop length is not positive.
+    """
+    if hop_length <= 0:
+        raise ValueError(f"hop_length must be positive, got {hop_length}")
+    target_samples = torch.arange(0, audio.shape[-1] + 1, hop_length, device=audio.device)
+    if backend == "torch":
+        # Center frame zero and retain a right-hand neighbor beyond the last target.
+        half_window = _CHROMA_N_FFT // 2
+        audio = F.pad(audio, (half_window, half_window + _CHROMA_HOP_LENGTH))
+    # Essentia already centers frame zero and zero-pads both boundaries.
+    tiv = extract_tiv_batch(audio, sample_rate, backend=backend)
+    left = target_samples // _CHROMA_HOP_LENGTH
+    right = (left + 1).clamp(max=tiv.shape[-1] - 1)
+    fraction = (target_samples % _CHROMA_HOP_LENGTH).to(tiv.dtype) / _CHROMA_HOP_LENGTH
+    return torch.lerp(tiv.index_select(-1, left), tiv.index_select(-1, right), fraction)

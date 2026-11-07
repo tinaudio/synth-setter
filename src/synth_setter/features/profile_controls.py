@@ -5,9 +5,10 @@ import torch
 from jaxtyping import Float
 
 from synth_setter.conditioning import SketchControlSpec
+from synth_setter.data.vst.shapes import mel_hop_length
 from synth_setter.features.pyfdn_controls import extract_reverb_sketch
 from synth_setter.features.sketch_controls import extract_sketch_controls_batch
-from synth_setter.features.tiv import extract_tiv_batch
+from synth_setter.features.tiv import extract_tiv_on_grid_batch
 from synth_setter.sketch import prepare_music_sketch_controls, resample_sketch_controls
 
 
@@ -28,7 +29,9 @@ def extract_music_sketch_controls(
     """
     music = prepare_music_sketch_controls(extract_sketch_controls_batch(audio, sample_rate), spec)
     if spec.profile == "music_tiv":
-        tiv = extract_tiv_batch(audio, sample_rate, backend=spec.tiv_backend)
+        tiv = extract_tiv_on_grid_batch(
+            audio, sample_rate, mel_hop_length(sample_rate), backend=spec.tiv_backend
+        )
         tiv = resample_sketch_controls(tiv, spec.num_frames, spec.temporal_resampling)
         return torch.cat((music, tiv), dim=1)
     return music
