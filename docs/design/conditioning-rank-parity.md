@@ -25,9 +25,12 @@ slot-collapse cosine logged during training is the evidence that would justify t
 
 ## Configuration
 
-Cached-embedding profiles such as `clap` and `same_l` use layerwise outputs automatically when the
-model defines `vector_field.num_layers`. Online profiles such as `clap_online` and `same_s_online`
-derive the same output count for their frozen encoder head.
+Cached-embedding profiles such as `clap`, `same_l`, and `same_s` use layerwise outputs
+automatically when the model defines `vector_field.num_layers`. The four online SAME profiles make
+the head architecture explicit: `same_l_online` and `same_s_online` retain the historical
+`EmbeddingPool` head, while `same_l_online_ast` and `same_s_online_ast` opt into an
+`AudioSpectrogramTransformer` head that preserves temporal latents as patch tokens. All four derive
+the output count for their frozen encoder head.
 
 Set `model.encoder.n_conditioning_outputs=1` for cached profiles, or
 `model.encoder.head.n_conditioning_outputs=1` for online profiles, when loading a checkpoint trained

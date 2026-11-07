@@ -37,7 +37,7 @@ _MEL_FLOOR: Final = 1e-10
 # Convert power spectrograms, rather than amplitudes, to decibels.
 _POWER_TO_DB: Final = 10.0
 
-_BATCH_AUDIO_INPUT_SHAPE: Final = "batch ... samples"
+_BATCH_AUDIO_INPUT_SHAPE: Final = "batch ..."
 _BATCH_FEATURES_SHAPE: Final = "batch 1 frames mels"
 _BATCH_EMBEDDING_SHAPE: Final = "batch embedding"
 _BATCH_ANY_SHAPE: Final = "batch ..."
@@ -463,7 +463,7 @@ class PretrainedConditioningEncoder(nn.Module):
     ) -> Float[Tensor, _BATCH_ANY_SHAPE]:
         """Embed audio in the frozen backbone's representation.
 
-        :param audio: Mono waveform batch.
+        :param audio: Mono or multichannel waveform batch.
         :returns: Backbone representation with a leading batch axis.
         """
         return self.backbone(audio)
@@ -485,7 +485,7 @@ class PretrainedConditioningEncoder(nn.Module):
     ) -> Float[Tensor, _BATCH_ANY_SHAPE]:
         """Encode audio into conditioning through both taps.
 
-        :param audio: Mono waveform batch.
+        :param audio: Mono or multichannel waveform batch.
         :returns: Conditioning shaped ``(batch, out_dim)``.
         """
         return self.project(self.embed(audio))
