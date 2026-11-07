@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794023298592,
+  "lastUpdate": 1794023303645,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -31495,6 +31495,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 11.571289418300012,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "07884aa73ed3c5fb40e981be508b16c760a6063b",
+          "message": "internal-feat(training): add TIV to online music sketch controls (#3744)\n\n* internal-feat(training): add TIV to online music sketch controls\n\n* test(training): cover combined sketch median augmentation\n\n* internal-fix(training): align combined music and TIV timestamps\n\n* internal-fix(training): filter combined sketch chroma before TIV\n\n* internal-fix(training): remove unnecessary TIV input marker",
+          "timestamp": "2026-11-06T21:55:40-05:00",
+          "tree_id": "065a1b123bef96a75b8eda9701c752ed3c665c37",
+          "url": "https://github.com/tinaudio/synth-setter/commit/07884aa73ed3c5fb40e981be508b16c760a6063b"
+        },
+        "date": 1794023302786,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 8.127148628234863,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 13.612049451842903,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.10253774374723434,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.006807863712310791,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.2669389247894287,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 8.75891164200002,
             "unit": "seconds"
           }
         ]
