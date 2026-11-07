@@ -13,6 +13,7 @@ from synth_setter.conditioning import (
     SKETCH_CENTROID_ROW,
     SKETCH_LOUDNESS_ROW,
     SKETCH_PITCH_SLICE,
+    TIV_SKETCH_CONTROLS,
     SketchControlProfile,
     SketchControls,
     SketchControlSpec,
@@ -900,12 +901,22 @@ def test_music_tiv_tokens_mask_tiv_independently(mode: Literal["average", "linea
             if key != "projections.tiv.weight"
         }
     )
-    controls = torch.cat((_controls(), torch.full((_BATCH, 12, _NUM_FRAMES), -2.0)), dim=1)
+    controls = torch.cat(
+        (
+            _controls(),
+            torch.nn.functional.one_hot(
+                torch.zeros(_BATCH, _NUM_FRAMES, dtype=torch.long), TIV_SKETCH_CONTROLS
+            )
+            .transpose(1, 2)
+            .float(),
+        ),
+        dim=1,
+    )
     keep_music = torch.tensor([[True, True, True, False]]).expand(_BATCH, -1)
 
     masked = module(controls, keep_music)
 
-    torch.testing.assert_close(masked, music(controls[:, :386], _keep_all()))
+    torch.testing.assert_close(masked, music(controls[:, :NUM_SKETCH_CONTROLS], _keep_all()))
     assert not torch.equal(masked, module(controls, torch.ones(_BATCH, 4, dtype=torch.bool)))
 
 
@@ -915,11 +926,11 @@ def test_music_tiv_spec_stored_source_rejected() -> None:
         SketchControlSpec(profile="music_tiv", num_frames=96)
 
 
-@pytest.mark.parametrize("group_index", [0, 1, 2, 3])
-def test_music_tiv_tokens_training_filters_each_group(group_index: int) -> None:
-    """The shared training median window removes isolated impulses in every group.
+@pytest.mark.parametrize("group_index", [0, 1, 2])
+def test_music_tiv_tokens_training_filters_each_music_group(group_index: int) -> None:
+    """The shared training median window removes isolated music-control impulses.
 
-    :param group_index: The only retained group, including the appended TIV group.
+    :param group_index: The only retained music group.
     """
     module = SketchControlTokens(
         d_model=1,
@@ -930,7 +941,7 @@ def test_music_tiv_tokens_training_filters_each_group(group_index: int) -> None:
     with torch.no_grad():
         for projection in module.projections.values():
             cast(torch.nn.Linear, projection).weight.fill_(1.0)
-    controls = torch.zeros(1, 398, 4)
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS + TIV_SKETCH_CONTROLS, 4)
     controls[:, :, 1] = 1.0
     keep = torch.zeros(1, 4, dtype=torch.bool)
     keep[:, group_index] = True

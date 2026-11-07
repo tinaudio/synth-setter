@@ -190,15 +190,24 @@ compiled frozen waveform encoders.
 To add TIV alongside online loudness, centroid, and pitch, select
 `sketch=music_online_tiv` (for example with `experiment=surge/flow_sketch_prelim`).
 This variant inherits `music_online`'s sample rate, 96-frame/token grid, pitch
-threshold, temporal resampling, and training-time median augmentation. It appends
-12 signed TIV coordinates to the 386 music channels, with four independently
-masked groups: `loudness`, `centroid`, `pitch`, and `tiv`. Pitch thresholding only
-affects the pitch group. All four groups share temporal reduction and the sampled
-median-filter window. TIV uses centered, zero-padded analysis windows and is
-interpolated onto the music timestamps before temporal reduction, including at
-the audio boundaries. It uses the PyTorch frontend described below on the audio
-device; no stored sketch column is needed. The four-group layout requires a new
-checkpoint; existing `music_online` checkpoints retain their three-group layout.
+threshold, temporal resampling, and training-time median augmentation. The extracted
+398-channel tensor contains the original music controls followed by 12 normalized
+chroma channels (`tiv_input: normalized_chroma`). Chroma uses centered,
+boundary-padded analysis and timestamp interpolation onto the music grid before
+temporal reduction. Non-silent chroma frames sum to one; silent frames remain zero.
+
+At the model token boundary, music and chroma share temporal resampling and one
+sampled median window per row during training. If the median erases a non-silent
+chroma frame, its original distribution is retained; silent input frames stay
+silent. Evaluation and inference skip random filtering. Chroma is normalized
+again and converted to signed TIV immediately before projection. The independently
+maskable groups remain `loudness`, `centroid`, `pitch`, and `tiv`; only PESTO pitch
+activations receive thresholding. Signed TIV coordinates are never thresholded.
+
+No stored sketch column is needed. This combined input contract requires a new
+checkpoint: older combined checkpoints without `tiv_input: normalized_chroma`
+are rejected rather than interpreting signed TIV as chroma. Existing music-only,
+standalone TIV, and reverb profiles retain their contracts.
 
 To derive tonal interval vectors from each waveform during training instead of
 reading a stored sketch column:

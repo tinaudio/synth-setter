@@ -17,6 +17,7 @@ from synth_setter.conditioning import (
     SketchControlSpec,
     SketchTemporalResampling,
 )
+from synth_setter.features.tiv import chroma_to_tiv, normalize_chroma
 
 
 @jaxtyped(typechecker=beartype)
@@ -156,3 +157,26 @@ def pool_sketch_controls(
         nonpositive grids are rejected by :func:`resample_sketch_controls`.
     """
     return resample_sketch_controls(controls, output_frames, "average")
+
+
+@jaxtyped(typechecker=beartype)
+def prepare_music_tiv_tokens(
+    controls: Float[torch.Tensor, "batch channels frames"],
+    max_kernel_size: int = 1,
+) -> Float[torch.Tensor, "batch channels frames"]:
+    """Filter music and normalized chroma together, then encode chroma as signed TIV.
+
+    :param controls: Token-grid music channels followed by nonnegative chroma.
+    :param max_kernel_size: Shared random median-window bound; one disables filtering.
+    :returns: Music channels followed by signed TIV, preserving silence and erased notes.
+    """
+    chroma = normalize_chroma(controls[:, NUM_SKETCH_CONTROLS:])
+    normalized = torch.cat((controls[:, :NUM_SKETCH_CONTROLS], chroma), dim=1)
+    filtered = random_median_filter_sketch_controls(normalized, max_kernel_size)
+    filtered_chroma = filtered[:, NUM_SKETCH_CONTROLS:]
+    # A channelwise median can erase changing notes; retain their original distribution.
+    filtered_chroma = torch.where(
+        filtered_chroma.sum(dim=1, keepdim=True) > 0, filtered_chroma, chroma
+    )
+    filtered_chroma = torch.where(chroma.sum(dim=1, keepdim=True) > 0, filtered_chroma, 0.0)
+    return torch.cat((filtered[:, :NUM_SKETCH_CONTROLS], chroma_to_tiv(filtered_chroma)), dim=1)

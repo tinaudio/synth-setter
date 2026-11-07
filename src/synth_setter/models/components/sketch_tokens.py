@@ -18,6 +18,7 @@ from synth_setter.conditioning import (
 )
 from synth_setter.models.components.embed_pool import make_sin_pos_enc
 from synth_setter.sketch import (
+    prepare_music_tiv_tokens,
     random_median_filter_sketch_controls,
     resample_sketch_controls,
 )
@@ -127,7 +128,8 @@ class SketchControlTokens(nn.Module):
     ) -> Float[torch.Tensor, "batch tokens d_model"]:
         """Tokenize a stored sketch-control batch.
 
-        :param controls: Profile channels arranged as ``(batch, channels, frames)``.
+        :param controls: Profile channels as ``(batch, channels, frames)``; ``music_tiv``
+            carries normalized chroma in its final channels until token preprocessing.
         :param keep: Positive per-group keep state in layout order.
         :returns: Control tokens with the temporal encoding added.
         """
@@ -138,16 +140,17 @@ class SketchControlTokens(nn.Module):
                 self.positional_encoding.shape[1],
                 self.temporal_resampling,
             )
-            # sample_batch runs under inference_mode without flipping train(); fixed-noise
-            # sampling must stay deterministic, so augmentation keys off both signals.
-            if (
-                self.training
-                and not torch.is_inference_mode_enabled()
-                and self.effective_median_filter_max_kernel_size > 1
-            ):
+            # Sampling can run in inference_mode while the module remains in train mode.
+            max_kernel_size = (
+                self.effective_median_filter_max_kernel_size
+                if self.training and not torch.is_inference_mode_enabled()
+                else 1
+            )
+            if self.layout.profile == "music_tiv":
+                temporal_controls = prepare_music_tiv_tokens(temporal_controls, max_kernel_size)
+            elif max_kernel_size > 1:
                 temporal_controls = random_median_filter_sketch_controls(
-                    temporal_controls,
-                    self.effective_median_filter_max_kernel_size,
+                    temporal_controls, max_kernel_size
                 )
         elif self.layout.profile == "tiv":
             temporal_controls = F.adaptive_avg_pool1d(controls, self.positional_encoding.shape[1])

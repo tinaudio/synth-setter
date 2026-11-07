@@ -23,6 +23,19 @@ _HPCP_MAX_FREQUENCY = 8000
 
 
 @jaxtyped(typechecker=beartype)
+def normalize_chroma(
+    chroma: Float[torch.Tensor, "batch 12 frames"],
+) -> Float[torch.Tensor, "batch 12 frames"]:
+    """L1-normalize nonnegative pitch energy, preserving silent frames.
+
+    :param chroma: Nonnegative pitch-class energy.
+    :returns: Unit-sum non-silent frames and zero silent frames on the input device.
+    """
+    energy = chroma.sum(dim=1, keepdim=True)
+    return chroma / energy.where(energy > 0, 1.0)
+
+
+@jaxtyped(typechecker=beartype)
 def chroma_to_tiv(
     chroma: Float[torch.Tensor, "batch 12 frames"],
 ) -> Float[torch.Tensor, "batch 12 frames"]:
@@ -31,9 +44,7 @@ def chroma_to_tiv(
     :param chroma: Pitch-class energy with C at row zero.
     :returns: Interleaved real and imaginary channels for DFT bins 1 through 6.
     """
-    energy = chroma.sum(dim=1, keepdim=True)
-    denominator = energy.where(energy > 0, 1.0)
-    normalized = chroma / denominator
+    normalized = normalize_chroma(chroma)
     coefficients = torch.fft.rfft(normalized, n=12, dim=1)[:, 1:7]
     weights = coefficients.new_tensor(_TIV_AUDIO_WEIGHTS)[None, :, None]
     weighted = coefficients * weights
@@ -147,20 +158,20 @@ def extract_tiv_batch(
 
 
 @jaxtyped(typechecker=beartype)
-def extract_tiv_on_grid_batch(
+def extract_chroma_on_grid_batch(
     audio: Float[torch.Tensor, "batch channels samples"],
     sample_rate: int,
     hop_length: int,
     *,
     backend: TIVBackend = "torch",
 ) -> Float[torch.Tensor, "batch 12 frames"]:
-    """Interpolate centered, zero-padded TIV onto a sample-spaced control grid.
+    """Interpolate normalized, centered chroma onto a sample-spaced control grid.
 
     :param audio: Waveforms shaped ``(batch, channels, samples)``.
     :param sample_rate: Waveform sample rate in Hz.
     :param hop_length: Target frame spacing in samples, starting at sample zero.
     :param backend: Device-local STFT chroma or CPU Essentia HPCP extraction.
-    :returns: Signed TIV at each target timestamp up to the waveform duration.
+    :returns: Nonnegative unit-sum chroma, or zeros for silence, on the audio device.
     :raises ValueError: The target hop length is not positive.
     """
     if hop_length <= 0:
@@ -171,8 +182,15 @@ def extract_tiv_on_grid_batch(
         half_window = _CHROMA_N_FFT // 2
         audio = F.pad(audio, (half_window, half_window + _CHROMA_HOP_LENGTH))
     # Essentia already centers frame zero and zero-pads both boundaries.
-    tiv = extract_tiv_batch(audio, sample_rate, backend=backend)
+    chroma = (
+        _audio_hpcp(audio, sample_rate)
+        if backend == "essentia"
+        else _audio_chroma(audio, sample_rate)
+    )
+    chroma = normalize_chroma(chroma).to(audio.device)
     left = target_samples // _CHROMA_HOP_LENGTH
-    right = (left + 1).clamp(max=tiv.shape[-1] - 1)
-    fraction = (target_samples % _CHROMA_HOP_LENGTH).to(tiv.dtype) / _CHROMA_HOP_LENGTH
-    return torch.lerp(tiv.index_select(-1, left), tiv.index_select(-1, right), fraction)
+    right = (left + 1).clamp(max=chroma.shape[-1] - 1)
+    fraction = (target_samples % _CHROMA_HOP_LENGTH).to(chroma.dtype) / _CHROMA_HOP_LENGTH
+    return normalize_chroma(
+        torch.lerp(chroma.index_select(-1, left), chroma.index_select(-1, right), fraction)
+    )
