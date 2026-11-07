@@ -187,7 +187,6 @@ def music_tiv_spec() -> SketchControlSpec:
     """
     return SketchControlSpec(
         profile="music_tiv",
-        tiv_input="normalized_chroma",
         source="online",
         sample_rate=_SAMPLE_RATE,
         num_frames=96,
@@ -228,7 +227,7 @@ def test_music_tiv_extraction_preserves_music_and_normalized_chroma(
     music = extract_music_sketch_controls(
         music_tiv_audio,
         _SAMPLE_RATE,
-        spec.model_copy(update={"profile": "music", "tiv_input": None}),
+        spec.model_copy(update={"profile": "music"}),
     )
     centered_audio = (
         torch.nn.functional.pad(music_tiv_audio, (1024, 1536))

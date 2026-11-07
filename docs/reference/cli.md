@@ -192,7 +192,7 @@ To add TIV alongside online loudness, centroid, and pitch, select
 This variant inherits `music_online`'s sample rate, 96-frame/token grid, pitch
 threshold, temporal resampling, and training-time median augmentation. The extracted
 398-channel tensor contains the original music controls followed by 12 normalized
-chroma channels (`tiv_input: normalized_chroma`). Chroma uses centered,
+chroma channels. Chroma uses centered,
 boundary-padded analysis and timestamp interpolation onto the music grid before
 temporal reduction. Non-silent chroma frames sum to one; silent frames remain zero.
 
@@ -204,10 +204,8 @@ again and converted to signed TIV immediately before projection. The independent
 maskable groups remain `loudness`, `centroid`, `pitch`, and `tiv`; only PESTO pitch
 activations receive thresholding. Signed TIV coordinates are never thresholded.
 
-No stored sketch column is needed. This combined input contract requires a new
-checkpoint: older combined checkpoints without `tiv_input: normalized_chroma`
-are rejected rather than interpreting signed TIV as chroma. Existing music-only,
-standalone TIV, and reverb profiles retain their contracts.
+No stored sketch column is needed. Existing music-only, standalone TIV, and
+reverb profiles retain their contracts.
 
 To derive tonal interval vectors from each waveform during training instead of
 reading a stored sketch column:

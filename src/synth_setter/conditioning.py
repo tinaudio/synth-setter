@@ -246,10 +246,6 @@ class SketchControlSpec(BaseModel):
 
         Device-local STFT chroma or CPU reference-style HPCP extraction.
 
-    .. attribute :: tiv_input
-
-        Combined-profile input contract; normalized chroma becomes TIV at tokenization.
-
     .. attribute :: num_frames
 
         Mel-grid frames per stored control row.
@@ -282,7 +278,6 @@ class SketchControlSpec(BaseModel):
     source: SketchControlSource = "stored"
     sample_rate: PositiveInt | None = None
     tiv_backend: TIVBackend = "torch"
-    tiv_input: Literal["normalized_chroma"] | None = None
     num_frames: PositiveInt
     num_control_tokens: PositiveInt = 32
     temporal_resampling: SketchTemporalResampling = "average"
@@ -331,12 +326,6 @@ class SketchControlSpec(BaseModel):
             raise ValueError("nondefault temporal resampling is supported only for music controls")
         if self.profile in ("tiv", "music_tiv") and self.source != "online":
             raise ValueError(f"{self.profile} sketch requires source='online'")
-        if self.profile == "music_tiv" and self.tiv_input != "normalized_chroma":
-            raise ValueError(
-                "music_tiv requires tiv_input='normalized_chroma'; old signed-TIV checkpoints are incompatible"
-            )
-        if self.profile != "music_tiv" and self.tiv_input is not None:
-            raise ValueError("tiv_input is supported only for music_tiv")
         if self.profile == "pyfdn_reverb" and self.source == "online":
             raise ValueError("pyfdn_reverb sketch does not support source='online'")
         if self.source == "online" and self.sample_rate is None:

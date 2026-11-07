@@ -7,5 +7,4 @@ defaults:
 model:
   sketch_controls:
     profile: music_tiv
-    tiv_input: normalized_chroma
     tiv_backend: torch

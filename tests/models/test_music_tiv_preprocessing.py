@@ -114,10 +114,12 @@ def test_training_silent_frame_stays_silent(
     )
 
 
-def test_combined_spec_legacy_input_contract_rejected() -> None:
-    """Old signed-TIV checkpoint metadata must not silently accept chroma inputs."""
-    with pytest.raises(ValueError, match="normalized_chroma"):
-        SketchControlSpec(profile="music_tiv", source="online", sample_rate=44100, num_frames=96)
+def test_combined_spec_online_profile_roundtrips() -> None:
+    """The combined online profile needs no additional input-format selector."""
+    spec = SketchControlSpec(
+        profile="music_tiv", source="online", sample_rate=44100, num_frames=96
+    )
+    assert SketchControlSpec.model_validate_json(spec.model_dump_json()) == spec
 
 
 def test_shared_row_kernel_filters_music_and_chroma_together(
