@@ -10,8 +10,9 @@ model:
     num_control_tokens: 96
     temporal_resampling: average
     pitch_zero_threshold: 0.1
-    # Five-token window at 32 tokens; scales to the selected token grid.
-    median_filter_max_window_fraction: 0.15625
+    # Opt-in augmentation (#3730); `median_filter_max_window_fraction=0.15625` is a five-token
+    # window at 32 tokens and scales with this token grid.
+    median_filter_max_window_fraction: null
 
 datamodule:
   sketch: ${model.sketch_controls}

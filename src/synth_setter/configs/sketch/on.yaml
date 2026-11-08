@@ -11,10 +11,9 @@ model:
     num_frames: 32
     num_control_tokens: 32
     pitch_zero_threshold: 0.1
-    # This fraction equals five frames on the fixed four-second, 32-token grid; it is not milliseconds.
-    # A literal override must also clear it: `model.sketch_controls.median_filter_max_kernel_size=3
-    # model.sketch_controls.median_filter_max_window_fraction=null`.
-    median_filter_max_window_fraction: 0.15625
+    # Opt-in augmentation (#3730): validation sees unfiltered sketches, so it stays off by default.
+    # Enable: `model.sketch_controls.median_filter_max_window_fraction=0.15625` (five frames here).
+    median_filter_max_window_fraction: null
 
 datamodule:
   sketch: ${model.sketch_controls}
