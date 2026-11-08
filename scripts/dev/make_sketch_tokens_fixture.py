@@ -1,8 +1,8 @@
 """Record ``SketchControlTokens`` outputs at a historical commit for equivalence tests.
 
-Run from a worktree checked out at the reference commit (see ``README.md``); the module
-under test is whatever ``synth_setter`` resolves to there, so the only constructor arguments
-used are the ones every revision accepts.
+Run from a worktree checked out at the reference commit (``tests/fixtures/sketch/README.md``
+lists them); the module under test is whatever ``synth_setter`` resolves to there, so only
+constructor arguments every revision accepts are used.
 """
 
 import argparse
