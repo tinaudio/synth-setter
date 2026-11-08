@@ -11,10 +11,8 @@ model:
     num_frames: 32
     num_control_tokens: 32
     pitch_zero_threshold: 0.1
-    # Training-time random median filtering (#3730) is an opt-in augmentation: validation sees
-    # unfiltered sketches and the filter erases notes shorter than its window. Enable it with
-    # `model.sketch_controls.median_filter_max_window_fraction=0.15625` (five frames on this
-    # 32-token grid; a grid fraction, not milliseconds).
+    # Opt-in augmentation (#3730): validation sees unfiltered sketches, so it stays off by default.
+    # Enable: `model.sketch_controls.median_filter_max_window_fraction=0.15625` (five frames here).
     median_filter_max_window_fraction: null
 
 datamodule:

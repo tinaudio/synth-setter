@@ -1,7 +1,8 @@
 """Tests for the concat sketch-control token module and its field injection."""
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Literal, cast
 from unittest import mock
 
 import pytest
@@ -960,24 +961,56 @@ def test_music_tiv_tokens_training_filters_each_music_group(group_index: int) ->
 _PRE_MEDIAN_FILTER_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "sketch"
 
 
-def _pre_median_filter_reference(commit: str) -> dict[str, Any]:
-    """Load tokenizer inputs and outputs recorded before median filtering existed.
+@dataclass(frozen=True)
+class _RecordedTokens:
+    """One recorded tokenizer pass from before median filtering existed.
 
-    :param commit: Abbreviated commit the fixture was recorded at (see the fixture README).
-    :returns: Recorded projection weights, inputs, and train-mode tokens.
+    .. attribute :: state_dict
+
+        Projection weights and positional-encoding buffer of the recorded module.
+
+    .. attribute :: controls
+
+        ``(batch, channels, frames)`` stored-sketch-like input batch.
+
+    .. attribute :: keep
+
+        ``(batch, groups)`` keep mask recorded with the inputs.
+
+    .. attribute :: tokens
+
+        Train-mode output tokens the recorded module produced.
     """
-    return torch.load(_PRE_MEDIAN_FILTER_FIXTURES / f"sketch_tokens_{commit}.pt")
+
+    state_dict: dict[str, torch.Tensor]
+    controls: torch.Tensor
+    keep: torch.Tensor
+    tokens: torch.Tensor
+
+    def module(self) -> SketchControlTokens:
+        """Rebuild the recorded music tokenizer with the filter left at its disabled default.
+
+        :returns: Tokenizer carrying the recorded projection weights.
+        """
+        module = SketchControlTokens(d_model=16, num_control_tokens=32, profile="music")
+        module.load_state_dict(self.state_dict)
+        return module
 
 
-def _reference_tokens_module(reference: dict[str, Any]) -> SketchControlTokens:
-    """Rebuild the recorded music tokenizer with the filter left at its disabled default.
+def _pre_median_filter_reference(commit: str, frames: int) -> _RecordedTokens:
+    """Load one recorded tokenizer pass (see the fixture README for the commits).
 
-    :param reference: Loaded pre-median-filter fixture.
-    :returns: Tokenizer carrying the recorded projection weights.
+    :param commit: Abbreviated commit the fixture was recorded at.
+    :param frames: Stored frame grid of the recorded pass.
+    :returns: Recorded weights, inputs, and train-mode tokens.
     """
-    module = SketchControlTokens(d_model=16, num_control_tokens=32, profile="music")
-    module.load_state_dict(reference["state_dict"])
-    return module
+    fixture = torch.load(_PRE_MEDIAN_FILTER_FIXTURES / f"sketch_tokens_{commit}.pt")
+    return _RecordedTokens(
+        state_dict=fixture["state_dict"],
+        controls=fixture[f"controls_{frames}"],
+        keep=fixture["keep"],
+        tokens=fixture[f"tokens_{frames}"],
+    )
 
 
 @pytest.mark.parametrize(
@@ -996,22 +1029,20 @@ def test_forward_training_without_median_filter_matches_pre_augmentation_tokens(
     :param commit: Fixture commit the reference tokens were recorded at.
     :param frames: Stored frame grid replayed through the 32-token module.
     """
-    reference = _pre_median_filter_reference(commit)
-    module = _reference_tokens_module(reference).train()
+    reference = _pre_median_filter_reference(commit, frames)
+    module = reference.module().train()
 
-    tokens = module(reference[f"controls_{frames}"], reference["keep"])
+    tokens = module(reference.controls, reference.keep)
 
-    assert torch.equal(tokens, reference[f"tokens_{frames}"])
+    assert torch.equal(tokens, reference.tokens)
 
 
 def test_forward_training_without_median_filter_matches_eval_forward() -> None:
     """With the filter off no stochastic path remains between train and eval mode."""
-    reference = _pre_median_filter_reference("d37e80c8e")
-    module = _reference_tokens_module(reference)
-    controls = reference["controls_64"]
-    keep = reference["keep"]
+    reference = _pre_median_filter_reference("d37e80c8e", frames=64)
+    module = reference.module()
 
-    train_tokens = module.train()(controls, keep)
-    eval_tokens = module.eval()(controls, keep)
+    train_tokens = module.train()(reference.controls, reference.keep)
+    eval_tokens = module.eval()(reference.controls, reference.keep)
 
     assert torch.equal(train_tokens, eval_tokens)
