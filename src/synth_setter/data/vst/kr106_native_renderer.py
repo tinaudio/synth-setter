@@ -163,12 +163,18 @@ class KR106NativeRenderer(AudioRenderer):
         if not 0 <= midi_note <= 127 or not 0 <= velocity <= 127:
             raise ValueError("MIDI pitch and velocity must be in [0, 127]")
         samples = int(self.sample_rate * self.signal_duration_seconds)
+        start_sample = min(samples - 1, _sample_index_at_or_after(start, self.sample_rate))
+        # A sub-frame note window rounds to one frame, as the VST backends gate it;
+        # the extension rejects an empty interval outright.
+        end_sample = min(
+            samples, max(start_sample + 1, _sample_index_at_or_after(end, self.sample_rate))
+        )
         audio = self._native.render_note(
             {self._parameters[name].id: value for name, value in values.items()},
             midi_note,
             velocity,
-            min(samples, _sample_index_at_or_after(start, self.sample_rate)),
-            min(samples, _sample_index_at_or_after(end, self.sample_rate)),
+            start_sample,
+            end_sample,
             samples,
             self.sample_rate,
             self.block_size,

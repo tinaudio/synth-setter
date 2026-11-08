@@ -10,6 +10,7 @@ import pytest
 from synth_setter.data.vst.kr106_native_renderer import KR106NativeRenderer
 from synth_setter.data.vst.kr106_native_runtime import import_kr106_native
 from synth_setter.data.vst.param_map import load_param_map
+from synth_setter.data.vst.renderers import _sample_index_at_or_after
 
 
 @pytest.fixture
@@ -191,3 +192,67 @@ def test_native_parameter_conversion_preserves_plugin_ranges(
         {"octave": 0.5, "tuning": 0.75, "voices": 0.5, "master_volume": 0.35}
     )
     assert values == {"octave": 1.0, "tuning": 0.5, "voices": 8.0, "master_volume": 0.35}
+
+
+# Degenerate production draw (100k run, shard 91 / row 352): both endpoints round to frame 130180.
+_SUB_FRAME_WINDOW = (2.9519203965431835, 2.9519231304983395)
+
+
+def _native_render_at_frames(
+    renderer: KR106NativeRenderer, start_sample: int, end_sample: int
+) -> np.ndarray:
+    """Render the committed baseline directly through the extension at integer frames.
+
+    :param renderer: Renderer whose baseline preset and clip geometry are reused.
+    :param start_sample: Note-on frame.
+    :param end_sample: Note-off frame.
+    :returns: Reference stereo audio for the same clip length.
+    """
+    baseline = json.loads(Path(renderer.plugin_state_path).read_text())["parameters"]
+    return import_kr106_native().render_note(
+        {},
+        60,
+        100,
+        start_sample,
+        end_sample,
+        int(renderer.sample_rate * renderer.signal_duration_seconds),
+        renderer.sample_rate,
+        renderer.block_size,
+        baseline_parameters={int(key): value for key, value in baseline.items()},
+    )
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [_SUB_FRAME_WINDOW, (np.nextafter(4.0, 0.0), 4.0)],
+)
+def test_native_sub_frame_note_window_renders_one_frame(
+    renderer: KR106NativeRenderer, start: float, end: float
+) -> None:
+    """A window shorter than one frame renders as a one-frame note instead of failing.
+
+    :param renderer: Real native renderer with the committed baseline.
+    :param start: Note-on time whose frame index equals the note-off frame index.
+    :param end: Note-off time inside the same frame, or the clip end.
+    """
+    last_frame = int(renderer.sample_rate * renderer.signal_duration_seconds) - 1
+    start_sample = min(last_frame, _sample_index_at_or_after(start, renderer.sample_rate))
+    expected = _native_render_at_frames(renderer, start_sample, start_sample + 1)
+    np.testing.assert_array_equal(renderer.render({}, 60, 100, (start, end)), expected)
+
+
+def test_native_note_frames_match_vst_backend_one_frame_floor(
+    renderer: KR106NativeRenderer,
+) -> None:
+    """The native note window follows the VST backends' ``max(1, end - start)`` frame floor.
+
+    :param renderer: Real native renderer with the committed baseline.
+    """
+    start, end = _SUB_FRAME_WINDOW
+    start_sample = _sample_index_at_or_after(start, renderer.sample_rate)
+    end_sample = _sample_index_at_or_after(end, renderer.sample_rate)
+    assert end_sample == start_sample
+    expected = _native_render_at_frames(
+        renderer, start_sample, start_sample + max(1, end_sample - start_sample)
+    )
+    np.testing.assert_array_equal(renderer.render({}, 60, 100, (start, end)), expected)
