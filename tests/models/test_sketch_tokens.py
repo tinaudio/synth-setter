@@ -1,6 +1,7 @@
 """Tests for the concat sketch-control token module and its field injection."""
 
-from typing import Literal, cast
+from pathlib import Path
+from typing import Any, Literal, cast
 from unittest import mock
 
 import pytest
@@ -954,3 +955,63 @@ def test_music_tiv_tokens_training_filters_each_music_group(group_index: int) ->
 
     assert torch.count_nonzero(unfiltered) > 0
     torch.testing.assert_close(filtered, torch.zeros_like(filtered), rtol=0, atol=0)
+
+
+_PRE_MEDIAN_FILTER_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "sketch"
+
+
+def _pre_median_filter_reference(commit: str) -> dict[str, Any]:
+    """Load tokenizer inputs and outputs recorded before median filtering existed.
+
+    :param commit: Abbreviated commit the fixture was recorded at (see the fixture README).
+    :returns: Recorded projection weights, inputs, and train-mode tokens.
+    """
+    return torch.load(_PRE_MEDIAN_FILTER_FIXTURES / f"sketch_tokens_{commit}.pt")
+
+
+def _reference_tokens_module(reference: dict[str, Any]) -> SketchControlTokens:
+    """Rebuild the recorded music tokenizer with the filter left at its disabled default.
+
+    :param reference: Loaded pre-median-filter fixture.
+    :returns: Tokenizer carrying the recorded projection weights.
+    """
+    module = SketchControlTokens(d_model=16, num_control_tokens=32, profile="music")
+    module.load_state_dict(reference["state_dict"])
+    return module
+
+
+@pytest.mark.parametrize(
+    ("commit", "frames"),
+    [
+        pytest.param("1416c2da", 32, id="benchmark-commit-identity-grid"),
+        pytest.param("d37e80c8e", 32, id="pre-3730-parent-identity-grid"),
+        pytest.param("d37e80c8e", 64, id="pre-3730-parent-pooled-grid"),
+    ],
+)
+def test_forward_training_without_median_filter_matches_pre_augmentation_tokens(
+    commit: str, frames: int
+) -> None:
+    """With the filter off, train-mode tokens are bit-identical to the pre-#3730 tokenizer.
+
+    :param commit: Fixture commit the reference tokens were recorded at.
+    :param frames: Stored frame grid replayed through the 32-token module.
+    """
+    reference = _pre_median_filter_reference(commit)
+    module = _reference_tokens_module(reference).train()
+
+    tokens = module(reference[f"controls_{frames}"], reference["keep"])
+
+    assert torch.equal(tokens, reference[f"tokens_{frames}"])
+
+
+def test_forward_training_without_median_filter_matches_eval_forward() -> None:
+    """With the filter off no stochastic path remains between train and eval mode."""
+    reference = _pre_median_filter_reference("d37e80c8e")
+    module = _reference_tokens_module(reference)
+    controls = reference["controls_64"]
+    keep = reference["keep"]
+
+    train_tokens = module.train()(controls, keep)
+    eval_tokens = module.eval()(controls, keep)
+
+    assert torch.equal(train_tokens, eval_tokens)

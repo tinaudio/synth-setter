@@ -1420,8 +1420,51 @@ def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> 
     assert sketch.model.sketch_controls.column == "sketch"
     assert sketch.model.sketch_controls.num_frames == 32
     assert "median_filter_max_kernel_size" not in sketch.model.sketch_controls
-    assert sketch.model.sketch_controls.median_filter_max_window_fraction == 0.15625
+    assert sketch.model.sketch_controls.median_filter_max_window_fraction is None
     assert sketch.datamodule.sketch == sketch.model.sketch_controls
+
+
+@pytest.mark.parametrize("profile", ["on", "music_online", "music_online_tiv"])
+def test_sketch_profiles_leave_median_filter_augmentation_off(profile: str) -> None:
+    """Shipped sketch profiles keep the training-time median filter an explicit opt-in.
+
+    :param profile: ``sketch`` config-group entry under test.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_xt",
+            "model=vst_flow",
+            "trainer=cpu",
+            f"sketch={profile}",
+        ],
+    )
+    spec = resolve_sketch_controls(cfg.model.sketch_controls)
+
+    assert spec is not None
+    assert spec.median_filter_max_window_fraction is None
+    assert spec.median_filter_max_kernel_size == 1
+    assert spec.effective_median_filter_max_kernel_size == 1
+
+
+def test_sketch_on_median_filter_fraction_override_enables_augmentation() -> None:
+    """The documented override resolves to the five-frame window on the 32-token grid."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_xt",
+            "model=vst_flow",
+            "trainer=cpu",
+            "sketch=on",
+            "model.sketch_controls.median_filter_max_window_fraction=0.15625",
+        ],
+    )
+    spec = resolve_sketch_controls(cfg.model.sketch_controls)
+
+    assert spec is not None
+    assert spec.effective_median_filter_max_kernel_size == 5
 
 
 def test_music_online_sketch_profile_is_explicit_and_matches_datamodule_rate() -> None:
@@ -1442,7 +1485,7 @@ def test_music_online_sketch_profile_is_explicit_and_matches_datamodule_rate() -
     assert online.model.sketch_controls.num_control_tokens == 96
     assert online.model.sketch_controls.temporal_resampling == "average"
     assert online.model.sketch_controls.pitch_zero_threshold == 0.1
-    assert online.model.sketch_controls.median_filter_max_window_fraction == 0.15625
+    assert online.model.sketch_controls.median_filter_max_window_fraction is None
     assert online.datamodule.sketch == online.model.sketch_controls
     assert "source" not in stored.model.sketch_controls
 

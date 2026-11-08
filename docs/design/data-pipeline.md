@@ -1183,14 +1183,16 @@ linear interpolation first onto `num_frames` for live extraction and then onto
 `num_control_tokens` in the tokenizer. Pitch thresholding occurs on the frame grid
 before token resampling.
 
-During training, the tokenizer samples one median-filter width per row and applies
-that width to all three groups after token resampling. The `sketch=on` maximum-window
-fraction is `0.15625`, which yields 5, 10, and 15 frames on 32-, 64-, and 96-token
-grids. Five frames preserve the prior duration only for the fixed four-second,
-32-token setup; the setting is a grid fraction, not milliseconds. A literal
-`median_filter_max_kernel_size` remains available for checkpoint compatibility, and
-cannot be combined with a fraction unless its value is the disabled default of 1. Because `sketch=on` sets the fraction, a literal override must also clear it:
-`model.sketch_controls.median_filter_max_kernel_size=3 model.sketch_controls.median_filter_max_window_fraction=null`.
+The tokenizer can augment training rows with a random median filter: it samples one
+window per row and applies that width to all three groups after token resampling. The
+augmentation is off in every shipped sketch profile (`median_filter_max_window_fraction: null`), because validation sees unfiltered sketches and a five-frame window erases attacks
+and notes shorter than about three frames; with it off the tokenizer computes exactly what
+it did before the augmentation existed (`tests/fixtures/sketch/`). Opt in per run with
+`model.sketch_controls.median_filter_max_window_fraction=0.15625`, which yields 5, 10, and
+15 frames on 32-, 64-, and 96-token grids; the setting is a grid fraction, not
+milliseconds. A literal `median_filter_max_kernel_size` remains available for checkpoint
+compatibility and cannot be combined with a fraction unless its value is the disabled
+default of 1.
 Evaluation and browser export do not filter controls. Its `IndexSpec` fixes
 `num_sub_vectors=2` — the only practical PQ split for the pooled
 vector's 386-wide layout (386 = 2 × 193, so its divisors are 1, 2, 193, and
