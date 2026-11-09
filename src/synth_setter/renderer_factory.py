@@ -91,6 +91,24 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
                 flush_blocks=render_config.flush_blocks,
             )
         raise AssertionError(f"unsupported DawDreamer synth format {synth_format!r}")
+    if backend == "kr106_native":
+        from synth_setter.data.vst.kr106_native_renderer import KR106NativeRenderer
+        from synth_setter.data.vst.param_map import load_param_map
+        from synth_setter.resources import as_file, param_map
+
+        with as_file(param_map(render_config.param_spec_name)) as path:
+            joint_map = load_param_map(path)
+        if render_config.block_size is None:
+            raise AssertionError("validated KR106-native config has no block_size")
+        return KR106NativeRenderer(
+            plugin_path=render_config.plugin_path,
+            sample_rate=render_config.sample_rate,
+            channels=render_config.channels,
+            signal_duration_seconds=render_config.signal_duration_seconds,
+            plugin_state_path=render_config.plugin_state_path,
+            parameter_map=joint_map,
+            block_size=render_config.block_size,
+        )
     if backend == "surgepy":
         from synth_setter.data.vst.param_map import load_param_map
         from synth_setter.data.vst.surgepy_runtime import ensure_surgepy_runtime

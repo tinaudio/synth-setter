@@ -1,0 +1,7 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "ultramaster_kr106_onehot_native"
+param_spec_name: "ultramaster_kr106_onehot"
+plugin_path: "kr106_native"
+plugin_state_path: "presets/ultramaster_kr106-native.json"
+synth_version: "2.5.13"
+source_sha256: "eba003e0e6f295a5d884a6490b6055b1d1d0183ae74847c9bb2ffdc6e23809a5"
