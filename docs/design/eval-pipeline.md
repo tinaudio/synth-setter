@@ -173,26 +173,27 @@ portable `make` targets instead. No new code references SGE.
 The evaluation pipeline is a three-stage batch pipeline. Each stage is an independent command with well-defined inputs and outputs. R2 serves as the backing store for datasets and eval artifacts; checkpoints are stored in W&B.
 
 ```
-                    ┌──────────────────────────────────────────────┐
-                    │           R2 (intermediate-data bucket)             │
-                    │                                              │
-                    │  data/                                       │
-                    │    {dataset_config_id}/{dataset_wandb_run_id}/│
-                    │                                              │
-                    │  eval/                                       │
-                    │    {dataset_config_id}/.../{eval_wandb_run_id}│
-                    │      predictions/ audio/ metrics/            │
-                    └──────┬─────────────────┬─────────────────────┘
+                    ┌──────────────────────────────────────────────────┐
+                    │          R2 (intermediate-data bucket)           │
+                    │                                                  │
+                    │  data/                                           │
+                    │    {dataset_config_id}/{dataset_wandb_run_id}/   │
+                    │                                                  │
+                    │  eval/                                           │
+                    │    {dataset_config_id}/.../{eval_wandb_run_id}   │
+                    │      predictions/ audio/ metrics/                │
+                    └──────┬─────────────────┬─────────────────────────┘
                            │                 │
                     download if needed  upload if configured
                            │                 │
                            ▼                 ▲
-┌─────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
 │  checkpoint  │───►│   PREDICT    │───►│    RENDER    │───►│   METRICS    │
 │  + dataset   │    │              │    │              │    │              │
-│  (local or   │    │ src/synth_setter/cli/eval.py  │    │ renderscript │    │ compute_     │
-│   R2)        │    │ mode=predict │    │ .sh          │    │ audio_       │
-└─────────────┘    │              │    │              │    │ metrics.py   │
+│  (local or   │    │ src/synth_   │    │ renderscript │    │ compute_     │
+│   R2)        │    │ setter/cli/  │    │ .sh          │    │ audio_       │
+└──────────────┘    │ eval.py      │    │              │    │ metrics.py   │
+                    │ mode=predict │    │              │    │              │
                     └──────┬───────┘    └──────┬───────┘    └──────┬───────┘
                            │                   │                   │
                            ▼                   ▼                   ▼
@@ -532,7 +533,7 @@ This creates a lineage graph in W&B:
 ```
 data-surge_simple:v2 ──→ training run flow_simple-20260315T091500250Z ──→ model-flow_simple:latest
                                                                                │
-data-surge_simple:v2 ──→ eval run (job_type=evaluation) ◄─────────────────────┘
+data-surge_simple:v2 ──→ eval run (job_type=evaluation) ◄──────────────────────┘
                                   │
                                   └──→ eval-surge_simple (R2 ref)
 ```
@@ -1148,18 +1149,18 @@ ______________________________________________________________________
 
 ```
 Mar 31 ─────────── Apr 07 ─────────── Apr 14 ── Apr 15
-│                  │                  │          │
-├── Phase 1: Portable Eval ──────────┤           │
-│   (#94, #85, #86, #87)             │           │
-│                  ├── Phase 2: Storage ─────────┤│
-│                  │   (#90, #91, #93)            ││
-│                  ├── Phase 3: W&B ─────────────┤│
-│                  │   (#128, #96)                ││
+│                  │                  │         │
+├── Phase 1: Portable Eval ───────────┤         │
+│   (#94, #85, #86, #87)              │         │
+│                  ├── Phase 2: Storage ────────┤
+│                  │   (#90, #91, #93)          │
+│                  ├── Phase 3: W&B ────────────┤
+│                  │   (#128, #96)              │
 │                  │              ├── Phase 4: CI + Docker ──┤
-│                  │              │   (#88, #89)              │
-│                  │              │              ├── Phase 5 ─┤
-│                  │              │              │   (#97)    │
-│                                                      milestone
+│                  │              │   (#88, #89)             │
+│                  │              │             ├── Phase 5 ─┤
+│                  │              │             │   (#97)    │
+                                                         milestone
 ```
 
 ## 10. Alternatives Considered

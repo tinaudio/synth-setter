@@ -74,7 +74,7 @@ data/{dataset_config_id}/{dataset_wandb_run_id}/
 │       ├── shards/shard-{id}/{worker_id}-{attempt_uuid}.shard-stats.npz
 │       ├── attempts/{worker_id}-{attempt_uuid}/report.json
 │       └── attempts/{worker_id}-{attempt_uuid}/debug.log
-└── stats.npz                   # Normalization statistics
+└── stats.npz                # Normalization statistics
 ```
 
 - Workers may write only per-attempt metadata under `metadata/workers/`, plus conditional claim/complete updates to the one shared Lance claims table `metadata/shard-claims.lance` (`pipeline/shard_claims.py`), except Lance workers may also write uncommitted fragment data under `train.lance/data/`, `val.lance/data/`, or `test.lance/data/`. Workers never write final Lance manifests, transactions, `metadata/dataset.complete`, or dataset-level `stats.npz`. *(future state — current workers write directly to `data/{config_id}/{run_id}/`; see [#406](https://github.com/tinaudio/synth-setter/issues/406))*
@@ -161,7 +161,7 @@ dataset config
   → [data-generation run] → [finalize run] → dataset artifact
                                ├→ [training run] → model artifact
                                │                      │
-eval dataset artifact ─────────┴→ [evaluation run] ←───┘
+eval dataset artifact ─────────┴→ [evaluation run] ←──┘
                                         │
                                    eval-results artifact
                                         │

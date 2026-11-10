@@ -200,18 +200,19 @@ Training is a **single long-running job**. Durable outputs flow through W&B (met
 3. **Local checkpoints → local disk** (Lightning default, ephemeral on cloud pods)
 
 ```
-┌──────────────┐     ┌────────────────────────┐      ┌────────────────────┐
-│ Dataset      │────►│       TRAIN JOB        │─────►│  Local checkpoints │
-│ local or R2  │     │  python -m synth_setter.cli.train   │      │  last.ckpt         │
-└──────────────┘     │                        │      │  best.ckpt         │
-                     │  Lightning + Hydra     │      └────────────────────┘
-                     │  W&B + CSV logger      │
-                     └──────────┬─────────────┘
-                                │
-                                ▼
-                         W&B training run
-                         model artifact (s3:// ref → R2)
-                         metrics / lineage
+┌──────────────┐     ┌──────────────────────────┐      ┌────────────────────┐
+│ Dataset      │────►│        TRAIN JOB         │─────►│  Local checkpoints │
+│ local or R2  │     │  python -m               │      │  last.ckpt         │
+└──────────────┘     │  synth_setter.cli.train  │      │  best.ckpt         │
+                     │                          │      └────────────────────┘
+                     │  Lightning + Hydra       │
+                     │  W&B + CSV logger        │
+                     └───────────┬──────────────┘
+                                 │
+                                 ▼
+                          W&B training run
+                          model artifact (s3:// ref → R2)
+                          metrics / lineage
 ```
 
 The best checkpoint is uploaded to R2 at train end and referenced by the model artifact ([#92](https://github.com/tinaudio/synth-setter/issues/92)). See §10.

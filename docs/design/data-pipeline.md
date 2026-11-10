@@ -252,39 +252,39 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 ┌────────────────────────────────┐
 │  make generate RUN_ID=...      │
 │  (CLI — local machine)         │
-│                                │        ┌──────────────────┐
-│  1. Validate auth (R2+RunPod)  │        │  Cloudflare R2   │
-│  2. Read/create spec     ◄─────┼───────►│                  │
-│  3. List staged shards   ◄─────┼────────┤  data/{cfg}/{id}/ │
-│  4. Validate staged shards     │        │   metadata/       │
-│  5. Compute missing set        │        │   workers/        │
-│  6. Partition across N workers │        │                  │
-│  7. Submit N tasks             │        │                  │
-│  8. Exit                       │        │                  │
-└────────────────────────────────┘        │                  │
-                                          │                  │
-         ┌───────────────────┐            │                  │
-         │  Worker 1         │───────────►│  metadata/       │
-         │  (RunPod worker)  │            │   workers/       │
-         │  shards 0-47      │            │   shards/        │
-         └───────────────────┘            │                  │
-         ┌───────────────────┐            │                  │
-         │  Worker N         │───────────►│  (staging)       │
-         │  shards 432+      │            │                  │
-         └───────────────────┘            │                  │
-                                          │                  │
-┌────────────────────────────────┐        │                  │
-│  make finalize RUN_ID=...      │        │                  │
-│  (local or cloud)              │        │                  │
-│                                │        │  data/           │
-│  1. Read spec            ◄─────┼────────┤   train.*        │
-│  2. Validate attempts    ◄─────┼────────┤   val.*          │
-│  3. Select winners       ◄─────┼────────┤   stats.npz      │
-│  4. Commit fragments     ──────┼───────►│   metadata/       │
-│  5. Reduce stats              │         │   dataset.json   │
-│  6. Register in W&B           │         │                  │
-│  7. Write completion marker │         │   metadata/dataset.complete │
-└────────────────────────────────┘        └──────────────────┘
+│                                │        ┌──────────────────────────────┐
+│  1. Validate auth (R2+RunPod)  │        │  Cloudflare R2               │
+│  2. Read/create spec     ◄─────┼───────►│                              │
+│  3. List staged shards   ◄─────┼────────┤  data/{cfg}/{id}/            │
+│  4. Validate staged shards     │        │   metadata/                  │
+│  5. Compute missing set        │        │   workers/                   │
+│  6. Partition across N workers │        │                              │
+│  7. Submit N tasks             │        │                              │
+│  8. Exit                       │        │                              │
+└────────────────────────────────┘        │                              │
+                                          │                              │
+         ┌───────────────────┐            │                              │
+         │  Worker 1         │───────────►│  metadata/                   │
+         │  (RunPod worker)  │            │   workers/                   │
+         │  shards 0-47      │            │   shards/                    │
+         └───────────────────┘            │                              │
+         ┌───────────────────┐            │                              │
+         │  Worker N         │───────────►│  (staging)                   │
+         │  shards 432+      │            │                              │
+         └───────────────────┘            │                              │
+                                          │                              │
+┌────────────────────────────────┐        │                              │
+│  make finalize RUN_ID=...      │        │                              │
+│  (local or cloud)              │        │                              │
+│                                │        │  data/                       │
+│  1. Read spec            ◄─────┼────────┤   train.*                    │
+│  2. Validate attempts    ◄─────┼────────┤   val.*                      │
+│  3. Select winners       ◄─────┼────────┤   stats.npz                  │
+│  4. Commit fragments     ──────┼───────►│   metadata/                  │
+│  5. Reduce stats               │        │   dataset.json               │
+│  6. Register in W&B            │        │                              │
+│  7. Write completion marker    │        │   metadata/dataset.complete  │
+└────────────────────────────────┘        └──────────────────────────────┘
 ```
 
 ### R2 File Structure
@@ -330,7 +330,7 @@ All structured files in the pipeline, in one place:
        │ .invalid      │
        │ (lifecycle)   │
        └──────┬────────┘
-
+              │
      pipeline.cli finalize  ← validates + commits attempts
               │
        ┌──────▼──────────┐
@@ -344,7 +344,7 @@ All structured files in the pipeline, in one place:
        │ (output)      │     What was produced, how to use it
        └──────┬────────┘
               │
-       ┌──────▼───────────────────┐
+       ┌──────▼────────────────────┐
        │ metadata/dataset.complete │ ─── Completion marker
        │ (marker)                  │     "Finalization is done"
        └───────────────────────────┘
