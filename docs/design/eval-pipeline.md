@@ -1,8 +1,9 @@
 # Design Doc: Evaluation Pipeline & R2 Integration
 
-> **Status**: Draft
+> **Status**: Approved
 > **Author**: ktinubu@
-> **Last Updated**: 2026-03-20
+> **Created**: 2026-03-20
+> **Last Updated**: 2026-11-10
 > **Tracking**:
 >
 > - #98 (Epic: evaluation pipeline)

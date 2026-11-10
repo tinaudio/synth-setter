@@ -1,8 +1,9 @@
 # Design Doc: Data Pipeline
 
-> **Status**: Draft
+> **Status**: Approved
 > **Author**: ktinubu@
-> **Last Updated**: 2026-07-23
+> **Created**: 2026-03-19
+> **Last Updated**: 2026-11-10
 > **Tracking**: #74
 > **Storage conventions**: [storage-provenance-spec.md](storage-provenance-spec.md)
 

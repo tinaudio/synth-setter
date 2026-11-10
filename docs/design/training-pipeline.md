@@ -1,8 +1,9 @@
 # Design Doc: Training Pipeline
 
-> **Status**: Draft
+> **Status**: Approved
 > **Author**: ktinubu@
-> **Last Updated**: 2026-05-13
+> **Created**: 2026-03-20
+> **Last Updated**: 2026-11-10
 > **Tracking**: #107
 > **Issue tracking**: [github-taxonomy.md](github-taxonomy.md)
 

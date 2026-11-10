@@ -1,8 +1,9 @@
 # GitHub Metadata Taxonomy
 
-> **Status**: Draft
+> **Status**: Approved
 > **Author**: ktinubu@
-> **Last Updated**: 2026-03-19
+> **Created**: 2026-03-20
+> **Last Updated**: 2026-11-10
 
 ______________________________________________________________________
 
