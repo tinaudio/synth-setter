@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794023303645,
+  "lastUpdate": 1794282085729,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -18390,6 +18390,90 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
             "value": 0.047109127044677734,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-pair-count",
+            "value": 66,
+            "unit": "count"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "56eb28e3ced76ae68d38fd0b1bef0af2233e5555",
+          "message": "internal-fix(data-pipeline): gate sub-frame KR-106 native note windows (#3754)\n\nNoteDurationParameter draws two uniform endpoints in [0, 4] s, so about\n1.1e-5 of draws land within one frame of each other. Both endpoints then\nquantize to the same sample and the native render_note rejects the empty\ninterval with a ValueError that generate_sample does not catch. Shard\nseeds are deterministic, so the same row kills every retry of its shard:\nshards 487, 506, 757 and 36 of the 2M single-note native run could never\ncomplete.\n\nGive such a note a one-sample gate, as SurgePyRenderer already does, and\nreturn silence when the note-on lands past the last retained frame so the\nloudness gate rejects that draw. Every interval the extension previously\naccepted reaches it unchanged.\n\nFixes #3752",
+          "timestamp": "2026-11-09T21:48:20-05:00",
+          "tree_id": "aaf9e72a253b1e0636182ef251d97356f88cc757",
+          "url": "https://github.com/tinaudio/synth-setter/commit/56eb28e3ced76ae68d38fd0b1bef0af2233e5555"
+        },
+        "date": 1794282079769,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/multi-scale-spectral-loss-max",
+            "value": 4.160838603973389,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/dtw-aligned-mfcc-distance-max",
+            "value": 6.5998860439658165,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/spectral-optimal-transport-max",
+            "value": 0.03011545166373253,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/rms-envelope-cosine-distance-max",
+            "value": 0.032460570335388184,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/mel-spectrogram-mean-absolute-error",
+            "value": 3.4452836513519287,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/num-samples",
+            "value": 6,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/wall-clock-seconds-per-render",
+            "value": 7.922368347750004,
+            "unit": "seconds"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-multi-scale-spectral-loss-max",
+            "value": 4.760397434234619,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-dtw-aligned-mfcc-distance-max",
+            "value": 6.7525891446135935,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-spectral-optimal-transport-max",
+            "value": 0.03567679226398468,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-1-preset-n-renders/all-pairs-rms-envelope-cosine-distance-max",
+            "value": 0.05135035514831543,
             "unit": "1-cos"
           },
           {
