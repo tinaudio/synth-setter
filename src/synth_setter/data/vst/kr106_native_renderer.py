@@ -150,7 +150,8 @@ class KR106NativeRenderer(AudioRenderer):
         :param params: Normalized controls using the unchanged KR106 ParamSpec.
         :param midi_note: MIDI pitch in [0, 127].
         :param velocity: MIDI velocity in [0, 127].
-        :param note_start_and_end: Start and end times within the configured clip.
+        :param note_start_and_end: Start and end times within the configured clip; a window inside
+            one frame gates for one sample, and a note-on past the last frame is silent.
         :param warmup: Unused because the native backend has no editor.
         :returns: Finite audio with exactly the configured channels and frame count.
         :raises ValueError: Pitch, velocity, timing or parameter values are invalid.
@@ -163,12 +164,19 @@ class KR106NativeRenderer(AudioRenderer):
         if not 0 <= midi_note <= 127 or not 0 <= velocity <= 127:
             raise ValueError("MIDI pitch and velocity must be in [0, 127]")
         samples = int(self.sample_rate * self.signal_duration_seconds)
+        start_sample = _sample_index_at_or_after(start, self.sample_rate)
+        if start_sample >= samples:
+            return np.zeros((self.channels, samples), dtype=np.float32)
+        # A note shorter than one frame keeps a one-sample gate, as SurgePyRenderer does.
+        end_sample = min(
+            samples, max(start_sample + 1, _sample_index_at_or_after(end, self.sample_rate))
+        )
         audio = self._native.render_note(
             {self._parameters[name].id: value for name, value in values.items()},
             midi_note,
             velocity,
-            min(samples, _sample_index_at_or_after(start, self.sample_rate)),
-            min(samples, _sample_index_at_or_after(end, self.sample_rate)),
+            start_sample,
+            end_sample,
             samples,
             self.sample_rate,
             self.block_size,
