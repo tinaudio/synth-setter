@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794282096630,
+  "lastUpdate": 1794282101209,
   "repoUrl": "https://github.com/tinaudio/synth-setter",
   "entries": {
     "VST noise floor (1 preset N renders)": [
@@ -31638,6 +31638,65 @@ window.BENCHMARK_DATA = {
           {
             "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
             "value": 8.75891164200002,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "17952332+ktinubu@users.noreply.github.com",
+            "name": "KT",
+            "username": "ktinubu"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "56eb28e3ced76ae68d38fd0b1bef0af2233e5555",
+          "message": "internal-fix(data-pipeline): gate sub-frame KR-106 native note windows (#3754)\n\nNoteDurationParameter draws two uniform endpoints in [0, 4] s, so about\n1.1e-5 of draws land within one frame of each other. Both endpoints then\nquantize to the same sample and the native render_note rejects the empty\ninterval with a ValueError that generate_sample does not catch. Shard\nseeds are deterministic, so the same row kills every retry of its shard:\nshards 487, 506, 757 and 36 of the 2M single-note native run could never\ncomplete.\n\nGive such a note a one-sample gate, as SurgePyRenderer already does, and\nreturn silence when the note-on lands past the last retained frame so the\nloudness gate rejects that draw. Every interval the extension previously\naccepted reaches it unchanged.\n\nFixes #3752",
+          "timestamp": "2026-11-09T21:48:20-05:00",
+          "tree_id": "aaf9e72a253b1e0636182ef251d97356f88cc757",
+          "url": "https://github.com/tinaudio/synth-setter/commit/56eb28e3ced76ae68d38fd0b1bef0af2233e5555"
+        },
+        "date": 1794282100620,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "vst-noise-floor-random-preset-replay/multi-scale-spectral-loss-max",
+            "value": 7.494852066040039,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/dtw-aligned-mfcc-distance-max",
+            "value": 14.270284627079963,
+            "unit": "L1"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/spectral-optimal-transport-max",
+            "value": 0.08087766915559769,
+            "unit": "Wasserstein"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/rms-envelope-cosine-distance-max",
+            "value": 0.003151416778564453,
+            "unit": "1-cos"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/mel-spectrogram-mean-absolute-error",
+            "value": 3.0799686908721924,
+            "unit": "dB"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/num-samples",
+            "value": 5,
+            "unit": "count"
+          },
+          {
+            "name": "vst-noise-floor-random-preset-replay/wall-clock-seconds-per-render",
+            "value": 9.435825516500007,
             "unit": "seconds"
           }
         ]
