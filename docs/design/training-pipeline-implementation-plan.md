@@ -1,13 +1,13 @@
 # Implementation Plan: Training Pipeline
 
-> **Status**: INCOMPLETE — Implementation is not yet tracked against the phase criteria.
+> **Status**: INCOMPLETE — Phase 2's R2-referenced best checkpoint and W&B-artifact resume (the `${wandb:...}` resolver) are in the tree, and RunPod training launches through `.github/workflows/train.yml` and SkyPilot instead of Phase 3's `scripts/runpod_train.py`. `make train EXPERIMENT=...`, `make runpod-train`, `docker/train/Dockerfile`, `.github/workflows/train-smoke.yml`, and `docs/training-runbook.md` are not.
 >
 > **Canonical design:** [training-pipeline.md](training-pipeline.md)
 > **Tracking:** #107
 > **Issue tracking:** [github-taxonomy.md](github-taxonomy.md)
 > **Storage conventions:** [storage-provenance-spec.md](storage-provenance-spec.md)
 > **Created:** 2026-03-20
-> **Last Updated:** 2026-03-31
+> **Last Updated:** 2026-11-10
 
 ______________________________________________________________________
 
@@ -37,17 +37,17 @@ Each phase lands through one or more PRs. The unit of planning is the Phase issu
 
 | Phase   | Issue | Goal                         |
 | ------- | ----- | ---------------------------- |
-| Phase 1 | TBD   | Portable training foundation |
-| Phase 2 | TBD   | W&B checkpoint durability    |
-| Phase 3 | TBD   | RunPod launcher              |
-| Phase 4 | TBD   | Docker + CI                  |
-| Phase 5 | TBD   | Documentation                |
+| Phase 1 | #253  | Portable training foundation |
+| Phase 2 | #254  | W&B checkpoint durability    |
+| Phase 3 | #255  | RunPod launcher              |
+| Phase 4 | #256  | Docker + CI                  |
+| Phase 5 | #257  | Documentation                |
 
 ______________________________________________________________________
 
 ## Phase 1: Portable Training Foundation
 
-**Issue:** TBD
+**Issue:** #253
 **Epic:** #107
 
 ### Tasks
@@ -84,7 +84,7 @@ ______________________________________________________________________
 
 ## Phase 2: W&B Checkpoint Durability
 
-**Issue:** TBD
+**Issue:** #254
 **Epic:** #107
 
 ### Tasks
@@ -118,7 +118,7 @@ ______________________________________________________________________
 
 ## Phase 3: RunPod Launcher
 
-**Issue:** TBD
+**Issue:** #255
 **Epic:** #107
 
 ### Tasks
@@ -146,7 +146,7 @@ ______________________________________________________________________
 
 ## Phase 4: Docker & CI
 
-**Issue:** TBD
+**Issue:** #256
 **Epic:** #107
 
 ### Tasks
@@ -174,7 +174,7 @@ ______________________________________________________________________
 
 ## Phase 5: Documentation
 
-**Issue:** TBD
+**Issue:** #257
 **Epic:** #107
 
 ### Tasks
