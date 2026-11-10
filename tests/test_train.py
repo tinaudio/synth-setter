@@ -48,7 +48,6 @@ from synth_setter.models.components.differentiable_renderer import (
     FlamoFDNDifferentiableRenderer,
     TorchSynthDifferentiableRenderer,
 )
-from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_ast import PretrainedASTEncoder
 from synth_setter.models.components.pretrained_encoder import (
     ClapAudioEncoder,
@@ -60,8 +59,10 @@ from synth_setter.models.components.same_encoder import SameAudioEncoder
 from synth_setter.models.components.spec_encoder import SpecEncoder
 from synth_setter.models.components.transformer import (
     ApproxEquivTransformer,
+    AudioSpectrogramTransformer,
     GroupedParameterProjection,
     LearntProjection,
+    TemporalPatchEmbed,
 )
 from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
@@ -852,16 +853,16 @@ def test_train_torchsynth_clap_online_advances_one_cpu_step(
 
 
 @pytest.mark.slow
-def test_train_torchsynth_same_online_advances_one_cpu_step(
-    cfg_torchsynth_same_online_train: DictConfig,
+def test_train_torchsynth_same_online_ast_advances_one_cpu_step(
+    cfg_torchsynth_same_online_ast_train: DictConfig,
 ) -> None:
-    """Run the workflow-default TorchSynth SAME experiment for one CPU step.
+    """Run the workflow-default TorchSynth SAME AST experiment for one CPU step.
 
-    :param cfg_torchsynth_same_online_train: Tiny production-path SAME configuration.
+    :param cfg_torchsynth_same_online_ast_train: Tiny production-path SAME AST configuration.
     """
-    HydraConfig().set_config(cfg_torchsynth_same_online_train)
+    HydraConfig().set_config(cfg_torchsynth_same_online_ast_train)
 
-    metric_dict, object_dict = train(cfg_torchsynth_same_online_train)
+    metric_dict, object_dict = train(cfg_torchsynth_same_online_ast_train)
 
     assert object_dict["trainer"].global_step == 1
     assert_finite_train_loss(metric_dict)
@@ -871,8 +872,9 @@ def test_train_torchsynth_same_online_advances_one_cpu_step(
     assert isinstance(model.audio_loss, AudioFeedbackLoss)
     assert isinstance(encoder, PretrainedConditioningEncoder)
     assert isinstance(encoder.backbone, SameAudioEncoder)
-    assert isinstance(encoder.head, EmbeddingPool)
-    assert encoder.head.n_conditioning_outputs == len(model.vector_field.layers) == 2
+    assert isinstance(encoder.head, AudioSpectrogramTransformer)
+    assert isinstance(encoder.head.patch_embed, TemporalPatchEmbed)
+    assert encoder.head.embed_tokens.shape[1] == len(model.vector_field.layers) == 2
     assert not encoder.backbone.autoencoder.training
     assert all(not parameter.requires_grad for parameter in encoder.backbone.parameters())
     assert any(parameter.requires_grad for parameter in encoder.head.parameters())
@@ -880,16 +882,16 @@ def test_train_torchsynth_same_online_advances_one_cpu_step(
 
 @pytest.mark.slow
 def test_generic_launcher_runs_workflow_default_train_entrypoint(
-    cfg_torchsynth_same_online_train: DictConfig,
+    cfg_torchsynth_same_online_ast_train: DictConfig,
     tmp_path: Path,
 ) -> None:
     """Run one workflow-default training step through the decorated launcher CLI.
 
-    :param cfg_torchsynth_same_online_train: Tiny SAME configuration supplying checkpoints.
+    :param cfg_torchsynth_same_online_ast_train: Tiny SAME AST configuration supplying checkpoints.
     :param tmp_path: Output root for launcher and worker subprocesses.
     """
     repo_root = Path(__file__).parents[1]
-    cfg = cfg_torchsynth_same_online_train
+    cfg = cfg_torchsynth_same_online_ast_train
     worker_command = shlex.join(
         [
             "exec",
@@ -923,9 +925,9 @@ def test_generic_launcher_runs_workflow_default_train_entrypoint(
             "model.encoder.out_dim=8",
             f"model.encoder.backbone.checkpoint={cfg.model.encoder.backbone.checkpoint}",
             "model.encoder.backbone.checkpoint_sha256=null",
-            "model.encoder.head.embed_dim=8",
-            "model.encoder.head.max_seq_len=8",
-            "model.encoder.head.num_heads=1",
+            "model.encoder.head.n_heads=1",
+            "model.encoder.head.n_layers=1",
+            "model.encoder.head.token_embed.input_dim=8",
             "model.audio_loss.t_min=0.0",
             "model.audio_loss.distance.encoder.checkpoint="
             f"{cfg.model.audio_loss.distance.encoder.checkpoint}",
