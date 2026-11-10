@@ -65,6 +65,11 @@ _EXPECTED_PARAMETER_ADDRESSES: Mapping[str, list[str]] = {
         "/churchOrgan/noise_gain",
         "/churchOrgan/gate",
     ],
+    "faust_fdn_effect": [
+        "/fdnEffect/damping",
+        "/fdnEffect/decay",
+        "/fdnEffect/dryWet",
+    ],
     "faust_filter_osc": [
         "/SINE_WAVE_OSCILLATOR_oscrs/Amplitude",
         "/SINE_WAVE_OSCILLATOR_oscrs/Frequency",
@@ -338,6 +343,7 @@ def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
         ("faust_bright_organ", 13),
         ("faust_bubble", 10),
         ("faust_church_organ", 16),
+        ("faust_fdn_effect", 3),
         ("faust_filter_osc", 6),
         ("faust_kronecker_fdn", 39),
         ("faust_shimmer_fdn", 27),
@@ -356,6 +362,20 @@ def test_faust_param_spec_preserves_exact_addresses_and_encoded_width(
 
     assert spec.synth_param_names == _EXPECTED_PARAMETER_ADDRESSES[param_spec_name]
     assert spec.encoded_width == encoded_width
+
+
+def test_faust_fdn_effect_roundtrip_excludes_fixed_note_mapping() -> None:
+    """Effect targets encode causal DSP controls but retain valid render-note values."""
+    spec = resolve_faust_param_spec(ParamSpecName("faust_fdn_effect"))
+    sampled_synth, sampled_note = spec.sample(np.random.default_rng(42))
+    encoded = spec.encode(sampled_synth, sampled_note)
+    decoded_synth, decoded_note = spec.decode(encoded)
+
+    assert spec.note_params == []
+    assert encoded.shape == (3,)
+    assert decoded_synth == pytest.approx(sampled_synth)
+    assert sampled_note == {"pitch": 60, "note_start_and_end": (0.0, 4.0)}
+    assert decoded_note == sampled_note
 
 
 @pytest.mark.parametrize(
@@ -548,7 +568,7 @@ def test_faust_compiled_parameter_domains_match_specs(param_spec_name: str) -> N
         assert description["isDiscrete"] is is_discrete
 
 
-@pytest.mark.parametrize("param_spec_name", _EXPECTED_PARAMETER_ADDRESSES)
+@pytest.mark.parametrize("param_spec_name", _EXPECTED_OUTPUT_CHANNELS)
 def test_faust_source_renders_real_audio(param_spec_name: str) -> None:
     """One compiled source emits finite, audible, bounded audio of its native shape.
 

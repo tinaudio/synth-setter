@@ -89,7 +89,8 @@ test('compiled artifact loads and canonical patch changes real audio', async () 
             source: SOURCE,
             mode: 'mono',
             voices: 0,
-            outputs: 1,
+            expectedInputs: 0,
+            expectedOutputs: 1,
             reservedWasmAddresses: [],
             parameters: [
                 {
