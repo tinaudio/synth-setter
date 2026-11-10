@@ -1,8 +1,9 @@
 # SkyPilot Compute Integration Design
 
-> **Status**: Draft
+> **Status**: Approved
 > **Author**: ktinubu@
-> **Last Updated**: 2026-07-11
+> **Created**: 2026-04-14
+> **Last Updated**: 2026-11-10
 > **Tracking**: [#534](https://github.com/tinaudio/synth-setter/issues/534), [#105](https://github.com/tinaudio/synth-setter/issues/105) (Task 4.2: Compute Backend & Worker), [#106](https://github.com/tinaudio/synth-setter/issues/106) (Task 6.1: RunPod Backend & E2E)
 
 ## 1. Context

@@ -1,8 +1,9 @@
 # Design Doc: Data Pipeline
 
-> **Status**: Draft
+> **Status**: Approved
 > **Author**: ktinubu@
-> **Last Updated**: 2026-07-23
+> **Created**: 2026-03-19
+> **Last Updated**: 2026-11-10
 > **Tracking**: #74
 > **Storage conventions**: [storage-provenance-spec.md](storage-provenance-spec.md)
 
@@ -60,9 +61,12 @@ At research scale (500k–15M samples), the single-machine approach breaks down.
 > up to `render.max_retries` times (default 0 = strict fail-fast).
 > `use_shard_queue=true` instead claims shard IDs dynamically from the run's
 > Lance shard-claims table (§7.1), using the same local concurrency bound when
-> parallel rendering is enabled. The
-> distributed/parallel pipeline described below — CLI, backends, reconciliation,
-> and finalize stages — is the design target and not yet built.
+> parallel rendering is enabled. Multi-worker fan-out runs through
+> `synth-setter-skypilot-launch` (`num_workers > 1` launches one managed job per
+> static shard-range partition, `pipeline/partitioning.py`), and the finalize
+> stage is implemented as `synth-setter-finalize-dataset` (§7.6). The
+> `python -m synth_setter.pipeline` CLI, compute backends, and launcher-side
+> reconciliation described below are the design target and not yet built.
 
 The distributed data pipeline solves this by splitting generation across N cloud workers on **[RunPod](https://www.runpod.io/)** (a GPU/CPU cloud marketplace offering cheap on-demand compute), each independently producing shards in parallel. Workers write shards to **[Cloudflare R2](https://developers.cloudflare.com/r2/)** (an S3-compatible object storage service with free egress), which serves as both the data store and the coordination layer. A separate finalize step commits the winning shard attempts into train/val/test split datasets (for Lance, a metadata-only fragment commit — no shard download or row rewrite), reduces normalization statistics, and registers the dataset as a **[Weights & Biases](https://wandb.ai/)** (W&B) artifact.
 
@@ -211,13 +215,13 @@ Both planes use R2. There is no separate database, message queue, or coordinatio
 What if reconciliation itself has a bug — e.g., it validates a corrupt shard as good?
 
 - **Defense in depth:** Workers run validation checks before upload; all must pass ([§7.5](#75-shard-validation)).
-- **Tiered validation:** Full validation (4-check design target: structural, shape, value, row count — [#103](https://github.com/tinaudio/synth-setter/issues/103)). Current implementation: 3-check (valid Lance fragment, expected columns, row count). Shape and value checks are planned. Finalize structural-checks staged shards before committing. Each tier catches a different class of failure.
+- **Tiered validation:** Workers run full validation (4-check: structural, shape, value, row count — `pipeline/ci/validate_shard.py`). Finalize structural-checks staged shards before committing. Each tier catches a different class of failure.
 - **Training is the ultimate check:** A corrupt dataset will fail to train properly, providing end-to-end verification.
 - **Manual spot-checking is feasible:** At 1-2 runs/week, eyeballing a few shards is practical and encouraged.
 
 ## 5. Stage Definitions
 
-> **Implementation status.** Workers stage per-attempt fragment sidecars, Welford stats, and `.rendering`/`.valid` markers under `metadata/workers/shards/shard-{id}/` (`pipeline/data/lance_staging.py`), and finalize selects winners and commits their fragments into the split manifests (`pipeline/data/lance_finalize.py`). Not yet implemented: `.invalid`/quarantine and `.promoted` markers, and worker reports.
+> **Implementation status.** Workers stage per-attempt fragment sidecars, Welford stats, and `.rendering`/`.valid` markers under `metadata/workers/shards/shard-{id}/` (`pipeline/data/lance_staging.py`), and finalize selects winners and commits their fragments into the split manifests (`pipeline/data/lance_finalize.py`). Finalize writes `.invalid` for an attempt that fails its structural check (`invalidate_staged_attempt`). Not yet implemented: worker-side `.invalid`/quarantine, `.promoted` markers, and worker reports.
 
 The pipeline has two stages. Each is an independent command with well-defined inputs and outputs.
 
@@ -252,39 +256,39 @@ Each worker container runs with `MODE=generate-shards` — the entrypoint mode I
 ┌────────────────────────────────┐
 │  make generate RUN_ID=...      │
 │  (CLI — local machine)         │
-│                                │        ┌──────────────────┐
-│  1. Validate auth (R2+RunPod)  │        │  Cloudflare R2   │
-│  2. Read/create spec     ◄─────┼───────►│                  │
-│  3. List staged shards   ◄─────┼────────┤  data/{cfg}/{id}/ │
-│  4. Validate staged shards     │        │   metadata/       │
-│  5. Compute missing set        │        │   workers/        │
-│  6. Partition across N workers │        │                  │
-│  7. Submit N tasks             │        │                  │
-│  8. Exit                       │        │                  │
-└────────────────────────────────┘        │                  │
-                                          │                  │
-         ┌───────────────────┐            │                  │
-         │  Worker 1         │───────────►│  metadata/       │
-         │  (RunPod worker)  │            │   workers/       │
-         │  shards 0-47      │            │   shards/        │
-         └───────────────────┘            │                  │
-         ┌───────────────────┐            │                  │
-         │  Worker N         │───────────►│  (staging)       │
-         │  shards 432+      │            │                  │
-         └───────────────────┘            │                  │
-                                          │                  │
-┌────────────────────────────────┐        │                  │
-│  make finalize RUN_ID=...      │        │                  │
-│  (local or cloud)              │        │                  │
-│                                │        │  data/           │
-│  1. Read spec            ◄─────┼────────┤   train.*        │
-│  2. Validate attempts    ◄─────┼────────┤   val.*          │
-│  3. Select winners       ◄─────┼────────┤   stats.npz      │
-│  4. Commit fragments     ──────┼───────►│   metadata/       │
-│  5. Reduce stats              │         │   dataset.json   │
-│  6. Register in W&B           │         │                  │
-│  7. Write completion marker │         │   metadata/dataset.complete │
-└────────────────────────────────┘        └──────────────────┘
+│                                │        ┌──────────────────────────────┐
+│  1. Validate auth (R2+RunPod)  │        │  Cloudflare R2               │
+│  2. Read/create spec     ◄─────┼───────►│                              │
+│  3. List staged shards   ◄─────┼────────┤  data/{cfg}/{id}/            │
+│  4. Validate staged shards     │        │   metadata/                  │
+│  5. Compute missing set        │        │   workers/                   │
+│  6. Partition across N workers │        │                              │
+│  7. Submit N tasks             │        │                              │
+│  8. Exit                       │        │                              │
+└────────────────────────────────┘        │                              │
+                                          │                              │
+         ┌───────────────────┐            │                              │
+         │  Worker 1         │───────────►│  metadata/                   │
+         │  (RunPod worker)  │            │   workers/                   │
+         │  shards 0-47      │            │   shards/                    │
+         └───────────────────┘            │                              │
+         ┌───────────────────┐            │                              │
+         │  Worker N         │───────────►│  (staging)                   │
+         │  shards 432+      │            │                              │
+         └───────────────────┘            │                              │
+                                          │                              │
+┌────────────────────────────────┐        │                              │
+│  make finalize RUN_ID=...      │        │                              │
+│  (local or cloud)              │        │                              │
+│                                │        │  data/                       │
+│  1. Read spec            ◄─────┼────────┤   train.*                    │
+│  2. Validate attempts    ◄─────┼────────┤   val.*                      │
+│  3. Select winners       ◄─────┼────────┤   stats.npz                  │
+│  4. Commit fragments     ──────┼───────►│   metadata/                  │
+│  5. Reduce stats               │        │   dataset.json               │
+│  6. Register in W&B            │        │                              │
+│  7. Write completion marker    │        │   metadata/dataset.complete  │
+└────────────────────────────────┘        └──────────────────────────────┘
 ```
 
 ### R2 File Structure
@@ -330,7 +334,7 @@ All structured files in the pipeline, in one place:
        │ .invalid      │
        │ (lifecycle)   │
        └──────┬────────┘
-
+              │
      pipeline.cli finalize  ← validates + commits attempts
               │
        ┌──────▼──────────┐
@@ -344,7 +348,7 @@ All structured files in the pipeline, in one place:
        │ (output)      │     What was produced, how to use it
        └──────┬────────┘
               │
-       ┌──────▼───────────────────┐
+       ┌──────▼────────────────────┐
        │ metadata/dataset.complete │ ─── Completion marker
        │ (marker)                  │     "Finalization is done"
        └───────────────────────────┘
@@ -477,7 +481,7 @@ missing → rendering → staged-valid → finalized (canonical)
 **Transitions:**
 
 - **missing → rendering:** Worker begins shard generation, writes `.rendering` marker.
-- **rendering → staged-valid:** Worker validates locally (full validation — 4-check design target: structural, shape, value, row count — [#103](https://github.com/tinaudio/synth-setter/issues/103); current implementation: 3-check), uploads the fragment sidecar and stats to staging, writes worker report, then writes `.valid` marker as the **last step**. The `.valid` marker is the commit point — it signals that the worker completed the full shard lifecycle (render, validate, upload, bookkeeping). The `.rendering` marker is not deleted — both remain visible, preserving the full timeline.
+- **rendering → staged-valid:** Worker validates locally (full validation — 4-check: structural, shape, value, row count), uploads the fragment sidecar and stats to staging, writes worker report, then writes `.valid` marker as the **last step**. The `.valid` marker is the commit point — it signals that the worker completed the full shard lifecycle (render, validate, upload, bookkeeping). The `.rendering` marker is not deleted — both remain visible, preserving the full timeline.
 - **rendering → invalid:** Worker validates locally and the shard fails. Worker uploads the corrupt shard to `quarantine/` and writes `.invalid` marker, preserving the evidence for debugging. The shard is treated as missing on next `generate`.
 - **rendering → missing:** Worker crashes before writing `.valid`. The `.rendering` marker is orphaned — observable evidence of the crashed attempt. Any fragment data uploaded before the crash exists but without `.valid` is not considered staged-valid.
 - **staged-valid → finalized:** Finalize selects one valid attempt per logical shard, structural-checks the selected attempt, and commits it to the final output. It deserializes the selected `fragment.json`, lets Lance own fragment identity, and commits those fragments into the split dataset manifests. Finalize writes `.promoted` markers and `metadata/dataset.complete` after all outputs are complete. Staged files remain in place (append-only — no deletion).
@@ -504,7 +508,7 @@ Shard IDs are logical and deterministic: `shard-000000` through `shard-000479`, 
 
 1. Write `.rendering` marker: `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.rendering`
 2. Render shard to a local temp file
-3. **Validate locally** — structural checks plus row count. The design target is 4-check validation adding shape and value checks ([#103](https://github.com/tinaudio/synth-setter/issues/103)). This is the primary defense against corrupt data.
+3. **Validate locally** — 4-check validation: structural, shape, value, and row count. This is the primary defense against corrupt data.
 4. **If validation passes:**
    - Write the Lance attempt payload: write uncommitted fragment data through Lance, upload `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.fragment.json`, and upload `metadata/workers/shards/shard-{id}/{worker_id}-{attempt_uuid}.shard-stats.npz`
    - Write worker report (content hash, timing, per-shard results): `metadata/workers/attempts/{worker_id}-{attempt_uuid}/report.json`
@@ -584,24 +588,19 @@ Worker error details are overlaid from metadata files when present. The core out
 
 Validation is **tiered** — each stage does the minimum work needed for its role, avoiding redundant re-validation of shards that workers already checked.
 
-**Worker validation (3 checks; 4-check design target)** — run by workers before upload:
-
-Current implementation:
+**Worker validation (4 checks)** — run by workers before upload (`validate_shard` in `pipeline/ci/validate_shard.py`, plus the fragment schema check):
 
 - **Structural**: Opens as a Lance fragment, expected columns present (`audio`, `mel_spec`, `param_array`, `audio_mp3`, `audio_uuid`)
 - **Row count**: Matches spec's expected shard size
 - **Schema**: the written fragment's physical schema matches the spec-derived schema — see `lance_fragment` in `pipeline/data/lance_shard.py`; Lance's append-mode writer otherwise silently inherits an existing committed dataset's schema ([#2084](https://github.com/tinaudio/synth-setter/issues/2084))
-
-Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds:
-
-- **Shape**: Array dimensions match spec (sample rate, spectrogram bins, parameter count)
-- **Value**: No NaN/Inf values, audio within [-1, 1], parameters within spec bounds
+- **Shape**: Array dimensions and dtypes match spec (sample rate, spectrogram bins, parameter count)
+- **Value**: No NaN/Inf values, audio within [-1, 1], parameters within [0, 1]
 
 **Existence check** — run by `generate`/`status` during reconciliation:
 
 - Check for the fragment sidecar + stats + `.valid` marker in the staging directory — `.fragment.json` and `.shard-stats.npz`. No data loading.
 - The `.valid` marker is authoritative for staging admission: it means a worker completed the full shard lifecycle and committed the result ([§7.2](#72-shard-lifecycle)). It is not sufficient for final dataset correctness — finalize remains the gate before commit.
-- The trust chain justifies this: workers do 3-check validation (4-check design target — [#103](https://github.com/tinaudio/synth-setter/issues/103)) before upload, `rclone --checksum` verifies transfer integrity, and R2 PUTs are atomic (the object either exists completely or not). Re-validating hundreds of shards to find a few missing ones is wasted work.
+- The trust chain justifies this: workers do 4-check validation before upload, `rclone --checksum` verifies transfer integrity, and R2 PUTs are atomic (the object either exists completely or not). Re-validating hundreds of shards to find a few missing ones is wasted work.
 
 **Structural check** — run by finalize before committing selected attempts:
 
@@ -610,11 +609,11 @@ Design target ([#103](https://github.com/tinaudio/synth-setter/issues/103)) adds
 - This catches the only realistic failure between worker validation and finalize: transfer corruption or bit rot. Value-level corruption (NaN, wrong bounds) and row count mismatches were already caught by workers — re-checking would require loading all data from every shard, which is redundant.
 - If a staged shard fails the structural check, finalize writes `.invalid` for that attempt, reports the failure, and exits 1. The shard is treated as missing and regenerated on next `generate`.
 
-| Stage               | Validation                                                                                                                                                           | Cost                                   | Why                                                                           |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ----------------------------------------------------------------------------- |
-| **Worker**          | 3-check: valid Lance fragment, expected columns, row count. 4-check design target adds shape/value/NaN ([#103](https://github.com/tinaudio/synth-setter/issues/103)) | Moderate (opens file, checks metadata) | Primary defense — catches corrupt fragments, missing columns, wrong row count |
-| **Generate/status** | Existence (fragment sidecar + stats + `.valid` marker)                                                                                                               | Cheap (file listing)                   | Workers already validated; re-validation is redundant                         |
-| **Finalize**        | Structural (valid Lance sidecars/fragments/stats)                                                                                                                    | Moderate (metadata checks)             | Catches transfer corruption; last checkpoint before sealing dataset           |
+| Stage               | Validation                                                                                           | Cost                                | Why                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------- |
+| **Worker**          | 4-check: valid Lance fragment and expected columns, shape/dtype, values (NaN/Inf, bounds), row count | Moderate (opens file, scans values) | Primary defense — catches corrupt fragments, missing columns, bad values, wrong row count |
+| **Generate/status** | Existence (fragment sidecar + stats + `.valid` marker)                                               | Cheap (file listing)                | Workers already validated; re-validation is redundant                                     |
+| **Finalize**        | Structural (valid Lance sidecars/fragments/stats)                                                    | Moderate (metadata checks)          | Catches transfer corruption; last checkpoint before sealing dataset                       |
 
 **Content hashes** (SHA-256 over the fragment data) are recorded in worker reports for provenance and divergence detection. They are not used as acceptance criteria. If two workers produce different hashes for the same shard, the content hashes surface the divergence for investigation.
 
@@ -1595,7 +1594,6 @@ src/
   # cli.py              # Click entry point: generate, status, finalize
   # stages/             # Each stage is a self-contained module
   #   generate.py       # Generate stage logic
-  #   finalize.py       # Finalize stage logic
   # backends/           # Compute provider implementations
   #   base.py           # ComputeBackend Protocol definition
   #   runpod.py         # RunPodBackend (production)
@@ -1605,7 +1603,6 @@ src/
   # schemas/
   #   report.py         # WorkerReport, ShardResult
   #   card.py           # DatasetCard, ValidationSummary
-  # validation.py       # Full shard validation
   # retry.py            # Centralized tenacity retry policy
   # logging_config.py   # structlog configuration
 ```
@@ -1634,17 +1631,6 @@ src/synth_setter/configs/
     default.yaml
   trainer/             # Training configs (Hydra)
     ddp.yaml
-
-  # --- Planned (Hydra-composed dataset layout; lands when PR-3 migrates the
-  #     launcher to @hydra.main and removes load_dataset_spec_yaml) ---
-  # dataset.yaml         # Top-level @hydra.main composition target
-  # experiment/          # Per-experiment defaults files; each composes dataset.yaml + groups
-  #   generate_dataset/
-  #     surge-simple-480k-10k.yaml
-  # render/              # Backend-named renderer settings; identity lives in the root synth/ group
-  #   vst.yaml
-  # r2/                  # R2 bucket + prefix_root
-  #   default.yaml
 ```
 
 ## Appendix A: Glossary
