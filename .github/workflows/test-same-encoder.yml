@@ -61,11 +61,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
+      # A repo-scoped uv cache serves every image unless the key names one, and the env
+      # context cannot see the runner's own ImageOS — so republish it first (#3507, #3688).
+      - name: Publish the runner image id
+        run: echo "RUNNER_IMAGE_OS=${ImageOS:-unknown}" >> "$GITHUB_ENV"
+
       - name: Install uv and Python 3.12.13
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.11.28"
           enable-cache: true
+          cache-suffix: ${{ env.RUNNER_IMAGE_OS }}
           python-version: "3.12.13"
 
       # Install the normal CPU heavy runtime; Stable Audio 3 belongs to its torch group.
