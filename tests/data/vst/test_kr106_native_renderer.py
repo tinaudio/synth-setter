@@ -4,12 +4,16 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import lance
 import numpy as np
 import pytest
+from hydra import compose, initialize_config_module
 
 from synth_setter.data.vst.kr106_native_renderer import KR106NativeRenderer
 from synth_setter.data.vst.kr106_native_runtime import import_kr106_native
 from synth_setter.data.vst.param_map import load_param_map
+from synth_setter.data.vst.writers import make_lance_dataset
+from synth_setter.pipeline.schemas.spec import DatasetSpec
 
 
 @pytest.fixture
@@ -169,6 +173,78 @@ def test_native_float_event_boundaries_match_integer_sample_render(
         baseline_parameters={int(key): value for key, value in baseline.items()},
     )
     np.testing.assert_array_equal(short.render({}, 60, 100, (start, end)), expected)
+
+
+@pytest.mark.parametrize(
+    ("duration", "start", "end", "start_sample", "num_samples"),
+    [
+        (0.1, 17.2 / 44100, 17.6 / 44100, 18, 4410),
+        # Shard 487 row 806 of the 2M single-note native corpus (base seed 42).
+        (4.0, 3.002978267596139, 3.0029894337559564, 132432, 176400),
+    ],
+)
+def test_native_sub_sample_note_window_renders_one_sample_gate(
+    renderer: KR106NativeRenderer,
+    duration: float,
+    start: float,
+    end: float,
+    start_sample: int,
+    num_samples: int,
+) -> None:
+    """A note shorter than one frame still sounds, gated for exactly one sample.
+
+    :param renderer: Real native renderer with the committed baseline.
+    :param duration: Clip length in seconds.
+    :param start: Requested note-on time.
+    :param end: Requested note-off time inside the same output frame.
+    :param start_sample: First frame at or after both endpoints.
+    :param num_samples: Clip length in frames.
+    """
+    clip = replace(renderer, signal_duration_seconds=duration)
+    baseline = json.loads(Path(clip.plugin_state_path).read_text())["parameters"]
+    expected = import_kr106_native().render_note(
+        {},
+        60,
+        100,
+        start_sample,
+        start_sample + 1,
+        num_samples,
+        44100.0,
+        512,
+        baseline_parameters={int(key): value for key, value in baseline.items()},
+    )
+    np.testing.assert_array_equal(clip.render({}, 60, 100, (start, end)), expected)
+
+
+def test_native_note_on_after_last_frame_renders_silence(renderer: KR106NativeRenderer) -> None:
+    """A note-on that quantizes past the final retained frame leaves the clip silent.
+
+    :param renderer: Real native renderer.
+    """
+    clip = replace(renderer, signal_duration_seconds=0.1)
+    audio = clip.render({}, 60, 100, (np.nextafter(4409 / 44100, np.inf), 0.1))
+    np.testing.assert_array_equal(audio, np.zeros((2, 4410), dtype=np.float32))
+
+
+def test_native_shard_with_sub_sample_note_draw_completes(tmp_path: Path) -> None:
+    """The production 2M spec's shard 487 renders past its sub-frame note draw.
+
+    :param tmp_path: Destination for the one-row shard.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=[
+                "experiment=generate_dataset/ultramaster-kr106-single-note-native-lance-2m-40k-10k"
+            ],
+        )
+    spec = DatasetSpec.from_hydra_cfg(cfg)
+    shard = spec.shards[487]
+    render_cfg = spec.render_for_shard(shard).model_copy(
+        update={"samples_per_shard": 1, "sample_offset": shard.sample_offset + 806}
+    )
+    make_lance_dataset(tmp_path / "shard-000487.lance", render_cfg, shard_id=487)
+    assert lance.dataset(tmp_path / "shard-000487.lance").count_rows() == 1
 
 
 def test_native_render_rejects_unmapped_control(renderer: KR106NativeRenderer) -> None:
