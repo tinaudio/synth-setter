@@ -1,0 +1,23 @@
+# @package _global_
+
+defaults:
+  - override /datamodule: vst
+  - override /synth: dexed_py
+  - override /render: dexed
+  - _self_
+
+task_name: dexed-py-lance-2m-40k-10k
+output_format: lance
+train_val_test_sizes: [2000000, 40000, 10000]
+
+r2:
+  bucket: experiments
+
+use_shard_queue: true
+
+render:
+  samples_per_shard: 2500
+  samples_per_render_batch: 1
+  parallel: true
+  retain_local_shards: false
+  max_retries: 20

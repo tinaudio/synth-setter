@@ -1,0 +1,6 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "dexed_py"
+param_spec_name: "dexed_py"
+plugin_path: "dexed"
+plugin_state_path: ""
+synth_version: "0.3.0"
