@@ -79,13 +79,13 @@ shard; 800 / 16 / 4 shards).
 
 ### Join the shard queue from a fresh pod
 
-Until the PR that adds this backend merges, use its head commit for `SHA`. Afterwards any
-`main` commit containing it works. Every worker must use the same `SHA`, because the spec pins
-the synth identity and render contract.
+The current run was launched on 2026-11-11 from commit `b5164474`. Main doesn't contain this
+backend until its PR merges, so joiners use that commit (or a later commit of the PR). Every
+worker must render the same code, because the spec pins the synth identity and render contract.
 
 ```bash
-SHA=<commit with the Resonarium backend>
-SPEC='r2://experiments/data/resonarium-py-lance-2m-40k-10k/<run id>/input_spec.json'
+SHA=b5164474bde43559721cb235dcc2e0aa22930726
+SPEC='r2://experiments/data/resonarium-py-lance-2m-40k-10k/resonarium-py-lance-2m-40k-10k-20261111T034305220Z/input_spec.json'
 WT=$HOME/synth-setter-resonarium
 INF=(infisical run --projectId=f257dbf6-868f-4661-b62a-610625555539 --env=dev --)
 
@@ -100,8 +100,9 @@ git -C "$WT" fetch origin "$SHA" && git -C "$WT" checkout --detach "$SHA"
 cd "$WT" && uv sync --frozen --extra cpu --group resonarium
 .venv/bin/python -c "import resonarium, synth_setter; print('ok', synth_setter.__file__)"
 
-# 3. Secrets: the pod must be logged in to Infisical (`infisical login`) first.
-"${INF[@]}" true
+# 3. Secrets. A fresh pod has no Infisical session: a person with access runs the interactive
+#    `infisical login` once on each new pod. Then confirm, without printing any values:
+"${INF[@]}" true && echo "infisical ok"
 
 # 4. Join, detached, with math-library thread caps (see #3755).
 mkdir -p "$HOME/logs"
