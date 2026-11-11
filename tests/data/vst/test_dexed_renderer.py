@@ -166,3 +166,24 @@ def test_mismatched_version_is_rejected() -> None:
             plugin_path="dexed", sample_rate=44100, channels=1,
             signal_duration_seconds=0.5, synth_version="0.0.0",
         )
+
+
+def test_sample_aligned_onset_starts_on_its_own_frame(renderer: DexedRenderer) -> None:
+    """An onset of exactly 13 frames starts at frame 13, though 13/44100*44100 > 13.
+
+    :param renderer: Native mono renderer fixture.
+    """
+    start = 13 / 44100
+    native = DexedSynth(sample_rate=44100)
+    native.load_preset(Preset())
+    expected = native.render(
+        midi_note=60,
+        velocity=100,
+        note_duration=0.25,
+        render_duration=(22050 - 13 + 1) / 44100,
+    )
+
+    audio = renderer.render({}, 60, 100, (start, start + 0.25))
+
+    np.testing.assert_array_equal(audio[0, :13], 0.0)
+    np.testing.assert_array_equal(audio[0, 13:], expected[: 22050 - 13])

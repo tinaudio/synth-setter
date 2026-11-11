@@ -146,3 +146,9 @@ def test_dexed_renderer_version_reads_native_package_metadata() -> None:
     from synth_setter.data.vst.core import extract_renderer_version
 
     assert extract_renderer_version(Path("dexed")) == importlib.metadata.version("dexed-py")
+
+
+def test_dexed_render_contract_rejects_clip_shorter_than_note_window() -> None:
+    """A clip shorter than the sampled note window fails at config time, not per draw."""
+    with pytest.raises(ValidationError, match="signal_duration_seconds>=4.0"):
+        _dexed_render_config(signal_duration_seconds=1.0)

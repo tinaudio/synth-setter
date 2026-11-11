@@ -10,6 +10,7 @@ from synth_setter.data.vst.param_spec import (
 )
 
 DEXED_VERSION = "0.3.0"
+DEXED_NOTE_DURATION_SECONDS = 4.0
 
 # Preset.to_array() orders normalized fields first, then native discrete fields.
 _CONTINUOUS_FIELDS = (
@@ -72,6 +73,8 @@ DEXED_PARAM_SPEC = ParamSpec(
     synth_params=list(DEXED_PARAMETERS),
     note_params=[
         DiscreteLiteralParameter("pitch", min=0, max=127),
-        NoteDurationParameter("note_start_and_end", max_note_duration_seconds=4.0),
+        NoteDurationParameter(
+            "note_start_and_end", max_note_duration_seconds=DEXED_NOTE_DURATION_SECONDS
+        ),
     ],
 )

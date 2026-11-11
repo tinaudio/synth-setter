@@ -12,7 +12,11 @@ import numpy as np
 
 from synth_setter.data.vst.dexed_param_spec import DEXED_PARAMETERS, DEXED_VERSION
 from synth_setter.data.vst.param_spec import DiscreteLiteralParameter, ParameterValue
-from synth_setter.data.vst.renderers import AudioRenderer, _validate_rendered_audio
+from synth_setter.data.vst.renderers import (
+    AudioRenderer,
+    _sample_index_at_or_after,
+    _validate_rendered_audio,
+)
 
 
 def _preset_array(params: Mapping[str, ParameterValue]) -> np.ndarray:
@@ -110,7 +114,7 @@ class DexedRenderer(AudioRenderer):
         preset_values = _preset_array(params)
 
         samples = int(self.sample_rate * self.signal_duration_seconds)
-        start_sample = math.ceil(start * self.sample_rate)
+        start_sample = _sample_index_at_or_after(start, self.sample_rate)
         audio = np.zeros((self.channels, samples), dtype=np.float32)
         if start_sample >= samples or start == end or velocity == 0:
             return audio

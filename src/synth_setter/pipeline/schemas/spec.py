@@ -842,7 +842,8 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         """Require the registered native Dexed identity and lifecycle.
 
         :returns: This config when Dexed identity and lifecycle settings are valid.
-        :raises ValueError: Dexed identity, artifacts, channels, or lifecycle are incompatible.
+        :raises ValueError: Dexed identity, artifacts, channels, lifecycle, or clip length are
+            incompatible.
         """
         dexed_identity = self.synth.format == "dexed" or self.plugin_path == DEXED_PLUGIN_NAME
         if self.renderer_backend != "dexed":
@@ -866,6 +867,13 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             raise ValueError('dexed requires plugin_reload_cadence="render"')
         if self.gui_toggle_cadence != "never":
             raise ValueError('dexed requires gui_toggle_cadence="never"')
+        from synth_setter.data.vst.dexed_param_spec import DEXED_NOTE_DURATION_SECONDS
+
+        # A sampled note window ending past the clip would raise per draw, failing the shard.
+        if self.signal_duration_seconds < DEXED_NOTE_DURATION_SECONDS:
+            raise ValueError(
+                f"dexed requires signal_duration_seconds>={DEXED_NOTE_DURATION_SECONDS}"
+            )
         return self
 
     @model_validator(mode="after")
