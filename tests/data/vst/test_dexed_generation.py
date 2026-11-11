@@ -4,9 +4,12 @@ from pathlib import Path
 
 import lance
 import numpy as np
+import pytest
+from dexed import DexedSynth
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf, open_dict
 
+from synth_setter.data.vst.dexed_renderer import DexedRenderer
 from synth_setter.data.vst.generate_vst_dataset import SampleSeed, generate_sample
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst.writers import make_lance_dataset
@@ -58,3 +61,42 @@ def test_dexed_2m_experiment_shard_writes_lance_row(tmp_path: Path) -> None:
     make_lance_dataset(tmp_path / "shard-000000.lance", render_cfg, shard_id=0)
 
     assert lance.dataset(tmp_path / "shard-000000.lance").count_rows() == 1
+
+
+def test_non_finite_native_render_is_counted_rejection_not_fatal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A NaN native render is a counted per-draw rejection; the next draw is accepted.
+
+    :param monkeypatch: Injects one non-finite native render; the engine is fixed-point and cannot
+        be driven to NaN by any patch.
+    """
+    renderer = DexedRenderer(
+        plugin_path="dexed", sample_rate=44100, channels=2, signal_duration_seconds=4.0
+    )
+    real_render = DexedSynth.render
+    calls = iter([True])
+
+    def render_nan_once(
+        self: DexedSynth,
+        midi_note: int,
+        velocity: int,
+        note_duration: float,
+        render_duration: float,
+    ) -> np.ndarray:
+        audio = real_render(self, midi_note, velocity, note_duration, render_duration)
+        return np.full_like(audio, np.nan) if next(calls, False) else audio
+
+    monkeypatch.setattr(DexedSynth, "render", render_nan_once)
+
+    sample = generate_sample(
+        renderer,
+        100,
+        -55.0,
+        param_specs["dexed_py"],
+        fixed_note_params={"pitch": 60, "note_start_and_end": (0.0, 1.0)},
+        seed=SampleSeed(master_seed=42, max_attempts=20),
+    )
+
+    assert sample.non_finite_rejections == 1
+    assert np.isfinite(sample.audio).all()

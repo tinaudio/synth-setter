@@ -12,7 +12,7 @@ import numpy as np
 
 from synth_setter.data.vst.dexed_param_spec import DEXED_PARAMETERS, DEXED_VERSION
 from synth_setter.data.vst.param_spec import DiscreteLiteralParameter, ParameterValue
-from synth_setter.data.vst.renderers import AudioRenderer
+from synth_setter.data.vst.renderers import AudioRenderer, _validate_rendered_audio
 
 
 def _preset_array(params: Mapping[str, ParameterValue]) -> np.ndarray:
@@ -89,9 +89,10 @@ class DexedRenderer(AudioRenderer):
         :param velocity: MIDI velocity in [0, 127]; zero produces silence.
         :param note_start_and_end: Ordered note endpoints within the output duration, in seconds.
         :param warmup: Unsupported editor warm-up request.
-        :returns: Finite float32 audio shaped (channels, samples).
+        :returns: Finite float32 audio shaped (channels, samples); non-finite native audio
+            raises the shared ``NonFiniteAudioError`` that dataset sampling counts as a rejection.
         :raises ValueError: Parameters, MIDI values, timing, or warm-up are invalid.
-        :raises RuntimeError: The native engine returns invalid audio.
+        :raises RuntimeError: The native engine returned audio of the wrong shape or length.
         """
         from dexed import DexedSynth, Preset
 
@@ -123,7 +124,7 @@ class DexedRenderer(AudioRenderer):
             note_duration=end - start,
             render_duration=(frames + 1) / self.sample_rate,
         )
-        if native.ndim != 1 or native.size < frames or not np.isfinite(native).all():
-            raise RuntimeError("Dexed returned invalid native audio")
+        if native.ndim != 1 or native.size < frames:
+            raise RuntimeError(f"Dexed returned native audio shaped {native.shape}")
         audio[:, start_sample:] = native[:frames]
-        return audio
+        return _validate_rendered_audio(audio, channels=self.channels, samples=samples)
