@@ -18,7 +18,11 @@ from synth_setter.data.vst.audio_preview import (
 )
 from synth_setter.data.vst.dawdreamer_runtime import ensure_dawdreamer_runtime
 from synth_setter.data.vst.param_spec import ParameterValue, ParamSpec, require_note_params
-from synth_setter.data.vst.renderers import AudioRenderer, NonFiniteAudioError
+from synth_setter.data.vst.renderers import (
+    AudioRenderer,
+    NonFiniteAudioError,
+    _validate_rendered_audio,
+)
 from synth_setter.data.vst.seeding import seed_for_sample
 from synth_setter.data.vst.shapes import make_spectrogram as make_spectrogram
 from synth_setter.pipeline.schemas.render_metrics import render_metrics_path
@@ -151,8 +155,9 @@ def generate_sample(
     :param audio_dtype: Physical dtype used to derive previews from the persisted audio values.
     :param input_audio_pool: Optional pinned dataset audio used instead of built-in excitation.
     :returns: The accepted sample, with ``attempt`` set to the winning retry.
-    :raises ValueError: If the attempt budget is nonpositive, or a
-        ``fixed_synth_params`` render fell below ``min_loudness``.
+    :raises ValueError: If the attempt budget is nonpositive, a render's shape differs from
+        the renderer's configured geometry, or a ``fixed_synth_params`` render fell below
+        ``min_loudness``.
     :raises AudioAmplitudeError: A ``fixed_synth_params`` render clipped outside
         [-1, 1]; on the sampling path clipping rejects the draw and retries.
     :raises NonFiniteAudioError: A ``fixed_synth_params`` render contains NaN or infinity.
@@ -164,6 +169,7 @@ def generate_sample(
         raise ValueError("input_audio_pool requires deterministic SampleSeed inputs")
     if max_attempts < 1:
         raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+    expected_samples = int(renderer.sample_rate * renderer.signal_duration_seconds)
     clipped_rejections = 0
     non_finite_rejections = 0
     silent_rejections = 0
@@ -201,6 +207,8 @@ def generate_sample(
                 output = renderer.render_with_input(
                     synth_params, input_audio_pool.take(input_row)
                 )
+            # Central contract: holds even for a backend that skips its own output check.
+            _validate_rendered_audio(output, channels=renderer.channels, samples=expected_samples)
             _reject_clipped_audio(output)
         except AudioAmplitudeError:
             # Clipping is a property of the sampled patch: reject the draw like
