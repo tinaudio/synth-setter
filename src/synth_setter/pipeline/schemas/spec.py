@@ -52,6 +52,7 @@ from synth_setter.renderer_backend import (
     FLUSHING_BACKENDS,
     KR106_NATIVE_PLUGIN_NAME,
     PYFDN_PLUGIN_NAME,
+    RESONARIUM_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     TORCHSYNTH_PLUGIN_NAME,
     FlushBlocks,
@@ -778,6 +779,48 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         return replace(defaults, **self._explicit_flush_blocks())
 
     @model_validator(mode="after")
+    def _validate_resonarium_backend(self) -> RenderConfig:
+        """Require the registered native Resonarium identity and lifecycle.
+
+        :returns: This config when Resonarium identity and lifecycle settings are valid.
+        :raises ValueError: Resonarium identity, artifacts, channels, lifecycle, or clip length are
+            incompatible.
+        """
+        resonarium_identity = (
+            self.synth.format == "resonarium" or self.plugin_path == RESONARIUM_PLUGIN_NAME
+        )
+        if self.renderer_backend != "resonarium":
+            if resonarium_identity:
+                raise ValueError("all Resonarium identities require renderer_backend='resonarium'")
+            return self
+        if self.synth.format != "resonarium":
+            return self
+        registered = SYNTHS[SynthName("resonarium_py")]
+        if (
+            self.synth.name != registered.name
+            or self.param_spec_name != registered.param_spec_name
+        ):
+            raise ValueError("resonarium requires the registered resonarium_py synth identity")
+        if self.plugin_path != RESONARIUM_PLUGIN_NAME or self.plugin_state_path:
+            raise ValueError(
+                'resonarium requires plugin_path="resonarium" and no plugin_state_path'
+            )
+        if self.channels not in (1, 2):
+            raise ValueError("resonarium supports one or two channels")
+        if self.plugin_reload_cadence != "render":
+            raise ValueError('resonarium requires plugin_reload_cadence="render"')
+        if self.gui_toggle_cadence != "never":
+            raise ValueError('resonarium requires gui_toggle_cadence="never"')
+        from synth_setter.data.vst.resonarium_param_spec import RESONARIUM_NOTE_DURATION_SECONDS
+
+        # A sampled note window ending past the clip would raise per draw, failing the shard.
+        if self.signal_duration_seconds < RESONARIUM_NOTE_DURATION_SECONDS:
+            raise ValueError(
+                f"resonarium requires signal_duration_seconds>={RESONARIUM_NOTE_DURATION_SECONDS}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_pyfdn_backend(self) -> RenderConfig:
         """Require canonical pyFDN geometry and fixed compatibility stubs.
 
@@ -1018,6 +1061,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             "faust": {"dawdreamer", "faustcpp", "faustwasm"},
             "kr106_native": {"kr106_native"},
             "pyfdn": {"pyfdn"},
+            "resonarium": {"resonarium"},
             "surgepy": {"surgepy"},
             "torchsynth": {"torchsynth"},
             "vst3": {"dawdreamer", "pedalboard"},

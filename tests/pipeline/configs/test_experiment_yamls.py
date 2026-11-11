@@ -44,6 +44,7 @@ DATASET_EXPERIMENTS: dict[str, str] = {
     "generate_dataset/faust-shimmer-fdn-lance-50k": "faust-shimmer-fdn-lance-50k",
     "generate_dataset/nightly-parallel-smoke": "nightly-parallel-smoke",
     "generate_dataset/pyfdn-input-audio": "pyfdn-input-audio",
+    "generate_dataset/resonarium-py-lance-2m-40k-10k": "resonarium-py-lance-2m-40k-10k",
     "generate_dataset/smoke-shard": "smoke-shard",
     "generate_dataset/smoke-shard-lance": "smoke-shard-lance",
     "generate_dataset/surge-simple-480k-10k": "surge-simple-480k-10k",
@@ -212,6 +213,10 @@ def test_ultramaster_kr106_smoke_experiment_renders_twenty_lance_rows() -> None:
             "generate_dataset/ultramaster-kr106-lance-2m-40k-10k",
             {"train": (0, 800), "val": (800, 816), "test": (816, 820)},
         ),
+        (
+            "generate_dataset/resonarium-py-lance-2m-40k-10k",
+            {"train": (0, 800), "val": (800, 816), "test": (816, 820)},
+        ),
     ],
 )
 def test_full_scale_lance_experiment_composes_expected_split_shard_ranges(
@@ -235,6 +240,18 @@ def test_ultramaster_kr106_full_scale_experiment_uses_distributed_queue() -> Non
     spec = _compose_dataset_spec("generate_dataset/ultramaster-kr106-lance-2m-40k-10k")
 
     assert spec.train_val_test_sizes == (2_000_000, 40_000, 10_000)
+    assert spec.render.parallel is True
+    assert spec.render.retain_local_shards is False
+    assert spec.use_shard_queue is True
+
+
+def test_resonarium_full_scale_experiment_renders_natively_on_distributed_queue() -> None:
+    """Resonarium production generation renders natively on queue-claimed, uploaded shards."""
+    spec = _compose_dataset_spec("generate_dataset/resonarium-py-lance-2m-40k-10k")
+
+    assert spec.render.renderer_backend == "resonarium"
+    assert spec.render.synth.name == "resonarium_py"
+    assert spec.render.samples_per_render_batch == 1
     assert spec.render.parallel is True
     assert spec.render.retain_local_shards is False
     assert spec.use_shard_queue is True
