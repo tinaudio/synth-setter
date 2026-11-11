@@ -28,6 +28,14 @@ uses its existing clipping/loudness rejection and retry logic. The render config
 uses float32 audio. SysEx banks, custom operator graphs, and individual-operator
 outputs are not exposed by this backend.
 
+## Production dataset
+
+`experiment=generate_dataset/dexed-py-lance-2m-40k-10k` renders a
+2,000,000 / 40,000 / 10,000-row Lance dataset into the `experiments` bucket
+through the shard queue (2,500 rows per shard). Join more workers with
+`synth-setter-generate-dataset-from-spec-uri <spec uri>` and finish with
+`synth-setter-finalize-dataset dataset_root_uri=<run prefix>`.
+
 ## Direct render
 
 ```python

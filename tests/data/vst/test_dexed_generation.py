@@ -1,12 +1,16 @@
 """Native Dexed config-to-dataset-row integration."""
 
+from pathlib import Path
+
+import lance
 import numpy as np
 from hydra import compose, initialize_config_module
 from omegaconf import OmegaConf, open_dict
 
 from synth_setter.data.vst.generate_vst_dataset import SampleSeed, generate_sample
 from synth_setter.data.vst.param_spec_registry import param_specs
-from synth_setter.pipeline.schemas.spec import RenderConfig
+from synth_setter.data.vst.writers import make_lance_dataset
+from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.renderer_factory import make_audio_renderer
 from synth_setter.synth_spec import SYNTHS, SynthName
 
@@ -35,3 +39,22 @@ def test_dexed_hydra_config_generates_audio_features_and_parameters() -> None:
     assert sample.mel_spec.shape == (2, 128, 401)
     assert np.isfinite(sample.mel_spec).all()
     assert len(sample.audio_mp3) > 1000
+
+
+def test_dexed_2m_experiment_shard_writes_lance_row(tmp_path: Path) -> None:
+    """A production 2M shard's render config writes a real native Lance row.
+
+    :param tmp_path: Per-test output directory.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="dataset",
+            overrides=["experiment=generate_dataset/dexed-py-lance-2m-40k-10k"],
+        )
+    spec = DatasetSpec.from_hydra_cfg(cfg)
+    shard = spec.shards[0]
+    render_cfg = spec.render_for_shard(shard).model_copy(update={"samples_per_shard": 1})
+
+    make_lance_dataset(tmp_path / "shard-000000.lance", render_cfg, shard_id=0)
+
+    assert lance.dataset(tmp_path / "shard-000000.lance").count_rows() == 1
