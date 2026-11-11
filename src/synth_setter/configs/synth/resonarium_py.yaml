@@ -1,0 +1,6 @@
+# Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
+name: "resonarium_py"
+param_spec_name: "resonarium_py"
+plugin_path: "resonarium"
+plugin_state_path: ""
+synth_version: "0.1.1"

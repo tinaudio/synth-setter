@@ -199,6 +199,26 @@ def test_requires_surgepy_item_skipped_when_extension_absent(
 
 
 @pytest.mark.infra
+def test_requires_resonarium_item_skipped_when_extension_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """requires_resonarium items skip when the opt-in extension is not installed.
+
+    :param monkeypatch: Rebinds the cached Resonarium capability.
+    """
+    monkeypatch.setattr(conftest_module, "_RESONARIUM_AVAILABLE", False)
+    item = _FakeItem({"requires_resonarium": pytest.mark.requires_resonarium})
+
+    conftest_module.pytest_collection_modifyitems(
+        config=cast(pytest.Config, _FakeConfig("")),
+        items=cast(list[pytest.Item], [item]),
+    )
+
+    assert len(item.added_markers) == 1
+    assert "resonarium extension is unavailable" in item.added_markers[0].kwargs["reason"]
+
+
+@pytest.mark.infra
 def test_requires_surgepy_item_not_skipped_when_extension_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

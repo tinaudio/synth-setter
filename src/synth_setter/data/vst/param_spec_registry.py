@@ -28,6 +28,7 @@ from synth_setter.data.vst.cardinal_param_spec import CARDINAL_PARAM_SPEC
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.obxf_param_spec import OBXF_PARAM_SPEC
 from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.resonarium_param_spec import RESONARIUM_PARAM_SPEC
 from synth_setter.data.vst.surge_xt_param_spec import (
     SURGE_4_PARAM_SPEC,
     SURGE_SIMPLE_PARAM_SPEC,
@@ -62,6 +63,7 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
         ParamSpecName("faust_shimmer_fdn")
     ),
     ParamSpecName("cardinal"): CARDINAL_PARAM_SPEC,
+    ParamSpecName("resonarium_py"): RESONARIUM_PARAM_SPEC,
     ParamSpecName("surge_xt"): SURGE_XT_PARAM_SPEC,
     ParamSpecName("surge_simple"): SURGE_SIMPLE_PARAM_SPEC,
     ParamSpecName("surge_4"): SURGE_4_PARAM_SPEC,

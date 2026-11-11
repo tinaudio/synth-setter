@@ -266,6 +266,7 @@ class TestSynthsTable:
             "faust",
             "kr106_native",
             "pyfdn",
+            "resonarium",
             "surgepy",
             "torchsynth",
             "vst3",
