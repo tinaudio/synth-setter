@@ -42,8 +42,8 @@ level, and sampling them over ±100 dB makes clipping or silence dominate. Omitt
 their upstream defaults.
 
 Each render starts a fresh processor at 44.1 kHz with 512-frame blocks. It applies the patch,
-resets the processor so parameter smoothing settles, and sends sample-accurate note-on and
-note-off events. A note window inside one frame gates for one sample. A note-on past the last
+processes one block and resets the processor, as a host already running the patch would. It
+then sends sample-accurate note-on and note-off events. A note window inside one frame gates for one sample. A note-on past the last
 frame renders silence. Mono downmixes the native stereo output. Native gain is preserved, with
 no clipping or normalization; dataset generation rejects clipped, silent, and non-finite draws
 per attempt. Upstream defaults disable every exciter and resonator, so about a third of uniform
@@ -62,9 +62,14 @@ The native engine and the Resonarium v0.1.1 Linux VST3 compile the same source t
 - **Determinism (A-B-A):** renders are bit-identical across interleaved patches, including
   noise-excited ones. Exciter noise is a deterministic per-voice stream, so there is no per-render
   randomness.
-- **Audio parity:** random audible patches, with every coordinate loaded into the VST3 through
-  saved state, meet the KR-106 parity thresholds (MSS < 3, RMS > 0.95, SOT < 0.01, wMFCC < 4).
-  Several patches are bit-exact.
+- **Audio parity:** 24 random audible patches had every coordinate loaded into the VST3 through
+  saved state. 21 meet all of the KR-106 parity thresholds (MSS < 3, RMS > 0.95, SOT < 0.01,
+  wMFCC < 4), and the median MSS is 0.001.
+  - One miss equals the VST3's own difference between two fresh instances (MSS 5.28 both ways).
+  - Two phaser-and-chorus patches have MSS under 3 but miss RMS (0.91) or SOT (0.011). The VST3
+    is not exactly repeatable across instances on such patches either.
+  - Effects start from a host's steady state. Without the processed block before the reset,
+    phaser patches diverged from the plugin at onset (median MSS 1.9).
 
 ## Production dataset
 
