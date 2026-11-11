@@ -104,10 +104,15 @@ def test_generate_sample_uses_common_renderer_backend() -> None:
         .. attribute :: channels
 
            Fake output channel count.
+
+        .. attribute :: signal_duration_seconds
+
+           Fake render duration.
         """
 
         sample_rate = 44100
         channels = 2
+        signal_duration_seconds = 1.0
 
         def render(
             self,
