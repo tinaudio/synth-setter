@@ -17,7 +17,7 @@ use_shard_queue: true
 
 render:
   samples_per_shard: 2500
-  samples_per_render_batch: 32
+  samples_per_render_batch: 1
   parallel: true
   retain_local_shards: false
   max_retries: 20
