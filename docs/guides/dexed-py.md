@@ -24,8 +24,10 @@ normalization stays at the upstream default, disabled.
 
 Native gain is preserved, with no clipping or per-patch normalization. Some
 patches (including the default patch) can exceed [-1, 1]; dataset generation
-uses its existing clipping/loudness rejection and retry logic. The render config
-uses float32 audio. SysEx banks, custom operator graphs, and individual-operator
+uses its existing clipping/loudness rejection and retry logic. Native output is
+exactly 8x (+18.06 dB) the Dexed VST3 level; multiply stored audio by 0.125 to
+match the VST. `mel_spec` is referenced to each clip's maximum, so it needs no
+correction. The render config stores float16 audio. SysEx banks, custom operator graphs, and individual-operator
 outputs are not exposed by this backend.
 
 ## Production dataset

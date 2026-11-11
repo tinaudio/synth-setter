@@ -252,6 +252,7 @@ def test_dexed_py_full_scale_experiment_renders_natively_on_distributed_queue() 
     assert spec.render.renderer_backend == "dexed"
     assert spec.render.synth.name == "dexed_py"
     assert spec.render.samples_per_render_batch == 1
+    assert spec.render.audio_dtype == "float16"
     assert spec.render.parallel is True
     assert spec.render.retain_local_shards is False
     assert spec.use_shard_queue is True

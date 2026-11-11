@@ -4,6 +4,6 @@ defaults:
   - _self_
 
 renderer_backend: dexed
-audio_dtype: float32
+audio_dtype: float16
 plugin_reload_cadence: render
 gui_toggle_cadence: never

@@ -68,7 +68,7 @@ def test_dexed_hydra_groups_compose_to_valid_render_config() -> None:
     config = RenderConfig.from_cfg_nodes(render, synth)
 
     assert config.renderer_backend == "dexed"
-    assert config.audio_dtype == "float32"
+    assert config.audio_dtype == "float16"
     assert config.plugin_reload_cadence == "render"
     assert config.gui_toggle_cadence == "never"
 
