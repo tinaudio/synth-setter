@@ -7,6 +7,8 @@ import math
 import numpy as np
 import pytest
 import torch
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from synth_setter.data.vst.param_spec import (
     AngleArrayParameter,
@@ -1068,6 +1070,58 @@ def test_note_duration_decode_always_returns_valid_window(
     )
 
     assert parameter.decode(np.array(encoded)) == pytest.approx(expected)
+
+
+_UNIT = st.floats(min_value=0.0, max_value=1.0, allow_nan=False)
+
+
+@pytest.mark.hypothesis
+@given(onset=_UNIT, duration_fraction=_UNIT)
+@settings(max_examples=500, deadline=None)
+def test_note_duration_decode_unit_box_point_returns_legal_bounded_window(
+    onset: float, duration_fraction: float
+) -> None:
+    """Every point of the encoded unit box is an ordered note within the horizon.
+
+    :param onset: Encoded onset coordinate.
+    :param duration_fraction: Encoded remaining-window duration coordinate.
+    """
+    parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+        min_note_duration_seconds=0.001,
+    )
+
+    start, end = parameter.decode(np.array([onset, duration_fraction]))
+
+    assert 0.0 <= start < end <= 4.0
+    assert end - start == pytest.approx(
+        0.001 + (3.999 - start) * duration_fraction, abs=1e-12
+    )
+
+
+@pytest.mark.hypothesis
+@given(onset=_UNIT, duration_fraction=_UNIT)
+@settings(max_examples=500, deadline=None)
+def test_note_duration_encode_decoded_window_round_trips_coordinates(
+    onset: float, duration_fraction: float
+) -> None:
+    """Re-encoding a decoded window recovers its coordinates away from the final onset.
+
+    :param onset: Encoded onset coordinate.
+    :param duration_fraction: Encoded remaining-window duration coordinate.
+    """
+    parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+        min_note_duration_seconds=0.001,
+    )
+    # At onset 1 the remaining window is empty, so the duration coordinate is degenerate.
+    onset = min(onset, 0.999)
+
+    encoded = parameter.encode(parameter.decode(np.array([onset, duration_fraction])))
+
+    np.testing.assert_allclose(encoded, [onset, duration_fraction], atol=1e-9)
 
 
 @pytest.mark.parametrize(
