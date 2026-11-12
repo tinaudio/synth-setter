@@ -11,6 +11,10 @@ defaults:
 experiment_name: surge-4-slap
 run_name: slap_ast_audio_vst_ff_param
 
+# The stored dataset predates onset-duration timing and carries legacy endpoints.
+synth:
+  note_timing_parameterization: legacy_endpoints
+
 datamodule:
   conditioning: mel
   download_dataset_root_uri: r2://experiments/data/surge-4-lance-50k-2k-2k/surge-4-lance-50k-2k-2k-20260717T042205123Z/

@@ -14,6 +14,10 @@ model:
   # double-compiles and raises. Smoke runs don't need the compiled path anyway.
   compile: false
 
+# The stored dataset predates onset-duration timing and carries legacy endpoints.
+synth:
+  note_timing_parameterization: legacy_endpoints
+
 datamodule:
   # Projected-subset hydrated by prepare_data() before fit; opt-in R2 source.
   download_dataset_root_uri: r2://experiments/data/surge-xt-lance-1k-2k-2k/surge-xt-lance-1k-2k-2k-20260717T042205119Z/

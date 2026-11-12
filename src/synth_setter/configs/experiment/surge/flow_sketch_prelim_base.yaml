@@ -14,6 +14,10 @@ run_name: flow1k_prelim_base
 # Both A/B arms share this seed so the comparison isolates conditioning.
 seed: 3407
 
+# The stored dataset predates onset-duration timing and carries legacy endpoints.
+synth:
+  note_timing_parameterization: legacy_endpoints
+
 datamodule:
   download_dataset_root_uri: r2://experiments/data/surge-simple-lance-1k-2k-2k/surge-simple-lance-1k-2k-2k-20260716T163226347Z/
 

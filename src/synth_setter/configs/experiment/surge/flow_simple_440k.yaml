@@ -11,6 +11,10 @@ defaults:
 
 run_name: flow_440k
 
+# The stored dataset predates onset-duration timing and carries legacy endpoints.
+synth:
+  note_timing_parameterization: legacy_endpoints
+
 datamodule:
   download_dataset_root_uri: r2://experiments/data/surge-simple-lance-440k-20k-20k/surge-simple-lance-440k-20k-20k-20260706T005448315Z/
 

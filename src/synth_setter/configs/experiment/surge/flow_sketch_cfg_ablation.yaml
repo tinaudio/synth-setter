@@ -25,6 +25,10 @@ model:
   compile: false
   test_sample_steps: 50
 
+# The stored dataset predates onset-duration timing and carries legacy endpoints.
+synth:
+  note_timing_parameterization: legacy_endpoints
+
 datamodule:
   dataset_root: ${paths.output_dir}/data
   download_dataset_root_uri: r2://experiments/data/surge-simple-surgepy-lance-2m-40k-10k/surge-simple-surgepy-lance-2m-40k-10k-20260824T195308545Z/
