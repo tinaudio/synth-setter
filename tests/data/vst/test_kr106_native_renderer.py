@@ -235,10 +235,13 @@ def test_native_shard_with_sub_sample_note_draw_completes(tmp_path: Path) -> Non
         cfg = compose(
             config_name="dataset",
             overrides=[
-                "experiment=generate_dataset/ultramaster-kr106-single-note-native-lance-2m-40k-10k"
+                "experiment=generate_dataset/ultramaster-kr106-single-note-native-lance-2m-40k-10k",
+                # The 2M run sampled legacy endpoints; onset-duration windows are >= 1 ms.
+                "synth.note_timing_parameterization=legacy_endpoints",
             ],
         )
     spec = DatasetSpec.from_hydra_cfg(cfg)
+    assert spec.render.synth.note_timing_parameterization == "legacy_endpoints"
     shard = spec.shards[487]
     render_cfg = spec.render_for_shard(shard).model_copy(
         update={"samples_per_shard": 1, "sample_offset": shard.sample_offset + 806}

@@ -810,6 +810,26 @@ def test_load_checkpoint_with_same_width_timing_override_raises(tmp_path: Path) 
         )
 
 
+def test_resume_pre_stamp_checkpoint_into_onset_duration_module_raises(
+    tmp_path: Path,
+) -> None:
+    """Fit-resume rejects a checkpoint saved before timing metadata existed.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(param_spec="cardinal"),
+        tmp_path / "pre-stamp.ckpt",
+        omit_metadata="note_timing_parameterization",
+    )
+    checkpoint = torch.load(path, weights_only=False)
+
+    with pytest.raises(ValueError, match="note_timing_parameterization='legacy_endpoints'"):
+        _module(
+            param_spec="cardinal", note_timing_parameterization="onset_duration"
+        ).on_load_checkpoint(checkpoint)
+
+
 def test_load_checkpoint_with_other_endpoint_time_weighting_raises(tmp_path: Path) -> None:
     """Resume rejects silently switching a same-shaped endpoint objective.
 
