@@ -8,8 +8,19 @@ from typing import Any
 import numpy as np
 import pytest
 
-from synth_setter.data.vst.param_spec import CategoricalParameter, ContinuousParameter
-from synth_setter.data.vst.surge_fx_param_spec import SURGE_FX_PARAM_SPEC
+from synth_setter.data.vst.param_spec import (
+    CategoricalParameter,
+    ContinuousParameter,
+    DiscreteLiteralParameter,
+)
+from synth_setter.data.vst.surge_fx_param_spec import (
+    DRIVE_MODELS,
+    FX_SLOT_COUNT,
+    LFO_WAVEFORMS,
+    SURGE_FX_PARAM_SPEC,
+    SURGE_FX_TYPE_LAYOUTS,
+    shared_native_index,
+)
 
 _SAMPLE_RATE = 44_100
 _AUDIO_IN_TYPE = 29
@@ -25,21 +36,9 @@ _MAX_DISCRETE_SPAN = 64
 _SURGE_INT_OFFSET = 0.005
 _SURGE_INT_SCALE = 0.99
 _TYPE_PARAM = "fx_g2_fx_type"
-_RENDER_WINDOW_SECONDS = 4.0
-_TAIL_FLOOR = 1e-3  # -60 dBFS
-_CAPPED = [
-    ("Bonsai", "fx_g2_bonsai_sensitivity"),
-    ("Combulator", "fx_g2_combulator_feedback"),
-    ("Delay", "fx_g2_delay_crossfeed"),
-    ("Delay", "fx_g2_delay_feedback"),
-    ("Delay", "fx_g2_delay_left"),
-    ("Delay", "fx_g2_delay_right"),
-    ("Distortion", "fx_g2_distortion_feedback"),
-    ("Freq Shift", "fx_g2_freq_shift_feedback"),
-    ("Freq Shift", "fx_g2_freq_shift_time"),
-    ("Reverb 1", "fx_g2_reverb_1_decay_time"),
-    ("Reverb 2", "fx_g2_reverb_2_decay_time"),
-]
+_SHARED_PARAMS = {"fx_g2_lfo_waveform": LFO_WAVEFORMS, "fx_g2_drive_model": DRIVE_MODELS}
+# Phaser's native display for the canonical "Sawtooth" LFO shape.
+_NATIVE_LABEL_ALIASES = {("Phaser", "Sawtooth"): "Saw"}
 
 
 def _param(name: str) -> Any:
@@ -116,13 +115,13 @@ def _impulse_response(synth: Any, seconds: float) -> np.ndarray:
     return output
 
 
-def _live_params(native_type: int) -> list[tuple[int, str, str, float, float, list[str]]]:
+def _live_params(type_name: str) -> list[tuple[int, str, str, float, float, list[str]]]:
     """List the effect's populated slots as ``(slot, label, type, min, max, displays)``.
 
-    :param native_type: Native Surge FX type to introspect.
+    :param type_name: SurgePy display name of the effect type.
     :returns: One row per populated slot, in slot order; displays are empty for floats.
     """
-    synth, slot = _engine(native_type)
+    synth, slot = _engine(_surge_int(_type_raw_values()[type_name], 0, _FX_TYPE_SPAN))
     rows = []
     for index, parameter in enumerate(slot["p"]):
         value_type = synth.getParamValType(parameter)
@@ -139,6 +138,19 @@ def _live_params(native_type: int) -> list[tuple[int, str, str, float, float, li
     return rows
 
 
+def _live_discrete(type_name: str) -> dict[int, tuple[str, float, float, list[str]]]:
+    """Map each live discrete slot of a type to its native ``(type, min, max, displays)``.
+
+    :param type_name: SurgePy display name of the effect type.
+    :returns: Value type, native range and displays keyed by native slot index.
+    """
+    return {
+        index: (value_type, minimum, maximum, displays)
+        for index, _, value_type, minimum, maximum, displays in _live_params(type_name)
+        if value_type != "float"
+    }
+
+
 def test_surge_fx_spec_impulse_excitation_has_no_note_params() -> None:
     """Impulse-excited effects carry no MIDI note, like the pyFDN impulse specs."""
     assert SURGE_FX_PARAM_SPEC.note_params == []
@@ -149,6 +161,76 @@ def test_surge_fx_spec_type_selector_is_onehot_and_leads_the_spec() -> None:
     fx_type = SURGE_FX_PARAM_SPEC.synth_params[0]
     assert isinstance(fx_type, CategoricalParameter)
     assert (fx_type.name, fx_type.encoding) == (_TYPE_PARAM, "onehot")
+
+
+def test_surge_fx_spec_encoded_width_is_eighty_three() -> None:
+    """Generic slots, scalar counts and shared categoricals encode the spec in 83 columns."""
+    assert SURGE_FX_PARAM_SPEC.encoded_width == 83
+
+
+def test_surge_fx_spec_has_twenty_six_logical_fields() -> None:
+    """The spec has 26 logical fields: type, 12 slots and 13 discrete selectors."""
+    assert len(SURGE_FX_PARAM_SPEC.synth_params) == 26
+
+
+def test_surge_fx_spec_onehot_selectors_are_ten_spanning_forty_four_columns() -> None:
+    """Besides the type selector, ten one-hot categoricals occupy 44 encoded columns."""
+    onehots = [
+        p
+        for p in SURGE_FX_PARAM_SPEC.synth_params[1:]
+        if isinstance(p, CategoricalParameter) and p.encoding == "onehot"
+    ]
+    assert (len(onehots), sum(len(p) for p in onehots)) == (10, 44)
+
+
+def test_surge_fx_spec_continuous_slots_are_generic_and_uncapped() -> None:
+    """The continuous block is FX_SLOT_COUNT generic slots spanning each native range."""
+    slots = [p for p in SURGE_FX_PARAM_SPEC.synth_params if isinstance(p, ContinuousParameter)]
+    assert [(p.name, p.min, p.max) for p in slots] == [
+        (f"fx_g2_slot_{i}", 0.0, 1.0) for i in range(1, FX_SLOT_COUNT + 1)
+    ]
+
+
+def test_surge_fx_layouts_cover_exactly_the_selectable_types() -> None:
+    """Every selectable type has a layout and no layout names an unselectable type."""
+    assert list(SURGE_FX_TYPE_LAYOUTS) == _param(_TYPE_PARAM).values
+
+
+def test_surge_fx_layouts_fit_the_generic_slot_count() -> None:
+    """No type needs more continuous slots than the spec provides."""
+    widest = max(len(layout.continuous) for layout in SURGE_FX_TYPE_LAYOUTS.values())
+    assert widest == FX_SLOT_COUNT
+
+
+def test_surge_fx_layouts_route_every_discrete_selector_in_the_spec() -> None:
+    """Layout discrete entries are exactly the spec's non-type discrete params."""
+    routed = {s.name for layout in SURGE_FX_TYPE_LAYOUTS.values() for s in layout.discrete}
+    spec_discrete = {
+        p.name
+        for p in SURGE_FX_PARAM_SPEC.synth_params[1:]
+        if not isinstance(p, ContinuousParameter)
+    }
+    assert routed == spec_discrete
+
+
+def test_surge_fx_shared_selectors_use_canonical_positions_not_native_raw_values() -> None:
+    """Shared selectors encode canonical label order; natives come from ``shared_native_index``."""
+    for name, labels in _SHARED_PARAMS.items():
+        parameter = _param(name)
+        assert parameter.values == list(labels)
+        assert parameter.raw_values == pytest.approx(np.linspace(0.0, 1.0, len(labels)))
+
+
+def test_shared_native_index_rejects_type_without_that_selector() -> None:
+    """Asking for a shared selector on a type that lacks it fails loudly."""
+    with pytest.raises(KeyError):
+        shared_native_index("Delay", "fx_g2_drive_model", "Soft")
+
+
+def test_shared_native_index_rejects_label_outside_canonical_set() -> None:
+    """A label absent from the canonical set fails instead of selecting a neighbour."""
+    with pytest.raises(KeyError):
+        shared_native_index("Waveshaper", "fx_g2_drive_model", "Additive 1+2")
 
 
 @pytest.mark.requires_surgepy
@@ -162,56 +244,84 @@ def test_surge_fx_spec_type_raw_values_select_named_type_on_live_engine() -> Non
 
 
 @pytest.mark.requires_surgepy
-def test_surge_fx_spec_per_type_params_match_live_slot_labels() -> None:
-    """Each type's params mirror its live populated slots, in slot order."""
-    spec_names = [p.name for p in SURGE_FX_PARAM_SPEC.synth_params[1:]]
-    expected = []
-    for name, raw in _type_raw_values().items():
-        rows = _live_params(_surge_int(raw, 0, _FX_TYPE_SPAN))
+def test_surge_fx_layout_continuous_slots_match_live_float_slots() -> None:
+    """Each type's generic slots map, in order, onto its live float slots and labels."""
+    mismatched = {}
+    for name, layout in SURGE_FX_TYPE_LAYOUTS.items():
+        rows = _live_params(name)
         labels = [label for _, label, *_ in rows]
-        for index, label, *_ in rows:
-            suffix = f"_p{index + 1}" if labels.count(label) > 1 else ""
-            expected.append(f"fx_g2_{_slug(name)}_{_slug(label)}{suffix}")
-    assert spec_names == expected
-
-
-def _paired_live_params() -> list[tuple[Any, str, float, float, list[str]]]:
-    """Pair each per-type spec param with its live slot's ``(type, min, max, displays)``.
-
-    :returns: Spec parameter, then the live slot's type, range, and displays, in spec order.
-    """
-    live_rows = [
-        row[2:]
-        for raw_type in _type_raw_values().values()
-        for row in _live_params(_surge_int(raw_type, 0, _FX_TYPE_SPAN))
-    ]
-    spec_params = SURGE_FX_PARAM_SPEC.synth_params[1:]
-    return [(parameter, *row) for parameter, row in zip(spec_params, live_rows, strict=True)]
+        expected = [
+            (index, _slug(label) + (f"_p{index + 1}" if labels.count(label) > 1 else ""))
+            for index, label, value_type, *_ in rows
+            if value_type == "float"
+        ]
+        actual = [(s.native_slot, s.name) for s in layout.continuous]
+        if actual != expected:
+            mismatched[name] = actual
+    assert mismatched == {}
 
 
 @pytest.mark.requires_surgepy
-def test_surge_fx_spec_float_slots_are_continuous_params() -> None:
-    """Continuous live slots stay continuous in the spec."""
-    mismatched = [
-        parameter.name
-        for parameter, value_type, *_ in _paired_live_params()
-        if value_type == "float" and not isinstance(parameter, ContinuousParameter)
-    ]
+def test_surge_fx_layout_discrete_slots_match_live_discrete_slots() -> None:
+    """Each type routes a spec selector to every live discrete slot and no other."""
+    mismatched = {
+        name: [s.native_slot for s in layout.discrete]
+        for name, layout in SURGE_FX_TYPE_LAYOUTS.items()
+        if sorted(s.native_slot for s in layout.discrete) != sorted(_live_discrete(name))
+    }
+    assert mismatched == {}
+
+
+@pytest.mark.requires_surgepy
+def test_surge_fx_per_type_onehot_raw_values_select_live_displays() -> None:
+    """Per-type one-hot selectors decode to the live display each key names."""
+    mismatches = []
+    for name, layout in SURGE_FX_TYPE_LAYOUTS.items():
+        live = _live_discrete(name)
+        for routed in layout.discrete:
+            parameter = _param(routed.name)
+            if routed.name in _SHARED_PARAMS or not isinstance(parameter, CategoricalParameter):
+                continue
+            value_type, minimum, maximum, displays = live[routed.native_slot]
+            for value, raw in zip(parameter.values, parameter.raw_values, strict=True):
+                is_bool = value_type == "bool"
+                native = int(raw > 0.5) if is_bool else _surge_int(raw, minimum, maximum)
+                if displays[native - int(minimum)] != value:
+                    mismatches.append(f"{routed.name}={value!r}")
+    assert mismatches == []
+
+
+@pytest.mark.requires_surgepy
+def test_surge_fx_scalar_counts_span_the_live_native_range() -> None:
+    """Scalar discrete selectors cover exactly their live native integer range."""
+    mismatched = []
+    for name, layout in SURGE_FX_TYPE_LAYOUTS.items():
+        live = _live_discrete(name)
+        for routed in layout.discrete:
+            parameter = _param(routed.name)
+            if not isinstance(parameter, DiscreteLiteralParameter):
+                continue
+            _, minimum, maximum, _ = live[routed.native_slot]
+            if (parameter.min, parameter.max) != (int(minimum), int(maximum)):
+                mismatched.append(routed.name)
     assert mismatched == []
 
 
 @pytest.mark.requires_surgepy
-def test_surge_fx_spec_discrete_raw_values_select_live_displays() -> None:
-    """Discrete params decode to the live display each one-hot key names."""
+def test_shared_native_index_selects_the_canonical_label_on_every_type() -> None:
+    """Shared selectors land on the same-named live shape per type, never by position."""
     mismatches = []
-    for parameter, value_type, minimum, maximum, displays in _paired_live_params():
-        if value_type == "float":
-            continue
-        for value, raw in zip(parameter.values, parameter.raw_values, strict=True):
-            is_bool = value_type == "bool"
-            native = int(raw > 0.5) if is_bool else _surge_int(raw, minimum, maximum)
-            if displays[native - int(minimum)] != value:
-                mismatches.append(f"{parameter.name}={value!r}")
+    for name, layout in SURGE_FX_TYPE_LAYOUTS.items():
+        live = _live_discrete(name)
+        for routed in layout.discrete:
+            if routed.name not in _SHARED_PARAMS:
+                continue
+            _, minimum, _, displays = live[routed.native_slot]
+            for label in _SHARED_PARAMS[routed.name]:
+                native = shared_native_index(name, routed.name, label)
+                expected = _NATIVE_LABEL_ALIASES.get((name, label), label)
+                if displays[native - int(minimum)] != expected:
+                    mismatches.append(f"{name}:{label}")
     assert mismatches == []
 
 
@@ -226,29 +336,3 @@ def test_surge_fx_spec_every_type_has_audible_deterministic_impulse_response() -
         if not np.any(first) or not np.array_equal(first, second):
             failures.append(name)
     assert failures == []
-
-
-@pytest.mark.requires_surgepy
-@pytest.mark.parametrize(("type_name", "param_name"), _CAPPED)
-def test_surge_fx_spec_capped_param_tail_decays_within_render_window(
-    type_name: str, param_name: str
-) -> None:
-    """A tail-driving param at its cap decays below -60 dBFS inside the 4 s window.
-
-    :param type_name: SurgePy display name of the effect type.
-    :param param_name: Capped spec parameter of that type.
-    """
-    native = _surge_int(_type_raw_values()[type_name], 0, _FX_TYPE_SPAN)
-    names = [p.name for p in SURGE_FX_PARAM_SPEC.synth_params]
-    prefix = f"fx_g2_{_slug(type_name)}_"
-    type_names = [n for n in names if n.startswith(prefix)]
-    slot_index = _live_params(native)[type_names.index(param_name)][0]
-    synth, slot = _engine(native)
-    live = slot["p"][slot_index]
-    cap = _param(param_name).max
-    minimum, maximum = synth.getParamMin(live), synth.getParamMax(live)
-    synth.setParamVal(live, minimum + cap * (maximum - minimum))
-    synth.process()
-    response = _impulse_response(synth, seconds=_RENDER_WINDOW_SECONDS + 2.0)
-    audible = np.flatnonzero(np.abs(response).max(axis=0) > _TAIL_FLOOR)
-    assert audible[-1] / _SAMPLE_RATE < _RENDER_WINDOW_SECONDS
