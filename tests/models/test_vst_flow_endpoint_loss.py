@@ -201,6 +201,7 @@ def _module(
     endpoint_time_weighting: str = "uniform",
     parameterization: str = "endpoint",
     param_spec: str | None = "cardinal",
+    note_timing_parameterization: str = "legacy_endpoints",
     rectified_sigma_min: float = 0.0,
     row: torch.Tensor | None = None,
     audio_loss: torch.nn.Module | None = None,
@@ -212,6 +213,7 @@ def _module(
     :param endpoint_time_weighting: Endpoint time-weighting selection.
     :param parameterization: Field output parameterization.
     :param param_spec: Registered ParamSpec name, or ``None``.
+    :param note_timing_parameterization: Timing coordinates stored with model rows.
     :param rectified_sigma_min: Residual source-noise scale.
     :param row: Constant field output when no explicit field is supplied.
     :param audio_loss: Optional recording audio loss.
@@ -226,6 +228,7 @@ def _module(
         scheduler=None,  # pyright: ignore[reportArgumentType]
         num_params=_WIDTH,
         param_spec=param_spec,
+        note_timing_parameterization=note_timing_parameterization,  # pyright: ignore[reportArgumentType]
         conditioning="audio",
         audio_loss=audio_loss,  # pyright: ignore[reportArgumentType]
         cfg_dropout_rate=0.0,
@@ -751,6 +754,62 @@ def test_load_legacy_checkpoint_without_endpoint_loss_counts_as_mse(tmp_path: Pa
     assert loaded.hparams["endpoint_loss"] == "mse"
 
 
+def test_load_pre_stamp_checkpoint_uses_hyperparameter_param_spec(tmp_path: Path) -> None:
+    """An unstamped checkpoint retains its parameter-spec identity fallback.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(_module(param_spec="cardinal"), tmp_path / "legacy.ckpt")
+    checkpoint = torch.load(path, weights_only=False)
+    checkpoint.pop("param_spec_identity")
+    checkpoint.pop("note_timing_parameterization")
+    checkpoint["hyper_parameters"].pop("note_timing_parameterization")
+    torch.save(checkpoint, path)
+
+    loaded = VSTFlowMatchingModule.load_from_checkpoint(
+        path, encoder=_WaveformEncoder(), weights_only=False
+    )
+
+    assert loaded.hparams["param_spec"] == "cardinal"
+    assert loaded.hparams["note_timing_parameterization"] == "legacy_endpoints"
+
+
+def test_load_checkpoint_restores_note_timing_parameterization(tmp_path: Path) -> None:
+    """Resume restores persisted onset-duration semantics without an override.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(
+            param_spec="cardinal",
+            note_timing_parameterization="onset_duration",
+        ),
+        tmp_path / "onset-duration.ckpt",
+    )
+
+    loaded = VSTFlowMatchingModule.load_from_checkpoint(
+        path, encoder=_WaveformEncoder(), weights_only=False
+    )
+
+    assert loaded.hparams["note_timing_parameterization"] == "onset_duration"
+
+
+def test_load_checkpoint_with_same_width_timing_override_raises(tmp_path: Path) -> None:
+    """Resume rejects exchanging timing semantics despite an unchanged vector width.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(_module(param_spec="cardinal"), tmp_path / "legacy.ckpt")
+
+    with pytest.raises(ValueError, match="note_timing_parameterization"):
+        VSTFlowMatchingModule.load_from_checkpoint(
+            path,
+            encoder=_WaveformEncoder(),
+            note_timing_parameterization="onset_duration",
+            weights_only=False,
+        )
+
+
 def test_load_checkpoint_with_other_endpoint_time_weighting_raises(tmp_path: Path) -> None:
     """Resume rejects silently switching a same-shaped endpoint objective.
 
@@ -826,6 +885,25 @@ def test_load_pre_stamp_checkpoint_with_hparams_file_raises(tmp_path: Path) -> N
     checkpoint = torch.load(path, weights_only=False)
     checkpoint.pop("endpoint_time_weighting")
     torch.save(checkpoint, path)
+
+    with pytest.raises(ValueError, match="hparams_file"):
+        VSTFlowMatchingModule.load_from_checkpoint(
+            path,
+            hparams_file=tmp_path / "overrides.yaml",
+            weights_only=False,
+        )
+
+
+def test_load_unstamped_timing_checkpoint_with_hparams_file_raises(tmp_path: Path) -> None:
+    """External hyperparameters cannot obscure unstamped timing semantics.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(
+        _module(),
+        tmp_path / "unstamped-timing.ckpt",
+        omit_metadata="note_timing_parameterization",
+    )
 
     with pytest.raises(ValueError, match="hparams_file"):
         VSTFlowMatchingModule.load_from_checkpoint(

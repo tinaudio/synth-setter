@@ -2,6 +2,7 @@
 
 import math
 from collections.abc import Iterator, Mapping, Sequence
+from copy import deepcopy
 from numbers import Integral, Real
 from typing import Literal, TypedDict
 
@@ -657,32 +658,137 @@ class DirectionArrayParameter(Parameter):
         return (vector / np.linalg.norm(vector)).reshape(self.shape, order="C")
 
 
-class NoteDurationParameter(Parameter):
-    """A special parameter for sampling note durations."""
+def _numeric_endpoints(name: str, raw_value: object) -> tuple[float, float]:
+    if not (
+        isinstance(raw_value, tuple)
+        and len(raw_value) == 2
+        and all(isinstance(value, Real) for value in raw_value)
+    ):
+        raise TypeError(f"{name} must be a pair of numeric endpoints")
+    return float(raw_value[0]), float(raw_value[1])
 
-    def __init__(self, name: str, max_note_duration_seconds: float):
+
+class LegacyEndpointNoteDurationParameter(Parameter):
+    """Legacy note timing encoded as two independent endpoint coordinates."""
+
+    def __init__(self, name: str, max_note_duration_seconds: float) -> None:
+        """Initialize endpoint timing bounds.
+
+        :param name: Raw parameter name.
+        :param max_note_duration_seconds: Exclusive sampling horizon in seconds.
+        """
         super().__init__(name)
         self.max_note_duration_seconds = max_note_duration_seconds
 
-    def __len__(self):
+    def __len__(self) -> int:
         return 2
 
     def sample(self, rng: np.random.Generator) -> tuple[float, float]:
-        start, end = np.sort(rng.uniform(0.0, self.max_note_duration_seconds, size=2)).tolist()
-
+        start, end = np.sort(
+            rng.uniform(0.0, self.max_note_duration_seconds, size=2)
+        ).tolist()
         return start, end
 
     def encode(self, raw_value: object) -> np.ndarray:
-        if not (
-            isinstance(raw_value, tuple)
-            and len(raw_value) == 2
-            and all(isinstance(value, Real) for value in raw_value)
-        ):
-            raise TypeError(f"{self.name} must be a pair of numeric endpoints")
-        return np.array(raw_value, dtype=np.float64) / self.max_note_duration_seconds
+        endpoints = _numeric_endpoints(self.name, raw_value)
+        return np.array(endpoints, dtype=np.float64) / self.max_note_duration_seconds
 
     def decode(self, encoded: np.ndarray) -> tuple[float, ...]:
+        """Decode endpoint coordinates without changing the legacy width behavior.
+
+        :param encoded: Endpoint fractions, conventionally shaped ``(2,)``.
+        :returns: Endpoint times in seconds.
+        """
         return tuple(float(value) for value in encoded * self.max_note_duration_seconds)
+
+
+class NoteDurationParameter(Parameter):
+    """Note timing encoded as onset plus remaining-window duration fraction."""
+
+    def __init__(
+        self,
+        name: str,
+        max_note_duration_seconds: float,
+        min_note_duration_seconds: float = 0.001,
+    ) -> None:
+        """Initialize bounded onset-duration timing.
+
+        :param name: Raw parameter name.
+        :param max_note_duration_seconds: Render horizon in seconds.
+        :param min_note_duration_seconds: Minimum held duration in seconds.
+        :raises ValueError: If either bound is non-finite or the interval is invalid.
+        """
+        super().__init__(name)
+        if not np.isfinite(max_note_duration_seconds) or not np.isfinite(
+            min_note_duration_seconds
+        ):
+            raise ValueError("note duration bounds must be finite")
+        if not 0.0 < min_note_duration_seconds < max_note_duration_seconds:
+            raise ValueError("minimum note duration must be positive and below the maximum")
+        self.max_note_duration_seconds = max_note_duration_seconds
+        self.min_note_duration_seconds = min_note_duration_seconds
+
+    def __len__(self) -> int:
+        return 2
+
+    def sample(self, rng: np.random.Generator) -> tuple[float, float]:
+        available = self.max_note_duration_seconds - self.min_note_duration_seconds
+        onset, shifted_end = np.sort(rng.uniform(0.0, available, size=2)).tolist()
+        return onset, shifted_end + self.min_note_duration_seconds
+
+    def encoded_names(self) -> tuple[str, ...]:
+        return (f"{self.name}.onset", f"{self.name}.duration_fraction")
+
+    def encode(self, raw_value: object) -> np.ndarray:
+        onset, end = _numeric_endpoints(self.name, raw_value)
+        available = self.max_note_duration_seconds - self.min_note_duration_seconds
+        if not np.isfinite((onset, end)).all():
+            raise ValueError(f"{self.name} endpoints must be finite")
+        tolerance = np.finfo(np.float64).eps * self.max_note_duration_seconds * 8
+        if onset < -tolerance or onset > available + tolerance:
+            raise ValueError(f"{self.name} onset must be within [0, {available}]")
+        if end > self.max_note_duration_seconds + tolerance:
+            raise ValueError(
+                f"{self.name} end must not exceed {self.max_note_duration_seconds}"
+            )
+        onset = min(max(onset, 0.0), available)
+        end = min(end, self.max_note_duration_seconds)
+        duration = end - onset
+        if duration < self.min_note_duration_seconds - tolerance:
+            raise ValueError(
+                f"{self.name} duration must be at least {self.min_note_duration_seconds}"
+            )
+
+        remaining_duration = available - onset
+        duration_fraction = (
+            0.0
+            if remaining_duration == 0.0
+            else (duration - self.min_note_duration_seconds) / remaining_duration
+        )
+        return np.array(
+            [onset / available, min(max(duration_fraction, 0.0), 1.0)],
+            dtype=np.float64,
+        )
+
+    def decode(self, encoded: np.ndarray) -> tuple[float, float]:
+        """Decode bounded onset and duration coordinates into endpoint seconds.
+
+        :param encoded: Finite unit-domain coordinates shaped ``(2,)``.
+        :returns: Ordered onset and end times within the render horizon.
+        :raises ValueError: The coordinates have the wrong shape or leave the unit domain.
+        """
+        values = np.asarray(encoded)
+        if values.shape != (2,):
+            raise ValueError(f"encoded {self.name} must have shape (2,), got {values.shape}")
+        if not np.isfinite(values).all():
+            raise ValueError(f"encoded {self.name} must contain only finite values")
+        if np.any((values < 0.0) | (values > 1.0)):
+            raise ValueError(f"encoded {self.name} values must be within [0, 1]")
+
+        available = self.max_note_duration_seconds - self.min_note_duration_seconds
+        onset = float(values[0]) * available
+        duration = self.min_note_duration_seconds + (available - onset) * float(values[1])
+        return onset, onset + duration
 
 
 # pydoclint check-class-attributes has no sphinx directive for TypedDict fields,
@@ -905,6 +1011,33 @@ class ParamSpec:
         for parameter in (*self.synth_params, *self.note_params):
             names.extend(parameter.encoded_names())
         return names
+
+
+def legacy_endpoint_variant(spec: ParamSpec) -> ParamSpec:
+    """Return a copied spec whose onset-duration note window uses legacy endpoints.
+
+    :param spec: Current specification containing exactly one onset-duration parameter.
+    :returns: Independent specification with identical native values and encoded width.
+    :raises ValueError: The spec does not contain exactly one onset-duration parameter.
+    """
+    timing_parameters = [
+        parameter
+        for parameter in spec.note_params
+        if isinstance(parameter, NoteDurationParameter)
+    ]
+    if len(timing_parameters) != 1:
+        raise ValueError("expected exactly one onset-duration timing parameter")
+    timing = timing_parameters[0]
+    note_params = [
+        LegacyEndpointNoteDurationParameter(
+            name=parameter.name,
+            max_note_duration_seconds=parameter.max_note_duration_seconds,
+        )
+        if parameter is timing
+        else deepcopy(parameter)
+        for parameter in spec.note_params
+    ]
+    return ParamSpec(deepcopy(spec.synth_params), note_params)
 
 
 def spec_quantize_model_output(row: np.ndarray, spec: ParamSpec) -> np.ndarray:

@@ -33,6 +33,7 @@ cfg_dropout_rate: 0.1
 
 num_params: ${param_spec_width:${synth.param_spec_name}}
 param_spec: ${synth.param_spec_name}
+note_timing_parameterization: ${synth.note_timing_parameterization}
 
 rectified_sigma_min: 0.0
 # What the field predicts: the velocity x1 - x0, or the clean endpoint x1.

@@ -270,7 +270,9 @@ def _sample_random_patches(config: RenderConfig, *, seed: int) -> list[dict[str,
     :param seed: NumPy generator seed defining the complete corpus.
     :returns: Full-dimensional normalized synth patches in sample order.
     """
-    param_spec = resolve_param_spec(config.param_spec_name)
+    param_spec = resolve_param_spec(
+        config.param_spec_name, config.note_timing_parameterization
+    )
     rng = np.random.default_rng(seed)
     return cast(
         list[dict[str, float]],
@@ -851,7 +853,9 @@ def _assert_structural_artifact_contract(
     """
     config = _config("pedalboard", render_count)
     expected_samples = int(config.sample_rate * config.signal_duration_seconds)
-    expected_param_width = resolve_param_spec(config.param_spec_name).encoded_width
+    expected_param_width = resolve_param_spec(
+        config.param_spec_name, config.note_timing_parameterization
+    ).encoded_width
     for backend, result in results.items():
         identity = {"workload": workload, "backend": backend}
         assert result.audio.shape == (render_count, 2, expected_samples), identity
@@ -952,7 +956,9 @@ def _assert_parameter_artifact(
     assert len(parameters) == render_count
     assert {row["sample"] for row in parameters} == set(range(render_count))
     config = _config("pedalboard", render_count)
-    param_spec = resolve_param_spec(config.param_spec_name)
+    param_spec = resolve_param_spec(
+        config.param_spec_name, config.note_timing_parameterization
+    )
     persisted_midi = {
         "note": _HARDCODED_NOTE_PARAMS["pitch"],
         "note_start_and_end_seconds": list(_HARDCODED_NOTE_PARAMS["note_start_and_end"]),
@@ -1368,7 +1374,9 @@ def test_random_patch_sampler_same_seed_reproduces_full_param_corpus() -> None:
     patches = _sample_random_patches(config, seed=_RANDOM_PATCH_SEED)
     repeated = _sample_random_patches(config, seed=_RANDOM_PATCH_SEED)
     assert patches == repeated
-    param_spec = resolve_param_spec(config.param_spec_name)
+    param_spec = resolve_param_spec(
+        config.param_spec_name, config.note_timing_parameterization
+    )
     expected_names = {parameter.name for parameter in param_spec.synth_params}
     assert len(patches) == _RANDOM_PATCH_COUNT
     assert {frozenset(patch) for patch in patches} == {frozenset(expected_names)}
@@ -1683,7 +1691,9 @@ def test_comparison_json_rejects_missing_pair_metrics(tmp_path: Path) -> None:
         "note_start_and_end": tuple(persisted_midi["note_start_and_end_seconds"]),
         "velocity": persisted_midi["velocity"],
     }
-    vector = resolve_param_spec(config.param_spec_name).encode(
+    vector = resolve_param_spec(
+        config.param_spec_name, config.note_timing_parameterization
+    ).encode(
         _PARITY_SYNTH_PARAMS,
         encoded_midi,
     )

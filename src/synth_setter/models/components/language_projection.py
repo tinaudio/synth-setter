@@ -10,6 +10,7 @@ from jaxtyping import Float, jaxtyped
 from torch import Tensor, nn
 
 from synth_setter.models.components.transformer import GroupedParameterProjection
+from synth_setter.param_spec_name import LEGACY_NOTE_TIMING, NoteTimingParameterization
 from synth_setter.pipeline.data.param_language import (
     EMBEDDING_MODEL,
     EMBEDDING_REVISION,
@@ -36,6 +37,7 @@ class LanguageParameterProjection(GroupedParameterProjection):
         param_spec_name: str,
         synth_name: str,
         *,
+        note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING,
         embedding_dim: int = 128,
         embedding_path: str | None = None,
         embedding_source: Literal["language", "random", "learned"] = "language",
@@ -46,6 +48,7 @@ class LanguageParameterProjection(GroupedParameterProjection):
         :param d_model: Transformer token width.
         :param param_spec_name: Registered field layout.
         :param synth_name: Dataset synth identity.
+        :param note_timing_parameterization: Timing coordinates described by language rows.
         :param embedding_dim: Finalized metadata width.
         :param embedding_path: Local artifact consumed by explicit initialization before forward.
         :param embedding_source: Language vectors or matched frozen/trainable identity controls.
@@ -57,6 +60,9 @@ class LanguageParameterProjection(GroupedParameterProjection):
             raise ValueError("unsupported parameter language embedding dimension")
         self.param_spec_name = param_spec_name
         self.synth_name = synth_name
+        self.note_timing_parameterization: NoteTimingParameterization = (
+            note_timing_parameterization
+        )
         self.embedding_dim = embedding_dim
         self.embedding_path = embedding_path
         self.embedding_source = embedding_source
@@ -88,7 +94,11 @@ class LanguageParameterProjection(GroupedParameterProjection):
 
         :returns: Identity checked before checkpoint field vectors can be consumed.
         """
-        descriptions = describe_fields(self.param_spec_name, self.synth_name)
+        descriptions = describe_fields(
+            self.param_spec_name,
+            self.synth_name,
+            self.note_timing_parameterization,
+        )
         return {
             "description_sha256": hashlib.sha256("\n".join(descriptions).encode()).hexdigest(),
             "embedding_dim": str(self.embedding_dim),
@@ -125,7 +135,10 @@ class LanguageParameterProjection(GroupedParameterProjection):
         if self.embedding_path is None:
             raise ValueError("fresh language projection requires a finalized embedding_path")
         embeddings, metadata = load_param_language(
-            Path(self.embedding_path), self.param_spec_name, self.synth_name
+            Path(self.embedding_path),
+            self.param_spec_name,
+            self.synth_name,
+            self.note_timing_parameterization,
         )
         if metadata.dimension != self.embedding_dim:
             raise ValueError("artifact dimension does not match projection embedding_dim")

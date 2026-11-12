@@ -17,6 +17,7 @@ from synth_setter.data.vst.param_spec import (
     DirectionArrayParameter,
     DiscreteArrayParameter,
     DiscreteLiteralParameter,
+    LegacyEndpointNoteDurationParameter,
     NoteDurationParameter,
     ParamSpec,
 )
@@ -184,9 +185,19 @@ def test_discrete_array_mismatch_counts_one_vote_per_native_element() -> None:
     assert metrics["discrete_mae/taps"].item() == pytest.approx(1.0)
 
 
-def test_note_duration_semantic_distance_reports_native_seconds() -> None:
-    """Start and end errors are decoded to seconds before averaging."""
-    spec = ParamSpec([], [NoteDurationParameter("timing", 10.0)])
+def test_note_duration_semantic_distance_reports_onset_and_hold_seconds() -> None:
+    """Onset and held-duration errors remain independently interpretable."""
+    spec = ParamSpec([], [NoteDurationParameter("timing", 10.0, 0.001)])
+
+    metrics = semantic_parameter_distances(_model(-1.0, -1.0), _model(-1.0, 1.0), spec)
+
+    assert metrics["note_onset_mae_seconds/timing"].item() == 0.0
+    assert metrics["note_duration_mae_seconds/timing"].item() == pytest.approx(9.999)
+
+
+def test_legacy_note_duration_semantic_distance_reports_endpoint_seconds() -> None:
+    """Legacy identities retain their historical mean endpoint-error metric."""
+    spec = ParamSpec([], [LegacyEndpointNoteDurationParameter("timing", 10.0)])
 
     metrics = semantic_parameter_distances(_model(-0.2, 0.2), _model(-0.6, 0.6), spec)
 
@@ -203,7 +214,7 @@ def test_semantic_distance_mixed_spec_preserves_spans_and_finite_inventory() -> 
             ContinuousArrayParameter("curve", (2,), -1.0, 1.0),
             DiscreteLiteralParameter("steps", 0, 2),
         ],
-        [NoteDurationParameter("timing", 4.0)],
+        [NoteDurationParameter("timing", 4.0, 0.001)],
     )
     predicted = _model(0.9, 1.0, 0.0, 1.0, -0.7, 0.8, 0.9, -1.0, 1.0)
     target = _model(-0.9, -1.0, 1.0, 0.0, 0.7, -0.8, -0.9, 1.0, -1.0)
@@ -214,11 +225,13 @@ def test_semantic_distance_mixed_spec_preserves_spans_and_finite_inventory() -> 
         "angular_mae_radians/phase",
         "discrete_mae/steps",
         "discrete_mismatch_rate/steps",
-        "note_timing_mae_seconds/timing",
+        "note_duration_mae_seconds/timing",
+        "note_onset_mae_seconds/timing",
     }
     assert metrics["angular_mae_radians/phase"].item() == pytest.approx(torch.pi / 2)
     assert metrics["discrete_mae/steps"].item() == 2.0
-    assert metrics["note_timing_mae_seconds/timing"].item() == pytest.approx(4.0)
+    assert metrics["note_onset_mae_seconds/timing"].item() == pytest.approx(3.999)
+    assert metrics["note_duration_mae_seconds/timing"].item() == pytest.approx(3.999)
 
 
 def test_semantic_distance_callback_logs_validation_and_test_namespaces() -> None:

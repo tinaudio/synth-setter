@@ -467,6 +467,7 @@ def _write_register_wiring(
             SynthSpec(
                 name=SynthName(spec_name),
                 param_spec_name=ParamSpecName(spec_name),
+                note_timing_parameterization="onset_duration",
                 plugin_path=target.recorded_plugin_path,
                 plugin_state_path=preset_repo_path(spec_name),
                 synth_version=version,

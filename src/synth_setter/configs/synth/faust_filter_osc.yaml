@@ -1,6 +1,7 @@
 # Generated artifact of ``synth_setter.synth_spec.SYNTHS``; edit the table, not this file.
 name: "faust_filter_osc"
 param_spec_name: "faust_filter_osc"
+note_timing_parameterization: "onset_duration"
 plugin_path: "registry://faust/faust_filter_osc"
 plugin_state_path: ""
 synth_version: "1"

@@ -42,6 +42,7 @@ def test_train_root_selects_synth_group_by_name() -> None:
     assert cfg["synth"] == {
         "name": "surge_4",
         "param_spec_name": "surge_4",
+        "note_timing_parameterization": "onset_duration",
         "plugin_path": "plugins/Surge XT.vst3",
         "plugin_state_path": "presets/surge-mini.vstpreset",
         "synth_version": "1.3.4",

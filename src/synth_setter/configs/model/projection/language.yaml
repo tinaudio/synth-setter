@@ -7,6 +7,7 @@ model:
       d_model: ${model.vector_field.d_model}
       param_spec_name: ${synth.param_spec_name}
       synth_name: ${synth.name}
+      note_timing_parameterization: ${synth.note_timing_parameterization}
       embedding_dim: 128
       embedding_path: ${datamodule.dataset_root}/param_language.npz
 
