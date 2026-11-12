@@ -862,29 +862,32 @@ _PER_PARAM_MSE_OUTPUTS = (
     _NUMBER_GROUP_OPTIMAL_ASSIGNMENT_OUTPUT,
 )
 _SPEC_QUANTIZED_PER_PARAM_MSE = "per_param_mse_spec_quantized"
+_ACTIVE_PER_PARAM_MSE = "per_param_mse_active"
 
 
 def _distributed_metric_mean(
     total: np.ndarray,
-    count: int,
+    count: int | np.ndarray,
     device: torch.device,
 ) -> np.ndarray:
     """Reduce an accumulated metric sum and count before computing its mean.
 
     :param total: Rank-local per-column metric sums.
-    :param count: Rank-local number of contributing observations.
+    :param count: Rank-local number of contributing observations, overall or per column.
     :param device: Device compatible with the active distributed backend.
-    :returns: Globally weighted per-column mean.
+    :returns: Globally weighted per-column mean; NaN where no observation contributed.
     """
+    counts = np.broadcast_to(np.asarray(count, dtype=np.float32), total.shape).flatten()
     packed = torch.cat(
         (
             torch.as_tensor(total, device=device, dtype=torch.float32).flatten(),
-            torch.tensor([count], device=device, dtype=torch.float32),
+            torch.as_tensor(counts, device=device),
         )
     )
     if torch.distributed.is_available() and torch.distributed.is_initialized():
         torch.distributed.all_reduce(packed)
-    return (packed[:-1] / packed[-1]).cpu().numpy().reshape(total.shape)
+    sums, reduced_counts = packed.split(total.size)
+    return (sums / reduced_counts).cpu().numpy().reshape(total.shape)
 
 
 class LogPerParamMSE(Callback):
@@ -900,7 +903,7 @@ class LogPerParamMSE(Callback):
 
     def _reset(self) -> None:
         self.metric_totals: dict[str, np.ndarray] = {}
-        self.metric_counts: dict[str, int] = {}
+        self.metric_counts: dict[str, int | np.ndarray] = {}
         self.categorical_totals: dict[str, dict[str, float]] = {}
         self.categorical_counts: dict[str, int] = {}
 
@@ -909,11 +912,17 @@ class LogPerParamMSE(Callback):
             return
         params = batch.get("params") if isinstance(batch, Mapping) else None
         weight = params.shape[0] if isinstance(params, torch.Tensor) else 1
-        batch_metrics: list[tuple[str, torch.Tensor, int]] = []
+        batch_metrics: list[tuple[str, torch.Tensor, int | np.ndarray]] = []
         for metric_name in _PER_PARAM_MSE_OUTPUTS:
             metric = outputs.get(metric_name)
             if isinstance(metric, torch.Tensor):
                 batch_metrics.append((metric_name, metric, weight))
+        active_metric = outputs.get(_ACTIVE_PER_PARAM_MSE)
+        active_mask = outputs.get("active_mask")
+        if isinstance(active_metric, torch.Tensor) and isinstance(active_mask, torch.Tensor):
+            # Each column averages over the rows where it was active, not over the batch.
+            active_rows = active_mask.sum(dim=0).cpu().numpy()
+            batch_metrics.append((_ACTIVE_PER_PARAM_MSE, active_metric, active_rows))
 
         predictions = outputs.get("preds")
         if isinstance(predictions, torch.Tensor) and isinstance(params, torch.Tensor):
@@ -988,6 +997,8 @@ class LogPerParamMSE(Callback):
                 {
                     f"{metric_namespace}/{param.name}": mean[span].mean()
                     for param, span in self.param_spec.encoded_slices()
+                    # A param never active this epoch has no masked MSE to report.
+                    if metric_name != _ACTIVE_PER_PARAM_MSE or not np.isnan(mean[span]).any()
                 }
             )
             if metric_name == _SPEC_QUANTIZED_PER_PARAM_MSE:

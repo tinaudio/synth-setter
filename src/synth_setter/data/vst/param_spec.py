@@ -2,6 +2,7 @@
 
 import math
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from numbers import Integral, Real
 from typing import Literal, TypedDict
 
@@ -737,14 +738,69 @@ def require_note_params(values: Mapping[str, object]) -> NoteParams:
     }
 
 
+@dataclass(frozen=True)
+class SelectorGate:
+    """Declare synth params audible only under some values of a one-hot selector.
+
+    A synth param named in any block is audible only under the selector values whose block
+    lists it; params named in no block, the selector included, are audible under every value.
+
+    .. attribute :: selector
+
+       Name of the one-hot :class:`CategoricalParameter` choosing what is audible.
+
+    .. attribute :: blocks
+
+       Every selector value mapped to the gated synth params audible under it.
+    """
+
+    selector: str
+    blocks: Mapping[object, Sequence[str]]
+
+
+def _validate_gate(gate: SelectorGate, synth_params: Sequence[Parameter]) -> None:
+    """Reject a gate that does not resolve against ``synth_params``.
+
+    :param gate: Declared selector gate.
+    :param synth_params: Synth parameters the gate refers to.
+    :raises ValueError: The selector is not a one-hot categorical synth param, the blocks do not
+        cover exactly its values, or a block names an unknown param or the selector.
+    """
+    by_name = {parameter.name: parameter for parameter in synth_params}
+    selector = by_name.get(gate.selector)
+    if not isinstance(selector, CategoricalParameter) or selector.encoding != "onehot":
+        raise ValueError(
+            f"selector {gate.selector!r} must name a one-hot CategoricalParameter synth param"
+        )
+    # Exact coverage, so a renamed or misspelled value cannot silently gate everything off.
+    if set(gate.blocks) != set(selector.values) or len(gate.blocks) != len(selector.values):
+        raise ValueError(f"gate blocks must cover every value of {gate.selector!r} exactly")
+    for members in gate.blocks.values():
+        for member in members:
+            if member not in by_name or member == gate.selector:
+                raise ValueError(f"gate member {member!r} must be a non-selector synth param")
+
+
 class ParamSpec:
     def __init__(
         self,
         synth_params: list[Parameter],
         note_params: list[Parameter],
+        *,
+        gate: SelectorGate | None = None,
     ) -> None:
+        """Bind the encoded parameter layout.
+
+        :param synth_params: Synth parameters, encoded first.
+        :param note_params: Note parameters, encoded after the synth parameters.
+        :param gate: Optional selector gate marking synth params that only some selector values
+            make audible.
+        """
+        if gate is not None:
+            _validate_gate(gate, synth_params)
         self.synth_params = synth_params
         self.note_params = note_params
+        self.gate = gate
 
     @property
     def synth_param_length(self) -> int:
@@ -779,6 +835,28 @@ class ParamSpec:
             width = len(param)
             yield param, slice(pointer, pointer + width)
             pointer += width
+
+    def active_coordinate_table(self) -> tuple[slice, np.ndarray]:
+        """Map each selector value to the encoded columns audible under it.
+
+        :returns: The selector's encoded columns, and a boolean table shaped
+            ``(len(selector.values), encoded_width)`` whose row ``k`` marks the columns
+            audible while value ``k`` is selected.
+        :raises ValueError: The spec declares no selector gate.
+        """
+        if self.gate is None:
+            raise ValueError("ParamSpec declares no selector gate")
+        spans = {parameter.name: span for parameter, span in self.encoded_slices()}
+        selector = next(p for p in self.synth_params if p.name == self.gate.selector)
+        assert isinstance(selector, CategoricalParameter)
+        table = np.ones((len(selector.values), self.encoded_width), dtype=bool)
+        for members in self.gate.blocks.values():
+            for member in members:
+                table[:, spans[member]] = False
+        for value, members in self.gate.blocks.items():
+            for member in members:
+                table[selector.values.index(value), spans[member]] = True
+        return spans[self.gate.selector], table
 
     @property
     def synth_columns(self) -> slice:

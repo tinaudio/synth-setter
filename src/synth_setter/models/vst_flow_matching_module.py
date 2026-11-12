@@ -319,6 +319,21 @@ def mixed_endpoint_row_loss(
 
 
 @jaxtyped(typechecker=beartype)
+def active_row_mean(
+    values: Float[torch.Tensor, "batch params"],
+    active: Bool[torch.Tensor, "batch params"],
+) -> Float[torch.Tensor, "batch 1"]:
+    """Average each row over its active columns only.
+
+    :param values: Per-coordinate terms; inert entries never reach the result or its gradient.
+    :param active: Columns audible under each row's selected value; at least one per row.
+    :returns: Per-row mean over active columns, shaped ``(batch, 1)``.
+    """
+    total = torch.where(active, values, 0.0).sum(dim=-1, keepdim=True)
+    return total / active.sum(dim=-1, keepdim=True)
+
+
+@jaxtyped(typechecker=beartype)
 def joint_cfg_velocity(
     conditional_field: _TimeField,
     unconditional_field: _TimeField,
@@ -624,6 +639,7 @@ class VSTFlowMatchingModule(LightningModule):
         test_cfg_strength: float = 4.0,
         test_sketch_cfg_strength: float | None = None,
         compile: bool = False,
+        mask_inert_targets: bool = False,
     ) -> None:
         """Wire the encoder/vector-field and persist the flow-matching hyperparameters.
 
@@ -663,10 +679,14 @@ class VSTFlowMatchingModule(LightningModule):
         :param test_sketch_cfg_strength: Sketch guidance strength at test and prediction;
             defaults to ``test_cfg_strength``.
         :param compile: Whether to compile the encoder and vector field during fit setup.
+        :param mask_inert_targets: Exclude target coordinates the ParamSpec's selector gate
+            marks inaudible from the flow loss, and add ``param_mse_active`` /
+            ``per_param_mse_active`` evaluation metrics; ``False`` leaves both unchanged.
         :raises ValueError: The ParamSpec width differs from ``num_params``, an objective
             option is invalid, mixed loss lacks endpoint parameterization or a ParamSpec,
-            or ``audio_loss`` is combined with a nonzero ``rectified_sigma_min`` or
-            ``compile=True`` (#2585).
+            ``audio_loss`` is combined with a nonzero ``rectified_sigma_min`` or
+            ``compile=True`` (#2585), or ``mask_inert_targets`` lacks a gated ParamSpec or
+            is combined with mixed loss.
         """
         super().__init__()
         if parameterization not in _PARAMETERIZATIONS:
@@ -685,6 +705,10 @@ class VSTFlowMatchingModule(LightningModule):
             raise ValueError("endpoint_loss='mixed' requires parameterization='endpoint'")
         if endpoint_loss == "mixed" and param_spec is None:
             raise ValueError("endpoint_loss='mixed' requires param_spec")
+        if mask_inert_targets and param_spec is None:
+            raise ValueError("mask_inert_targets requires param_spec")
+        if mask_inert_targets and endpoint_loss == "mixed":
+            raise ValueError("mask_inert_targets does not support endpoint_loss='mixed'")
         if endpoint_time_weighting not in _ENDPOINT_TIME_WEIGHTINGS:
             raise ValueError(
                 "endpoint_time_weighting must be one of "
@@ -764,6 +788,15 @@ class VSTFlowMatchingModule(LightningModule):
                     f"does not match num_params {num_params}"
                 )
         self._metric_param_spec = metric_spec
+        active_table = None
+        self._target_selector_columns = slice(0, 0)
+        if mask_inert_targets:
+            assert metric_spec is not None
+            self._target_selector_columns, table = metric_spec.active_coordinate_table()
+            active_table = torch.as_tensor(table)
+        # Derived from the ParamSpec, so it stays out of checkpoints.
+        self._active_coordinate_table: torch.Tensor | None
+        self.register_buffer("_active_coordinate_table", active_table, persistent=False)
         self._pitch_metric_spec = (
             metric_spec
             if metric_spec is not None and supports_midi_pitch_residuals(metric_spec)
@@ -1156,6 +1189,8 @@ class VSTFlowMatchingModule(LightningModule):
         if self.hparams.endpoint_loss == "mixed":
             assert self._metric_param_spec is not None
             row_loss = mixed_endpoint_row_loss(prediction, target, self._metric_param_spec)
+        elif self._active_coordinate_table is not None:
+            row_loss = active_row_mean(squared_flow_error, self._active_mask(x1))
         else:
             row_loss = squared_flow_error.mean(dim=-1, keepdim=True)
         loss = (row_loss * w).mean()
@@ -1526,6 +1561,19 @@ class VSTFlowMatchingModule(LightningModule):
         )
 
     @jaxtyped(typechecker=beartype)
+    def _active_mask(
+        self, target: Float[torch.Tensor, "batch params"]
+    ) -> Bool[torch.Tensor, "batch params"]:
+        """Look up the columns audible under each target row's selected value.
+
+        :param target: Model-space target rows.
+        :returns: Per-row active-column mask.
+        """
+        assert self._active_coordinate_table is not None
+        selected = target[:, self._target_selector_columns].argmax(dim=-1)
+        return self._active_coordinate_table[selected]
+
+    @jaxtyped(typechecker=beartype)
     def _per_param_mse_outputs(
         self,
         predicted: Float[torch.Tensor, "batch params"],
@@ -1539,13 +1587,22 @@ class VSTFlowMatchingModule(LightningModule):
         :param number_group_metric: Structured metric defining eligible grouped assignments.
         :returns: Scalar, per-parameter, and prediction tensors for one batch.
         """
-        per_param_mse = (predicted - target).square().mean(dim=0)
+        squared_error = (predicted - target).square()
+        per_param_mse = squared_error.mean(dim=0)
         outputs = {
             "param_mse": per_param_mse.mean(),
             "per_param_mse": per_param_mse,
             "per_param_mse_best_swap": best_swap_per_param_mse(predicted, target),
             "preds": predicted,
         }
+        if self._active_coordinate_table is not None:
+            active = self._active_mask(target)
+            outputs["param_mse_active"] = active_row_mean(squared_error, active).mean()
+            # Columns inactive on every row report 0 here; LogPerParamMSE weights by the mask.
+            outputs["per_param_mse_active"] = torch.where(active, squared_error, 0.0).sum(
+                dim=0
+            ) / active.sum(dim=0).clamp_min(1)
+            outputs["active_mask"] = active
         if number_group_metric is not None:
             outputs["per_param_mse_number_group_optimal_assignment"] = (
                 number_group_optimal_assignment_per_param_mse(
@@ -1592,6 +1649,13 @@ class VSTFlowMatchingModule(LightningModule):
         self.log(
             "val/param_mse", outputs["param_mse"], on_step=False, on_epoch=True, prog_bar=True
         )
+        if "param_mse_active" in outputs:
+            self.log(
+                "val/param_mse_active",
+                outputs["param_mse_active"],
+                on_step=False,
+                on_epoch=True,
+            )
 
         self.val_param_mse_best_swap.update(pred_params, batch["params"])
         self.log(
@@ -1648,6 +1712,13 @@ class VSTFlowMatchingModule(LightningModule):
         self.log(
             "test/param_mse", outputs["param_mse"], on_step=False, on_epoch=True, prog_bar=True
         )
+        if "param_mse_active" in outputs:
+            self.log(
+                "test/param_mse_active",
+                outputs["param_mse_active"],
+                on_step=False,
+                on_epoch=True,
+            )
 
         self.test_param_mse_best_swap.update(pred_params, batch["params"])
         self.log(
