@@ -35,16 +35,65 @@ halves communicate **only** through the file contract below.
 
 ## CLI options
 
-`--checkpoint` defaults to a `# SET ME` deployment constant in
-`cli/predict_capture.py` — until it is set, every invocation must pass the
-flag. The LightningModule class is detected from the checkpoint's state dict
-(`--model-class {flow,ff}` overrides); `--stats-file` applies the training
+A Surge FXP can be rendered as the input target instead of supplying a capture
+WAV. The fixed render is stereo 44.1 kHz with MIDI note 60 at velocity 100,
+a 2 s note, and a 2 s release tail; it is saved beside the predictions as
+`target.wav`:
+
+```bash
+synth-setter-predict-capture \
+  --fxp presets/surge-base.fxp \
+  --prediction-dir outputs/predictions \
+  --checkpoint r2://models/inverse/surge.ckpt \
+  --checkpoint-sha256 <sha256>
+```
+
+The WAV positional argument and `--fxp` are mutually exclusive. Output and log
+names use the selected input's stem.
+
+This complete `surge_simple` example uses the checkpoint and matching mel
+statistics from the 2M-sample SurgePy training run. The checkpoint resolver
+accepts R2 directly; materialize the statistics locally before invoking the
+CLI:
+
+```bash
+CHECKPOINT_SHA=87a0fcb20f9efbcb56fffc6e3ee6e1c8743c47013c297e33516b472543468c07
+STATS_SHA=c0c45d75a8b77004b3802c761bc77b5b34e7709a08343b2cf70fee04b7f52a19
+STATS=/tmp/surge-simple-${STATS_SHA}-stats.npz
+rclone copyto \
+  "r2:experiments/browser-evaluation/${STATS_SHA}/stats.npz" "$STATS" --checksum
+
+synth-setter-predict-capture \
+  --fxp presets/surge-simple.fxp \
+  --prediction-dir outputs/predictions \
+  --checkpoint \
+    "r2://experiments/browser-evaluation/${CHECKPOINT_SHA}/checkpoint.ckpt" \
+  --checkpoint-sha256 "$CHECKPOINT_SHA" \
+  --stats-file "$STATS" \
+  --param-spec-name surge_simple \
+  --render-audio
+```
+
+`--render-audio` is opt-in. After inference, it decodes the predicted synth
+parameters and renders MIDI note 60 at velocity 100 from 0–2 s into a 4 s,
+stereo 44.1 kHz `pred.wav`. The native SurgePy render uses the selected spec's
+registered FXP baseline and verified packaged parameter map, never the input
+target FXP. `params.csv` is published only after this requested render succeeds.
+Without the flag, inference retains its prior WAV/FXP behavior and does not
+load the Surge engine.
+
+`--checkpoint` accepts a local path or exact `r2://` object URI and defaults to
+a `# SET ME` deployment constant in `cli/predict_capture.py` — until it is set,
+every invocation must pass the flag. `--checkpoint-sha256` optionally pins the
+local or downloaded bytes. The LightningModule class is detected from the
+checkpoint's state dict (`--model-class {flow,ff}` overrides); `--stats-file`
+applies the training
 run's saved mel mean/std and **must** be passed when the served checkpoint was
 trained with `use_saved_mean_and_variance`, or the model receives unnormalized
 input (the CLI warns when it is omitted). `--map` overrides the packaged CLAP
 param map, which otherwise follows `--param-spec-name`. Every run — crashes
-included — appends to `<log-dir>/<uuid>.log` (`--log-dir`, default set per
-deployment next to the checkpoint constant).
+included — appends to `<log-dir>/<input-stem>.log` (`--log-dir`, default set
+per deployment next to the checkpoint constant).
 
 ## Regenerating the joint parameter maps
 

@@ -1,10 +1,10 @@
 """``synth-setter-predict-capture`` — single-capture sound-match inference (#1787).
 
 Python half of the live sound-match bridge: a CLAP host plugin captures 4 s of
-audio to ``capture-sample-dir/<uuid>.wav`` and spawns this CLI; we predict the
-synth patch that best matches the sound and write
-``param-prediction-dir/<uuid>/params.csv`` (plus ``pred-0.pt`` as a debugging
-aid). Values in ``params.csv`` are already in each parameter's native CLAP
+audio to ``capture-sample-dir/<uuid>.wav`` and spawns this CLI; an operator may
+instead supply a Surge FXP target. We predict the synth patch that best matches
+the sound and write ``param-prediction-dir/<input-stem>/params.csv`` (plus
+``pred-0.pt`` as a debugging aid). Values in ``params.csv`` are already in each parameter's native CLAP
 domain per the committed per-spec map (:func:`synth_setter.resources.clap_map`).
 
 Failure semantics: any error exits nonzero and ``params.csv`` is written via a
@@ -22,8 +22,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import click
+import numpy as np
 import torch
 
+from synth_setter.cli.clap_render import resolve_inverse_checkpoint
 from synth_setter.data.audio_datamodule import AudioFolderDataset
 from synth_setter.data.vst.clap_map import (
     ClapCsvRow,
@@ -31,16 +33,22 @@ from synth_setter.data.vst.clap_map import (
     load_clap_map,
     synth_params_to_clap_rows,
 )
-from synth_setter.data.vst.param_map import load_param_map
+from synth_setter.data.vst.core import write_wav
+from synth_setter.data.vst.param_map import SynthParamMap, load_param_map
 from synth_setter.data.vst.param_spec import (
     ParamSpec,
     decode_model_output,
     require_scalar_synth_params,
 )
 from synth_setter.data.vst.param_spec_registry import param_specs
+from synth_setter.data.vst.renderers import SurgePyRenderer
+from synth_setter.data.vst.surgepy_runtime import import_surgepy
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.pipeline import r2_io
 from synth_setter.resources import as_file, param_map
+from synth_setter.synth_spec import SynthName, resolve_synth
+from synth_setter.workspace import operator_workspace
 
 # SET ME: deployment checkpoint — use an absolute path (this placeholder is
 # repo-relative); the C++ bridge passes no --checkpoint (#1787).
@@ -56,6 +64,12 @@ _DEFAULT_MODEL_CLASS: str | None = None
 
 # Flow sampling draws noise; a fixed seed keeps serving and retries reproducible.
 _SERVING_SEED = 0
+_FXP_CHANNELS = 2
+_FXP_MIDI_NOTE = 60
+_FXP_NOTE_SECONDS = 2.0
+_FXP_SAMPLE_RATE = 44_100
+_FXP_SIGNAL_SECONDS = 4.0
+_FXP_VELOCITY = 100
 
 _MODEL_CLASSES: dict[str, type[VSTFlowMatchingModule] | type[VSTFeedForwardModule]] = {
     "flow": VSTFlowMatchingModule,
@@ -115,6 +129,36 @@ def detect_model_class(checkpoint: Path) -> str:
     raise ValueError(f"cannot infer model class from state-dict prefixes {sorted(prefixes)}")
 
 
+def render_fxp_target(fxp_path: Path) -> np.ndarray:
+    """Render an arbitrary Surge FXP as the fixed prediction target.
+
+    The note is MIDI 60 at velocity 100 for two seconds, followed by a two-second release tail at
+    44.1 kHz stereo.
+
+    :param fxp_path: Existing Surge FXP patch.
+    :returns: Channel-leading float32 audio with exactly 176,400 samples.
+    :raises RuntimeError: If Surge cannot load the patch.
+    """
+    surgepy = import_surgepy()
+    synth = surgepy.createSurge(_FXP_SAMPLE_RATE)
+    if not synth.loadPatch(str(fxp_path.resolve())):
+        raise RuntimeError(f"SurgePy could not load patch {fxp_path}")
+
+    sample_count = int(_FXP_SAMPLE_RATE * _FXP_SIGNAL_SECONDS)
+    block_size = synth.getBlockSize()
+    block_count = math.ceil(sample_count / block_size)
+    note_blocks = math.ceil(_FXP_SAMPLE_RATE * _FXP_NOTE_SECONDS / block_size)
+    audio = synth.createMultiBlock(block_count)
+    try:
+        synth.playNote(0, _FXP_MIDI_NOTE, _FXP_VELOCITY)
+        synth.processMultiBlock(audio, 0, note_blocks)
+        synth.releaseNote(0, _FXP_MIDI_NOTE)
+        synth.processMultiBlock(audio, note_blocks, block_count - note_blocks)
+    finally:
+        synth.allNotesOff()
+    return np.asarray(audio[:, :sample_count], dtype=np.float32)
+
+
 def compute_capture_mel(wav_path: Path, stats_file: Path | None = None) -> torch.Tensor:
     """Compute the model-input mel for one capture via the training data path.
 
@@ -136,6 +180,18 @@ def compute_capture_mel(wav_path: Path, stats_file: Path | None = None) -> torch
     return dataset[0]["mel"]
 
 
+def _decode_synth_params(prediction: torch.Tensor, spec: ParamSpec) -> dict[str, float]:
+    """Decode one raw model output row into scalar renderer parameters.
+
+    :param prediction: Tensor of shape ``(1, len(spec))`` in the model-output domain.
+    :param spec: Spec the model was trained against.
+    :returns: Renderer-native scalar synth parameters; note parameters are discarded.
+    """
+    row = prediction[0].detach().cpu().float().numpy()
+    synth_values, _ = decode_model_output(row, spec)
+    return require_scalar_synth_params(synth_values)
+
+
 def decode_and_convert(  # noqa: DOC502 — ValueError propagates from synth_params_to_clap_rows
     prediction: torch.Tensor,
     spec: ParamSpec,
@@ -153,10 +209,7 @@ def decode_and_convert(  # noqa: DOC502 — ValueError propagates from synth_par
     :returns: One row per decoded synth parameter.
     :raises ValueError: when any decoded param is missing from ``format_map``.
     """
-    row = prediction[0].detach().cpu().float().numpy()
-    synth_values, _ = decode_model_output(row, spec)
-    synth_params = require_scalar_synth_params(synth_values)
-    return synth_params_to_clap_rows(synth_params, spec, format_map)
+    return synth_params_to_clap_rows(_decode_synth_params(prediction, spec), spec, format_map)
 
 
 # DOC503: the bare re-raise after .tmp cleanup is not a new exception type.
@@ -212,19 +265,33 @@ def _predict_raw_params(
 
 
 @click.command()
-@click.argument("wav_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument(
+    "wav_path",
+    required=False,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--fxp",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help="Render this Surge FXP as the input target (MIDI 60, velocity 100, 2 s note + 2 s tail).",
+)
 @click.option(
     "--prediction-dir",
     required=True,
     type=click.Path(file_okay=False, path_type=Path),
-    help="Bridge param-prediction-dir; the <uuid>/ subdir is created here.",
+    help="Bridge param-prediction-dir; the <input-stem>/ subdir is created here.",
 )
 @click.option(
     "--checkpoint",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=_DEFAULT_CHECKPOINT,
+    type=str,
+    default=str(_DEFAULT_CHECKPOINT),
     show_default=True,
-    help="Lightning checkpoint to load.",
+    help="Local path or r2:// URI of the Lightning checkpoint to load.",
+)
+@click.option(
+    "--checkpoint-sha256",
+    default=None,
+    help="Optional SHA-256 required for the local or downloaded checkpoint.",
 )
 @click.option(
     "--map",
@@ -247,63 +314,98 @@ def _predict_raw_params(
     help="Mel mean/std .npz from training; set when the checkpoint trained normalized.",
 )
 @click.option("--param-spec-name", default="surge_xt", show_default=True)
+@click.option(
+    "--render-audio",
+    is_flag=True,
+    help="Render predicted parameters to pred.wav with the native Surge engine.",
+)
 @click.option("--device", default="cpu", show_default=True)
 @click.option(
     "--log-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=_DEFAULT_LOG_DIR,
     show_default=True,
-    help="Run logs land here as <uuid>.log (appended across retries).",
+    help="Run logs land here as <input-stem>.log (appended across retries).",
 )
 # DOC501/DOC503: the bare re-raise after logging is not a new exception type.
 def main(  # noqa: DOC501, DOC503
-    wav_path: Path,
+    wav_path: Path | None,
+    fxp: Path | None,
     prediction_dir: Path,
-    checkpoint: Path,
+    checkpoint: str,
+    checkpoint_sha256: str | None,
     map_path: Path | None,
     stats_file: Path | None,
     model_class: str | None,
     param_spec_name: str,
+    render_audio: bool,
     device: str,
     log_dir: Path,
 ) -> None:
-    """Predict synth parameters for one capture WAV and write the bridge CSV.
+    """Predict synth parameters for one WAV or rendered FXP target.
 
-    Every run — including any crash — is recorded in ``<log-dir>/<uuid>.log``;
-    the console mirror stays on stderr via ``click.echo``.
+    Every run — including any crash — is recorded in
+    ``<log-dir>/<input-stem>.log``; the console mirror stays on stderr.
 
-    :param wav_path: Capture file; its stem is the bridge uuid.
-    :param prediction_dir: Where the ``<uuid>/`` output dir is created.
-    :param checkpoint: Checkpoint file to run.
+    :param wav_path: Capture file, mutually exclusive with ``fxp``.
+    :param fxp: Surge patch rendered as the target, mutually exclusive with ``wav_path``.
+    :param prediction_dir: Where the ``<input-stem>/`` output dir is created.
+    :param checkpoint: Local checkpoint path or R2 object URI.
+    :param checkpoint_sha256: Optional required checkpoint digest.
     :param map_path: Map override; ``None`` resolves the packaged map.
     :param stats_file: Saved mel stats to normalize with; ``None`` skips normalization.
     :param model_class: ``_MODEL_CLASSES`` key selecting the module class;
         ``None`` detects it from the checkpoint's state dict.
     :param param_spec_name: ``param_specs`` registry key.
+    :param render_audio: Whether to render the prediction through native SurgePy.
     :param device: torch device for inference.
-    :param log_dir: Directory receiving the per-uuid run log.
+    :param log_dir: Directory receiving the per-input run log.
     """
-    capture_uuid = wav_path.stem
+    if (wav_path is None) == (fxp is None):
+        raise click.UsageError("exactly one of WAV_PATH or --fxp is required")
+    input_path = wav_path if wav_path is not None else fxp
+    assert input_path is not None
+    input_stem = input_path.stem
+    output_dir = prediction_dir / input_stem
+    (output_dir / "params.csv").unlink(missing_ok=True)
+    (output_dir / "pred.wav").unlink(missing_ok=True)
+
     log_dir.mkdir(parents=True, exist_ok=True)
-    logger = _open_run_logger(log_dir / f"{capture_uuid}.log")
+    logger = _open_run_logger(log_dir / f"{input_stem}.log")
     try:
         logger.info(
-            "predict_capture start: wav=%s checkpoint=%s spec=%s device=%s map=%s stats=%s",
-            wav_path,
+            "predict_capture start: target=%s checkpoint=%s spec=%s device=%s map=%s stats=%s",
+            input_path,
             checkpoint,
             param_spec_name,
             device,
             map_path or "packaged",
             stats_file or "none",
         )
+        if r2_io.is_r2_uri(checkpoint):
+            r2_io.ensure_r2_env_loaded()
+        resolved_checkpoint = resolve_inverse_checkpoint(checkpoint, checkpoint_sha256)
+        target_wav = wav_path
+        if fxp is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            target_wav = output_dir / "target.wav"
+            write_wav(
+                render_fxp_target(fxp),
+                str(target_wav),
+                _FXP_SAMPLE_RATE,
+                _FXP_CHANNELS,
+            )
+            _say(logger, f"rendered FXP target to {target_wav}")
+        assert target_wav is not None
         _run(
-            wav_path=wav_path,
-            prediction_dir=prediction_dir,
-            checkpoint=checkpoint,
+            wav_path=target_wav,
+            output_dir=output_dir,
+            checkpoint=resolved_checkpoint,
             map_path=map_path,
             stats_file=stats_file,
             model_class=model_class,
             param_spec_name=param_spec_name,
+            render_audio=render_audio,
             device=device,
             logger=logger,
         )
@@ -326,40 +428,79 @@ def _say(logger: logging.Logger, message: str) -> None:
     click.echo(message, err=True)
 
 
+def _prediction_renderer(param_spec_name: str, joint_map: SynthParamMap) -> SurgePyRenderer:
+    """Build the registered native renderer for a selected parameter spec.
+
+    :param param_spec_name: Selected ``param_specs`` registry key.
+    :param joint_map: Packaged joint map matching the selected spec.
+    :returns: Renderer pinned to the map's registered FXP baseline.
+    :raises ValueError: If the spec or map cannot drive native SurgePy rendering.
+    """
+    try:
+        synth = resolve_synth(SynthName(f"{param_spec_name}_surgepy"))
+    except KeyError:
+        raise ValueError(
+            f"parameter spec {param_spec_name!r} does not support SurgePy prediction rendering"
+        ) from None
+    if joint_map.surgepy is None or joint_map.surgepy_preset_resource is None:
+        raise ValueError(
+            f"parameter spec {param_spec_name!r} does not support SurgePy prediction rendering"
+        )
+    if (
+        str(joint_map.param_spec_name) != param_spec_name
+        or str(synth.param_spec_name) != param_spec_name
+        or synth.plugin_state_path != joint_map.surgepy_preset_resource
+    ):
+        raise ValueError(f"SurgePy registry and parameter map disagree for {param_spec_name!r}")
+    return SurgePyRenderer(
+        plugin_path=synth.plugin_path,
+        sample_rate=_FXP_SAMPLE_RATE,
+        channels=_FXP_CHANNELS,
+        signal_duration_seconds=_FXP_SIGNAL_SECONDS,
+        plugin_state_path=str(operator_workspace() / synth.plugin_state_path),
+        parameter_map=joint_map,
+    )
+
+
 def _run(
     wav_path: Path,
-    prediction_dir: Path,
+    output_dir: Path,
     checkpoint: Path,
     map_path: Path | None,
     stats_file: Path | None,
     model_class: str | None,
     param_spec_name: str,
+    render_audio: bool,
     device: str,
     logger: logging.Logger,
 ) -> None:
     """Execute one bridge prediction under an open run logger.
 
-    :param wav_path: Capture file; its stem is the bridge uuid.
-    :param prediction_dir: Where the ``<uuid>/`` output dir is created.
+    :param wav_path: Capture WAV or persisted FXP target render.
+    :param output_dir: Directory receiving prediction artifacts.
     :param checkpoint: Checkpoint file to run.
     :param map_path: Map override; ``None`` resolves the packaged map.
     :param stats_file: Saved mel stats to normalize with; ``None`` skips normalization.
     :param model_class: ``_MODEL_CLASSES`` key; ``None`` detects from the checkpoint.
     :param param_spec_name: ``param_specs`` registry key.
+    :param render_audio: Whether to render the prediction through native SurgePy.
     :param device: torch device for inference.
     :param logger: Per-run file logger from :func:`_open_run_logger`.
     """
-    capture_uuid = wav_path.stem
-    uuid_dir = prediction_dir / capture_uuid
-    # A retried uuid must never expose the previous run's result when this run
-    # fails — absence of params.csv IS the failure signal.
-    (uuid_dir / "params.csv").unlink(missing_ok=True)
+    joint_map: SynthParamMap | None = None
+    renderer: SurgePyRenderer | None = None
+    if render_audio:
+        with as_file(param_map(param_spec_name)) as packaged:
+            joint_map = load_param_map(packaged)
+        renderer = _prediction_renderer(param_spec_name, joint_map)
 
     if map_path is not None:
         format_map = load_clap_map(map_path)
     else:
-        with as_file(param_map(param_spec_name)) as packaged:
-            format_map = load_param_map(packaged).clap_projection()
+        if joint_map is None:
+            with as_file(param_map(param_spec_name)) as packaged:
+                joint_map = load_param_map(packaged)
+        format_map = joint_map.clap_projection()
     spec = param_specs[param_spec_name]
 
     if model_class is None:
@@ -387,15 +528,25 @@ def _run(
     # capture yields a different patch on every spawn.
     torch.manual_seed(_SERVING_SEED)
     prediction = _predict_raw_params(mel, model)
-    uuid_dir.mkdir(parents=True, exist_ok=True)
-    torch.save(prediction, uuid_dir / "pred-0.pt")
-    logger.info("saved raw prediction: %s", uuid_dir / "pred-0.pt")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    torch.save(prediction, output_dir / "pred-0.pt")
+    logger.info("saved raw prediction: %s", output_dir / "pred-0.pt")
 
-    rows = decode_and_convert(prediction, spec, format_map)
-    write_params_csv(rows, uuid_dir / "params.csv")
+    synth_params = _decode_synth_params(prediction, spec)
+    rows = synth_params_to_clap_rows(synth_params, spec, format_map)
+    if renderer is not None:
+        audio = renderer.render(
+            synth_params,
+            midi_note=_FXP_MIDI_NOTE,
+            velocity=_FXP_VELOCITY,
+            note_start_and_end=(0.0, _FXP_NOTE_SECONDS),
+        )
+        write_wav(audio, str(output_dir / "pred.wav"), _FXP_SAMPLE_RATE, _FXP_CHANNELS)
+        _say(logger, f"rendered predicted audio to {output_dir / 'pred.wav'}")
+    write_params_csv(rows, output_dir / "params.csv")
     _say(
         logger,
-        f"wrote {len(rows)} params to {uuid_dir / 'params.csv'} "
+        f"wrote {len(rows)} params to {output_dir / 'params.csv'} "
         f"(checkpoint={checkpoint} map={map_path or f'packaged {param_spec_name}_param_map.json'} "
         f"spec={param_spec_name})",
     )
