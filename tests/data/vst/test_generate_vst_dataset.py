@@ -4,11 +4,11 @@ import json
 import logging
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 from unittest.mock import MagicMock, patch
 
 import lance
@@ -18,8 +18,8 @@ import pytest
 
 from synth_setter.data.vst import param_specs
 from synth_setter.data.vst.core import load_plugin, load_preset, render_params
-from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
-from synth_setter.data.vst.renderers import PedalboardRenderer
+from synth_setter.data.vst.param_spec import NoteParams, ParameterValue, ParamSpec
+from synth_setter.data.vst.renderers import AudioRenderer, PedalboardRenderer
 from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.data.vst.writers import make_lance_dataset
 from synth_setter.evaluation.compute_audio_metrics import (
@@ -37,6 +37,9 @@ from tests._vst import (
     TEST_PRESET_PATH,
     TEST_SYNTH_VERSION,
 )
+
+if TYPE_CHECKING:
+    from synth_setter.data.vst.input_audio import InputAudioPool
 
 log = logging.getLogger(__name__)
 
@@ -1329,6 +1332,141 @@ def test_generate_sample_nonfinite_render_fixed_synth_params_raises(
             param_spec=spec,
             fixed_synth_params=_HARDCODED_SYNTH_PARAMS,
             fixed_note_params=_HARDCODED_NOTE_PARAMS,
+        )
+
+
+@dataclass(kw_only=True)
+class _UnvalidatedRenderer(AudioRenderer):
+    """Return queued outputs verbatim, skipping every backend-side output check.
+
+    .. attribute :: outputs
+
+       Audio returned by successive ``render`` / ``render_with_input`` calls.
+    """
+
+    outputs: Iterator[np.ndarray]
+
+    def render(
+        self,
+        params: Mapping[str, ParameterValue],
+        midi_note: int,
+        velocity: int,
+        note_start_and_end: tuple[float, float],
+        *,
+        warmup: bool = False,
+    ) -> np.ndarray:
+        """Return the next queued output.
+
+        :param params: Ignored.
+        :param midi_note: Ignored.
+        :param velocity: Ignored.
+        :param note_start_and_end: Ignored.
+        :param warmup: Ignored.
+        :returns: The next queued output, unvalidated.
+        """
+        del params, midi_note, velocity, note_start_and_end, warmup
+        return next(self.outputs)
+
+    def render_with_input(
+        self,
+        params: Mapping[str, ParameterValue],
+        mono_buffer: np.ndarray,
+    ) -> np.ndarray:
+        """Return the next queued output.
+
+        :param params: Ignored.
+        :param mono_buffer: Ignored.
+        :returns: The next queued output, unvalidated.
+        """
+        del params, mono_buffer
+        return next(self.outputs)
+
+
+def _unvalidated_renderer(*outputs: np.ndarray) -> _UnvalidatedRenderer:
+    """Build a renderer that returns ``outputs`` in order without validating them.
+
+    :param *outputs: Audio returned by successive render calls.
+    :returns: Renderer with this module's stereo geometry.
+    """
+    return _UnvalidatedRenderer(
+        plugin_path="unvalidated",
+        sample_rate=_SAMPLE_RATE,
+        channels=_CHANNELS,
+        signal_duration_seconds=_DURATION,
+        outputs=iter(outputs),
+    )
+
+
+class _SilentInputPool:
+    """Serve one silent mono row for every attempt."""
+
+    def row_index(self, base_seed: int, sample_idx: int, attempt: int) -> int:
+        """Select the only row.
+
+        :param base_seed: Ignored.
+        :param sample_idx: Ignored.
+        :param attempt: Ignored.
+        :returns: Row zero.
+        """
+        del base_seed, sample_idx, attempt
+        return 0
+
+    def take(self, row_index: int) -> np.ndarray:
+        """Return a silent mono waveform on the module's render grid.
+
+        :param row_index: Ignored.
+        :returns: Zero-valued float32 mono waveform.
+        """
+        del row_index
+        return np.zeros(int(_SAMPLE_RATE * _DURATION), dtype=np.float32)
+
+
+def test_generate_sample_unvalidated_renderer_nonfinite_render_counts_rejection() -> None:
+    """A NaN render from a renderer that skips its own output check is a per-draw rejection."""
+    from synth_setter.data.vst import generate_vst_dataset
+
+    sample = generate_vst_dataset.generate_sample(
+        renderer=_unvalidated_renderer(_nonfinite_audio(), _loud_audio()),
+        velocity=_VELOCITY,
+        min_loudness=_MIN_LOUDNESS,
+        param_spec=param_specs[_SPEC_NAME],
+        seed=generate_vst_dataset.SampleSeed(master_seed=7, max_attempts=2),
+    )
+
+    assert sample.attempt == 1
+    assert sample.non_finite_rejections == 1
+
+
+def test_generate_sample_unvalidated_renderer_nonfinite_input_render_counts_rejection() -> None:
+    """A NaN ``render_with_input`` output that skips its own check is a per-draw rejection."""
+    from synth_setter.data.vst import generate_vst_dataset
+
+    sample = generate_vst_dataset.generate_sample(
+        renderer=_unvalidated_renderer(_nonfinite_audio(), _loud_audio()),
+        velocity=_VELOCITY,
+        min_loudness=_MIN_LOUDNESS,
+        param_spec=param_specs[_SPEC_NAME],
+        seed=generate_vst_dataset.SampleSeed(master_seed=7, max_attempts=2),
+        input_audio_pool=cast("InputAudioPool", _SilentInputPool()),
+    )
+
+    assert sample.attempt == 1
+    assert sample.non_finite_rejections == 1
+
+
+def test_generate_sample_unvalidated_renderer_wrong_shape_raises() -> None:
+    """A render violating the configured geometry fails fast: it is a backend defect, not a draw."""
+    from synth_setter.data.vst import generate_vst_dataset
+
+    mono = _loud_audio()[:1]
+
+    with pytest.raises(ValueError, match="shape"):
+        generate_vst_dataset.generate_sample(
+            renderer=_unvalidated_renderer(mono),
+            velocity=_VELOCITY,
+            min_loudness=_MIN_LOUDNESS,
+            param_spec=param_specs[_SPEC_NAME],
+            seed=generate_vst_dataset.SampleSeed(master_seed=7, max_attempts=1),
         )
 
 
