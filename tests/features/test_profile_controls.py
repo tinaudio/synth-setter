@@ -1,5 +1,7 @@
 """Sketch-control extraction dispatches on the checkpoint's profile."""
 
+import importlib.util
+
 import numpy as np
 import pytest
 import torch
@@ -22,6 +24,16 @@ from synth_setter.features.tiv import chroma_to_tiv, extract_tiv_batch
 from synth_setter.sketch import prepare_music_sketch_controls, resample_sketch_controls
 
 _SAMPLE_RATE = 44_100
+_TIV_BACKENDS = (
+    "torch",
+    pytest.param(
+        "essentia",
+        marks=pytest.mark.skipif(
+            importlib.util.find_spec("essentia") is None,
+            reason="Essentia is not installed (Linux x86_64 dev group or `uv sync --extra tiv-cpu`)",
+        ),
+    ),
+)
 
 
 def _decaying_noise(seed: int, channels: int = 1) -> np.ndarray:
@@ -206,7 +218,7 @@ def music_tiv_audio() -> torch.Tensor:
 
 
 @pytest.mark.parametrize("mode", ["average", "linear"])
-@pytest.mark.parametrize("backend", ["torch", "essentia"])
+@pytest.mark.parametrize("backend", _TIV_BACKENDS)
 def test_music_tiv_extraction_preserves_music_and_normalized_chroma(
     backend: TIVBackend,
     mode: SketchTemporalResampling,
@@ -303,7 +315,7 @@ def test_music_tiv_extraction_offline_matches_batch(
     torch.testing.assert_close(offline, batch)
 
 
-@pytest.mark.parametrize("backend", ["torch", "essentia"])
+@pytest.mark.parametrize("backend", _TIV_BACKENDS)
 def test_music_tiv_final_five_millisecond_tone_retains_boundary_energy(
     backend: TIVBackend, music_tiv_spec: SketchControlSpec
 ) -> None:
@@ -322,7 +334,7 @@ def test_music_tiv_final_five_millisecond_tone_retains_boundary_energy(
     assert torch.count_nonzero(controls[:, NUM_SKETCH_CONTROLS:, -1]) > 0
 
 
-@pytest.mark.parametrize("backend", ["torch", "essentia"])
+@pytest.mark.parametrize("backend", _TIV_BACKENDS)
 @pytest.mark.parametrize("transition_time", [0.1, 3.9])
 def test_music_tiv_note_transition_preserves_waveform_timestamp(
     backend: TIVBackend, transition_time: float, music_tiv_spec: SketchControlSpec
@@ -352,7 +364,7 @@ def test_music_tiv_note_transition_preserves_waveform_timestamp(
     assert observed_time == pytest.approx(transition_time, abs=0.012)
 
 
-@pytest.mark.parametrize("backend", ["torch", "essentia"])
+@pytest.mark.parametrize("backend", _TIV_BACKENDS)
 def test_music_tiv_silent_audio_has_zero_chroma(
     backend: TIVBackend, music_tiv_spec: SketchControlSpec
 ) -> None:
