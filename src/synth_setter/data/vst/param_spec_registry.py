@@ -27,7 +27,7 @@ from synth_setter.data.pyfdn_param_spec import (
 from synth_setter.data.vst.cardinal_param_spec import CARDINAL_PARAM_SPEC
 from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
 from synth_setter.data.vst.obxf_param_spec import OBXF_PARAM_SPEC
-from synth_setter.data.vst.param_spec import ParamSpec
+from synth_setter.data.vst.param_spec import ParamSpec, onset_duration_variant
 from synth_setter.data.vst.surge_xt_param_spec import (
     SURGE_4_PARAM_SPEC,
     SURGE_SIMPLE_PARAM_SPEC,
@@ -43,7 +43,7 @@ from synth_setter.data.vst.ultramaster_kr106_param_spec import (
     ULTRAMASTER_KR106_PARAM_SPEC,
     ULTRAMASTER_KR106_SINGLE_NOTE_PARAM_SPEC,
 )
-from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.param_spec_name import ParamSpecName, onset_duration_param_spec_name
 from synth_setter.synth_spec import SYNTHS
 
 _param_specs: dict[ParamSpecName, ParamSpec] = {
@@ -76,6 +76,15 @@ _param_specs: dict[ParamSpecName, ParamSpec] = {
     ParamSpecName("ultramaster_kr106_onehot"): ULTRAMASTER_KR106_ONEHOT_PARAM_SPEC,
     ParamSpecName("ultramaster_kr106_single_note"): ULTRAMASTER_KR106_SINGLE_NOTE_PARAM_SPEC,
 }
+# Onset-duration timing has the same width as endpoint timing, so it is a separate spec
+# name rather than a flag: every name-keyed consumer then selects it, or rejects a swap.
+_param_specs.update(
+    {
+        onset_duration_param_spec_name(name): variant
+        for name, spec in _param_specs.items()
+        if (variant := onset_duration_variant(spec)) is not None
+    }
+)
 param_specs = cast(Mapping[str, ParamSpec], MappingProxyType(_param_specs))
 
 # Projection of the identity table, not a second source: keeping it derived is what

@@ -1010,6 +1010,43 @@ def test_from_hydra_real_vst_lance_render_stages_then_resume_skips(
 
 @pytest.mark.requires_vst
 @pytest.mark.slow
+def test_from_hydra_onset_duration_spec_real_vst_render_writes_valid_shards(
+    cfg_dataset: DictConfig,
+    fake_r2_remote: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """One spec-name override drives the operator path through a real VST render.
+
+    :param cfg_dataset: Hydra cfg composed with the smoke-shard dataset.
+    :param fake_r2_remote: Local-filesystem root backing the real rclone process.
+    :param monkeypatch: Pins the single-worker rank and world size.
+    :param tmp_path: Scratch directory for finalize sidecars and statistics.
+    """
+    (tmp_path / "src").symlink_to(_REPO_ROOT / "src", target_is_directory=True)
+    (tmp_path / "presets").symlink_to(_REPO_ROOT / "presets", target_is_directory=True)
+    monkeypatch.setenv("SYNTH_SETTER_WORKER_RANK", "0")
+    monkeypatch.setenv("SYNTH_SETTER_NUM_WORKERS", "1")
+    onset_duration_spec_name = f"{cfg_dataset.synth.param_spec_name}_onset_duration"
+    with open_dict(cfg_dataset):
+        cfg_dataset.output_format = "lance"
+        cfg_dataset.train_val_test_sizes = [1, 1, 1]
+        cfg_dataset.synth.param_spec_name = onset_duration_spec_name
+        cfg_dataset.synth.plugin_path = str(_REAL_PLUGIN_VST3)
+        cfg_dataset.render.samples_per_render_batch = 1
+        cfg_dataset.render.samples_per_shard = 1
+        cfg_dataset.r2.prefix = "fake-r2/real-vst-onset-duration-run/"
+        cfg_dataset.logger = None
+    spec = spec_from_cfg(cfg_dataset)
+
+    from_hydra(cfg_dataset)
+
+    assert spec.render.param_spec_name == onset_duration_spec_name
+    assert validate_all_shards_from_r2(spec) == []
+
+
+@pytest.mark.requires_vst
+@pytest.mark.slow
 def test_from_hydra_real_kr106_smoke_writes_finite_consumable_lance_shard(
     cfg_dataset_kr106_smoke: DictConfig,
     fake_r2_remote: Path,

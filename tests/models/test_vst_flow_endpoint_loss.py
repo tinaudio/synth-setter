@@ -937,6 +937,52 @@ def test_load_legacy_checkpoint_with_flowmol3_module_raises(tmp_path: Path) -> N
         module.on_load_checkpoint(checkpoint)
 
 
+@pytest.mark.parametrize(
+    ("trained", "resumed"),
+    [("cardinal", "cardinal_onset_duration"), ("cardinal_onset_duration", "cardinal")],
+)
+def test_resume_under_same_width_note_timing_twin_raises(
+    tmp_path: Path, trained: str, resumed: str
+) -> None:
+    """Weights trained on one note-timing encoding cannot resume under the other.
+
+    :param tmp_path: Checkpoint directory.
+    :param trained: Spec the checkpoint's rows were encoded with.
+    :param resumed: Same-width spec the resuming module decodes with.
+    """
+    path = _save_checkpoint(_module(param_spec=trained), tmp_path / "trained.ckpt")
+    checkpoint = torch.load(path, weights_only=False)
+
+    with pytest.raises(ValueError, match=f"parameter spec {trained!r}"):
+        _module(param_spec=resumed).on_load_checkpoint(checkpoint)
+
+
+def test_resume_checkpoint_without_recorded_param_spec_is_endpoint_timed(
+    tmp_path: Path,
+) -> None:
+    """A checkpoint that predates spec recording resumes only under endpoint timing.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(_module(param_spec=None), tmp_path / "unrecorded.ckpt")
+    checkpoint = torch.load(path, weights_only=False)
+
+    _module(param_spec="cardinal").on_load_checkpoint(checkpoint)
+    with pytest.raises(ValueError, match="parameter spec 'cardinal'"):
+        _module(param_spec="cardinal_onset_duration").on_load_checkpoint(checkpoint)
+
+
+def test_resume_module_without_param_spec_accepts_any_checkpoint(tmp_path: Path) -> None:
+    """A module that decodes with no spec has no row encoding to contradict.
+
+    :param tmp_path: Checkpoint directory.
+    """
+    path = _save_checkpoint(_module(param_spec="cardinal"), tmp_path / "trained.ckpt")
+    checkpoint = torch.load(path, weights_only=False)
+
+    _module(param_spec=None).on_load_checkpoint(checkpoint)
+
+
 def test_vst_flow_config_defaults_endpoint_loss_to_mse() -> None:
     """The shipped flow config defaults endpoint_loss to MSE."""
     path = Path(__file__).parents[2] / "src/synth_setter/configs/model/vst_flow.yaml"

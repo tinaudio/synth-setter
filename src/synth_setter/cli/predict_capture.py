@@ -40,6 +40,7 @@ from synth_setter.data.vst.param_spec import (
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.param_spec_name import require_trained_param_spec
 from synth_setter.resources import as_file, param_map
 
 # SET ME: deployment checkpoint — use an absolute path (this placeholder is
@@ -371,6 +372,7 @@ def _run(
     model = _MODEL_CLASSES[model_class].load_from_checkpoint(
         checkpoint, map_location=device, weights_only=False
     )
+    require_trained_param_spec(model.hparams, param_spec_name)
     # map_location only remaps storages; move the module so model.device (and
     # the batch _predict_raw_params sends) actually follow --device.
     model.to(device)
@@ -396,7 +398,7 @@ def _run(
     _say(
         logger,
         f"wrote {len(rows)} params to {uuid_dir / 'params.csv'} "
-        f"(checkpoint={checkpoint} map={map_path or f'packaged {param_spec_name}_param_map.json'} "
+        f"(checkpoint={checkpoint} map={map_path or 'packaged'} "
         f"spec={param_spec_name})",
     )
 

@@ -45,7 +45,7 @@ from synth_setter.data.vst.param_spec import (
 from synth_setter.data.vst.param_spec_registry import default_plugin_path
 from synth_setter.data.vst.shapes import PARAM_ARRAY_FIELD
 from synth_setter.data.vst.writers import make_lance_dataset
-from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.param_spec_name import ParamSpecName, base_param_spec_name
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.resources import as_file, vst_headless_wrapper
 from synth_setter.synth_spec import SynthName, SynthSpec
@@ -77,7 +77,7 @@ def make_dataset_render_cfg(
     """
     return RenderConfig(
         synth=SynthSpec(
-            name=SynthName(param_spec_name),
+            name=SynthName(base_param_spec_name(param_spec_name)),
             param_spec_name=ParamSpecName(param_spec_name),
             plugin_path=plugin_path,
             plugin_state_path=plugin_state_path,
@@ -1337,7 +1337,7 @@ def main(
     :raises TypeError: The loaded plugin is not a VST3 plugin.
     :raises click.UsageError: CLI options conflict or an output path already exists.
     """
-    plugin_state_path = plugin_state_paths[param_spec_name]
+    plugin_state_path = plugin_state_paths[base_param_spec_name(param_spec_name)]
     if dataset_ref is not None and pred is not None:
         raise click.UsageError(
             "--pred and --dataset-ref are mutually exclusive; pass at most one."

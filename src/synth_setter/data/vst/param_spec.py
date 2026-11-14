@@ -657,6 +657,23 @@ class DirectionArrayParameter(Parameter):
         return (vector / np.linalg.norm(vector)).reshape(self.shape, order="C")
 
 
+def _numeric_endpoints(name: str, raw_value: object) -> tuple[float, float]:
+    """Coerce a raw note window to ``(start, end)`` seconds.
+
+    :param name: Parameter name used in the rejection message.
+    :param raw_value: Candidate two-element tuple of real numbers.
+    :returns: Start and end as floats.
+    :raises TypeError: ``raw_value`` is not a pair of numeric endpoints.
+    """
+    if not (
+        isinstance(raw_value, tuple)
+        and len(raw_value) == 2
+        and all(isinstance(value, Real) for value in raw_value)
+    ):
+        raise TypeError(f"{name} must be a pair of numeric endpoints")
+    return float(raw_value[0]), float(raw_value[1])
+
+
 class NoteDurationParameter(Parameter):
     """A special parameter for sampling note durations."""
 
@@ -673,16 +690,105 @@ class NoteDurationParameter(Parameter):
         return start, end
 
     def encode(self, raw_value: object) -> np.ndarray:
-        if not (
-            isinstance(raw_value, tuple)
-            and len(raw_value) == 2
-            and all(isinstance(value, Real) for value in raw_value)
-        ):
-            raise TypeError(f"{self.name} must be a pair of numeric endpoints")
-        return np.array(raw_value, dtype=np.float64) / self.max_note_duration_seconds
+        endpoints = _numeric_endpoints(self.name, raw_value)
+        return np.array(endpoints, dtype=np.float64) / self.max_note_duration_seconds
 
     def decode(self, encoded: np.ndarray) -> tuple[float, ...]:
         return tuple(float(value) for value in encoded * self.max_note_duration_seconds)
+
+
+class OnsetDurationParameter(Parameter):
+    """Note window encoded as onset plus the held fraction of the remaining render window.
+
+    Every unit-domain coordinate pair decodes to an ordered ``(start, end)`` window at
+    least ``min_note_duration_seconds`` long, unlike :class:`NoteDurationParameter`,
+    whose independent endpoints can reverse or collapse.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        max_note_duration_seconds: float,
+        min_note_duration_seconds: float = 0.001,
+    ) -> None:
+        """Initialize bounded onset-duration timing.
+
+        :param name: Raw parameter name.
+        :param max_note_duration_seconds: Render horizon in seconds.
+        :param min_note_duration_seconds: Minimum held duration in seconds.
+        :raises ValueError: If either bound is non-finite or the interval is invalid.
+        """
+        super().__init__(name)
+        if not np.isfinite(max_note_duration_seconds) or not np.isfinite(
+            min_note_duration_seconds
+        ):
+            raise ValueError("note duration bounds must be finite")
+        if not 0.0 < min_note_duration_seconds < max_note_duration_seconds:
+            raise ValueError("minimum note duration must be positive and below the maximum")
+        self.max_note_duration_seconds = max_note_duration_seconds
+        self.min_note_duration_seconds = min_note_duration_seconds
+        # Latest onset that still leaves room for the minimum held duration.
+        self._max_onset_seconds = max_note_duration_seconds - min_note_duration_seconds
+
+    def __len__(self) -> int:
+        return 2
+
+    def sample(self, rng: np.random.Generator) -> tuple[float, float]:
+        onset, shifted_end = np.sort(rng.uniform(0.0, self._max_onset_seconds, size=2)).tolist()
+        return onset, shifted_end + self.min_note_duration_seconds
+
+    def encoded_names(self) -> tuple[str, ...]:
+        return (f"{self.name}.onset", f"{self.name}.duration_fraction")
+
+    def encode(self, raw_value: object) -> np.ndarray:
+        onset, end = _numeric_endpoints(self.name, raw_value)
+        max_onset = self._max_onset_seconds
+        if not np.isfinite((onset, end)).all():
+            raise ValueError(f"{self.name} endpoints must be finite")
+        # Absorbs float round-off in sampled or decoded windows, not genuine violations.
+        tolerance = np.finfo(np.float64).eps * self.max_note_duration_seconds * 8
+        if onset < -tolerance or onset > max_onset + tolerance:
+            raise ValueError(f"{self.name} onset must be within [0, {max_onset}]")
+        if end > self.max_note_duration_seconds + tolerance:
+            raise ValueError(f"{self.name} end must not exceed {self.max_note_duration_seconds}")
+        onset = min(max(onset, 0.0), max_onset)
+        end = min(end, self.max_note_duration_seconds)
+        duration = end - onset
+        if duration < self.min_note_duration_seconds - tolerance:
+            raise ValueError(
+                f"{self.name} duration must be at least {self.min_note_duration_seconds}"
+            )
+
+        remaining_duration = max_onset - onset
+        duration_fraction = (
+            0.0
+            if remaining_duration == 0.0
+            else (duration - self.min_note_duration_seconds) / remaining_duration
+        )
+        return np.array(
+            [onset / max_onset, min(max(duration_fraction, 0.0), 1.0)],
+            dtype=np.float64,
+        )
+
+    def decode(self, encoded: np.ndarray) -> tuple[float, float]:
+        """Decode bounded onset and duration coordinates into endpoint seconds.
+
+        :param encoded: Finite unit-domain coordinates shaped ``(2,)``.
+        :returns: Ordered onset and end times within the render horizon.
+        :raises ValueError: The coordinates have the wrong shape or leave the unit domain.
+        """
+        values = np.asarray(encoded)
+        if values.shape != (2,):
+            raise ValueError(f"encoded {self.name} must have shape (2,), got {values.shape}")
+        if not np.isfinite(values).all():
+            raise ValueError(f"encoded {self.name} must contain only finite values")
+        if np.any((values < 0.0) | (values > 1.0)):
+            raise ValueError(f"encoded {self.name} values must be within [0, 1]")
+
+        onset = float(values[0]) * self._max_onset_seconds
+        remaining_duration = self._max_onset_seconds - onset
+        duration = self.min_note_duration_seconds + remaining_duration * float(values[1])
+        return onset, onset + duration
 
 
 # pydoclint check-class-attributes has no sphinx directive for TypedDict fields,
@@ -905,6 +1011,24 @@ class ParamSpec:
         for parameter in (*self.synth_params, *self.note_params):
             names.extend(parameter.encoded_names())
         return names
+
+
+def onset_duration_variant(spec: ParamSpec) -> ParamSpec | None:
+    """Return ``spec`` with every endpoint note window re-encoded as onset and duration.
+
+    :param spec: Specification to convert.
+    :returns: Specification with the same native values and encoded width as ``spec``, or
+        ``None`` when ``spec`` has no :class:`NoteDurationParameter` to re-encode.
+    """
+    if not any(isinstance(parameter, NoteDurationParameter) for parameter in spec.note_params):
+        return None
+    note_params = [
+        OnsetDurationParameter(parameter.name, parameter.max_note_duration_seconds)
+        if isinstance(parameter, NoteDurationParameter)
+        else parameter
+        for parameter in spec.note_params
+    ]
+    return ParamSpec(list(spec.synth_params), note_params)
 
 
 def spec_quantize_model_output(row: np.ndarray, spec: ParamSpec) -> np.ndarray:

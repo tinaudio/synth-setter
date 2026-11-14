@@ -441,6 +441,39 @@ def test_render_obxf_composes_into_valid_render_config() -> None:
 
 
 @pytest.mark.parametrize(
+    ("synth_group", "render_group"),
+    [
+        ("surge_simple", "vst"),
+        ("surge_simple_surgepy", "surgepy"),
+        ("cardinal", "cardinal"),
+        ("torchsynth_simple", "torchsynth"),
+        ("faust_filter_osc", "faust_filter_osc"),
+        ("faust_filter_osc", "faustcpp_filter_osc"),
+        ("faust_filter_osc", "faustwasm_filter_osc"),
+        ("ultramaster_kr106_native", "kr106_native"),
+    ],
+)
+def test_onset_duration_spec_composes_on_every_render_backend(
+    synth_group: str, render_group: str
+) -> None:
+    """Selecting a synth's onset-duration spec keeps its backend identity valid.
+
+    :param synth_group: Synth identity group whose spec carries a note window.
+    :param render_group: Backend render group paired with the identity.
+    """
+    synth = _compose_synth_group(synth_group)
+    endpoint_spec_name = synth.param_spec_name
+    endpoint_config = RenderConfig.from_cfg_nodes(_compose_render_group(render_group), synth)
+    synth.param_spec_name = f"{endpoint_spec_name}_onset_duration"
+
+    config = RenderConfig.from_cfg_nodes(_compose_render_group(render_group), synth)
+
+    assert config.param_spec_name == f"{endpoint_spec_name}_onset_duration"
+    assert config.synth.source_sha256 == endpoint_config.synth.source_sha256
+    assert config.shard_metadata() != endpoint_config.shard_metadata()
+
+
+@pytest.mark.parametrize(
     ("synth_group", "param_spec_name", "plugin_state_path"),
     [
         ("surge_4_surgepy", "surge_4", "presets/surge-mini.fxp"),

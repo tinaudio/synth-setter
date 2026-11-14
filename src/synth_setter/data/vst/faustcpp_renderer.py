@@ -24,7 +24,7 @@ from synth_setter.data.vst.renderers import (
     require_scalar_synth_params,
 )
 from synth_setter.param_spec_name import ParamSpecName
-from synth_setter.synth_spec import validate_faust_registry_reference
+from synth_setter.synth_spec import faust_source_identity
 
 _COMPILE_TIMEOUT_SECONDS = 120
 _CPP_INT_MAX = 2_147_483_647
@@ -84,11 +84,7 @@ class FaustCppRenderer(AudioRenderer):
         """
         if self.plugin_state_path:
             raise ValueError("Faust C++ renderer accepts no preset path")
-        self._identity = self.param_spec_name
-        if self.plugin_path:
-            self._identity = validate_faust_registry_reference(
-                self.plugin_path, self.param_spec_name
-            )
+        self._identity = faust_source_identity(self.plugin_path, self.param_spec_name)
         if (
             isinstance(self.block_size, bool)
             or not isinstance(self.block_size, int)

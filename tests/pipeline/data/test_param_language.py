@@ -85,6 +85,36 @@ def test_artifact_wrong_spec_rejected(tmp_path: Path) -> None:
         load_param_language(path, "surge_4", "surge_xt")
 
 
+def test_describe_fields_endpoint_spec_note_window_description_is_pinned() -> None:
+    """Checkpoints and artifacts persist this text, so an endpoint-timed spec must keep it."""
+    assert describe_fields("surge_4", "surge_4")[-1] == (
+        '{"encoded_span": [5, 7], "name": "note_start_and_end", "spec": "surge_4", '
+        '"synth": "surge_4", "type": "NoteDurationParameter"}'
+    )
+
+
+@pytest.mark.parametrize(
+    ("saved", "loaded"),
+    [("surge_4", "surge_4_onset_duration"), ("surge_4_onset_duration", "surge_4")],
+)
+def test_artifact_of_same_width_note_timing_twin_rejected(
+    tmp_path: Path, saved: str, loaded: str
+) -> None:
+    """Field vectors describing one note-timing encoding never load under the other.
+
+    :param tmp_path: Temporary directory for the artifact.
+    :param saved: Spec the artifact describes.
+    :param loaded: Same-width spec requested at load.
+    """
+    descriptions = describe_fields(saved, "surge_4")
+    path = tmp_path / "language.npz"
+    embeddings = np.full((len(descriptions), 768), 1 / np.sqrt(768), dtype=np.float32)
+    save_param_language(path, embeddings, saved, "surge_4")
+
+    with pytest.raises(ValueError, match="spec"):
+        load_param_language(path, loaded, "surge_4")
+
+
 def test_artifact_non_unit_vectors_rejected_on_save(tmp_path: Path) -> None:
     """An artifact cannot publish vectors with non-unit row norms.
 

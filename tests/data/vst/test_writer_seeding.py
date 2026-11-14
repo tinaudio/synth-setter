@@ -18,7 +18,7 @@ import pytest
 from synth_setter.cli.generate_dataset import build_generate_args
 from synth_setter.data.vst.generate_vst_dataset import SampleSeed, VSTDataSample, main
 from synth_setter.data.vst.input_audio import InputAudioPool
-from synth_setter.data.vst.param_spec import NoteParams, ParamSpec
+from synth_setter.data.vst.param_spec import NoteParams, ParamSpec, require_note_params
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.data.vst.renderers import AudioRenderer
 from synth_setter.data.vst.seeding import rng_for_sample, seed_for_sample
@@ -514,6 +514,39 @@ def test_row_params_are_pure_function_of_seed_and_index(
     for i in range(num_samples):
         synth, note = spec.sample(rng_for_sample(_BASE_SEED, i, 0))
         assert np.array_equal(got[i], spec.encode(synth, note))
+
+
+@pytest.mark.fake_vst
+def test_onset_duration_spec_rows_are_its_own_seeded_draws_with_renderable_note_windows(
+    tmp_path: Path, install_fake_plugin: FakeVST3Plugin
+) -> None:
+    """The writer samples and encodes rows with the spec its render config names.
+
+    :param tmp_path: Pytest fixture providing destination paths.
+    :param install_fake_plugin: Swaps the VST loader for a deterministic fake plugin.
+    """
+    num_samples = 4
+    onset_duration_spec_name = f"{_SPEC_NAME}_onset_duration"
+    endpoint_cfg = _fake_render_cfg(num_samples=num_samples, min_loudness=float("-inf"))
+    cfg = endpoint_cfg.model_copy(
+        update={
+            "base_seed": _BASE_SEED,
+            "synth": endpoint_cfg.synth.model_copy(
+                update={"param_spec_name": onset_duration_spec_name}
+            ),
+        }
+    )
+
+    make_lance_dataset(tmp_path / "onset.lance", cfg)
+
+    rows = _read_param_array(tmp_path / "onset.lance")
+    spec = param_specs[onset_duration_spec_name]
+    for i in range(num_samples):
+        synth, note = spec.sample(rng_for_sample(_BASE_SEED, i, 0))
+        assert np.array_equal(rows[i], spec.encode(synth, note))
+        start, end = require_note_params(spec.decode(rows[i])[1])["note_start_and_end"]
+        assert 0.0 <= start < end <= 4.0
+        assert end - start >= 0.001 - 1e-9
 
 
 @pytest.mark.fake_vst

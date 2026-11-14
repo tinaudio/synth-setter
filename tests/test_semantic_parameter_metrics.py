@@ -18,6 +18,7 @@ from synth_setter.data.vst.param_spec import (
     DiscreteArrayParameter,
     DiscreteLiteralParameter,
     NoteDurationParameter,
+    OnsetDurationParameter,
     ParamSpec,
 )
 from synth_setter.metrics import semantic_parameter_distances
@@ -191,6 +192,17 @@ def test_note_duration_semantic_distance_reports_native_seconds() -> None:
     metrics = semantic_parameter_distances(_model(-0.2, 0.2), _model(-0.6, 0.6), spec)
 
     assert metrics["note_timing_mae_seconds/timing"].item() == pytest.approx(2.0)
+
+
+def test_onset_duration_semantic_distance_reports_onset_and_hold_seconds() -> None:
+    """Onset and held-duration errors are independently interpretable in seconds."""
+    spec = ParamSpec([], [OnsetDurationParameter("timing", 10.0, 0.001)])
+
+    metrics = semantic_parameter_distances(_model(-1.0, -1.0), _model(-1.0, 1.0), spec)
+
+    assert set(metrics) == {"note_onset_mae_seconds/timing", "note_duration_mae_seconds/timing"}
+    assert metrics["note_onset_mae_seconds/timing"].item() == 0.0
+    assert metrics["note_duration_mae_seconds/timing"].item() == pytest.approx(9.999)
 
 
 def test_semantic_distance_mixed_spec_preserves_spans_and_finite_inventory() -> None:

@@ -790,13 +790,9 @@ class DawDreamerFaustRenderer(AudioRenderer):
         """
         from synth_setter.data.vst.faust_param_spec import resolve_faust_param_spec
         from synth_setter.data.vst.faust_sources import resolve_faust_dsp
-        from synth_setter.synth_spec import validate_faust_registry_reference
+        from synth_setter.synth_spec import faust_source_identity
 
-        source_identity = (
-            self.param_spec_name
-            if not self.plugin_path
-            else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
-        )
+        source_identity = faust_source_identity(self.plugin_path, self.param_spec_name)
         if self.plugin_state_path:
             raise ValueError("Faust renderer does not accept plugin_state_path")
         dsp = resolve_faust_dsp(source_identity)

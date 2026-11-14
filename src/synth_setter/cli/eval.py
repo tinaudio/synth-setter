@@ -35,6 +35,7 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
     dataset_artifact_ref,
     describe_unresolved_dataset_root,
+    validate_datamodule_dataset,
 )
 from synth_setter.pipeline.schemas.spec import RenderConfig, _get_git_sha
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
@@ -530,6 +531,7 @@ def evaluate(cfg: DictConfig) -> tuple[dict[str, Any], dict[str, Any]]:
             )
         seed_everything(evaluation_seed, workers=True)
     apply_feature_flags(cfg)
+    validate_datamodule_dataset(cfg.datamodule)
 
     log.info(f"Instantiating datamodule <{cfg.datamodule._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.datamodule)

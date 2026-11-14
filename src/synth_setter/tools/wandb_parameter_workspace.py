@@ -78,7 +78,7 @@ def build_parameter_workspace(entity: str, project: str) -> ws.Workspace:
                     ),
                     wr.LinePlot(
                         title="Note timing MAE by parameter",
-                        metric_regex=r"^val/note_timing_mae_seconds/.+$",
+                        metric_regex=r"^val/note_(timing|onset|duration)_mae_seconds/.+$",
                     ),
                 ],
             ),

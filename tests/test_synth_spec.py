@@ -25,6 +25,7 @@ from synth_setter.synth_spec import (
     SYNTHS,
     SynthName,
     SynthSpec,
+    faust_source_identity,
     resolve_synth,
     validate_faust_registry_reference,
     validate_synth_identity,
@@ -146,6 +147,23 @@ class TestSynthSpecValidation:
         )
 
         assert identity == "faust_bright_organ"
+
+    @pytest.mark.parametrize("plugin_path", ["", "registry://faust/faust_bubble"])
+    @pytest.mark.parametrize("param_spec_name", ["faust_bubble", "faust_bubble_onset_duration"])
+    def test_faust_source_identity_is_independent_of_note_timing(
+        self, plugin_path: str, param_spec_name: str
+    ) -> None:
+        """A pathless or registry-backed identity renders one source under either timing spec.
+
+        :param plugin_path: Legacy pathless identity or its registry URI.
+        :param param_spec_name: Endpoint-timed spec or its onset-duration twin.
+        """
+        assert faust_source_identity(plugin_path, param_spec_name) == "faust_bubble"
+
+    def test_faust_source_identity_reference_to_another_spec_raises(self) -> None:
+        """A registry URI cannot pair one source with another spec's parameters."""
+        with pytest.raises(ValueError, match="faust_bubble"):
+            faust_source_identity("registry://faust/faust_bubble", "faust_filter_osc")
 
     @pytest.mark.parametrize(
         "reference",
@@ -457,6 +475,41 @@ class TestValidateSynthIdentity:
         """A spec that contradicts the registry row is rejected."""
         cfg = OmegaConf.create({"synth": _synth_node("surge_xt", param_spec_name="surge_4")})
         with pytest.raises(ValueError, match="surge_4"):
+            validate_synth_identity(cfg)
+
+    @pytest.mark.parametrize(
+        "row", ["surge_xt", "surge_xt_surgepy", "faust_bubble", "ultramaster_kr106_native"]
+    )
+    def test_onset_duration_twin_of_the_registry_spec_passes(self, row: str) -> None:
+        """A run may select the onset-duration timing of the synth's own spec.
+
+        :param row: Registry key whose identity validators key on the spec name.
+        """
+        twin = f"{SYNTHS[SynthName(row)].param_spec_name}_onset_duration"
+        cfg = OmegaConf.create({"synth": _synth_node(row, param_spec_name=twin)})
+
+        synth = validate_synth_identity(cfg)
+
+        assert synth is not None
+        assert synth.param_spec_name == twin
+
+    def test_onset_duration_twin_of_another_spec_raises(self) -> None:
+        """Onset-duration timing does not loosen which synth parameters a row names."""
+        cfg = OmegaConf.create(
+            {"synth": _synth_node("surge_xt", param_spec_name="surge_4_onset_duration")}
+        )
+        with pytest.raises(ValueError, match="surge_4_onset_duration"):
+            validate_synth_identity(cfg)
+
+    def test_datamodule_endpoint_spec_under_onset_duration_synth_raises(self) -> None:
+        """Same-width timing variants of one spec are still different row encodings."""
+        cfg = OmegaConf.create(
+            {
+                "synth": _synth_node("surge_4", param_spec_name="surge_4_onset_duration"),
+                "datamodule": {"param_spec_name": "surge_4"},
+            }
+        )
+        with pytest.raises(ValueError, match="datamodule.param_spec_name"):
             validate_synth_identity(cfg)
 
     def test_surge_xt_overridden_to_surgepy_format_requires_variant_identity(self) -> None:

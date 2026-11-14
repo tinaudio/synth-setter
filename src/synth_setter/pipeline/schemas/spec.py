@@ -35,7 +35,7 @@ from pydantic import (
 )
 
 import synth_setter.renderer_backend as renderer_backend_contract
-from synth_setter.param_spec_name import ValidatedParamSpecName
+from synth_setter.param_spec_name import ValidatedParamSpecName, base_param_spec_name
 from synth_setter.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
@@ -63,7 +63,7 @@ from synth_setter.synth_spec import (
     SYNTHS,
     SynthName,
     SynthSpec,
-    validate_faust_registry_reference,
+    faust_source_identity,
 )
 
 if TYPE_CHECKING:
@@ -855,12 +855,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         from synth_setter.data.vst.faust_param_spec import FAUST_NOTE_DURATION_SECONDS
         from synth_setter.data.vst.faust_sources import resolve_faust_dsp
 
-        source_identity = (
-            self.param_spec_name
-            if not self.plugin_path
-            else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
-        )
-        source = resolve_faust_dsp(source_identity)
+        source = resolve_faust_dsp(faust_source_identity(self.plugin_path, self.param_spec_name))
         isolated_backends = {"faustcpp", "faustwasm"}
         if self.renderer_backend in isolated_backends:
             if self.render_contract_version == 1:
@@ -933,7 +928,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             )
         )
         actual_provenance = (
-            self.synth.param_spec_name,
+            base_param_spec_name(self.synth.param_spec_name),
             self.synth.format,
             self.synth.synth_version,
             self.synth.source_sha256,
@@ -974,7 +969,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             return self
         if self.plugin_path != SURGEPY_PLUGIN_NAME:
             raise ValueError('surgepy requires plugin_path="surgepy"')
-        if self.param_spec_name not in {"surge_xt", "surge_simple", "surge_4"}:
+        if base_param_spec_name(self.param_spec_name) not in {
+            "surge_xt",
+            "surge_simple",
+            "surge_4",
+        }:
             raise ValueError("surgepy requires a Surge parameter spec")
         if not self.plugin_state_path.casefold().endswith(".fxp"):
             raise ValueError("surgepy requires an .fxp plugin_state_path")

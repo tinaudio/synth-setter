@@ -19,7 +19,11 @@ from typing import TYPE_CHECKING, Literal, NewType
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from synth_setter.param_spec_name import ParamSpecName, ValidatedParamSpecName
+from synth_setter.param_spec_name import (
+    ParamSpecName,
+    ValidatedParamSpecName,
+    base_param_spec_name,
+)
 from synth_setter.renderer_backend import (
     FAUST_REGISTRY_PREFIX,
     KR106_NATIVE_PLUGIN_NAME,
@@ -59,9 +63,9 @@ def validate_faust_registry_reference(reference: str, param_spec_name: str) -> P
     """Validate and resolve an in-process Faust source reference.
 
     :param reference: Canonical ``registry://faust/<registered-source-name>`` URI.
-    :param param_spec_name: Selected parameter-spec and source identity.
+    :param param_spec_name: Selected parameter spec, named after its source identity.
     :returns: Registered Faust source identity named by the reference.
-    :raises ValueError: The URI is malformed, unknown, or mismatches ``param_spec_name``.
+    :raises ValueError: The URI is malformed, unknown, or names another spec's source.
     """
     if not reference.startswith(FAUST_REGISTRY_PREFIX):
         raise ValueError(
@@ -74,12 +78,25 @@ def validate_faust_registry_reference(reference: str, param_spec_name: str) -> P
         )
     if identity not in _FAUST_SOURCE_SHA256:
         raise ValueError(f"Faust source {identity!r} is not registered")
-    if identity != param_spec_name:
+    if identity != base_param_spec_name(param_spec_name):
         raise ValueError(
             f"Faust registry reference selects {identity!r} but "
             f"param_spec_name is {param_spec_name!r}"
         )
     return ParamSpecName(identity)
+
+
+def faust_source_identity(plugin_path: str, param_spec_name: str) -> ParamSpecName:
+    """Resolve the checked-in Faust source a synth identity renders.
+
+    :param plugin_path: Registry URI, or ``""`` for a legacy pathless identity whose
+        parameter spec names the source.
+    :param param_spec_name: Selected parameter spec.
+    :returns: Registered Faust source identity.
+    """
+    if not plugin_path:
+        return base_param_spec_name(param_spec_name)
+    return validate_faust_registry_reference(plugin_path, param_spec_name)
 
 
 def _is_registry_reference(reference: object) -> bool:
@@ -205,7 +222,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
             validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
         if self.plugin_state_path:
             raise ValueError("format='faust' does not accept plugin_state_path")
-        expected = _FAUST_SOURCE_SHA256.get(self.param_spec_name)
+        expected = _FAUST_SOURCE_SHA256.get(base_param_spec_name(self.param_spec_name))
         if expected is None or self.source_sha256 != expected:
             raise ValueError(
                 f"format='faust' requires the registered source_sha256 for "
@@ -222,7 +239,7 @@ class SynthSpec(BaseModel):  # noqa: DOC601, DOC603 — field semantics document
         """
         if self.format != "kr106_native":
             return self
-        expected = _KR106_NATIVE_PARAM_SPEC_SHA256.get(self.param_spec_name)
+        expected = _KR106_NATIVE_PARAM_SPEC_SHA256.get(base_param_spec_name(self.param_spec_name))
         if expected is None or self.source_sha256 != expected:
             raise ValueError(
                 "format='kr106_native' requires the registered source_sha256 for "
@@ -429,7 +446,8 @@ def validate_synth_identity(cfg: DictConfig) -> SynthSpec | None:
     Duck-typed so the module stays free of a runtime omegaconf import — the
     minimal-env CI install that runs ``validate_spec`` does not ship it. The
     ``name``, ``param_spec_name``, and ``format`` fields are pinned to the
-    ``SYNTHS`` row; ``plugin_path``, ``plugin_state_path``, and ``synth_version``
+    ``SYNTHS`` row, except that ``param_spec_name`` may select the row spec's
+    onset-duration twin; ``plugin_path``, ``plugin_state_path``, and ``synth_version``
     stay per-run overridable (relocated bundles, stub plugins in tests). A
     CLI-forced ``datamodule.param_spec_name`` literal that skews from the
     synth selection surfaces here instead of as a silent width mismatch; a
@@ -449,7 +467,7 @@ def validate_synth_identity(cfg: DictConfig) -> SynthSpec | None:
     row = SYNTHS.get(spec.name)
     if row is None:
         raise ValueError(f"synth {spec.name!r} is not registered in SYNTHS")
-    if spec.param_spec_name != row.param_spec_name:
+    if base_param_spec_name(spec.param_spec_name) != row.param_spec_name:
         raise ValueError(
             f"synth {spec.name!r} declares param_spec_name={spec.param_spec_name!r} "
             f"but the registry row says {row.param_spec_name!r}"
@@ -458,8 +476,7 @@ def validate_synth_identity(cfg: DictConfig) -> SynthSpec | None:
         alternatives = [
             candidate.name
             for candidate in SYNTHS.values()
-            if candidate.param_spec_name == spec.param_spec_name
-            and candidate.format == spec.format
+            if candidate.param_spec_name == row.param_spec_name and candidate.format == spec.format
         ]
         suggestion = f"; select synth={alternatives[0]}" if alternatives else ""
         raise ValueError(

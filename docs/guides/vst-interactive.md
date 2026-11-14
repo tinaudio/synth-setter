@@ -37,8 +37,9 @@ training pairs that random sampling can't reach.
   set and non-empty, else `plugins/Surge XT.vst3` — satisfied by
   `make install-surge-xt`).
 - A base preset file. Selected automatically from
-  `plugin_state_paths[param_spec_name]` in `src/synth_setter/data/vst/__init__.py`
-  (keyed by the value passed to `--param-spec-name`).
+  `plugin_state_paths` in `src/synth_setter/data/vst/__init__.py`, keyed by the
+  value passed to `--param-spec-name` (an `_onset_duration` spec uses its base
+  spec's preset).
 - A working audio output device. The tool opens a real-time audio
   stream via `pedalboard.io.AudioStream`; headless environments without
   ALSA/PulseAudio cannot run it.

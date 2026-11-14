@@ -14,6 +14,8 @@ from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.dataset_lineage import (
     dataset_artifact_ref,
     describe_unresolved_dataset_root,
+    validate_datamodule_dataset,
+    validate_dataset_param_spec,
 )
 from synth_setter.pipeline.schemas.spec import DatasetSpec
 from synth_setter.pipeline.spec_io import write_spec_to_path
@@ -329,3 +331,175 @@ def test_describe_unresolved_dataset_root_falls_back_to_the_local_root() -> None
 def test_describe_unresolved_dataset_root_without_any_root_returns_none() -> None:
     """No configured root means nothing was expected to resolve, so nothing is reported."""
     assert describe_unresolved_dataset_root(None, None) is None
+
+
+def _write_frozen_spec_naming(root: Path, param_spec_name: str) -> None:
+    """Write the identity slice of a frozen spec that names the rows' parameter spec.
+
+    :param root: Dataset root receiving ``input_spec.json``.
+    :param param_spec_name: Spec the dataset's parameter rows are encoded with.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "input_spec.json").write_text(
+        json.dumps({"render": {"synth": {"param_spec_name": param_spec_name}}}),
+        encoding="utf-8",
+    )
+
+
+def test_validate_dataset_param_spec_reads_the_spec_name_a_finalized_dataset_records(
+    tmp_path: Path, dataset_spec_factory: Callable[..., DatasetSpec]
+) -> None:
+    """The frozen spec the pipeline writes names the only spec a run may decode it with.
+
+    :param tmp_path: Local dataset root containing the frozen spec.
+    :param dataset_spec_factory: Factory producing a valid frozen dataset spec.
+    """
+    spec = dataset_spec_factory(
+        task_name="surge-simple-lance",
+        run_id="surge-simple-lance-20260713T120000000Z",
+        train_val_test_sizes=[4, 4, 0],
+        r2={"bucket": "intermediate-data"},
+        render={"samples_per_shard": 4},
+    )
+    write_spec_to_path(spec, tmp_path / "input_spec.json")
+
+    validate_dataset_param_spec(tmp_path, None, "surge_simple")
+    with pytest.raises(ValueError, match="surge_simple_onset_duration"):
+        validate_dataset_param_spec(tmp_path, None, "surge_simple_onset_duration")
+
+
+@pytest.mark.parametrize(
+    ("recorded", "requested"),
+    [
+        ("surge_4", "surge_4_onset_duration"),
+        ("surge_4_onset_duration", "surge_4"),
+    ],
+)
+def test_validate_dataset_param_spec_same_width_timing_swap_raises(
+    tmp_path: Path, recorded: str, requested: str
+) -> None:
+    """Rows of one note-timing encoding are rejected by a run that decodes the other.
+
+    :param tmp_path: Local dataset root containing the frozen spec.
+    :param recorded: Spec the dataset rows were encoded with.
+    :param requested: Same-width spec the run would decode them with.
+    """
+    _write_frozen_spec_naming(tmp_path, recorded)
+
+    with pytest.raises(ValueError, match=f"{recorded!r}.*{requested!r}"):
+        validate_dataset_param_spec(tmp_path, None, requested)
+
+
+def test_validate_dataset_param_spec_onset_duration_run_over_another_spec_raises(
+    tmp_path: Path,
+) -> None:
+    """An onset-duration run accepts only a dataset that names exactly its spec.
+
+    :param tmp_path: Local dataset root naming an unrelated endpoint-timed spec.
+    """
+    _write_frozen_spec_naming(tmp_path, "surge_simple")
+
+    with pytest.raises(ValueError, match="param_spec_name='surge_simple'"):
+        validate_dataset_param_spec(tmp_path, None, "surge_4_onset_duration")
+
+
+def test_validate_dataset_param_spec_leaves_endpoint_spec_pairs_to_width_checks(
+    tmp_path: Path,
+) -> None:
+    """Two endpoint-timed names are not compared: their rows already differ in width.
+
+    A stale or relabelled frozen spec must not block a run that worked before
+    onset-duration timing existed.
+
+    :param tmp_path: Local dataset root naming another endpoint-timed spec.
+    """
+    _write_frozen_spec_naming(tmp_path, "surge_simple")
+
+    validate_dataset_param_spec(tmp_path, None, "surge_4")
+
+
+def test_validate_dataset_param_spec_remote_root_precedes_local_spec(
+    tmp_path: Path, fake_r2_remote: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dataset being hydrated, not a stale local copy, decides the row encoding.
+
+    :param tmp_path: Local dataset root holding a spec for another encoding.
+    :param fake_r2_remote: Local filesystem backing the fake ``r2:`` remote.
+    :param monkeypatch: Replaces R2 credential initialization for the local remote.
+    """
+    monkeypatch.setattr(r2_io, "ensure_r2_env_loaded", MagicMock())
+    _write_frozen_spec_naming(tmp_path, "surge_4")
+    _write_frozen_spec_naming(
+        fake_r2_remote / "intermediate-data" / "onset-run", "surge_4_onset_duration"
+    )
+
+    validate_dataset_param_spec(
+        tmp_path, "r2://intermediate-data/onset-run", "surge_4_onset_duration"
+    )
+
+
+def test_validate_dataset_param_spec_unverifiable_root_rejects_onset_duration_run(
+    tmp_path: Path,
+) -> None:
+    """An onset-duration run never consumes rows whose encoding cannot be confirmed.
+
+    :param tmp_path: Dataset root with no frozen spec.
+    """
+    with pytest.raises(ValueError, match="cannot verify"):
+        validate_dataset_param_spec(tmp_path, None, "surge_4_onset_duration")
+
+
+def test_validate_dataset_param_spec_unreadable_spec_rejects_onset_duration_run(
+    tmp_path: Path,
+) -> None:
+    """A spec that names no parameter spec gives an onset-duration run nothing to trust.
+
+    :param tmp_path: Dataset root whose frozen spec lacks a synth identity.
+    """
+    (tmp_path / "input_spec.json").write_text(json.dumps({"task_name": "t"}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="cannot verify"):
+        validate_dataset_param_spec(tmp_path, None, "surge_4_onset_duration")
+
+
+def test_validate_dataset_param_spec_unverifiable_root_accepts_endpoint_run(
+    tmp_path: Path,
+) -> None:
+    """Dataset roots that predate frozen specs stay usable under their endpoint-timed spec.
+
+    :param tmp_path: Dataset root with no frozen spec.
+    """
+    validate_dataset_param_spec(tmp_path, None, "surge_4")
+
+
+@pytest.mark.parametrize(
+    "datamodule",
+    [
+        {"_target_": "audio.only.DataModule", "dataset_root": "missing"},
+        {"param_spec_name": "surge_4_onset_duration", "fake": True, "dataset_root": "missing"},
+    ],
+)
+def test_validate_datamodule_dataset_without_spec_encoded_rows_passes(
+    datamodule: dict[str, object],
+) -> None:
+    """A datamodule that reads no spec-encoded dataset rows has nothing to verify.
+
+    :param datamodule: Composed node with no parameter spec, or synthesizing its rows.
+    """
+    validate_datamodule_dataset(datamodule)
+
+
+def test_validate_datamodule_dataset_checks_the_configured_roots(tmp_path: Path) -> None:
+    """The composed datamodule's own spec name is checked against its dataset roots.
+
+    :param tmp_path: Local dataset root naming an endpoint-timed spec.
+    """
+    _write_frozen_spec_naming(tmp_path, "surge_4")
+    datamodule = {
+        "param_spec_name": "surge_4_onset_duration",
+        "dataset_root": str(tmp_path / "stale"),
+        "download_dataset_root_uri": tmp_path.as_uri(),
+    }
+
+    with pytest.raises(ValueError, match="param_spec_name='surge_4'"):
+        validate_datamodule_dataset(datamodule)

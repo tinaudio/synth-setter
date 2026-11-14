@@ -2623,6 +2623,50 @@ def test_train_wandb_config_resolves_scheduler_max_steps(
     assert logger.recorded_config["model"]["scheduler"]["T_max"] == 1
 
 
+def _name_dataset_param_spec(cfg: DictConfig, param_spec_name: str) -> None:
+    """Record which parameter spec the configured dataset's rows are encoded with.
+
+    :param cfg: Composed Lance training configuration naming the dataset root.
+    :param param_spec_name: Spec name written into the dataset's frozen spec.
+    """
+    spec = {"render": {"synth": {"param_spec_name": param_spec_name}}}
+    spec_path = Path(cfg.datamodule.dataset_root) / "input_spec.json"
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
+
+
+def test_train_lance_onset_duration_run_over_endpoint_dataset_raises(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """Training refuses equal-width rows encoded with the other note timing.
+
+    :param cfg_train_lance: Composed Lance training configuration.
+    """
+    endpoint_spec = str(cfg_train_lance.synth.param_spec_name)
+    _name_dataset_param_spec(cfg_train_lance, endpoint_spec)
+    cfg_train_lance.synth.param_spec_name = f"{endpoint_spec}_onset_duration"
+
+    with pytest.raises(ValueError, match=f"param_spec_name='{endpoint_spec}'"):
+        train(cfg_train_lance)
+
+
+def test_train_lance_onset_duration_run_over_onset_duration_dataset_trains(
+    cfg_train_lance: DictConfig,
+) -> None:
+    """One spec-name override carries onset-duration timing to every row consumer.
+
+    :param cfg_train_lance: Composed Lance training configuration.
+    """
+    onset_duration_spec = f"{cfg_train_lance.synth.param_spec_name}_onset_duration"
+    _name_dataset_param_spec(cfg_train_lance, onset_duration_spec)
+    cfg_train_lance.synth.param_spec_name = onset_duration_spec
+    HydraConfig().set_config(cfg_train_lance)
+
+    metric_dict, object_dict = train(cfg_train_lance)
+
+    assert object_dict["datamodule"].param_spec_name == onset_duration_spec
+    assert torch.isfinite(metric_dict["test/param_mse"])
+
+
 @pytest.mark.dataloader_multiprocess
 @pytest.mark.xdist_group(name="dataloader-multiprocess")
 def test_train_lance_records_dataset_lineage_from_legacy_local_spec(
