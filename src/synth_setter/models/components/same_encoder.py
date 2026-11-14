@@ -25,7 +25,7 @@ from synth_setter.same import (
     resolve_same_checkpoint,
 )
 
-_BATCH_AUDIO_SHAPE: Final = "batch samples"
+_BATCH_AUDIO_SHAPE: Final = "batch ..."
 _BATCH_STEREO_SHAPE: Final = "batch 2 resampled"
 _BATCH_LATENT_SHAPE: Final = "batch latent frames"
 _SAME_CHANNELS: Final = 2
@@ -137,17 +137,24 @@ class SameAudioEncoder(nn.Module):
     def _stereo_at_same_rate(
         self, audio: Float[Tensor, _BATCH_AUDIO_SHAPE]
     ) -> Float[Tensor, _BATCH_STEREO_SHAPE]:
-        """Resample and duplicate mono audio into SAME's stereo input contract.
+        """Prepare mono or stereo audio for SAME without discarding channels.
 
-        Duplication rather than a silent second channel, matching the ``same_s`` column the
-        stored conditioning is written from.
-
-        :param audio: Mono waveform batch at ``sample_rate``.
+        :param audio: ``(B, T)`` mono or ``(B, C, T)`` audio with one or two channels.
         :returns: Stereo waveform batch at ``SAME_SAMPLE_RATE``.
+        :raises ValueError: Audio has an unsupported rank or channel count.
         """
+        if audio.ndim == 2:
+            audio = audio.unsqueeze(1)
+        elif audio.ndim != 3 or audio.shape[1] not in (1, _SAME_CHANNELS):
+            raise ValueError(
+                "audio must have shape (batch, samples) or "
+                f"(batch, 1|2, samples), got {audio.shape}"
+            )
         if self.sample_rate != SAME_SAMPLE_RATE:
             audio = audio_fn.resample(audio, self.sample_rate, SAME_SAMPLE_RATE)
-        return audio.unsqueeze(1).expand(-1, _SAME_CHANNELS, -1)
+        if audio.shape[1] == 1:
+            audio = audio.expand(-1, _SAME_CHANNELS, -1)
+        return audio
 
     @jaxtyped(typechecker=beartype)
     def forward(
@@ -158,7 +165,7 @@ class SameAudioEncoder(nn.Module):
         SAME zero-pads the tail to a whole latent frame internally, so a rendered estimate and
         its target share a frame grid whenever they share a length.
 
-        :param audio: Mono waveform batch at ``sample_rate``.
+        :param audio: Mono or stereo waveform batch at ``sample_rate``.
         :returns: SAME latents shaped ``(batch, latent, frames)``.
         """
         return cast(_SameAutoencoder, self.autoencoder).encode(self._stereo_at_same_rate(audio))

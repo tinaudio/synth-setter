@@ -679,7 +679,9 @@ _WAVEFORM_CONDITIONING_PROFILES = frozenset(
         "pupujepa_tiny_online",
         "pupujepa_tiny_scratch",
         "same_l_online",
+        "same_l_online_ast",
         "same_s_online",
+        "same_s_online_ast",
     }
 )
 _CACHED_CONDITIONING_PROFILES = [

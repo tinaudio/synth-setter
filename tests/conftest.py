@@ -797,11 +797,11 @@ def cfg_torchsynth_clap_online_train(tmp_path: Path) -> DictConfig:
 
 
 @pytest.fixture
-def cfg_torchsynth_same_online_train(tmp_path: Path) -> DictConfig:
-    """Compose one CPU step through frozen SAME-S conditioning.
+def cfg_torchsynth_same_online_ast_train(tmp_path: Path) -> DictConfig:
+    """Compose one CPU step through frozen SAME-S AST conditioning.
 
     :param tmp_path: Output root and tiny SAME checkpoint parent.
-    :returns: Ready-to-run tiny SAME-S TorchSynth training configuration.
+    :returns: Ready-to-run tiny SAME-S AST TorchSynth training configuration.
     """
     from synth_setter.same import SAME_SAMPLE_RATE
     from tests.helpers.same_reference import TINY_SAME_LATENT_DIM, write_tiny_same_checkpoint
@@ -826,9 +826,9 @@ def cfg_torchsynth_same_online_train(tmp_path: Path) -> DictConfig:
         cfg.model.audio_loss.t_min = 0.0
         cfg.model.audio_loss.distance.encoder.checkpoint = str(checkpoint)
         cfg.model.audio_loss.distance.encoder.checkpoint_sha256 = None
-        cfg.model.encoder.head.embed_dim = TINY_SAME_LATENT_DIM
-        cfg.model.encoder.head.max_seq_len = 8
-        cfg.model.encoder.head.num_heads = 1
+        cfg.model.encoder.head.n_heads = 1
+        cfg.model.encoder.head.n_layers = 1
+        cfg.model.encoder.head.token_embed.input_dim = TINY_SAME_LATENT_DIM
         cfg.model.vector_field.num_layers = 2
     return cfg
 

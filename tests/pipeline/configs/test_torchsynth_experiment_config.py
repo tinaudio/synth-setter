@@ -408,21 +408,21 @@ def test_ast_online_conditioning_predicts_from_online_audio() -> None:
     ("profile", "checkpoint", "checkpoint_sha256"),
     [
         (
-            "same_l_online",
+            "same_l_online_ast",
             DEFAULT_SAME_L_CHECKPOINT,
             DEFAULT_SAME_L_CHECKPOINT_SHA256,
         ),
         (
-            "same_s_online",
+            "same_s_online_ast",
             DEFAULT_SAME_S_CHECKPOINT,
             DEFAULT_SAME_S_CHECKPOINT_SHA256,
         ),
     ],
 )
-def test_same_online_conditioning_composes_frozen_backbone_and_temporal_pool(
+def test_same_online_ast_conditioning_composes_with_sketch_controls(
     profile: str, checkpoint: str, checkpoint_sha256: str
 ) -> None:
-    """Online SAME profiles pool frozen waveform latents into flow conditioning.
+    """Opt-in SAME AST profiles preserve temporal latents with sketch controls.
 
     :param profile: SAME conditioning profile under test.
     :param checkpoint: Expected pretrained SAME checkpoint.
@@ -431,7 +431,7 @@ def test_same_online_conditioning_composes_frozen_backbone_and_temporal_pool(
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml",
-            overrides=["experiment=torchsynth/flow", f"conditioning={profile}"],
+            overrides=["experiment=torchsynth/flow", f"conditioning={profile}", "sketch=on"],
         )
 
     assert cfg.model.conditioning == "audio"
@@ -449,11 +449,37 @@ def test_same_online_conditioning_composes_frozen_backbone_and_temporal_pool(
     assert cfg.model.encoder.backbone.checkpoint_sha256 == checkpoint_sha256
     assert (
         cfg.model.encoder.head._target_
+        == "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
+    )
+    assert (
+        cfg.model.encoder.head.token_embed._target_
+        == "synth_setter.models.components.transformer.TemporalPatchEmbed"
+    )
+    assert cfg.model.encoder.head.token_embed.input_dim == 256
+    assert cfg.model.encoder.head.token_embed.num_tokens == 44
+    assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
+    assert cfg.datamodule.sketch == cfg.model.sketch_controls
+
+
+@pytest.mark.parametrize("profile", ["same_l_online", "same_s_online"])
+def test_same_online_conditioning_retains_temporal_pool(profile: str) -> None:
+    """Historical SAME online profiles pool frozen waveform latents.
+
+    :param profile: SAME conditioning profile under test.
+    """
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["experiment=torchsynth/flow", f"conditioning={profile}"],
+        )
+
+    assert (
+        cfg.model.encoder.head._target_
         == "synth_setter.models.components.embed_pool.EmbeddingPool"
     )
     assert cfg.model.encoder.head.embed_dim == 256
     assert cfg.model.encoder.head.max_seq_len == 44
-    assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.out_dim
+    assert cfg.model.encoder.head.n_conditioning_outputs == cfg.model.vector_field.num_layers
 
 
 def test_pupujepa_online_conditioning_composes_frozen_teacher_and_temporal_pool() -> None:
@@ -643,8 +669,8 @@ def test_same_audio_loss_measures_in_the_stored_conditioning_space() -> None:
     assert cfg.model.compile is False
 
 
-def test_same_audio_loss_experiment_conditions_on_online_same_s() -> None:
-    """The SAME arm uses frozen SAME-S for both conditioning and render distance."""
+def test_same_audio_loss_experiment_conditions_on_online_same_s_ast() -> None:
+    """The SAME arm preserves SAME-S patches and scores in frozen SAME-S space."""
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="train.yaml", overrides=["experiment=torchsynth/flow_audio_same"]
@@ -660,5 +686,9 @@ def test_same_audio_loss_experiment_conditions_on_online_same_s() -> None:
     assert cfg.model.encoder.backbone.checkpoint_sha256 == DEFAULT_SAME_S_CHECKPOINT_SHA256
     assert (
         cfg.model.encoder.head._target_
-        == "synth_setter.models.components.embed_pool.EmbeddingPool"
+        == "synth_setter.models.components.transformer.AudioSpectrogramTransformer"
+    )
+    assert (
+        cfg.model.encoder.head.token_embed._target_
+        == "synth_setter.models.components.transformer.TemporalPatchEmbed"
     )
