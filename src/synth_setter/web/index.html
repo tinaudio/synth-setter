@@ -8,6 +8,8 @@
   <body>
     <h1>SurgePy flow evaluation</h1>
     <p>Inference runs here using ONNX Runtime Web (WASM). SurgePy rendering and audio metrics run in the local CLI after inference.</p>
+    <p>Untick a sketch group to condition on its positional encoding only; the CLI selection is the default.</p>
+    <fieldset id="sketch-groups" aria-label="Sketch groups"></fieldset>
     <button id="run" type="button">Run flow evaluation</button>
     <p id="status" role="status">Ready</p>
     <pre id="prediction"></pre>

@@ -1,8 +1,8 @@
 """Tests for sketch-control conditioning in the flow-matching module."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 import torch
@@ -22,11 +22,12 @@ from synth_setter.models.vst_flow_matching_module import (
     multi_cfg_velocity,
     rk4_step,
 )
+from synth_setter.sketch import prepare_music_sketch_controls
 
 _BATCH = 2
 _D_MODEL = 16
 _NUM_PARAMS = 6
-_NUM_FRAMES = 9
+_NUM_FRAMES = 32
 _MEL_SHAPE = (2, 8, 5)
 
 if TYPE_CHECKING:
@@ -75,9 +76,7 @@ def _module(
         num_heads=2,
         d_ff=_D_MODEL,
         num_tokens=5,
-        # "none" is a valid runtime value model/vst_flow.yaml ships; the
-        # constructor's Literal annotation omits it.
-        pe_type=cast(Literal["initial", "layerwise"], "none"),
+        pe_type="none",
         time_encoding="scalar",
         learn_projection=True,
     )
@@ -151,6 +150,34 @@ def _batch(*, with_sketch: bool) -> dict[str, torch.Tensor]:
             (_BATCH, NUM_SKETCH_CONTROLS, _NUM_FRAMES), generator=generator
         )
     return batch
+
+
+class _CountingBranchField(torch.nn.Module):
+    """Count field evaluations while returning a valid zero velocity."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        t: torch.Tensor,
+        conditioning: torch.Tensor | None,
+        *,
+        control_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        """Record one CFG branch evaluation.
+
+        :param x: Parameter state whose shape the velocity follows.
+        :param t: Flow time.
+        :param conditioning: Content conditioning for this branch.
+        :param control_tokens: Sketch tokens for this branch.
+        :returns: Zero velocity.
+        """
+        del t, conditioning, control_tokens
+        self.calls += 1
+        return torch.zeros_like(x)
 
 
 class _BranchField(torch.nn.Module):
@@ -417,6 +444,207 @@ def test_sample_batch_guidance_and_sketch_controls_change_fixed_noise_output() -
     assert not torch.equal(sketch_guided, changed_controls)
 
 
+def test_sample_batch_enabled_sketch_groups_matches_explicitly_zeroed_controls() -> None:
+    """A selected group produces the same sample as zeroing every other control group."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    assert model.sketch_tokens is not None
+    with torch.no_grad():
+        for projection in model.sketch_tokens.projections.values():
+            assert isinstance(projection, torch.nn.Linear)
+            projection.weight.fill_(1.0)
+    batch = _batch(with_sketch=True)
+    noise = torch.zeros_like(batch["noise"])
+    masked = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+        enabled_sketch_groups=("pitch",),
+    )
+    zeroed_batch = dict(batch)
+    zeroed_controls = batch["sketch_ctrl"].clone()
+    zeroed_controls[:, :2] = 0
+    zeroed_batch["sketch_ctrl"] = zeroed_controls
+    explicit = model.sample_batch(
+        zeroed_batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+    )
+
+    torch.testing.assert_close(masked, explicit)
+
+
+def test_sample_batch_none_and_all_groups_return_identical_predictions() -> None:
+    """The omitted selector preserves the pre-mask all-groups inference path."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+    kwargs = {
+        "noise": batch["noise"],
+        "content_cfg_strength": 2.0,
+        "sketch_cfg_strength": 1.0,
+        "sample_steps": 2,
+    }
+
+    omitted = model.sample_batch(batch, **kwargs)
+    explicit = model.sample_batch(
+        batch,
+        **kwargs,
+        enabled_sketch_groups=("loudness", "centroid", "pitch"),
+    )
+
+    torch.testing.assert_close(omitted, explicit, rtol=0, atol=0)
+
+
+def test_sample_batch_empty_groups_preserves_three_cfg_branch_evaluations() -> None:
+    """A PE-only mask does not optimize away the established three-branch CFG graph."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    field = _CountingBranchField()
+    model.vector_field = field
+    batch = _batch(with_sketch=True)
+
+    model.sample_batch(
+        batch,
+        noise=batch["noise"],
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+        enabled_sketch_groups=(),
+    )
+
+    assert field.calls == 12
+
+
+def test_control_token_branches_empty_groups_use_exact_pe_only_tokens() -> None:
+    """Disabling every group makes both CFG sketch branches exactly unconditional."""
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    branches = model._control_token_branches_from_batch(  # noqa: SLF001
+        batch, enabled_sketch_groups=()
+    )
+
+    assert branches is not None
+    assert torch.equal(branches.conditional, branches.unconditional)
+
+
+@pytest.mark.parametrize(
+    ("enabled", "message"),
+    [
+        ("pitch", "sequence.*not a string"),
+        (("pitch", "pitch"), "duplicate.*pitch"),
+        (("brightness",), "unknown.*brightness.*loudness.*centroid.*pitch"),
+    ],
+)
+def test_sample_batch_invalid_enabled_sketch_groups_raises(
+    enabled: Sequence[str], message: str
+) -> None:
+    """Malformed group selectors fail with checkpoint-derived valid names.
+
+    :param enabled: Invalid selector accepted by the sequence type boundary.
+    :param message: Expected validation error fragment.
+    """
+    model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
+    batch = _batch(with_sketch=True)
+
+    with pytest.raises((TypeError, ValueError), match=message):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=1,
+            enabled_sketch_groups=enabled,
+        )
+
+
+def test_sample_batch_pyfdn_group_names_are_resolved_from_dynamic_layout() -> None:
+    """PyFDN inference masks its own profile groups rather than music constants."""
+    model = _module(SketchControlSpec(num_frames=32, profile="pyfdn_reverb"))
+    assert model.sketch_tokens is not None
+    with torch.no_grad():
+        for projection in model.sketch_tokens.projections.values():
+            assert isinstance(projection, torch.nn.Linear)
+            projection.weight.fill_(1.0)
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = torch.randn(_BATCH, 10, 32)
+    noise = torch.zeros_like(batch["noise"])
+    masked = model.sample_batch(
+        batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+        enabled_sketch_groups=("echo_density",),
+    )
+    zeroed_batch = dict(batch)
+    zeroed_controls = batch["sketch_ctrl"].clone()
+    # pyFDN layout: edc occupies channels 0-7, echo_density 8, spectral_flatness 9.
+    zeroed_controls[:, :8] = 0
+    zeroed_controls[:, 9] = 0
+    zeroed_batch["sketch_ctrl"] = zeroed_controls
+    explicit = model.sample_batch(
+        zeroed_batch,
+        noise=noise,
+        content_cfg_strength=0.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+    )
+
+    torch.testing.assert_close(masked, explicit)
+
+
+def test_sample_batch_nonempty_groups_without_sketch_model_raises() -> None:
+    """A selector cannot be silently ignored by a checkpoint without sketch support."""
+    model = _module(None)
+    batch = _batch(with_sketch=False)
+
+    with pytest.raises(ValueError, match="does not configure sketch controls"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=1,
+            enabled_sketch_groups=("pitch",),
+        )
+
+
+def test_sample_batch_omitted_groups_without_sketch_model_is_accepted() -> None:
+    """Legacy checkpoints accept an omitted selector."""
+    model = _module(None)
+    batch = _batch(with_sketch=False)
+
+    prediction = model.sample_batch(
+        batch,
+        noise=batch["noise"],
+        content_cfg_strength=2.0,
+        sketch_cfg_strength=1.0,
+        sample_steps=1,
+        enabled_sketch_groups=None,
+    )
+
+    assert prediction.shape == (_BATCH, _NUM_PARAMS)
+
+
+def test_sample_batch_empty_groups_without_sketch_model_raises() -> None:
+    """An explicit empty selector cannot silently become a no-op on a legacy checkpoint."""
+    model = _module(None)
+    batch = _batch(with_sketch=False)
+
+    with pytest.raises(ValueError, match="does not configure sketch controls"):
+        model.sample_batch(
+            batch,
+            noise=batch["noise"],
+            content_cfg_strength=2.0,
+            sketch_cfg_strength=1.0,
+            sample_steps=1,
+            enabled_sketch_groups=(),
+        )
+
+
 def test_fixed_time_diagnostics_use_conditional_sketch_tokens() -> None:
     """Held-out endpoint diagnostics respond to conditional sketch controls."""
     model = _module(SketchControlSpec(num_frames=_NUM_FRAMES))
@@ -529,6 +757,22 @@ def test_sample_batch_nonpositive_steps_raises() -> None:
             sketch_cfg_strength=1.0,
             sample_steps=0,
         )
+
+
+def test_module_routes_temporal_policy_to_music_tokenizer() -> None:
+    """The checkpointed sketch spec configures resampling and training augmentation."""
+    module = _module(
+        SketchControlSpec(
+            num_frames=_NUM_FRAMES,
+            median_filter_max_window_fraction=0.15625,
+            temporal_resampling="linear",
+        )
+    )
+
+    assert module.sketch_tokens is not None
+    assert module.sketch_tokens.temporal_resampling == "linear"
+    assert module.sketch_tokens.median_filter_max_window_fraction == 0.15625
+    assert module.sketch_tokens.effective_median_filter_max_kernel_size == 5
 
 
 def test_train_step_with_sketch_batch_produces_finite_loss() -> None:
@@ -715,6 +959,42 @@ def test_validation_step_with_sketch_runs_cfg_sampling() -> None:
 
     assert torch.isfinite(out["param_mse"])
     assert out["preds"].shape == (_BATCH, _NUM_PARAMS)
+
+
+def test_dense_linear_preparation_reaches_training_backward_without_input_mutation() -> None:
+    """Serving preparation and dense linear tokenization support real training gradients."""
+    spec = SketchControlSpec(
+        num_frames=32,
+        num_control_tokens=16,
+        temporal_resampling="linear",
+    )
+    module = _module(
+        spec,
+        sketch_dropout_rate=0.0,
+        all_conditioning_dropout_rate=0.0,
+        cfg_dropout_rate=0.0,
+    )
+    raw_controls = torch.zeros(_BATCH, NUM_SKETCH_CONTROLS, 64)
+    raw_controls[:, 0, 16:48] = 0.5
+    raw_controls[:, 2, 16:48] = 0.2
+    source_controls = raw_controls.clone()
+    batch = _batch(with_sketch=False)
+    batch["sketch_ctrl"] = prepare_music_sketch_controls(raw_controls, spec)
+
+    loss = module._train_step(batch).loss  # noqa: SLF001
+    loss.backward()
+
+    assert module.sketch_tokens is not None
+    projection_gradients = [
+        cast(torch.nn.Linear, projection).weight.grad
+        for projection in module.sketch_tokens.projections.values()
+    ]
+    assert any(gradient is not None for gradient in projection_gradients)
+    assert any(
+        parameter.grad is not None and torch.count_nonzero(parameter.grad) > 0
+        for parameter in module.parameters()
+    )
+    torch.testing.assert_close(raw_controls, source_controls, rtol=0, atol=0)
 
 
 @pytest.mark.slow

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import copy
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from pathlib import Path
 from typing import cast
 
@@ -42,6 +42,8 @@ from synth_setter.models.vst_flow_matching_module import (
 )
 
 _BATCH_ANY_SHAPE = "batch ..."
+_REFERENCE_FIELD_PREFIX = "reference_field."
+_REFERENCE_BASE_SHA_KEY = "ram_reference_field_base_sha256"
 _BATCH_PARAMS_SHAPE = "batch params"
 _BATCH_TIME_SHAPE = "batch 1"
 _SCALAR_SHAPE = ""
@@ -213,6 +215,8 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         self.reference_field = copy.deepcopy(self.vector_field).requires_grad_(False)
         self.old_field = copy.deepcopy(self.vector_field).requires_grad_(False)
         self.eval_field = copy.deepcopy(self.vector_field).requires_grad_(False)
+        # sha256 of the base a loaded checkpoint needs before its reference can train.
+        self._missing_reference_base_sha256: str | None = None
         self._freeze_modes()
 
     @jaxtyped(typechecker=beartype)
@@ -227,8 +231,29 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
         return self
 
     @jaxtyped(typechecker=beartype)
+    def on_save_checkpoint(self, checkpoint: dict[str, object]) -> None:
+        """Drop the frozen reference field, which the pinned base reproduces exactly.
+
+        It is a third full copy of the vector field on disk (~110 MB for the default field) and
+        never moves during the run, so only its provenance is stored (#3257).
+
+        :param checkpoint: Mutable Lightning checkpoint payload.
+        :raises TypeError: The checkpoint has a malformed state dictionary.
+        """
+        super().on_save_checkpoint(checkpoint)
+        if self.base_checkpoint_sha256 is None:
+            return
+        state = checkpoint.get("state_dict")
+        if not isinstance(state, MutableMapping):
+            raise TypeError("Lightning checkpoint state_dict must be a mutable mapping")
+        for name in tuple(state):
+            if isinstance(name, str) and name.startswith(_REFERENCE_FIELD_PREFIX):
+                del state[name]
+        checkpoint[_REFERENCE_BASE_SHA_KEY] = self.base_checkpoint_sha256
+
+    @jaxtyped(typechecker=beartype)
     def on_load_checkpoint(self, checkpoint: dict[str, object]) -> None:
-        """Refuse checkpoints that predate the evaluation EMA trajectory.
+        """Refuse a checkpoint predating the eval EMA, and restore the omitted reference.
 
         :param checkpoint: Mutable Lightning checkpoint payload.
         :raises ValueError: The checkpoint has no saved evaluation EMA state.
@@ -241,14 +266,55 @@ class VSTFlowRAMModule(PretrainedBaseMixin, VSTFlowMatchingModule):
                 "checkpoint is missing the eval EMA trajectory; legacy RAM checkpoints "
                 "cannot reconstruct it from final policy weights"
             )
+        self._restore_reference_field(checkpoint, state)
         super().on_load_checkpoint(checkpoint)
 
     @jaxtyped(typechecker=beartype)
+    def _restore_reference_field(
+        self, checkpoint: Mapping[str, object], state: Mapping[str, object]
+    ) -> None:
+        """Put this module's reference weights back where the save hook removed them.
+
+        ``__init__`` has already rebuilt them from ``base_checkpoint``, so the identity
+        check is on that base rather than on the weights themselves. Without a base the reference stays a placeholder: sampling never reads it, and
+        ``on_train_start`` refuses to fit against it.
+
+        :param checkpoint: Lightning checkpoint payload.
+        :param state: The payload's state dictionary.
+        :raises TypeError: ``state`` cannot be written back into.
+        :raises ValueError: The module was built from a different base.
+        """
+        stamped = checkpoint.get(_REFERENCE_BASE_SHA_KEY)
+        if stamped is None:
+            return
+        if self.base_checkpoint_sha256 is None:
+            self._missing_reference_base_sha256 = str(stamped)
+        elif self.base_checkpoint_sha256 != stamped:
+            raise ValueError(
+                f"checkpoint was cut from base sha256={stamped}, but this module loaded "
+                f"sha256={self.base_checkpoint_sha256}"
+            )
+        if not isinstance(state, MutableMapping):
+            raise TypeError("Lightning checkpoint state_dict must be a mutable mapping")
+        for name, value in self.state_dict().items():
+            if name.startswith(_REFERENCE_FIELD_PREFIX):
+                state[name] = value
+
+    @jaxtyped(typechecker=beartype)
     def on_train_start(self) -> None:
-        """Reject a multi-device fit: the render reward mutates one shared voice (#2585)."""
+        """Reject a multi-device fit or one whose frozen reference was never restored.
+
+        :raises ValueError: A checkpoint was loaded without the base its reference needs.
+        """
         from synth_setter.models.components.audio_feedback import (
             validate_audio_feedback_runtime,
         )
+
+        if self._missing_reference_base_sha256 is not None:
+            raise ValueError(
+                "checkpoint omits reference_field weights; load it with the "
+                f"base_checkpoint whose sha256 is {self._missing_reference_base_sha256}"
+            )
 
         validate_audio_feedback_runtime(compiled=False, world_size=self.trainer.world_size)
 

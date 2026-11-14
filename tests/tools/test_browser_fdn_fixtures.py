@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,7 @@ from synth_setter.tools.browser_fdn_fixtures import (
     FIXTURE_DIR,
     SAMPLE_RATE,
     build_fixtures,
+    fixtures_match,
     main,
     synthetic_impulse_response,
 )
@@ -113,12 +115,55 @@ def test_build_fixtures_octave_sos_filters_a_unit_impulse_like_scipy() -> None:
 
 
 def test_committed_fixtures_match_regenerated_fixtures() -> None:
-    """The checked-in JSON must equal what the current Python references produce."""
+    """The checked-in JSON must still agree with the current Python references."""
     fixtures = build_fixtures()
 
     for name, payload in fixtures.items():
         committed = json.loads((FIXTURE_DIR / f"{name}.json").read_text(encoding="utf-8"))
-        assert committed == payload, f"{name}.json drifted; rerun the generator"
+        assert fixtures_match(committed, payload), f"{name}.json drifted; rerun the generator"
+
+
+def test_fixtures_match_when_floats_differ_by_one_ulp_reports_match() -> None:
+    """Last-place arithmetic noise is not drift."""
+    committed = {"sample_rate": 44_100, "sos": [[9.744017220493924e-11, 1.0, -2.0]]}
+    regenerated = {
+        "sample_rate": 44_100,
+        "sos": [[math.nextafter(9.744017220493924e-11, math.inf), 1.0, -2.0]],
+    }
+
+    assert fixtures_match(committed, regenerated)
+
+
+def test_fixtures_match_when_a_float_changes_beyond_tolerance_reports_mismatch() -> None:
+    """A regenerated value that actually moved is drift."""
+    committed = {"sos": [[0.9480419550028545]]}
+    regenerated = {"sos": [[0.9480419550028545 * (1.0 + 1e-9)]]}
+
+    assert not fixtures_match(committed, regenerated)
+
+
+def test_fixtures_match_when_band_count_differs_reports_mismatch() -> None:
+    """A changed band count is drift even though every shared value agrees."""
+    committed = {"sketch_centres_hz": [125.0, 250.0]}
+    regenerated = {"sketch_centres_hz": [125.0, 250.0, 500.0]}
+
+    assert not fixtures_match(committed, regenerated)
+
+
+def test_fixtures_match_when_a_key_is_added_reports_mismatch() -> None:
+    """A new payload key is drift."""
+    committed = {"sample_rate": 44_100}
+    regenerated = {"sample_rate": 44_100, "metrics_centres_hz": [125.0]}
+
+    assert not fixtures_match(committed, regenerated)
+
+
+def test_fixtures_match_when_an_integer_becomes_a_float_reports_mismatch() -> None:
+    """Sample rate and recipe counts are exact integers, not near-equal numbers."""
+    committed = {"samples": 176_400}
+    regenerated = {"samples": 176_400.0}
+
+    assert not fixtures_match(committed, regenerated)
 
 
 def test_main_when_output_dir_given_writes_both_fixture_files(tmp_path: Path) -> None:

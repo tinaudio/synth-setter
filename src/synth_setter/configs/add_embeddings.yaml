@@ -37,7 +37,7 @@ metric: cosine
 # Per-batch UDF-output cache enabling resume of an interrupted run; deleted on success.
 resume_cache: null
 # Log every batch with stage timings and enable native Lance debug telemetry.
-debug: false
+debug_logging: false
 # Param spec describing param_array; required by embeddings that condition on parameters.
 param_spec_name: null
 # Strategy rendering param rows as conditioning text for param-sourced embeddings.

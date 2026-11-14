@@ -289,18 +289,22 @@ def test_ultramaster_kr106_spec_round_trip_preserves_values() -> None:
     )
 
 
-def test_ultramaster_kr106_master_volume_samples_calibrated_range() -> None:
-    """Post-chorus gain remains variable within its calibrated ceiling."""
-    master_volume = next(
-        param
-        for param in param_specs["ultramaster_kr106"].synth_params
-        if param.name == "master_volume"
-    )
+@pytest.mark.parametrize(
+    "spec_name",
+    ["ultramaster_kr106", "ultramaster_kr106_onehot", "ultramaster_kr106_single_note"],
+)
+def test_ultramaster_kr106_gain_ranges(spec_name: str) -> None:
+    """KR-106 identities sample the full panel range and hold master gain at -18.2 dB.
 
-    assert isinstance(master_volume, ContinuousParameter)
-    assert master_volume.min == 0.0
-    assert master_volume.max == 0.25
-    assert master_volume.constant_val_p == 0.0
+    :param spec_name: Registered KR-106 parameter-spec identity.
+    """
+    params = {param.name: param for param in param_specs[spec_name].synth_params}
+    volume = cast(ContinuousParameter, params["volume"])
+    master_volume = cast(ContinuousParameter, params["master_volume"])
+
+    assert (volume.min, volume.max) == (0.0, 1.0)
+    assert master_volume.constant_val_p == 1.0
+    assert master_volume.constant_val == 0.35
 
 
 def test_ultramaster_kr106_command_and_silence_states_are_not_sampled() -> None:

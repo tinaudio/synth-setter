@@ -2,7 +2,6 @@
 
 import re
 from collections import defaultdict
-from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -164,73 +163,6 @@ def spec_per_param_abs_cosine_distance(
         similarity = torch.nn.functional.cosine_similarity(predicted_array, target_array, dim=-1)
         distances[parameter.name] = (1 - similarity.abs().clamp(max=1)).mean()
     return distances
-
-
-def complex_to_dbfs(z: torch.Tensor, eps: float = 1e-8):
-    squared_modulus = z.real.square() + z.imag.square()
-    clamped = torch.clamp(squared_modulus, min=eps)
-    return 10 * torch.log10(clamped)
-
-
-class LogSpectralDistance(Metric):
-    """Mean log-spectral distance between predicted and target signals (dBFS magnitude spectra)."""
-
-    def __init__(self, eps: float = 1e-8, **kwargs):
-        super().__init__(**kwargs)
-        self.add_state("lsd", default=torch.tensor(0.0), dist_reduce_fx="sum")
-        self.add_state("count", default=torch.tensor(0), dist_reduce_fx="sum")
-        self.eps = eps
-
-    def update(
-        self,
-        predicted_params: torch.Tensor,
-        target_signal: torch.Tensor,
-        synth_fn: Callable,
-    ):
-        pred_signal = synth_fn(predicted_params)
-
-        pred_fft = torch.fft.rfft(pred_signal, norm="forward")
-        target_fft = torch.fft.rfft(target_signal, norm="forward")
-
-        pred_power = complex_to_dbfs(pred_fft, self.eps)
-        target_power = complex_to_dbfs(target_fft, self.eps)
-
-        self.lsd += (pred_power - target_power).square().mean(dim=-1).sqrt().mean()
-        self.count += 1
-
-    def compute(self):
-        lsd = self.lsd / self.count
-        return lsd
-
-
-class SpectralDistance(Metric):
-    """Mean L1 distance between predicted- and target-signal magnitude spectra."""
-
-    def __init__(self, eps: float = 1e-8, **kwargs):
-        super().__init__(**kwargs)
-        self.add_state("sd", default=torch.tensor(0.0), dist_reduce_fx="sum")
-        self.add_state("count", default=torch.tensor(0), dist_reduce_fx="sum")
-        self.eps = eps
-
-    def update(
-        self,
-        predicted_params: torch.Tensor,
-        target_signal: torch.Tensor,
-        synth_fn: Callable,
-    ):
-        pred_signal = synth_fn(predicted_params)
-
-        pred_fft = torch.fft.rfft(pred_signal, norm="forward")
-        target_fft = torch.fft.rfft(target_signal, norm="forward")
-
-        pred_mag = pred_fft.abs()
-        target_mag = target_fft.abs()
-
-        self.sd += torch.nn.functional.l1_loss(pred_mag, target_mag)
-        self.count += 1
-
-    def compute(self):
-        return self.sd / self.count
 
 
 def _number_groups(

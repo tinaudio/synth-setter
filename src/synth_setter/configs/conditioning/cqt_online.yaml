@@ -5,7 +5,6 @@ defaults:
   - override /model/encoder: cqt_online
 
 model:
-  compile: false
   conditioning: audio
   encoder_output_dim: ${model.encoder.out_dim}
   vector_field:

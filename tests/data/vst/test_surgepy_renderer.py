@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -534,3 +535,35 @@ def test_surgepy_renderer_rejects_non_surgepy_plugin_identity() -> None:
                 Path("src/synth_setter/data/vst/surge_xt_param_map.json")
             ),
         )
+
+
+@pytest.mark.requires_surgepy
+def test_render_accepts_param_map_commit_abbreviated_differently_than_the_build(
+    tmp_path: Path,
+) -> None:
+    """A param map pinned at another abbreviation length still drives the engine.
+
+    The checked-in maps carry the eight-digit stamp this host builds, while the Ubuntu lane in
+    #3391 built the same commit as nine digits and failed every render.
+
+    :param tmp_path: Scratch root holding the re-abbreviated param map.
+    """
+    source = Path("src/synth_setter/data/vst/surge_simple_param_map.json")
+    document = json.loads(source.read_text())
+    release, _, commit = document["surgepy"]["plugin_version"].rpartition(".")
+    document["surgepy"]["plugin_version"] = f"{release}.{commit}0"
+    widened = tmp_path / "surge_simple_param_map.json"
+    widened.write_text(json.dumps(document))
+
+    renderer = SurgePyRenderer(
+        plugin_path="surgepy",
+        sample_rate=44_100,
+        channels=2,
+        signal_duration_seconds=0.1,
+        plugin_state_path="presets/surge-simple.fxp",
+        parameter_map=load_param_map(widened),
+    )
+
+    audio = renderer.render({}, 60, 100, (0.0, 0.05))
+
+    assert np.abs(audio).max() > 0.0

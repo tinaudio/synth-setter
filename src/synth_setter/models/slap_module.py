@@ -27,6 +27,7 @@ from torch.optim import Optimizer
 from synth_setter.evaluation.paired_retrieval import RetrievalBatches, gathered_retrieval_metrics
 from synth_setter.models.components.slap import BYOLLoss, SiameseArm
 from synth_setter.models.components.slap_ema import MovingAverageWeightUpdate
+from synth_setter.models.dynamo_typecheck import install_dynamo_typecheck_bypass
 
 OptimizerFactory = Callable[..., torch.optim.Optimizer]
 SchedulerFactory = Callable[..., torch.optim.lr_scheduler.LRScheduler]
@@ -382,6 +383,7 @@ class SLAPModule(LightningModule):
         if not compile_mode or stage != "fit":
             return
         mode = compile_mode if isinstance(compile_mode, str) else "default"
+        install_dynamo_typecheck_bypass()
         self.audio_encoder = torch.compile(self.audio_encoder, mode=mode)
         self.param_encoder = torch.compile(self.param_encoder, mode=mode)
         self.audio_ema = torch.compile(self.audio_ema, mode=mode)

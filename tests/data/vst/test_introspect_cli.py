@@ -21,7 +21,11 @@ import click
 import pytest
 from click.testing import CliRunner
 
-from synth_setter.cli.introspect_plugin import _load_plugin_loudly, main
+from synth_setter.cli.introspect_plugin import (
+    _heartbeat_wait_seconds,
+    _load_plugin_loudly,
+    main,
+)
 from synth_setter.data.vst.param_spec import ParamSpec
 from tests.data.vst._introspect_fakes import (
     IntrospectFakeParameter,
@@ -519,5 +523,121 @@ def test_plugin_load_timeout_is_not_overshot_by_the_heartbeat_interval() -> None
             hard_timeout_handler=lambda _message: release_loader.set(),
         )
 
-    # Two 0.25s waits would take 0.5s; remaining-aware waits stop at ~0.3s.
-    assert time.monotonic() - started < 0.45
+    # A wall-clock bound here cannot separate the two behaviours under load (#3667);
+    # _heartbeat_wait_seconds is asserted directly below.
+    assert time.monotonic() - started < 5.0
+
+
+@pytest.mark.parametrize(
+    ("remaining", "heartbeat", "expected"),
+    [
+        (0.05, 0.25, 0.05),
+        (0.25, 0.25, 0.25),
+        (10.0, 0.25, 0.25),
+    ],
+    ids=["remaining_shorter", "equal", "heartbeat_shorter"],
+)
+def test_heartbeat_wait_is_clamped_to_the_remaining_budget(
+    remaining: float, heartbeat: float, expected: float
+) -> None:
+    """The watchdog never asks for a wait that would outlast the load budget.
+
+    :param remaining: Seconds left before the soft timeout fires.
+    :param heartbeat: Requested heartbeat spacing.
+    :param expected: The wait the watchdog should request.
+    """
+    assert _heartbeat_wait_seconds(remaining, heartbeat) == expected
+
+
+def test_plugin_load_timeout_binds_when_the_watchdog_thread_is_scheduled_late(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The budget runs from the load, not from whenever the watchdog gets scheduled.
+
+    A contended runner can leave the watchdog unscheduled for longer than the
+    whole budget. If the deadline's origin were read inside that thread, a load
+    that had already overrun would be waved through — #3562's ``assert 0 != 0``.
+
+    :param monkeypatch: Delays the watchdog body past the declared timeout.
+    """
+    timeout_seconds = 0.05
+    load_running = threading.Event()
+    release = threading.Event()
+    real_thread_run = threading.Thread.run
+
+    def run_watchdog_late(self: threading.Thread) -> None:
+        """Withhold the watchdog body until the load has already overrun.
+
+        :param self: The thread whose body is being withheld.
+        """
+        if self.name == "plugin-load-watchdog":
+            release.wait(timeout=5.0)
+        real_thread_run(self)
+
+    def blocks_past_the_budget(_path: str, _name: str | None = None) -> IntrospectFakePlugin:
+        load_running.set()
+        release.wait(timeout=5.0)
+        return IntrospectFakePlugin({})
+
+    monkeypatch.setattr(threading.Thread, "run", run_watchdog_late)
+
+    def overrun_then_release() -> None:
+        load_running.wait(timeout=5.0)
+        # Sleep is a lower bound only: the load is guaranteed to have overrun.
+        time.sleep(timeout_seconds * 4)
+        release.set()
+
+    releaser = threading.Thread(target=overrun_then_release, name="test-releaser")
+    releaser.start()
+    try:
+        with pytest.raises(click.UsageError, match="did not finish loading"):
+            _load_plugin_loudly(
+                "fake.vst3",
+                None,
+                blocks_past_the_budget,
+                timeout_seconds=timeout_seconds,
+                heartbeat_seconds=0.02,
+                hard_timeout_grace_seconds=0.0,
+                hard_timeout_handler=lambda _message: release.set(),
+            )
+    finally:
+        release.set()
+        releaser.join(timeout=5.0)
+
+
+def test_plugin_load_timeout_binds_when_the_watchdog_oversleeps_the_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A load that outlasts its budget fails even if the watchdog wakes only after it returns.
+
+    A contended runner can leave the watchdog asleep inside its wait until the load has already
+    finished; the verdict must come from the measured duration, not from which thread won the race
+    (#3705).
+
+    :param monkeypatch: Makes the watchdog oversleep, as a descheduled thread would.
+    """
+    timeout_seconds = 0.05
+    watchdog_waiting = threading.Event()
+
+    def oversleep(_remaining: float, _heartbeat_seconds: float) -> float:
+        watchdog_waiting.set()
+        return 5.0
+
+    def overruns_while_the_watchdog_sleeps(
+        _path: str, _name: str | None = None
+    ) -> IntrospectFakePlugin:
+        watchdog_waiting.wait(timeout=5.0)
+        time.sleep(timeout_seconds * 4)
+        return IntrospectFakePlugin({})
+
+    monkeypatch.setattr("synth_setter.cli.introspect_plugin._heartbeat_wait_seconds", oversleep)
+
+    with pytest.raises(click.UsageError, match="did not finish loading"):
+        _load_plugin_loudly(
+            "fake.vst3",
+            None,
+            overruns_while_the_watchdog_sleeps,
+            timeout_seconds=timeout_seconds,
+            heartbeat_seconds=0.02,
+            hard_timeout_grace_seconds=0.0,
+        )

@@ -45,6 +45,11 @@ from synth_setter.data.vst_datamodule import (
     prepare_batch,
     ranked_generator_seed,
 )
+from synth_setter.features.profile_controls import extract_music_sketch_controls
+from synth_setter.features.sketch_controls import (
+    DEFAULT_PESTO_CHECKPOINT,
+    load_pesto_model,
+)
 from synth_setter.features.tiv import extract_tiv_batch
 from synth_setter.param_spec_name import (
     LEGACY_NOTE_TIMING,
@@ -52,6 +57,10 @@ from synth_setter.param_spec_name import (
     ParamSpecName,
 )
 from synth_setter.pipeline.data.growing_lance import ActiveGrowingSnapshot, GrowingSnapshot
+from synth_setter.pipeline.data.lance_shard import (
+    SHARD_METADATA_SCHEMA_KEY,
+    read_shard_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +101,32 @@ def _fixed_embedding_shape(field: pa.Field) -> tuple[int, ...]:
             f"got {value_type}"
         )
     return shape
+
+
+def _validate_audio_geometry(shard_path: Path, sample_rate: int, signal_length: int) -> None:
+    """Check one split's recorded render geometry against the configured geometry.
+
+    Online conditioning encoders are built from ``datamodule.sample_rate`` and
+    ``datamodule.signal_length`` at composition, before any dataset is opened, so a
+    disagreement would otherwise surface as mis-framed encoder input, not an error. Splits written without shard
+    metadata — third-party imports — carry no recorded geometry and pass.
+
+    :param shard_path: Lance dataset selected for a Lightning split.
+    :param sample_rate: Configured rate of the stored audio, in Hz.
+    :param signal_length: Configured samples per stored row.
+    :raises ValueError: If either recorded value differs from the configured one.
+    """
+    schema = lance.dataset(str(shard_path)).schema
+    if SHARD_METADATA_SCHEMA_KEY not in (schema.metadata or {}):
+        return
+    metadata = read_shard_metadata(schema)
+    stored_length = round(metadata.sample_rate * metadata.signal_duration_seconds)
+    if (metadata.sample_rate, stored_length) != (sample_rate, signal_length):
+        raise ValueError(
+            f"{shard_path} stores {stored_length} samples at {metadata.sample_rate} Hz, "
+            f"but the datamodule is configured for {signal_length} samples at "
+            f"{sample_rate} Hz"
+        )
 
 
 def _validate_embedding_column(
@@ -569,6 +604,8 @@ class LanceVSTDataModule(VSTDataModule):
         high_memory_materialization: bool = False,
         growing_active_record: str | Path | None = None,
         eval_sample_ids: bool = False,
+        sample_rate: int = 44_100,
+        signal_length: int = 176_400,
     ) -> None:
         """Store map-style Lance loader configuration.
 
@@ -599,12 +636,16 @@ class LanceVSTDataModule(VSTDataModule):
         :param high_memory_materialization: Whether to use high-memory Lance tuning.
         :param growing_active_record: Atomic active-record path for train-only snapshots.
         :param eval_sample_ids: Include pinned source row identities in validation and test.
+        :param sample_rate: Rate of the stored audio in Hz, checked against each split.
+        :param signal_length: Samples per stored row, checked against each split.
         :raises ValueError: Growing refresh is combined with persistent workers, or
             identity-bearing evaluation is requested for random fake data.
         """
         if eval_sample_ids and fake:
             raise ValueError("eval_sample_ids requires real source rows, not fake data")
         self.eval_sample_ids = eval_sample_ids
+        self.sample_rate = sample_rate
+        self.signal_length = signal_length
         super().__init__(
             dataset_root=dataset_root,
             download_dataset_root_uri=download_dataset_root_uri,
@@ -625,6 +666,15 @@ class LanceVSTDataModule(VSTDataModule):
             download_dataset_row_limit=download_dataset_row_limit,
             high_memory_materialization=high_memory_materialization,
         )
+        if (
+            self.sketch_controls is not None
+            and self.sketch_controls.source == "online"
+            and self.sketch_controls.sample_rate != sample_rate
+        ):
+            raise ValueError(
+                f"sketch sample_rate {self.sketch_controls.sample_rate} does not match "
+                f"datamodule sample_rate {sample_rate}"
+            )
         self.val_num_workers = val_num_workers
         self.persistent_workers = persistent_workers
         self.prefetch_factor = prefetch_factor
@@ -696,6 +746,7 @@ class LanceVSTDataModule(VSTDataModule):
         :param include_sample_id: Add transient source row identities to this split.
         :returns: Sample-indexed dataset and collate operation.
         """
+        _validate_audio_geometry(shard_path, self.sample_rate, self.signal_length)
         spec = self.embedding_conditioning
         if spec is not None:
             _validate_embedding_column(shard_path, spec)
@@ -992,6 +1043,15 @@ class LanceVSTDataModule(VSTDataModule):
         :raises ValueError: The active record's directory does not exist, so the
             materializer was never started and the run could never grow.
         """
+        self._select_compatible_dataset_root()
+        if (
+            self.sketch_controls is not None
+            and self.sketch_controls.profile in ("music", "music_tiv")
+            and self.sketch_controls.source == "online"
+        ):
+            # Warm the canonical weights before workers fork; no device argument, so a
+            # model already resident on the accelerator is left where it is.
+            load_pesto_model(DEFAULT_PESTO_CHECKPOINT)
         if (
             self.growing_active_record is not None
             and not self.growing_active_record.parent.is_dir()
@@ -1151,12 +1211,12 @@ class LanceVSTDataModule(VSTDataModule):
     def on_after_batch_transfer(
         self, batch: Mapping[str, torch.Tensor | None], dataloader_idx: int
     ) -> ModelBatch:
-        """Extract online TIV sketch controls from transferred waveform audio.
+        """Extract configured online sketch controls from transferred waveform audio.
 
-        :param batch: Model batch containing projected audio for online TIV.
+        :param batch: Model batch containing projected audio for online extraction.
         :param dataloader_idx: Unused; each stage serves one loader.
-        :returns: Batch with temporal ``sketch_ctrl`` when online TIV is configured.
-        :raises ValueError: Online TIV is configured but audio is absent.
+        :returns: Batch with temporal ``sketch_ctrl`` when online extraction is configured.
+        :raises ValueError: Online extraction is configured but audio or its rate is absent.
         """
         del dataloader_idx
         model_batch = dict(batch)
@@ -1165,15 +1225,16 @@ class LanceVSTDataModule(VSTDataModule):
             return model_batch
         audio = model_batch.get("audio")
         if audio is None:
-            raise ValueError("online TIV sketch extraction requires batch audio")
+            raise ValueError("online sketch extraction requires batch audio")
         if sketch.sample_rate is None:
-            raise ValueError("online TIV sketch extraction requires sample_rate")
-        controls = extract_tiv_batch(
-            audio, sketch.sample_rate, backend=sketch.tiv_backend
-        )
-        model_batch[SKETCH_CTRL_FIELD] = F.adaptive_avg_pool1d(
-            controls, sketch.num_frames
-        )
+            raise ValueError("online sketch extraction requires sample_rate")
+        if sketch.profile in ("music", "music_tiv"):
+            model_batch[SKETCH_CTRL_FIELD] = extract_music_sketch_controls(
+                audio, sketch.sample_rate, sketch
+            )
+            return model_batch
+        controls = extract_tiv_batch(audio, sketch.sample_rate, backend=sketch.tiv_backend)
+        model_batch[SKETCH_CTRL_FIELD] = F.adaptive_avg_pool1d(controls, sketch.num_frames)
         return model_batch
 
     def teardown(self, stage: str | None = None) -> None:

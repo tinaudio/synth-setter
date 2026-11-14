@@ -20,6 +20,7 @@ from agent._shared.run_pi_review_follow_up import (
     _MAX_LOG_BYTES,
     FollowUpResult,
 )
+from tests.helpers.subprocess_progress import await_progress
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "agent/_shared/run_pi_review_follow_up.py"
@@ -208,39 +209,73 @@ def _environment(tmp_path: Path, *, mode: str, foreground_stopped: bool = True) 
     return environment
 
 
-def _run_supervisor(manifest: Path, environment: dict[str, str]) -> int:
-    try:
+def _run_supervisor_capturing(manifest: Path, environment: dict[str, str]) -> tuple[int, str]:
+    supervisor = cast(
+        Any,
         sh.Command(sys.executable)(
             SCRIPT,
             "--supervise",
             manifest,
+            _bg=True,
+            _bg_exc=False,
             _cwd=manifest.parents[1],
             _env=environment,
-            _timeout=5,
-        )
+            _return_cmd=True,
+        ),
+    )
+    try:
+        _await_supervisor_exit(supervisor)
+    finally:
+        with contextlib.suppress(Exception):
+            supervisor.kill()
+    try:
+        supervisor.wait()
     except sh.ErrorReturnCode as error:
-        return error.exit_code
-    return 0
+        return error.exit_code, error.stderr.decode()
+    return 0, supervisor.stderr.decode()
+
+
+def _run_supervisor(manifest: Path, environment: dict[str, str]) -> int:
+    return _run_supervisor_capturing(manifest, environment)[0]
 
 
 def _read_result(manifest: Path) -> FollowUpResult:
     return FollowUpResult.model_validate_json(_result_path(manifest).read_text())
 
 
-def _wait_for_path(path: Path, *, timeout: float = 5) -> None:
-    deadline = time.monotonic() + timeout
-    while not path.exists():
-        if time.monotonic() >= deadline:
-            raise AssertionError(f"timed out waiting for {path}")
-        time.sleep(0.01)
+def _await_supervisor_exit(supervisor: Any) -> None:
+    """Wait for a backgrounded supervisor to exit, however loaded the runner is.
+
+    :param supervisor: Backgrounded supervisor command.
+    """
+    await_progress(
+        lambda: not supervisor.is_alive(),
+        supervisor.pid,
+        description="the supervisor to exit",
+    )
 
 
-def _wait_for_text(path: Path, expected: str, *, timeout: float = 5) -> None:
-    deadline = time.monotonic() + timeout
-    while not path.exists() or expected not in path.read_text():
-        if time.monotonic() >= deadline:
-            raise AssertionError(f"timed out waiting for {expected!r} in {path}")
-        time.sleep(0.01)
+def _wait_for_path(supervisor: Any, path: Path) -> None:
+    """Wait for ``path`` to appear while the supervisor tree keeps working.
+
+    :param supervisor: Backgrounded supervisor whose tree writes ``path``.
+    :param path: File the supervisor or its child creates.
+    """
+    await_progress(path.exists, supervisor.pid, description=f"{path} to appear")
+
+
+def _wait_for_text(supervisor: Any, path: Path, expected: str) -> None:
+    """Wait for ``expected`` to reach ``path`` while the supervisor tree keeps working.
+
+    :param supervisor: Backgrounded supervisor whose tree writes ``path``.
+    :param path: File the text is expected in.
+    :param expected: Substring awaited in ``path``.
+    """
+    await_progress(
+        lambda: path.exists() and expected in path.read_text(),
+        supervisor.pid,
+        description=f"{expected!r} in {path}",
+    )
 
 
 def test_supervisor_valid_child_result_publishes_strict_atomic_result(tmp_path: Path) -> None:
@@ -352,11 +387,12 @@ def test_supervisor_killed_child_writes_failed_result_with_signal_code(tmp_path:
         ),
     )
     try:
-        _wait_for_path(child_pid_file)
-        _wait_for_text(_log_path(manifest), "child-log")
+        _wait_for_path(supervisor, child_pid_file)
+        _wait_for_text(supervisor, _log_path(manifest), "child-log")
         os.kill(int(child_pid_file.read_text()), signal.SIGKILL)
+        _await_supervisor_exit(supervisor)
         with pytest.raises(sh.ErrorReturnCode) as error:
-            supervisor.wait(timeout=5)
+            supervisor.wait()
         assert error.value.exit_code == 1
     finally:
         if child_pid_file.exists():
@@ -413,10 +449,11 @@ def test_supervisor_result_path_never_exposes_partial_child_output(tmp_path: Pat
         ),
     )
     try:
-        _wait_for_path(partial_marker)
+        _wait_for_path(supervisor, partial_marker)
         assert not _result_path(manifest).exists()
         release.touch()
-        supervisor.wait(timeout=5)
+        _await_supervisor_exit(supervisor)
+        supervisor.wait()
     finally:
         with contextlib.suppress(Exception):
             supervisor.kill()
@@ -529,7 +566,10 @@ def test_supervisor_mixed_ownership_reports_one_terminal_status_per_pass(tmp_pat
     )
     manifest.write_text(json.dumps(payload))
 
-    completed = _run_supervisor(manifest, _environment(tmp_path, mode="missing"))
+    completed = _run_supervisor(
+        manifest,
+        _environment(tmp_path, mode="missing", foreground_stopped=False),
+    )
 
     assert completed == 1
     attempts = [(row.skill, row.status) for row in _read_result(manifest).attempts]
@@ -604,8 +644,39 @@ def test_supervisor_unstoppable_foreground_owner_fails_closed(tmp_path: Path) ->
     assert "ownership" in {diagnostic.category for diagnostic in result.diagnostics}
 
 
-def test_supervisor_host_exit_does_not_authorize_duplicate_launch(tmp_path: Path) -> None:
-    """Fail closed because foreground host exit does not stop its workers.
+def test_supervisor_transfers_stalled_owner_once_foreground_stopped(tmp_path: Path) -> None:
+    """Relaunch a reportless pass after the host that owned it is known stopped.
+
+    :param tmp_path: Temporary review root and fake Pi executable.
+    """
+    launch_marker = tmp_path / "pi-launched"
+    runtime_copy = tmp_path / "runtime-manifest.json"
+    pi = _fake_pi(tmp_path)
+    pi.write_text(
+        pi.read_text().replace(
+            "result = Path",
+            f"Path({str(launch_marker)!r}).touch()\n"
+            f"Path({str(runtime_copy)!r}).write_text(runtime.read_text())\n"
+            "result = Path",
+        )
+    )
+    manifest = _manifest(tmp_path, output_path=tmp_path / "unfinished.jsonl")
+
+    completed = _run_supervisor(manifest, _environment(tmp_path, mode="valid"))
+
+    assert completed == 0
+    assert launch_marker.exists()
+    result = _read_result(manifest)
+    assert result.status == "complete"
+    assert [attempt.status for attempt in result.attempts] == ["stale", "success"]
+    transferred = json.loads(runtime_copy.read_text())["deferred_passes"]
+    assert [(row["agent_id"], row["output_path"]) for row in transferred] == [(None, None)]
+
+
+def test_supervisor_waits_for_delayed_report_before_transferring_stopped_owner(
+    tmp_path: Path,
+) -> None:
+    """Adopt a late foreground report instead of relaunching a stopped host's pass.
 
     :param tmp_path: Temporary review root and fake Pi executable.
     """
@@ -614,15 +685,33 @@ def test_supervisor_host_exit_does_not_authorize_duplicate_launch(tmp_path: Path
     pi.write_text(
         pi.read_text().replace("runtime =", f"Path({str(launch_marker)!r}).touch()\nruntime =")
     )
-    manifest = _manifest(tmp_path, output_path=tmp_path / "unfinished.jsonl")
+    foreground_output = tmp_path / "late.jsonl"
+    manifest = _manifest(tmp_path, output_path=foreground_output)
+    report = {
+        "skill": "correctness-review",
+        "target": "PR #2174",
+        "findings": [],
+        "what_looks_good": ["The late report beat the transfer."],
+    }
 
-    completed = _run_supervisor(manifest, _environment(tmp_path, mode="valid"))
+    def write_report() -> None:
+        time.sleep(0.5)
+        event = {"message": {"role": "assistant", "content": json.dumps(report)}}
+        foreground_output.write_text(json.dumps(event) + "\n")
 
-    assert completed == 1
+    writer = threading.Thread(target=write_report)
+    writer.start()
+    environment = _environment(tmp_path, mode="valid")
+    environment["PI_REVIEW_FOLLOW_UP_OWNERSHIP_WAIT_SECONDS"] = "1"
+    try:
+        completed = _run_supervisor(manifest, environment)
+    finally:
+        writer.join()
+
+    assert completed == 0
     assert not launch_marker.exists()
-    result = _read_result(manifest)
-    assert [attempt.status for attempt in result.attempts] == ["failed"]
-    assert "ownership" in {diagnostic.category for diagnostic in result.diagnostics}
+    statuses = [attempt.status for attempt in _read_result(manifest).attempts]
+    assert statuses == ["adopted-foreground-result"]
 
 
 def test_follow_up_result_failed_status_requires_diagnostic() -> None:
@@ -640,3 +729,68 @@ def test_follow_up_result_rejects_model_written_extra_fields() -> None:
 
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         FollowUpResult.model_validate_json(json.dumps(payload))
+
+
+def test_supervisor_failed_child_names_its_diagnostic_on_stderr(tmp_path: Path) -> None:
+    """Make a failed follow-up diagnosable from the job log without the artifact.
+
+    :param tmp_path: Temporary review root and fake Pi executable.
+    """
+    _fake_pi(tmp_path)
+    manifest = _manifest(tmp_path)
+
+    completed, stderr = _run_supervisor_capturing(manifest, _environment(tmp_path, mode="nonzero"))
+
+    assert completed == 1
+    assert "child-exit" in stderr
+    assert "Pi follow-up child exited with code 7" in stderr
+
+
+def test_supervisor_unstoppable_owner_names_the_unfinished_pass_on_stderr(tmp_path: Path) -> None:
+    """Name which checklists never landed when ownership blocks the relaunch.
+
+    :param tmp_path: Temporary review root and fake Pi executable.
+    """
+    _fake_pi(tmp_path)
+    manifest = _manifest(tmp_path, output_path=tmp_path / "unfinished.jsonl")
+
+    completed, stderr = _run_supervisor_capturing(
+        manifest,
+        _environment(tmp_path, mode="valid", foreground_stopped=False),
+    )
+
+    assert completed == 1
+    assert "ownership" in stderr
+    assert "correctness-review" in stderr
+    assert "free-pool" in stderr
+
+
+def test_supervisor_failure_stderr_withholds_child_output(tmp_path: Path) -> None:
+    """Keep provider text out of the job log; the sidecar artifact carries it.
+
+    :param tmp_path: Temporary review root and fake Pi executable.
+    """
+    _fake_pi(tmp_path)
+    manifest = _manifest(tmp_path)
+    environment = {**_environment(tmp_path, mode="nonzero"), "FAKE_PI_LOG": "sk-secret-token"}
+
+    completed, stderr = _run_supervisor_capturing(manifest, environment)
+
+    assert completed == 1
+    assert "sk-secret-token" in _log_path(manifest).read_text()
+    assert "child-exit" in stderr
+    assert "sk-secret-token" not in stderr
+
+
+def test_supervisor_complete_result_writes_no_failure_report(tmp_path: Path) -> None:
+    """Leave the green path quiet so a failure report is never ambiguous.
+
+    :param tmp_path: Temporary review root and fake Pi executable.
+    """
+    _fake_pi(tmp_path)
+    manifest = _manifest(tmp_path)
+
+    completed, stderr = _run_supervisor_capturing(manifest, _environment(tmp_path, mode="valid"))
+
+    assert completed == 0
+    assert "Pi review follow-up failed" not in stderr

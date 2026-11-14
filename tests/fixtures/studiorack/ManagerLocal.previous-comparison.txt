@@ -1,0 +1,126 @@
+// Minimal @open-audio-stack/core 0.1.55 contract required by patch-core.mjs.
+import { readFileSync } from 'fs';
+import path from 'path';
+        const system = getSystem();
+        const architecture = getArchitecture();
+        let files = packageCompatibleFiles(pkgVersion, [architecture], [system], excludedFormats);
+        if (!files.length) throw new Error('none');
+        if (files.some(file => file.type === FileType.Archive)) {
+            files = files.filter(file => file.type === FileType.Archive);
+        }
+        const artifactLockPath = process.env.SYNTH_SETTER_STUDIORACK_ARTIFACT_LOCK || this.config.get('artifactLockPath');
+        if (!artifactLockPath)
+            throw new Error('Studiorack artifact lock path is required');
+        const artifactLockFailure = message => {
+            throw new Error(`invalid artifact lock ${artifactLockPath}: ${message}`);
+        };
+        const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+        const requireExactFields = (value, expectedFields, context) => {
+            if (!isRecord(value))
+                artifactLockFailure(`${context} must be an object`);
+            const actualFields = Object.keys(value).sort();
+            if (actualFields.length !== expectedFields.length ||
+                actualFields.some((field, index) => field !== expectedFields[index]))
+                artifactLockFailure(`${context} must have exactly fields: ${expectedFields.join(', ')}`);
+        };
+        const requireSupportedList = (value, supportedValues, context) => {
+            if (!Array.isArray(value) || value.length === 0)
+                artifactLockFailure(`${context} must be a nonempty array`);
+            const seen = new Set();
+            for (const item of value) {
+                if (typeof item !== 'string' || !supportedValues.has(item))
+                    artifactLockFailure(`${context} contains unsupported value ${JSON.stringify(item)}`);
+                if (seen.has(item))
+                    artifactLockFailure(`${context} contains duplicate value ${JSON.stringify(item)}`);
+                seen.add(item);
+            }
+        };
+        const supportedArchitectures = new Set(['arm32', 'arm64', 'arm64ec', 'x32', 'x64']);
+        const supportedSystems = new Set(['linux', 'mac', 'win']);
+        const supportedTypes = new Set(Object.values(FileType));
+        const validateArtifact = (artifact, context) => {
+            requireExactFields(artifact, ['architectures', 'sha256', 'systems', 'type', 'url'], context);
+            requireSupportedList(artifact.architectures, supportedArchitectures, `${context}.architectures`);
+            requireSupportedList(artifact.systems, supportedSystems, `${context}.systems`);
+            if (typeof artifact.type !== 'string' || !supportedTypes.has(artifact.type))
+                artifactLockFailure(`${context}.type contains unsupported value ${JSON.stringify(artifact.type)}`);
+            if (typeof artifact.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(artifact.sha256))
+                artifactLockFailure(`${context}.sha256 must be 64 lowercase hexadecimal characters`);
+            if (typeof artifact.url !== 'string')
+                artifactLockFailure(`${context}.url must be a valid HTTPS URL`);
+            let artifactUrl;
+            try {
+                artifactUrl = new URL(artifact.url);
+            } catch {
+                artifactLockFailure(`${context}.url must be a valid HTTPS URL`);
+            }
+            if (artifactUrl === undefined || artifactUrl.protocol !== 'https:' || !artifactUrl.hostname)
+                artifactLockFailure(`${context}.url must be a valid HTTPS URL`);
+        };
+        const normalizeArtifact = file => ({
+            architectures: [...file.architectures].sort(),
+            sha256: file.sha256,
+            systems: file.systems.map(value => typeof value === 'string' ? value : value.type).sort(),
+            type: file.type,
+            url: file.url,
+        });
+        const artifactIdentity = artifact => JSON.stringify(normalizeArtifact(artifact));
+        const validateArtifactLock = lock => {
+            if (!isRecord(lock))
+                artifactLockFailure('artifact lock root must be an object');
+            for (const [reference, entry] of Object.entries(lock)) {
+                const versionSeparator = reference.lastIndexOf('@');
+                const packageName = reference.slice(0, versionSeparator).trim();
+                const packageVersion = reference.slice(versionSeparator + 1).trim();
+                if (versionSeparator <= 0 || !packageName || !packageVersion)
+                    artifactLockFailure(`package reference ${JSON.stringify(reference)} must contain a nonempty package and version`);
+                requireExactFields(entry, ['artifacts'], reference);
+                if (!Array.isArray(entry.artifacts) || entry.artifacts.length === 0)
+                    artifactLockFailure(`${reference}.artifacts must be a nonempty array`);
+                const seenArtifacts = new Set();
+                entry.artifacts.forEach((artifact, index) => {
+                    validateArtifact(artifact, `${reference}.artifacts[${index}]`);
+                    const identity = artifactIdentity(artifact);
+                    if (seenArtifacts.has(identity))
+                        artifactLockFailure(`${reference}.artifacts contains duplicate artifact at index ${index}`);
+                    seenArtifacts.add(identity);
+                });
+            }
+            return lock;
+        };
+        let parsedArtifactLock;
+        try {
+            parsedArtifactLock = JSON.parse(readFileSync(artifactLockPath, 'utf8'));
+        } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            throw new Error(`invalid artifact lock JSON at ${artifactLockPath}: ${detail}`);
+        }
+        const artifactLock = validateArtifactLock(parsedArtifactLock);
+        const packageReference = `${slug}@${versionNum}`;
+        const lockedArtifacts = artifactLock[packageReference]?.artifacts;
+        if (!Array.isArray(lockedArtifacts))
+            throw new Error(`artifact lock missing ${packageReference}`);
+        const canonicalArtifacts = artifacts => artifacts
+            .map(normalizeArtifact)
+            .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+        const preferArchives = artifacts => artifacts.some(file => file.type === FileType.Archive)
+            ? artifacts.filter(file => file.type === FileType.Archive)
+            : artifacts;
+        const lockedCompatibleArtifacts = lockedArtifacts.filter(file =>
+            file.architectures.includes(architecture) && file.systems.includes(system));
+        const lockedSelection = canonicalArtifacts(preferArchives(lockedCompatibleArtifacts));
+        const liveSelection = canonicalArtifacts(preferArchives(files));
+        if (JSON.stringify(liveSelection) !== JSON.stringify(lockedSelection))
+            throw new Error(`artifact lock mismatch for ${packageReference} (${system}-${architecture})`);
+        if (this.isPackageInstalled(slug, versionNum)) {
+            this.log(`Package ${slug} version ${versionNum} already installed`);
+            pkgVersion.installed = true;
+            return pkgVersion;
+        }
+        if (!isAdmin() && !isTests() && !files.every(file => file.type === FileType.Archive)) {
+            await runCliAsAdmin({
+                appDir: this.config.get('appDir'),
+                artifactLockPath,
+                operation: 'install',
+            });
+        }

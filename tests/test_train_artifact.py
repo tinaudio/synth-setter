@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import re
 import shutil
@@ -36,6 +37,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 
 from synth_setter.cli.train import (
     _checkpoint_metadata,
+    _checkpoint_path_written_by_run,
     _derive_checkpoint_uri,
     _log_model_artifact,
     _upload_best_checkpoint,
@@ -189,19 +191,186 @@ def _fake_trainer(
     )
 
 
+def _write_checkpoint(path: Path, epoch: int, global_step: int) -> Path:
+    """Save a Lightning-shaped checkpoint carrying its own training counters.
+
+    :param path: File the checkpoint is written to.
+    :param epoch: Value stored as the checkpoint's ``epoch``.
+    :param global_step: Value stored as the checkpoint's ``global_step``.
+    :returns: The written path.
+    """
+    torch.save(
+        {"epoch": epoch, "global_step": global_step, "state_dict": {"w": torch.zeros(2)}}, path
+    )
+    return path
+
+
+def _fake_checkpoint_callback(best_model_path: str, dirpath: str | None) -> Any:
+    """Build a ModelCheckpoint stand-in exposing the best path and its write directory.
+
+    :param best_model_path: Value returned as ``best_model_path``.
+    :param dirpath: Directory the callback writes into, or ``None`` when unset.
+    :returns: A namespace with ``best_model_path`` and ``dirpath``.
+    """
+    return SimpleNamespace(best_model_path=best_model_path, dirpath=dirpath)
+
+
+def test_checkpoint_path_written_by_run_keeps_a_path_under_the_callback_dir(
+    tmp_path: Path,
+) -> None:
+    """A checkpoint this run wrote into its own callback directory is uploadable.
+
+    :param tmp_path: Stands in for the run's checkpoint directory.
+    """
+    best = tmp_path / "checkpoints" / "epoch_003.ckpt"
+    trainer = SimpleNamespace(
+        checkpoint_callback=_fake_checkpoint_callback(str(best), str(tmp_path / "checkpoints"))
+    )
+
+    assert _checkpoint_path_written_by_run(cast(Any, trainer)) == str(best)
+
+
+def test_checkpoint_path_written_by_run_drops_a_resumed_foreign_best(tmp_path: Path) -> None:
+    """A best path restored from resumed callback state is not this run's to upload (#3260).
+
+    :param tmp_path: Holds both the previous run's directory and this run's.
+    """
+    inherited = tmp_path / "final500" / "checkpoints" / "step_000500.ckpt"
+    trainer = SimpleNamespace(
+        checkpoint_callback=_fake_checkpoint_callback(
+            str(inherited), str(tmp_path / "wandb5000" / "checkpoints")
+        )
+    )
+
+    assert _checkpoint_path_written_by_run(cast(Any, trainer)) == ""
+
+
+def test_checkpoint_path_written_by_run_warns_which_path_it_dropped(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Dropping an inherited best path is announced with the path, not silent.
+
+    :param tmp_path: Holds both the previous run's directory and this run's.
+    :param caplog: Captures the warning naming the dropped checkpoint.
+    """
+    inherited = tmp_path / "final500" / "checkpoints" / "step_000500.ckpt"
+    trainer = SimpleNamespace(
+        checkpoint_callback=_fake_checkpoint_callback(
+            str(inherited), str(tmp_path / "wandb5000" / "checkpoints")
+        )
+    )
+
+    with caplog.at_level(logging.WARNING):
+        _checkpoint_path_written_by_run(cast(Any, trainer))
+
+    assert "step_000500.ckpt" in caplog.text
+
+
+def test_checkpoint_path_written_by_run_without_a_dirpath_keeps_the_path(tmp_path: Path) -> None:
+    """With no write directory to compare against, the callback's own answer stands.
+
+    :param tmp_path: Supplies the checkpoint path the callback reports.
+    """
+    best = tmp_path / "epoch_003.ckpt"
+    trainer = SimpleNamespace(checkpoint_callback=_fake_checkpoint_callback(str(best), None))
+
+    assert _checkpoint_path_written_by_run(cast(Any, trainer)) == str(best)
+
+
+def test_checkpoint_path_written_by_run_without_a_checkpoint_callback_is_empty() -> None:
+    """A run with checkpointing disabled entirely reports no path to upload."""
+    trainer = SimpleNamespace(checkpoint_callback=None)
+
+    assert _checkpoint_path_written_by_run(cast(Any, trainer)) == ""
+
+
 def test_checkpoint_metadata_records_uri_epoch_step_and_size(tmp_path: Path) -> None:
     """The referenced checkpoint's URI, position in training, and byte size are recorded.
 
-    :param tmp_path: Holds the local checkpoint whose size is read.
+    :param tmp_path: Holds the local checkpoint whose counters and size are read.
     """
-    ckpt = tmp_path / "model.ckpt"
-    ckpt.write_bytes(b"x" * 17)
+    ckpt = _write_checkpoint(tmp_path / "model.ckpt", epoch=3, global_step=4200)
 
     metadata = _checkpoint_metadata(_fake_trainer(), str(ckpt), _CKPT_URI)
 
     assert metadata["ckpt_uri"] == _CKPT_URI
     assert metadata["epoch"] == 3
     assert metadata["global_step"] == 4200
+    assert metadata["ckpt_bytes"] == ckpt.stat().st_size
+
+
+def test_checkpoint_metadata_reports_the_uploaded_file_not_the_trainer(tmp_path: Path) -> None:
+    """A resumed run's stale best checkpoint is described by its own counters (#3260).
+
+    :param tmp_path: Holds the step-500 checkpoint a step-5000 trainer uploads.
+    """
+    ckpt = _write_checkpoint(tmp_path / "step_000500.ckpt", epoch=8, global_step=500)
+
+    metadata = _checkpoint_metadata(
+        _fake_trainer(epoch=80, global_step=5000), str(ckpt), _CKPT_URI
+    )
+
+    assert metadata["epoch"] == 8
+    assert metadata["global_step"] == 500
+
+
+def test_checkpoint_metadata_stale_best_records_the_trainer_step_separately(
+    tmp_path: Path,
+) -> None:
+    """The run that uploaded an older checkpoint stays visible beside its counters.
+
+    :param tmp_path: Holds the step-500 checkpoint a step-5000 trainer uploads.
+    """
+    ckpt = _write_checkpoint(tmp_path / "step_000500.ckpt", epoch=8, global_step=500)
+
+    metadata = _checkpoint_metadata(
+        _fake_trainer(epoch=80, global_step=5000), str(ckpt), _CKPT_URI
+    )
+
+    assert metadata["trainer_global_step"] == 5000
+
+
+def test_checkpoint_metadata_stale_best_warns_with_both_steps(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Uploading another run's checkpoint is announced in the run log, not just in W&B.
+
+    :param tmp_path: Holds the step-500 checkpoint a step-5000 trainer uploads.
+    :param caplog: Captures the warning naming both steps.
+    """
+    ckpt = _write_checkpoint(tmp_path / "step_000500.ckpt", epoch=8, global_step=500)
+
+    with caplog.at_level(logging.WARNING):
+        _checkpoint_metadata(_fake_trainer(epoch=80, global_step=5000), str(ckpt), _CKPT_URI)
+
+    assert "500" in caplog.text and "5000" in caplog.text
+
+
+def test_checkpoint_metadata_current_checkpoint_omits_the_trainer_step(tmp_path: Path) -> None:
+    """A checkpoint written by this run carries no redundant trainer counter.
+
+    :param tmp_path: Holds a checkpoint saved at the trainer's own step.
+    """
+    ckpt = _write_checkpoint(tmp_path / "model.ckpt", epoch=3, global_step=4200)
+
+    metadata = _checkpoint_metadata(_fake_trainer(), str(ckpt), _CKPT_URI)
+
+    assert "trainer_global_step" not in metadata
+
+
+def test_checkpoint_metadata_unreadable_checkpoint_omits_counters(tmp_path: Path) -> None:
+    """Bytes that are not a checkpoint yield no checkpoint step, only the uploading run's.
+
+    :param tmp_path: Holds a file that torch cannot load.
+    """
+    corrupt = tmp_path / "model.ckpt"
+    corrupt.write_bytes(b"x" * 17)
+
+    metadata = _checkpoint_metadata(_fake_trainer(), str(corrupt), _CKPT_URI)
+
+    assert "epoch" not in metadata
+    assert "global_step" not in metadata
+    assert metadata["trainer_global_step"] == 4200
     assert metadata["ckpt_bytes"] == 17
 
 
@@ -210,8 +379,7 @@ def test_checkpoint_metadata_records_monitored_metric_as_float(tmp_path: Path) -
 
     :param tmp_path: Holds the local checkpoint whose size is read.
     """
-    ckpt = tmp_path / "model.ckpt"
-    ckpt.write_bytes(b"x")
+    ckpt = _write_checkpoint(tmp_path / "model.ckpt", epoch=3, global_step=4200)
 
     metadata = _checkpoint_metadata(
         _fake_trainer(best_model_score=torch.tensor(0.327)), str(ckpt), _CKPT_URI
@@ -226,8 +394,7 @@ def test_checkpoint_metadata_without_score_omits_the_key(tmp_path: Path) -> None
 
     :param tmp_path: Holds the local checkpoint whose size is read.
     """
-    ckpt = tmp_path / "model.ckpt"
-    ckpt.write_bytes(b"x")
+    ckpt = _write_checkpoint(tmp_path / "model.ckpt", epoch=3, global_step=4200)
 
     metadata = _checkpoint_metadata(_fake_trainer(monitor=None), str(ckpt), _CKPT_URI)
 
@@ -469,6 +636,35 @@ def test_train_logs_model_artifact_to_offline_wandb_run(
     )
     assert b"model" in payload, "artifact type 'model' not recorded"
     assert b"git_sha" in payload, "artifact metadata 'git_sha' not recorded in offline run binary"
+
+
+@pytest.mark.slow
+def test_checkpoint_metadata_describes_a_trainer_written_checkpoint(cfg_train: DictConfig) -> None:
+    """A real two-step run's own checkpoint is described by the counters it stores.
+
+    Drives the real ``train(cfg)`` entrypoint so the metadata is read back from
+    bytes Lightning wrote, not from a hand-assembled payload.
+
+    :param cfg_train: Tiny CPU TorchSynth train config; no external plugin.
+    """
+    with open_dict(cfg_train):
+        cfg_train.trainer.fast_dev_run = False
+        cfg_train.trainer.max_epochs = 1
+        cfg_train.trainer.max_steps = 2
+        cfg_train.trainer.limit_train_batches = 2
+        cfg_train.trainer.limit_val_batches = 2
+        cfg_train.trainer.val_check_interval = 2
+        cfg_train.test = False
+
+    _, object_dict = train(cfg_train)
+    trainer = cast(Any, object_dict["trainer"])
+    best_model_path = trainer.checkpoint_callback.best_model_path
+    assert best_model_path, "the run wrote no checkpoint to describe"
+
+    metadata = _checkpoint_metadata(trainer, best_model_path, _CKPT_URI)
+
+    assert metadata["global_step"] == 2
+    assert "trainer_global_step" not in metadata
 
 
 @pytest.mark.slow

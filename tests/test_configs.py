@@ -32,7 +32,7 @@ from synth_setter.pupujepa import (
     DEFAULT_PUPUJEPA_TINY_CHECKPOINT,
     PUPUJEPA_CHECKPOINT_REVISION,
 )
-from synth_setter.resources import configs_dir
+from synth_setter.resources import as_file, configs_dir
 from synth_setter.utils import extras
 from tests.conftest import _build_surge_xt_smoke_cfg
 
@@ -754,7 +754,8 @@ def test_cqt_online_profile_routes_audio_through_canonical_temporal_pool() -> No
     )
 
     assert cfg.datamodule.conditioning == "audio"
-    assert cfg.model.compile is False
+    # #3572 lifted the compile block this profile carried at introduction.
+    assert cfg.model.compile is True
     assert cfg.model.conditioning == "audio"
     assert (
         cfg.model.encoder.backbone._target_
@@ -1418,7 +1419,75 @@ def test_flow_sketch_prelim_experiments_differ_only_in_sketch_conditioning() -> 
     assert sketch.run_name == "flow1k_prelim_sketch"
     assert sketch.model.sketch_controls.column == "sketch"
     assert sketch.model.sketch_controls.num_frames == 32
+    assert "median_filter_max_kernel_size" not in sketch.model.sketch_controls
+    assert sketch.model.sketch_controls.median_filter_max_window_fraction is None
     assert sketch.datamodule.sketch == sketch.model.sketch_controls
+
+
+@pytest.mark.parametrize("profile", ["on", "music_online", "music_online_tiv"])
+def test_sketch_profiles_leave_median_filter_augmentation_off(profile: str) -> None:
+    """Shipped sketch profiles keep the training-time median filter an explicit opt-in.
+
+    :param profile: ``sketch`` config-group entry under test.
+    """
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_xt",
+            "model=vst_flow",
+            "trainer=cpu",
+            f"sketch={profile}",
+        ],
+    )
+    spec = resolve_sketch_controls(cfg.model.sketch_controls)
+
+    assert spec is not None
+    assert spec.median_filter_max_window_fraction is None
+    assert spec.median_filter_max_kernel_size == 1
+    assert spec.effective_median_filter_max_kernel_size == 1
+
+
+def test_sketch_on_median_filter_fraction_override_enables_augmentation() -> None:
+    """The documented override resolves to the five-frame window on the 32-token grid."""
+    cfg = _compose(
+        "train.yaml",
+        [
+            "datamodule=surge_lance",
+            "synth=surge_xt",
+            "model=vst_flow",
+            "trainer=cpu",
+            "sketch=on",
+            "model.sketch_controls.median_filter_max_window_fraction=0.15625",
+        ],
+    )
+    spec = resolve_sketch_controls(cfg.model.sketch_controls)
+
+    assert spec is not None
+    assert spec.effective_median_filter_max_kernel_size == 5
+
+
+def test_music_online_sketch_profile_is_explicit_and_matches_datamodule_rate() -> None:
+    """The online profile opts into waveform extraction without changing stored defaults."""
+    base_overrides = [
+        "datamodule=surge_lance",
+        "synth=surge_xt",
+        "model=vst_flow",
+        "trainer=cpu",
+    ]
+    online = _compose("train.yaml", [*base_overrides, "sketch=music_online"])
+    stored = _compose("train.yaml", [*base_overrides, "sketch=on"])
+
+    assert online.model.sketch_controls.profile == "music"
+    assert online.model.sketch_controls.source == "online"
+    assert online.model.sketch_controls.sample_rate == online.datamodule.sample_rate
+    assert online.model.sketch_controls.num_frames == 96
+    assert online.model.sketch_controls.num_control_tokens == 96
+    assert online.model.sketch_controls.temporal_resampling == "average"
+    assert online.model.sketch_controls.pitch_zero_threshold == 0.1
+    assert online.model.sketch_controls.median_filter_max_window_fraction is None
+    assert online.datamodule.sketch == online.model.sketch_controls
+    assert "source" not in stored.model.sketch_controls
 
 
 def test_ffn_simple_smoke_experiment_pins_lance_fixture_and_smoke_caps() -> None:
@@ -1589,7 +1658,7 @@ def test_pyfdn_flow_ast_online_resolves_waveform_ast_conditioning() -> None:
     assert cfg.model.encoder.frontend.in_dim == 176_400
     assert cfg.model.encoder.frontend.sample_rate == 44_100
     assert cfg.model.encoder.backbone._target_.endswith("AudioSpectrogramTransformer")
-    assert cfg.model.encoder.backbone.input_channels == 1
+    assert cfg.model.encoder.backbone.input_channels == 2
     assert cfg.model.encoder.backbone.n_conditioning_outputs == 8
 
 
@@ -2108,3 +2177,66 @@ def test_nsynth_sketch_eval_experiment_pins_full_production_run() -> None:
     assert cfg.evaluation.rerender_target is False
     assert cfg.render.renderer_backend == "surgepy"
     assert cfg.logger.wandb.offline is False
+
+
+def _endpoint_config_names() -> list[str]:
+    """List the top-level Hydra entrypoint configs shipped in the config package.
+
+    :returns: Config names (without suffix) that Hydra can compose directly.
+    """
+    with as_file(configs_dir()) as root:
+        return sorted(path.stem for path in Path(root).glob("*.yaml"))
+
+
+def test_no_endpoint_config_field_shadows_a_config_group() -> None:
+    """A top-level field named after a config group is unreachable from the CLI.
+
+    Hydra resolves ``name=value`` against the config *groups* on the search path
+    before the composed fields, so a field sharing a directory's name can only be
+    overridden by editing the YAML (#3128).
+    """
+    # ``hydra`` is Hydra's own reserved node: its overrides are addressed as
+    # ``hydra/<group>=…`` or ``hydra.<field>=…``, so it cannot shadow a field.
+    with as_file(configs_dir()) as root:
+        groups = {path.name for path in Path(root).iterdir() if path.is_dir()} - {"hydra"}
+        shadowed = {
+            name: sorted(keys)
+            for name in _endpoint_config_names()
+            if (keys := groups & set(OmegaConf.load(Path(root) / f"{name}.yaml").keys()))
+        }
+
+    assert shadowed == {}
+
+
+def test_add_embeddings_debug_logging_is_overridable_from_the_cli() -> None:
+    """The documented per-batch logging switch must be reachable as a CLI override."""
+    with initialize_config_module(config_module="synth_setter.configs", version_base="1.3"):
+        cfg = compose(
+            config_name="add_embeddings",
+            overrides=["lance_uri=x", "debug_logging=true"],
+        )
+
+    assert cfg.debug_logging is True
+
+
+def _conditioning_profiles() -> list[str]:
+    """List the shipped ``conditioning/`` profile names.
+
+    :returns: Profile names selectable as ``conditioning=<name>``.
+    """
+    with as_file(configs_dir()) as root:
+        return sorted(path.stem for path in (Path(root) / "conditioning").glob("*.yaml"))
+
+
+@pytest.mark.parametrize("profile", _conditioning_profiles())
+def test_conditioning_profile_resolves_against_a_lance_experiment(profile: str) -> None:
+    """Every profile composes on the Lance-backed experiment it is meant to swap into.
+
+    Profiles needing waveform geometry read ``datamodule.sample_rate`` and
+    ``datamodule.signal_length``, so the VST datamodule must declare both.
+
+    :param profile: Conditioning profile under test.
+    """
+    cfg = _compose("train.yaml", ["experiment=surge/flow_simple", f"conditioning={profile}"])
+
+    OmegaConf.to_container(cfg.model, resolve=True)

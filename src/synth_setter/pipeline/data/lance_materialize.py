@@ -3,8 +3,9 @@
 Streams a projected scan of one source snapshot into a fresh local Lance
 dataset, so hydration transfers only the columns and rows a training run
 reads instead of the whole dataset directory. A manifest inside the
-materialized directory records the request and gates cache reuse: a rerun with
-the same request reuses the local copy; any drift fails loudly.
+materialized directory records the request and gates cache reuse: a request
+may reuse an intact copy containing every requested column; all other drift
+fails loudly.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import hashlib
 import json
 import os
 import shutil
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from uuid import uuid4
 
@@ -334,15 +335,28 @@ def _read_manifest(manifest_path: Path) -> MaterializeManifest:
 
 def _manifest_matches_request(
     manifest: MaterializeManifest,
-    requested_hash: str,
+    *,
+    source_uri: str,
+    txid: str | None,
+    resolved_version: int,
+    columns: tuple[str, ...],
+    limit: int | None,
     resolved_txid: str | None,
 ) -> bool:
     """Return whether a sidecar covers the request and selected source identity.
 
+    The stored hash remains an exact integrity check over the manifest. Reuse
+    compatibility is separate: a materialized projection may contain extra
+    columns, but every other request field must match exactly.
+
     :param manifest: Parsed sidecar manifest.
-    :param requested_hash: Hash of the current materialization request.
+    :param source_uri: Current request's source URI.
+    :param txid: Current request's transaction uuid, or ``None``.
+    :param resolved_version: Source version selected by the current request.
+    :param columns: Current request's projected columns.
+    :param limit: Current request's row cap.
     :param resolved_txid: Current source transaction for an unpinned request.
-    :returns: Whether the manifest is internally sound and current.
+    :returns: Whether the manifest is internally sound and covers the request.
     """
     stored_hash = request_hash(
         manifest.source_uri,
@@ -352,13 +366,17 @@ def _manifest_matches_request(
         manifest.limit,
     )
     if manifest.txid is not None:
-        source_matches = manifest.resolved_txid in (None, manifest.txid)
+        source_identity_matches = manifest.resolved_txid in (None, manifest.txid)
     else:
-        source_matches = manifest.resolved_txid == resolved_txid
+        source_identity_matches = manifest.resolved_txid == resolved_txid
     return (
         manifest.request_hash == stored_hash
-        and manifest.request_hash == requested_hash
-        and source_matches
+        and manifest.source_uri == source_uri
+        and manifest.txid == txid
+        and manifest.resolved_version == resolved_version
+        and set(columns).issubset(manifest.columns)
+        and manifest.limit == limit
+        and source_identity_matches
     )
 
 
@@ -435,8 +453,15 @@ def _reuse_or_raise(
     requested_version = (
         manifest.resolved_version if resolved_version is None else resolved_version
     )
-    requested_hash = request_hash(source_uri, txid, requested_version, columns, limit)
-    if not _manifest_matches_request(manifest, requested_hash, resolved_txid):
+    if not _manifest_matches_request(
+        manifest,
+        source_uri=source_uri,
+        txid=txid,
+        resolved_version=requested_version,
+        columns=columns,
+        limit=limit,
+        resolved_txid=resolved_txid,
+    ):
         raise ValueError(
             f"materialize request hash mismatch for {dest_path}: sidecar was written "
             f"for source={manifest.source_uri!r} txid={manifest.txid!r} "
@@ -622,8 +647,8 @@ def materialize_lance_subset(  # noqa: DOC502, DOC503
         unrelated dataset.
     :param txid: Transaction uuid pinning the source snapshot, or ``None`` for latest.
     :param columns: Columns to project, in scan order.
-    :param version: Explicit source version, used for native branch snapshots whose
-        transaction reader is unavailable in Lance 9. Mutually exclusive with ``txid``.
+    :param version: Explicit source version. Unlike ``txid`` it leaves the request
+        hash equal to an unpinned resolve of that version. Mutually exclusive with ``txid``.
     :param branch: Native branch selected from ``source_base_uri`` at ``version``.
     :param source_base_uri: Parent dataset URI used to resolve inherited branch fragments.
     :param limit: First-N row cap, or ``None`` for all rows.
@@ -658,7 +683,7 @@ def materialize_lance_subset(  # noqa: DOC502, DOC503
         if version is not None
         else ds.version if txid is None else resolve_txid_version(ds, txid)
     )
-    resolved_txid = None if version is not None else _transaction_uuid(ds, resolved_version)
+    resolved_txid = None if branch is not None else _transaction_uuid(ds, resolved_version)
     if dest_path.exists():
         return _reuse_or_raise(
             dest_path,
@@ -712,11 +737,29 @@ def _require_dataset_complete(source_root_uri: str) -> None:
         )
 
 
+def resolve_latest_versions(
+    source_root_uri: str, splits: Iterable[str], shard_suffix: str
+) -> dict[str, int]:
+    """Read the current version of each split under a finalized dataset root.
+
+    :param source_root_uri: Hydration root holding the split datasets.
+    :param splits: Split names to resolve.
+    :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
+    :returns: ``{split: latest_version}``.
+    """
+    _require_dataset_complete(source_root_uri)
+    return {
+        split: _open_source(f"{source_root_uri.rstrip('/')}/{split}{shard_suffix}").version
+        for split in splits
+    }
+
+
 def materialize_splits(
     source_root_uri: str,
     dest_root: Path,
     *,
     txids: Mapping[str, str] | None,
+    versions: Mapping[str, int] | None = None,
     projection: Mapping[str, Sequence[str]],
     row_limit: int | None,
     shard_suffix: str,
@@ -729,6 +772,7 @@ def materialize_splits(
     :param dest_root: Local destination root; each split lands at
         ``dest_root / f"{split}{shard_suffix}"``.
     :param txids: Per-split transaction uuids, or ``None`` to use latest snapshots.
+    :param versions: Per-split source versions pinning an unpinned request, or ``None``.
     :param projection: Columns to materialize per split.
     :param row_limit: First-N row cap per split, or ``None`` for all rows.
     :param shard_suffix: Split dataset suffix, e.g. ``.lance``.
@@ -741,6 +785,7 @@ def materialize_splits(
             f"{source_root_uri.rstrip('/')}/{name}",
             dest_root / name,
             txid=txids[split] if txids is not None else None,
+            version=versions[split] if versions is not None else None,
             columns=columns,
             limit=row_limit,
             high_memory_materialization=high_memory_materialization,

@@ -309,20 +309,47 @@ function artifactLockPatch() {
   const comparisonMarker = "artifact lock mismatch for ${packageReference}";
   const preferenceMarker = "const preferArchives = artifacts =>";
   const validationMarker = "const artifactIdentity = artifact =>";
+  const selectionMarker = "files = lockedSelection;";
+  const liveCaptureBlock = "        const liveArtifacts = files;\n";
   const legacyParseBlock =
     "        const artifactLock = JSON.parse(readFileSync(artifactLockPath, 'utf8'));\n";
   const legacySelectionBlock =
     "        const lockedSelection = canonicalArtifacts(lockedArtifacts.filter(file =>\n" +
     "            file.architectures.includes(architecture) && file.systems.includes(system)));\n" +
     "        const liveSelection = canonicalArtifacts(files);\n";
-  const preferredSelectionBlock =
+  const compatibleSelectionBlock =
     `        ${preferenceMarker} artifacts.some(file => file.type === FileType.Archive)\n` +
     "            ? artifacts.filter(file => file.type === FileType.Archive)\n" +
     "            : artifacts;\n" +
     "        const lockedCompatibleArtifacts = lockedArtifacts.filter(file =>\n" +
-    "            file.architectures.includes(architecture) && file.systems.includes(system));\n" +
+    "            file.architectures.includes(architecture) && file.systems.includes(system));\n";
+  const preferredSelectionBlock =
+    compatibleSelectionBlock +
     "        const lockedSelection = canonicalArtifacts(preferArchives(lockedCompatibleArtifacts));\n" +
     "        const liveSelection = canonicalArtifacts(preferArchives(files));\n";
+  const canonicalBlock =
+    "        const canonicalArtifacts = artifacts => artifacts\n" +
+    "            .map(normalizeArtifact)\n" +
+    "            .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));\n";
+  const legacyComparisonBlock =
+    canonicalBlock +
+    preferredSelectionBlock +
+    "        if (JSON.stringify(liveSelection) !== JSON.stringify(lockedSelection))\n" +
+    "            throw new Error(`artifact lock mismatch for ${packageReference} (${system}-${architecture})`);\n";
+  // The registry may publish new artifacts after a pin is taken, so the lock decides what is
+  // downloaded and the live list only has to still offer it (#3623).
+  const lockedSelectionBlock =
+    compatibleSelectionBlock +
+    "        const lockedSelection = preferArchives(lockedCompatibleArtifacts);\n" +
+    "        const lockMismatch = detail => new Error(\n" +
+    "            `artifact lock mismatch for ${packageReference} (${system}-${architecture}): ${detail}`);\n" +
+    "        if (!lockedSelection.length)\n" +
+    "            throw lockMismatch(`the lock pins no ${system}-${architecture} artifact`);\n" +
+    "        const liveIdentities = new Set(liveArtifacts.map(artifactIdentity));\n" +
+    "        const unavailable = lockedSelection.filter(file => !liveIdentities.has(artifactIdentity(file)));\n" +
+    "        if (unavailable.length)\n" +
+    "            throw lockMismatch(`the registry no longer offers ${unavailable.map(file => file.url).join(', ')}`);\n" +
+    `        ${selectionMarker}\n`;
   const artifactBlock =
     `        ${artifactPathMarker}\n` +
     "        if (!artifactLockPath)\n" +
@@ -332,12 +359,7 @@ function artifactLockPatch() {
     "        const lockedArtifacts = artifactLock[packageReference]?.artifacts;\n" +
     "        if (!Array.isArray(lockedArtifacts))\n" +
     "            throw new Error(`artifact lock missing ${packageReference}`);\n" +
-    "        const canonicalArtifacts = artifacts => artifacts\n" +
-    "            .map(normalizeArtifact)\n" +
-    "            .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));\n" +
-    preferredSelectionBlock +
-    "        if (JSON.stringify(liveSelection) !== JSON.stringify(lockedSelection))\n" +
-    "            throw new Error(`artifact lock mismatch for ${packageReference} (${system}-${architecture})`);\n" +
+    lockedSelectionBlock +
     installedBlock;
   return {
     name: "artifact lock comparison",
@@ -345,6 +367,7 @@ function artifactLockPatch() {
       artifactPathMarker,
       comparisonMarker,
       preferenceMarker,
+      selectionMarker,
       validationMarker,
     ],
     preconditions: [
@@ -389,6 +412,22 @@ function artifactLockPatch() {
             target,
           });
         }
+        if (!migratedSource.includes(selectionMarker)) {
+          migratedSource = replaceUnique({
+            candidates: [legacyComparisonBlock],
+            patchName: "artifact lock selection",
+            replacement: lockedSelectionBlock,
+            source: migratedSource,
+            target,
+          });
+          migratedSource = replaceUnique({
+            candidates: [preferenceBlock],
+            patchName: "artifact lock live capture",
+            replacement: liveCaptureBlock,
+            source: migratedSource,
+            target,
+          });
+        }
         return migratedSource;
       }
       if (hasCurrentPath || hasLegacyPath) {
@@ -404,7 +443,7 @@ function artifactLockPatch() {
       return replaceUnique({
         candidates: [preferenceBlock],
         patchName: "artifact lock comparison insertion",
-        replacement: preferenceBlock + artifactBlock,
+        replacement: liveCaptureBlock + artifactBlock,
         source: withoutInstalledBlock,
         target,
       });

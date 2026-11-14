@@ -1,6 +1,9 @@
 """Tests for the concat sketch-control token module and its field injection."""
 
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, cast
+from unittest import mock
 
 import pytest
 import torch
@@ -12,6 +15,7 @@ from synth_setter.conditioning import (
     SKETCH_CENTROID_ROW,
     SKETCH_LOUDNESS_ROW,
     SKETCH_PITCH_SLICE,
+    TIV_SKETCH_CONTROLS,
     SketchControlProfile,
     SketchControls,
     SketchControlSpec,
@@ -45,17 +49,29 @@ def _controls(batch: int = _BATCH, seed: int = 0) -> torch.Tensor:
     return controls
 
 
-def _tokens_module(seed: int = 0, profile: SketchControlProfile = "music") -> SketchControlTokens:
+def _tokens_module(
+    seed: int = 0,
+    profile: SketchControlProfile = "music",
+    median_filter_max_kernel_size: int = 1,
+    median_filter_max_window_fraction: float | None = None,
+    temporal_resampling: Literal["average", "linear"] = "average",
+) -> SketchControlTokens:
     """Build a small token module with non-zero projection weights.
 
     :param seed: RNG seed for the randomized projection weights.
     :param profile: Channel layout selected for tokenization.
+    :param median_filter_max_kernel_size: Largest literal training-time median window.
+    :param median_filter_max_window_fraction: Token-grid fraction bounding the median window.
+    :param temporal_resampling: Temporal reduction used before projection.
     :returns: Module whose three projections were re-randomized after zero-init.
     """
     module = SketchControlTokens(
         d_model=_D_MODEL,
         num_control_tokens=_NUM_CONTROL_TOKENS,
         profile=profile,
+        median_filter_max_kernel_size=median_filter_max_kernel_size,
+        median_filter_max_window_fraction=median_filter_max_window_fraction,
+        temporal_resampling=temporal_resampling,
     )
     generator = torch.Generator().manual_seed(seed)
     with torch.no_grad():
@@ -103,6 +119,9 @@ class TestSketchControlSpec:
         assert spec.profile == "music"
         assert spec.num_control_tokens == 32
         assert spec.pitch_zero_threshold == 0.1
+        assert spec.median_filter_max_kernel_size == 1
+        assert spec.median_filter_max_window_fraction is None
+        assert spec.temporal_resampling == "average"
 
     def test_pyfdn_reverb_profile_has_temporal_layout(self) -> None:
         """The reverb profile pins its channel and temporal-group layout."""
@@ -135,6 +154,48 @@ class TestSketchControlSpec:
         with pytest.raises(ValueError, match="sample_rate"):
             SketchControlSpec(profile="tiv", source="online", num_frames=32)
 
+    def test_nonmusic_profile_rejects_median_filter_augmentation(self) -> None:
+        """Median filtering is confined to the paper's music-control profile."""
+        with pytest.raises(ValueError, match="median filtering is supported only"):
+            SketchControlSpec(
+                num_frames=32,
+                profile="pyfdn_reverb",
+                median_filter_max_kernel_size=3,
+            )
+
+    def test_music_online_source_without_sample_rate_rejected(self) -> None:
+        """Online music extraction requires the waveform rate explicitly."""
+        with pytest.raises(ValueError, match="online sketch extraction requires sample_rate"):
+            SketchControlSpec(profile="music", source="online", num_frames=96)
+
+    def test_music_online_source_with_sample_rate_is_accepted(self) -> None:
+        """Music controls may be extracted directly from waveform batches."""
+        spec = SketchControlSpec(
+            profile="music", source="online", sample_rate=44_100, num_frames=96
+        )
+
+        assert spec.source == "online"
+        assert spec.sample_rate == 44_100
+
+    def test_pyfdn_online_source_rejected(self) -> None:
+        """The reverb profile remains a stored-control-only contract."""
+        with pytest.raises(ValueError, match="pyfdn_reverb.*source='online'"):
+            SketchControlSpec(
+                profile="pyfdn_reverb",
+                source="online",
+                sample_rate=44_100,
+                num_frames=32,
+            )
+
+    def test_median_filter_kernel_cannot_exceed_token_grid(self) -> None:
+        """The configured training window must fit the filtered token grid."""
+        with pytest.raises(ValueError, match="cannot exceed num_control_tokens"):
+            SketchControlSpec(
+                num_frames=4,
+                num_control_tokens=4,
+                median_filter_max_kernel_size=5,
+            )
+
     def test_pyfdn_reverb_profile_rejects_noncanonical_frames(self) -> None:
         """Reverb controls retain one token for each canonical stored frame."""
         with pytest.raises(ValueError, match="pyfdn_reverb sketch requires"):
@@ -163,10 +224,71 @@ class TestSketchControlSpec:
         with pytest.raises(ValueError, match="pitch_zero_threshold"):
             SketchControlSpec(num_frames=401, pitch_zero_threshold=threshold)
 
-    def test_pooled_storage_with_different_token_count_rejected(self) -> None:
-        """Stored pooled controls cannot recover a different temporal token budget."""
-        with pytest.raises(ValueError, match="pooled sketch storage requires"):
-            SketchControlSpec(num_frames=32, num_control_tokens=16)
+    @pytest.mark.parametrize("num_control_tokens", [32, 64, 96])
+    def test_music_dense_storage_accepts_equal_or_smaller_token_grid(
+        self, num_control_tokens: int
+    ) -> None:
+        """Dense music controls may retain or reduce their temporal resolution.
+
+        :param num_control_tokens: Accepted model token count.
+        """
+        spec = SketchControlSpec(num_frames=96, num_control_tokens=num_control_tokens)
+        assert spec.num_control_tokens == num_control_tokens
+
+    def test_music_storage_rejects_larger_token_grid(self) -> None:
+        """Tokenization cannot invent a denser grid than stored music controls."""
+        with pytest.raises(ValueError, match="cannot exceed num_frames"):
+            SketchControlSpec(num_frames=32, num_control_tokens=96)
+
+    def test_nonmusic_profile_rejects_nondefault_temporal_resampling(self) -> None:
+        """Linear temporal resampling is confined to music controls."""
+        with pytest.raises(ValueError, match="temporal resampling.*music"):
+            SketchControlSpec(
+                num_frames=32,
+                profile="pyfdn_reverb",
+                temporal_resampling="linear",
+            )
+
+    @pytest.mark.parametrize(
+        ("num_control_tokens", "fraction", "expected_maximum"),
+        [(32, None, 1), (32, 0.15625, 5), (96, 0.15625, 15), (32, 0.001, 1)],
+    )
+    def test_effective_median_window_resolves_fraction_on_token_grid(
+        self, num_control_tokens: int, fraction: float | None, expected_maximum: int
+    ) -> None:
+        """The spec reports the training-time window maximum its tokenizer will use.
+
+        :param num_control_tokens: Token grid under test.
+        :param fraction: Optional token-grid fraction.
+        :param expected_maximum: Effective positive window maximum.
+        """
+        spec = SketchControlSpec(
+            num_frames=num_control_tokens,
+            num_control_tokens=num_control_tokens,
+            median_filter_max_window_fraction=fraction,
+        )
+        assert spec.effective_median_filter_max_kernel_size == expected_maximum
+
+    def test_fractional_median_window_rejects_ambiguous_literal_policy(self) -> None:
+        """Fractional and non-disabled literal maxima cannot both select a policy."""
+        with pytest.raises(ValueError, match="median_filter_max_kernel_size=1"):
+            SketchControlSpec(
+                num_frames=32,
+                median_filter_max_kernel_size=5,
+                median_filter_max_window_fraction=0.15625,
+            )
+
+    @pytest.mark.parametrize("fraction", [0.0, -0.1, 1.1, float("inf"), float("nan")])
+    def test_fractional_median_window_out_of_range_rejected(self, fraction: float) -> None:
+        """The optional median-window fraction must be finite and in ``(0, 1]``.
+
+        :param fraction: Invalid fraction under test.
+        """
+        with pytest.raises(ValueError, match="median_filter_max_window_fraction"):
+            SketchControlSpec(
+                num_frames=32,
+                median_filter_max_window_fraction=fraction,
+            )
 
     def test_resolve_non_mapping_raises_type_error(self) -> None:
         """Non-mapping junk is rejected with a clear error."""
@@ -176,6 +298,213 @@ class TestSketchControlSpec:
 
 class TestSketchControlTokens:
     """Behavior tests for the zero-init control tokenizer."""
+
+    @pytest.mark.parametrize(
+        ("num_control_tokens", "expected_maximum"),
+        [(32, 5), (64, 10), (96, 15)],
+    )
+    def test_fractional_median_window_scales_with_token_grid(
+        self, num_control_tokens: int, expected_maximum: int
+    ) -> None:
+        """Fractional policy rounds to the nearest positive token-window maximum.
+
+        :param num_control_tokens: Token grid under test.
+        :param expected_maximum: Effective maximum median window.
+        """
+        module = SketchControlTokens(
+            d_model=_D_MODEL,
+            num_control_tokens=num_control_tokens,
+            median_filter_max_window_fraction=0.15625,
+        )
+        assert module.effective_median_filter_max_kernel_size == expected_maximum
+
+    @pytest.mark.parametrize(
+        ("fraction", "expected_maximum"),
+        [(0.046875, 2), (0.001, 1)],
+    )
+    def test_fractional_median_window_half_up_and_minimum_bounds(
+        self, fraction: float, expected_maximum: int
+    ) -> None:
+        """Fractional maxima round half up and never disable the one-frame baseline.
+
+        :param fraction: Token-grid fraction under test.
+        :param expected_maximum: Rounded positive window maximum.
+        """
+        module = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=32,
+            median_filter_max_window_fraction=fraction,
+        )
+        assert module.effective_median_filter_max_kernel_size == expected_maximum
+
+    def test_fractional_and_literal_median_policies_match_training_output(self) -> None:
+        """Equivalent fractional and literal maxima sample identical training filters."""
+        fractional = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=32,
+            median_filter_max_window_fraction=0.15625,
+        )
+        literal = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=32,
+            median_filter_max_kernel_size=5,
+        )
+        for module in (fractional, literal):
+            with torch.no_grad():
+                cast(torch.nn.Linear, module.projections["loudness"]).weight.fill_(1.0)
+        controls = torch.zeros(2, NUM_SKETCH_CONTROLS, 32)
+        controls[:, SKETCH_LOUDNESS_ROW, 8:24] = 1.0
+        keep = torch.tensor(((True, False, False), (True, False, False)))
+
+        torch.manual_seed(41)
+        fractional_tokens = fractional(controls, keep)
+        torch.manual_seed(41)
+        literal_tokens = literal(controls, keep)
+
+        torch.testing.assert_close(fractional_tokens, literal_tokens, rtol=0, atol=0)
+
+    def test_forward_disabled_group_with_nonfinite_controls_matches_clean_tokens(self) -> None:
+        """Masking removes a disabled group's values entirely, so NaN there cannot leak."""
+        module = SketchControlTokens(d_model=1, num_control_tokens=4).eval()
+        for projection in module.projections.values():
+            with torch.no_grad():
+                cast(torch.nn.Linear, projection).weight.fill_(1.0)
+        clean = torch.rand(1, NUM_SKETCH_CONTROLS, 4)
+        poisoned = clean.clone()
+        poisoned[:, SKETCH_CENTROID_ROW] = float("nan")
+        poisoned[:, SKETCH_PITCH_SLICE.start] = float("inf")
+        keep = torch.tensor(((True, False, False),))
+
+        tokens = module(poisoned, keep)
+
+        assert torch.isfinite(tokens).all()
+        torch.testing.assert_close(tokens, module(clean, keep), rtol=0, atol=0)
+
+    def test_forward_eval_ignores_fractional_median_policy(self) -> None:
+        """Evaluation with a fractional policy equals the disabled compatibility path."""
+        fractional = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=32,
+            median_filter_max_window_fraction=0.15625,
+        ).eval()
+        disabled = SketchControlTokens(d_model=1, num_control_tokens=32).eval()
+        for module in (fractional, disabled):
+            with torch.no_grad():
+                cast(torch.nn.Linear, module.projections["loudness"]).weight.fill_(1.0)
+        controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 32)
+        controls[:, SKETCH_LOUDNESS_ROW, 15] = 1.0
+        keep = torch.tensor(((True, False, False),))
+
+        torch.manual_seed(3)
+        fractional_tokens = fractional(controls, keep)
+        torch.manual_seed(29)
+        disabled_tokens = disabled(controls, keep)
+
+        torch.testing.assert_close(fractional_tokens, disabled_tokens, rtol=0, atol=0)
+
+    def test_literal_median_window_remains_unchanged_on_larger_grid(self) -> None:
+        """Legacy literal policy remains five frames rather than scaling with tokens."""
+        module = SketchControlTokens(
+            d_model=_D_MODEL,
+            num_control_tokens=96,
+            median_filter_max_kernel_size=5,
+        )
+        assert module.effective_median_filter_max_kernel_size == 5
+
+    def test_forward_resampling_modes_produce_distinct_projected_tokens(self) -> None:
+        """Checkpoint-selected temporal modes reach nonzero projection outputs."""
+        average = SketchControlTokens(d_model=1, num_control_tokens=4)
+        linear = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=4,
+            temporal_resampling="linear",
+        )
+        for module in (average, linear):
+            with torch.no_grad():
+                cast(torch.nn.Linear, module.projections["loudness"]).weight.fill_(1.0)
+        controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 2)
+        controls[0, SKETCH_LOUDNESS_ROW, 1] = 1.0
+        keep = torch.tensor(((True, False, False),))
+
+        average_contribution = average(controls, keep) - average.unconditional(1)
+        linear_contribution = linear(controls, keep) - linear.unconditional(1)
+
+        torch.testing.assert_close(
+            average_contribution[0, :, 0], torch.tensor((0.0, 0.0, 1.0, 1.0))
+        )
+        torch.testing.assert_close(
+            linear_contribution[0, :, 0], torch.tensor((0.0, 0.25, 0.75, 1.0))
+        )
+
+    def test_forward_training_applies_configured_random_median_filter(self) -> None:
+        """Training smooths music controls before their group projections."""
+        module = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=4,
+            median_filter_max_kernel_size=2,
+        )
+        with torch.no_grad():
+            cast(torch.nn.Linear, module.projections["loudness"]).weight.fill_(1.0)
+        controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 4)
+        controls[0, SKETCH_LOUDNESS_ROW, 1] = 1.0
+        keep = torch.tensor(((True, False, False),))
+
+        module.eval()
+        unfiltered = module(controls, keep) - module.unconditional(1)
+        module.train()
+        # Pin the per-row draw to the two-frame window; a draw of one would leave the row unfiltered.
+        with mock.patch.object(torch, "randint", return_value=torch.tensor([2])):
+            filtered = module(controls, keep) - module.unconditional(1)
+
+        torch.testing.assert_close(unfiltered[0, :, 0], controls[0, SKETCH_LOUDNESS_ROW])
+        torch.testing.assert_close(filtered, torch.zeros_like(filtered), rtol=0, atol=0)
+
+    def test_forward_inference_mode_skips_augmentation_even_in_training_mode(self) -> None:
+        """Sampling under inference_mode is deterministic although the module is still training."""
+        module = SketchControlTokens(
+            d_model=1,
+            num_control_tokens=4,
+            median_filter_max_kernel_size=4,
+        )
+        with torch.no_grad():
+            cast(torch.nn.Linear, module.projections["loudness"]).weight.fill_(1.0)
+        controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 4)
+        controls[0, SKETCH_LOUDNESS_ROW, 1] = 1.0
+        keep = torch.tensor(((True, False, False),))
+        module.train()
+
+        with (
+            torch.inference_mode(),
+            mock.patch.object(torch, "randint", return_value=torch.tensor([4])),
+        ):
+            tokens = module(controls, keep) - module.unconditional(1)
+
+        torch.testing.assert_close(tokens[0, :, 0], controls[0, SKETCH_LOUDNESS_ROW])
+
+    def test_forward_training_same_seed_repeats_augmentation(self) -> None:
+        """Resetting the Torch seed reproduces training-time control tokens."""
+        module = _tokens_module(median_filter_max_kernel_size=4)
+        controls = _controls()
+
+        torch.manual_seed(23)
+        first = module(controls, _keep_all())
+        torch.manual_seed(23)
+        second = module(controls, _keep_all())
+
+        torch.testing.assert_close(first, second, rtol=0, atol=0)
+
+    def test_forward_eval_ignores_median_filter_policy(self) -> None:
+        """Evaluation stays deterministic and consumes controls without smoothing."""
+        module = _tokens_module(median_filter_max_kernel_size=4)
+        module.eval()
+        controls = _controls()
+
+        torch.manual_seed(3)
+        first = module(controls, _keep_all())
+        torch.manual_seed(29)
+        second = module(controls, _keep_all())
+
+        torch.testing.assert_close(first, second, rtol=0, atol=0)
 
     def test_forward_control_batch_returns_token_sequence(self) -> None:
         """The tokenizer emits the configured token sequence shape."""
@@ -456,12 +785,12 @@ class TestPyFDNReverbSketchControlTokens:
             )
 
 
-def _field(pe_type: str = "none") -> ApproxEquivTransformer:
+def _field(
+    pe_type: Literal["initial", "layerwise", "none"] = "none",
+) -> ApproxEquivTransformer:
     """Build a tiny vector field for injection tests.
 
-    :param pe_type: Parameter-token positional-encoding mode; ``"none"`` is a
-        valid runtime value ``model/vst_flow.yaml`` ships, although the
-        constructor's ``Literal`` annotation omits it (hence the cast).
+    :param pe_type: Parameter-token positional-encoding mode.
     :returns: Small CPU field with live (non-zero-init) blocks, as configured
         by ``model/vst_flow.yaml``.
     """
@@ -479,7 +808,7 @@ def _field(pe_type: str = "none") -> ApproxEquivTransformer:
         num_heads=2,
         d_ff=_D_MODEL,
         num_tokens=5,
-        pe_type=cast(Literal["initial", "layerwise"], pe_type),
+        pe_type=pe_type,
         time_encoding="scalar",
         learn_projection=True,
         zero_init=False,
@@ -557,3 +886,163 @@ class TestApproxEquivTransformerControlTokens:
         )
         assert out.shape == (_BATCH, 6)
         assert torch.isfinite(out).all()
+
+
+@pytest.mark.parametrize("mode", ["average", "linear"])
+def test_music_tiv_tokens_mask_tiv_independently(mode: Literal["average", "linear"]) -> None:
+    """Dropping TIV retains precisely the original three music projections.
+
+    :param mode: Shared temporal reduction before group projection.
+    """
+    module = _tokens_module(profile="music_tiv", temporal_resampling=mode)
+    music = _tokens_module(temporal_resampling=mode)
+    music.load_state_dict(
+        {
+            key: value
+            for key, value in module.state_dict().items()
+            if key != "projections.tiv.weight"
+        }
+    )
+    controls = torch.cat(
+        (
+            _controls(),
+            torch.nn.functional.one_hot(
+                torch.zeros(_BATCH, _NUM_FRAMES, dtype=torch.long), TIV_SKETCH_CONTROLS
+            )
+            .transpose(1, 2)
+            .float(),
+        ),
+        dim=1,
+    )
+    keep_music = torch.tensor([[True, True, True, False]]).expand(_BATCH, -1)
+
+    masked = module(controls, keep_music)
+
+    torch.testing.assert_close(masked, music(controls[:, :NUM_SKETCH_CONTROLS], _keep_all()))
+    assert not torch.equal(masked, module(controls, torch.ones(_BATCH, 4, dtype=torch.bool)))
+
+
+def test_music_tiv_spec_stored_source_rejected() -> None:
+    """Combined controls cannot be read from a stored music-only column."""
+    with pytest.raises(ValueError, match="music_tiv sketch requires source='online'"):
+        SketchControlSpec(profile="music_tiv", num_frames=96)
+
+
+@pytest.mark.parametrize("group_index", [0, 1, 2])
+def test_music_tiv_tokens_training_filters_each_music_group(group_index: int) -> None:
+    """The shared training median window removes isolated music-control impulses.
+
+    :param group_index: The only retained music group.
+    """
+    module = SketchControlTokens(
+        d_model=1,
+        num_control_tokens=4,
+        profile="music_tiv",
+        median_filter_max_kernel_size=3,
+    )
+    with torch.no_grad():
+        for projection in module.projections.values():
+            cast(torch.nn.Linear, projection).weight.fill_(1.0)
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS + TIV_SKETCH_CONTROLS, 4)
+    controls[:, :, 1] = 1.0
+    keep = torch.zeros(1, 4, dtype=torch.bool)
+    keep[:, group_index] = True
+    module.eval()
+    unfiltered = module(controls, keep) - module.unconditional(1)
+    module.train()
+
+    with mock.patch.object(torch, "randint", return_value=torch.tensor([3])):
+        filtered = module(controls, keep) - module.unconditional(1)
+
+    assert torch.count_nonzero(unfiltered) > 0
+    torch.testing.assert_close(filtered, torch.zeros_like(filtered), rtol=0, atol=0)
+
+
+_PRE_MEDIAN_FILTER_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "sketch"
+
+
+@dataclass(frozen=True)
+class _RecordedTokens:
+    """One recorded tokenizer pass from before median filtering existed.
+
+    .. attribute :: state_dict
+
+        Projection weights and positional-encoding buffer of the recorded module.
+
+    .. attribute :: controls
+
+        ``(batch, channels, frames)`` stored-sketch-like input batch.
+
+    .. attribute :: keep
+
+        ``(batch, groups)`` keep mask recorded with the inputs.
+
+    .. attribute :: tokens
+
+        Train-mode output tokens the recorded module produced.
+    """
+
+    state_dict: dict[str, torch.Tensor]
+    controls: torch.Tensor
+    keep: torch.Tensor
+    tokens: torch.Tensor
+
+    def module(self) -> SketchControlTokens:
+        """Rebuild the recorded music tokenizer with the filter left at its disabled default.
+
+        :returns: Tokenizer carrying the recorded projection weights.
+        """
+        module = SketchControlTokens(d_model=16, num_control_tokens=32, profile="music")
+        module.load_state_dict(self.state_dict)
+        return module
+
+
+def _pre_median_filter_reference(commit: str, frames: int) -> _RecordedTokens:
+    """Load one recorded tokenizer pass (see the fixture README for the commits).
+
+    :param commit: Abbreviated commit the fixture was recorded at.
+    :param frames: Stored frame grid of the recorded pass.
+    :returns: Recorded weights, inputs, and train-mode tokens.
+    """
+    fixture = torch.load(_PRE_MEDIAN_FILTER_FIXTURES / f"sketch_tokens_{commit}.pt")
+    return _RecordedTokens(
+        state_dict=fixture["state_dict"],
+        controls=fixture[f"controls_{frames}"],
+        keep=fixture["keep"],
+        tokens=fixture[f"tokens_{frames}"],
+    )
+
+
+@pytest.mark.parametrize(
+    ("commit", "frames"),
+    [
+        pytest.param("1416c2da", 32, id="benchmark-commit-identity-grid"),
+        pytest.param("d37e80c8e", 32, id="pre-3730-parent-identity-grid"),
+        pytest.param("d37e80c8e", 64, id="pre-3730-parent-pooled-grid"),
+    ],
+)
+def test_forward_training_without_median_filter_matches_pre_augmentation_tokens(
+    commit: str, frames: int
+) -> None:
+    """With the filter off, train-mode tokens are bit-identical to the pre-#3730 tokenizer.
+
+    :param commit: Fixture commit the reference tokens were recorded at.
+    :param frames: Stored frame grid replayed through the 32-token module.
+    """
+    reference = _pre_median_filter_reference(commit, frames)
+    module = reference.module().train()
+
+    tokens = module(reference.controls, reference.keep)
+
+    assert torch.equal(tokens, reference.tokens)
+
+
+def test_forward_training_without_median_filter_matches_eval_forward() -> None:
+    """With the filter off no stochastic path remains between train and eval mode."""
+    reference = _pre_median_filter_reference("d37e80c8e", frames=64)
+    module = reference.module()
+
+    train_tokens = module.train()(reference.controls, reference.keep)
+    eval_tokens = module.eval()(reference.controls, reference.keep)
+
+    assert torch.equal(train_tokens, eval_tokens)

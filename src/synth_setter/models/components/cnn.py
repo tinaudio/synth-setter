@@ -218,9 +218,11 @@ class ResidualEncoder(nn.Module):
             )
             dim *= 2
         self.conv_net = nn.Sequential(*conv_layers)
+        # Head width is the stack's channel count, not the waveform length: a length-sized square
+        # block grows O(in_dim**2) — 166 GiB of weights at 4 s / 44.1 kHz (#3677).
         self.net = nn.Sequential(
-            nn.LazyLinear(in_dim // 2),
-            ResidualMLPBlock(in_dim // 2, in_dim // 2, out_dim),
+            nn.LazyLinear(dim),
+            ResidualMLPBlock(dim, dim, out_dim),
         )
 
         self.register_buffer("_d", torch.empty(()))

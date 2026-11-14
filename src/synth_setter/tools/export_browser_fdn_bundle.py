@@ -28,7 +28,8 @@ from synth_setter.param_spec_name import ParamSpecName
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 1
+# Version 2: conditioning.onnx takes the sketch_keep mask over sketch.groups.
+_SCHEMA_VERSION = 2
 _SAMPLE_RATE = 44_100
 _DURATION_SECONDS = 4.0
 _BRANCH_ORDER = ("unconditional", "sketch_only", "content_only", "full")
@@ -158,6 +159,7 @@ def _write_bundle(
             "numControls": sketch.layout.num_controls,
             "numFrames": sketch.num_frames,
             "numControlTokens": sketch.num_control_tokens,
+            "groups": list(sketch.layout.group_names),
         },
         "sampleRate": _SAMPLE_RATE,
         "frames": frontend.frames,

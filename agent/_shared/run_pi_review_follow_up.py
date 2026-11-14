@@ -39,6 +39,7 @@ _FOLLOW_UP_PROVIDER = "openai-codex"
 _FOLLOW_UP_THINKING = "medium"
 _RUNTIME_MANIFEST_ENV = "PI_REVIEW_FOLLOW_UP_RUNTIME_MANIFEST"
 _OWNERSHIP_WAIT_ENV = "PI_REVIEW_FOLLOW_UP_OWNERSHIP_WAIT_SECONDS"
+_FOREGROUND_STOPPED_ENV = "SYNTH_SETTER_PI_REVIEW_FOREGROUND_STOPPED"
 _MAX_OWNERSHIP_WAIT_SECONDS = 3600
 _OWNERSHIP_POLL_SECONDS = 0.25
 _MAX_LOG_BYTES = 64 * 1024
@@ -501,10 +502,25 @@ def _adopt_report(deferred: DeferredPass, target: str) -> WorkerReport | None:
         return None
 
 
-def _plan_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
-    """Adopt reports and fail closed when a foreground owner may remain live.
+def _release_ownership(deferred: DeferredPass) -> DeferredPass:
+    """Drop the foreground handles so the follow-up owner starts the pass itself.
+
+    :param deferred: Pass whose foreground owner has stopped without reporting.
+    :returns: Equivalent pass carrying no foreground ownership.
+    """
+    return DeferredPass.model_validate(
+        deferred.model_dump() | {"agent_id": None, "output_path": None}
+    )
+
+
+def _plan_ownership(
+    manifest: FollowUpManifest, *, transfer_stalled_owners: bool = False
+) -> _OwnershipPlan:
+    """Adopt reports, then transfer or refuse ownership of every reportless pass.
 
     :param manifest: Validated foreground ownership handoff.
+    :param transfer_stalled_owners: Whether a reportless pass may change owner instead of blocking
+        the plan.
     :returns: Adoption and relaunch plan.
     """
     remaining: list[DeferredPass] = []
@@ -527,6 +543,16 @@ def _plan_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
             continue
         if deferred.agent_id is None:
             remaining.append(deferred)
+            continue
+        if transfer_stalled_owners:
+            attempts.append(
+                _attempt(
+                    deferred,
+                    "stale",
+                    "foreground host stopped before this pass reported; ownership transferred",
+                )
+            )
+            remaining.append(_release_ownership(deferred))
             continue
         attempts.append(
             _attempt(
@@ -561,7 +587,7 @@ def _ownership_wait_seconds() -> int:
 
 
 def _wait_for_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
-    """Wait for foreground reports without ever launching a duplicate owner.
+    """Wait for foreground reports, transferring ownership only once the host has stopped.
 
     :param manifest: Validated foreground ownership handoff.
     :returns: Adoption and relaunch plan after completion or grace-period expiry.
@@ -570,8 +596,12 @@ def _wait_for_ownership(manifest: FollowUpManifest) -> _OwnershipPlan:
     while True:
         ownership = _plan_ownership(manifest)
         remaining_seconds = deadline - time.monotonic()
-        if not ownership.blocked or remaining_seconds <= 0:
+        if not ownership.blocked:
             return ownership
+        if remaining_seconds <= 0:
+            if os.environ.get(_FOREGROUND_STOPPED_ENV) != "1":
+                return ownership
+            return _plan_ownership(manifest, transfer_stalled_owners=True)
         time.sleep(min(_OWNERSHIP_POLL_SECONDS, remaining_seconds))
 
 
@@ -829,6 +859,30 @@ def _supervise_child(
     )
 
 
+def _render_failure_report(result: FollowUpResult, result_path: Path) -> str:
+    """Render a failed follow-up as a self-contained job-log block.
+
+    Child output is withheld: it is provider text that can carry credentials,
+    and the workflow uploads the sidecar as an artifact for that detail (#2905).
+
+    :param result: Published failure carrying diagnostics and pass rows.
+    :param result_path: Canonical sidecar holding the full evidence.
+    :returns: Multi-line report for stderr.
+    """
+    lines = [f"Pi review follow-up failed: {result_path}"]
+    # Zero means the child returned cleanly and failed some other way, so the
+    # code is noise there; a nonzero one is not always named by a diagnostic.
+    if result.child_exit_code:
+        lines.append(f"  child exit code: {result.child_exit_code}")
+    lines.extend(f"  [{row.category}] {row.message}" for row in result.diagnostics)
+    lines.extend(
+        f"  unfinished pass {row.skill}/{row.pass_name}: {row.detail}"
+        for row in result.attempts
+        if row.status == "failed"
+    )
+    return "\n".join(lines)
+
+
 def supervise_follow_up(manifest_path: Path) -> int:
     """Run one Pi child and atomically guarantee the canonical result sidecar.
 
@@ -877,6 +931,8 @@ def supervise_follow_up(manifest_path: Path) -> int:
         _atomic_write_result(paths.canonical_result, result)
         paths.runtime_result.unlink(missing_ok=True)
         paths.runtime_manifest.unlink(missing_ok=True)
+        if result.status == "failed":
+            sys.stderr.write(f"{_render_failure_report(result, paths.canonical_result)}\n")
     return 1 if result.status == "failed" else 0
 
 

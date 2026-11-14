@@ -150,7 +150,6 @@ PROGRESS_LOG_INTERVAL_SECONDS: float = 30.0
 _EMBEDDING_NAME_METADATA = b"synth_setter.embedding.name"
 _EMBEDDING_ARTIFACT_METADATA = b"synth_setter.embedding.artifact"
 SAME_LATENT_FRAMES: int = 44
-SAME_ENCODE_MAX_BATCH: int = 16
 SKETCH_INDEX_SUB_VECTORS: int = 2
 # PESTO's per-clip intermediates scale with batch size: a full 128-row Lance
 # batch peaked at ~8.8 GiB RSS and drew earlyoom SIGTERMs in the field (#2707).
@@ -1636,7 +1635,7 @@ def _write_columns(
             now = time.monotonic()
             interval_due = rows_processed >= next_progress_row or rows_processed == total_rows
             time_due = now - last_progress_at >= PROGRESS_LOG_INTERVAL_SECONDS
-            if config.debug or interval_due or time_due:
+            if config.debug_logging or interval_due or time_due:
                 timings = {f"{name}_ms": round(duration, 1) for name, duration in stage_ms.items()}
                 logger.info(
                     "embedding_progress",
@@ -2105,11 +2104,7 @@ def load_same_audio_encoder(checkpoint: str, device: str | None = None) -> SameE
         return latents.float().cpu().numpy()
 
     def encode(stereo: np.ndarray) -> np.ndarray:
-        chunks = [
-            _encode_chunk(stereo[start : start + SAME_ENCODE_MAX_BATCH])
-            for start in range(0, len(stereo), SAME_ENCODE_MAX_BATCH)
-        ]
-        return np.concatenate(chunks, axis=0)
+        return _encode_chunk(stereo)
 
     return encode
 
@@ -2165,7 +2160,7 @@ def _hydra_main(cfg: DictConfig) -> None:
         for run_logger in loggers:
             run_logger.log_hyperparams(config.model_dump(mode="json"))
         log_wandb_provenance()
-        _configure_lance_logging(debug=config.debug)
+        _configure_lance_logging(debug=config.debug_logging)
         logger.info("lance_logging_configured", native_level=os.environ["LANCE_LOG"])
         add_embeddings(config)
         status = "success"

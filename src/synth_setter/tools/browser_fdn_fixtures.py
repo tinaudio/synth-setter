@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections.abc import Sequence
 from importlib.resources import files
 from pathlib import Path
@@ -45,6 +46,33 @@ _LCG_INCREMENT = 1_013_904_223
 _LCG_MODULUS = 2**32
 _TARGET_RECIPE = {"seed": 7, "samples": 4 * SAMPLE_RATE, "decay_seconds": 0.6}
 _PRED_RECIPE = {"seed": 11, "samples": 4 * SAMPLE_RATE, "decay_seconds": 0.9}
+_DRIFT_RELATIVE_TOLERANCE = 1e-12
+
+
+def fixtures_match(committed: Any, regenerated: Any) -> bool:
+    """Report whether a committed fixture payload still agrees with a regenerated one.
+
+    Floats compare within a relative tolerance: scipy designs the octave SOS tables
+    through BLAS, so macOS and Linux disagree by one or two ULP on coefficients that no
+    consumer resolves that finely (the JavaScript ports assert to ``1e-6``). Everything
+    else — keys, lengths, integers, strings — compares exactly, so real regeneration
+    drift still fails.
+
+    :param committed: Payload parsed from a checked-in fixture file.
+    :param regenerated: Payload produced by :func:`build_fixtures`.
+    :returns: ``True`` when the payloads agree.
+    """
+    if isinstance(committed, float) and isinstance(regenerated, float):
+        return math.isclose(committed, regenerated, rel_tol=_DRIFT_RELATIVE_TOLERANCE, abs_tol=0.0)
+    if isinstance(committed, dict) and isinstance(regenerated, dict):
+        return committed.keys() == regenerated.keys() and all(
+            fixtures_match(value, regenerated[key]) for key, value in committed.items()
+        )
+    if isinstance(committed, list) and isinstance(regenerated, list):
+        return len(committed) == len(regenerated) and all(
+            fixtures_match(left, right) for left, right in zip(committed, regenerated, strict=True)
+        )
+    return type(committed) is type(regenerated) and committed == regenerated
 
 
 def _stable_metric(value: float) -> float:

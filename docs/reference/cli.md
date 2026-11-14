@@ -54,7 +54,10 @@ digests, and the producing revision. The velocity graph takes `branch_weights` o
 unconditional, sketch-only, content-only, and full branches; `branch_weights(mode, content, sketch)`
 in `synth_setter.models.flow_onnx` (mirrored by `guidance.mjs`) maps a conditioning mode and two
 CFG strengths onto them. The sketch input is the `pyfdn_reverb` profile: `(1, 10, 32)` controls
-from `extract_reverb_sketch`.
+from `extract_reverb_sketch`. The conditioning graph also takes `sketch_keep`, a float32
+`(1, groups)` mask over the names listed under `sketch.groups` in the manifest (values above 0.5
+keep a group; feed all ones to condition on every group). `schemaVersion` is 2 since that input
+was added.
 
 ## Generate a dataset
 
@@ -184,6 +187,26 @@ It processes at most 32 rows per CQT call; override
 memory. Model compilation is disabled for this profile pending support for
 compiled frozen waveform encoders.
 
+To add TIV alongside online loudness, centroid, and pitch, select
+`sketch=music_online_tiv` (for example with `experiment=surge/flow_sketch_prelim`).
+This variant inherits `music_online`'s sample rate, 96-frame/token grid, pitch
+threshold, temporal resampling, and training-time median augmentation. The extracted
+398-channel tensor contains the original music controls followed by 12 normalized
+chroma channels. Chroma uses centered,
+boundary-padded analysis and timestamp interpolation onto the music grid before
+temporal reduction. Non-silent chroma frames sum to one; silent frames remain zero.
+
+At the model token boundary, music and chroma share temporal resampling and one
+sampled median window per row during training. If the median erases a non-silent
+chroma frame, its original distribution is retained; silent input frames stay
+silent. Evaluation and inference skip random filtering. Chroma is normalized
+again and converted to signed TIV immediately before projection. The independently
+maskable groups remain `loudness`, `centroid`, `pitch`, and `tiv`; only PESTO pitch
+activations receive thresholding. Signed TIV coordinates are never thresholded.
+
+No stored sketch column is needed. Existing music-only, standalone TIV, and
+reverb profiles retain their contracts.
+
 To derive tonal interval vectors from each waveform during training instead of
 reading a stored sketch column:
 
@@ -215,6 +238,24 @@ tokens. Unlike the example's global descriptor, training retains per-frame
 TIVs before temporal pooling. The frontends produce different features; choose
 one consistently for training and evaluation. Both add extraction cost to every
 train, validation, and test batch; no precomputed sketch column is required.
+
+For standalone sketch inversion, retain a checkpoint-defined subset of sketch controls by repeating
+`--sketch-group`; omit the option to use every group, or pass `--no-sketch-groups` to retain only
+the temporal positional encoding:
+
+```bash
+synth-setter-sketch sketch.wav content.wav \
+  --sketch-group loudness --sketch-group pitch \
+  --content-cfg 2 --sketch-cfg 3 --no-upload
+```
+
+Names and their order come from the loaded checkpoint (`loudness`, `centroid`, and `pitch` for the
+music profile; pyFDN checkpoints expose their own groups). Duplicate or unknown names fail instead
+of being ignored. In browser mode the selection is only the page's starting state: the exported
+conditioning graph takes a `sketch_keep` runtime mask, the page shows one checkbox per group, and
+the loopback server rejects a prediction whose groups are unknown or duplicated. Every arm records
+the `requested`, `resolved`, and `applied` selection under `sketch_groups` in its
+`provenance.json`; `applied` is what the page (or, natively, the CLI) actually kept.
 
 For repeatable standalone flow evaluation, opt in through the model config and provide the seed
 explicitly:

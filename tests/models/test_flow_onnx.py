@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import lightning
 import numpy as np
 import onnxruntime as ort
 import pytest
@@ -17,10 +18,10 @@ from synth_setter.models.flow_onnx import branch_weights, export_flow_onnx
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
 
 
-@pytest.fixture
-def flow_model() -> VSTFlowMatchingModule:
-    """Return a small instance of the production mel/sketch architecture.
+def _flow_model(sketch_controls: dict[str, object]) -> VSTFlowMatchingModule:
+    """Build a small production mel/sketch model with live projections.
 
+    :param sketch_controls: Constructor sketch-control configuration.
     :returns: Evaluation model with nonzero sketch-control projections.
     """
     torch.manual_seed(17)
@@ -49,7 +50,7 @@ def flow_model() -> VSTFlowMatchingModule:
         scheduler=None,
         num_params=92,
         param_spec="surge_simple",
-        sketch_controls={"num_frames": 4, "num_control_tokens": 4},
+        sketch_controls=sketch_controls,
     ).eval()
     assert isinstance(model, VSTFlowMatchingModule)
     assert model.sketch_tokens is not None
@@ -57,6 +58,34 @@ def flow_model() -> VSTFlowMatchingModule:
         assert isinstance(projection, torch.nn.Linear)
         torch.nn.init.normal_(projection.weight, std=0.01)
     return model
+
+
+def _all_groups_feed(batch: dict[str, torch.Tensor]) -> dict[str, np.ndarray]:
+    """Return the conditioning-graph feed that keeps every sketch group.
+
+    :param batch: CPU float32 ``mel`` and ``sketch_ctrl`` export inputs.
+    :returns: Named float32 inputs including an all-ones ``sketch_keep`` mask.
+    """
+    return {
+        "mel": batch["mel"].numpy(),
+        "sketch_ctrl": batch["sketch_ctrl"].numpy(),
+        "sketch_keep": np.ones((batch["mel"].shape[0], 3), dtype=np.float32),
+    }
+
+
+@pytest.fixture
+def flow_model() -> VSTFlowMatchingModule:
+    """Return the default-grid ONNX test model.
+
+    :returns: Evaluation model with nonzero sketch-control projections.
+    """
+    return _flow_model(
+        {
+            "num_frames": 4,
+            "num_control_tokens": 4,
+            "median_filter_max_kernel_size": 4,
+        }
+    )
 
 
 @pytest.mark.parametrize("strengths", [(0.0, 0.0), (2.0, 3.0)])
@@ -76,7 +105,7 @@ def test_exported_velocity_same_inputs_matches_production(
     }
     export_flow_onnx(flow_model, batch, tmp_path)
     encoder = ort.InferenceSession(str(tmp_path / "conditioning.onnx"))
-    encoded = encoder.run(None, {key: value.numpy() for key, value in batch.items()})
+    encoded = encoder.run(None, _all_groups_feed(batch))
     x = torch.randn(1, 92)
     t = torch.tensor([[0.3]])
     field = ort.InferenceSession(str(tmp_path / "velocity.onnx"))
@@ -102,6 +131,140 @@ def test_exported_velocity_same_inputs_matches_production(
     assert actual.shape == expected.shape
     assert actual.dtype == np.float32
     np.testing.assert_allclose(actual, expected.numpy(), rtol=2e-5, atol=2e-5)
+
+
+@pytest.mark.parametrize(
+    "enabled_groups",
+    [("loudness", "centroid", "pitch"), ("pitch",), ()],
+    ids=["all", "pitch-only", "none"],
+)
+def test_exported_runtime_group_mask_matches_native_for_one_export(
+    tmp_path: Path,
+    flow_model: VSTFlowMatchingModule,
+    enabled_groups: tuple[str, ...],
+) -> None:
+    """One exported graph honours any host-supplied keep mask without re-export.
+
+    :param tmp_path: Export directory.
+    :param flow_model: Small production architecture with nonzero sketch projections.
+    :param enabled_groups: Groups the host keeps at runtime.
+    """
+    assert flow_model.sketch_tokens is not None
+    batch = {
+        "mel": torch.randn(1, 2, 8, 8),
+        "sketch_ctrl": torch.rand(1, flow_model.sketch_tokens.layout.num_controls, 4),
+    }
+
+    export_flow_onnx(flow_model, batch, tmp_path)
+    encoder = ort.InferenceSession(str(tmp_path / "conditioning.onnx"))
+    assert [value.name for value in encoder.get_inputs()] == ["mel", "sketch_ctrl", "sketch_keep"]
+    keep = flow_model.sketch_keep_mask(enabled_groups, batch_size=1, device=torch.device("cpu"))
+    encoded = encoder.run(
+        None,
+        {
+            "mel": batch["mel"].numpy(),
+            "sketch_ctrl": batch["sketch_ctrl"].numpy(),
+            "sketch_keep": keep.to(torch.float32).numpy(),
+        },
+    )
+    native = flow_model._control_token_branches_from_batch(  # noqa: SLF001
+        {"sketch_ctrl": batch["sketch_ctrl"]},
+        enabled_sketch_groups=enabled_groups,
+    )
+
+    assert native is not None
+    actual_controls, actual_null_controls = encoded[1:]
+    assert isinstance(actual_controls, np.ndarray)
+    assert isinstance(actual_null_controls, np.ndarray)
+    np.testing.assert_allclose(
+        actual_controls, native.conditional.detach().numpy(), rtol=2e-5, atol=2e-5
+    )
+    np.testing.assert_allclose(
+        actual_null_controls, native.unconditional.detach().numpy(), rtol=2e-5, atol=2e-5
+    )
+    if not enabled_groups:
+        np.testing.assert_array_equal(actual_controls, actual_null_controls)
+
+
+def test_exported_linear_resampling_matches_native_conditioning_and_velocity(
+    tmp_path: Path,
+) -> None:
+    """Constructor-backed dense linear conditioning survives both ONNX graphs.
+
+    :param tmp_path: Export directory.
+    """
+    source_model = _flow_model(
+        {
+            "num_frames": 8,
+            "num_control_tokens": 4,
+            "temporal_resampling": "linear",
+        }
+    )
+    checkpoint = {
+        "state_dict": source_model.state_dict(),
+        "hyper_parameters": dict(source_model.hparams),
+        "pytorch-lightning_version": lightning.__version__,
+    }
+    source_model.on_save_checkpoint(checkpoint)
+    checkpoint_path = tmp_path / "dense-linear.ckpt"
+    torch.save(checkpoint, checkpoint_path)
+    model = VSTFlowMatchingModule.load_from_checkpoint(
+        checkpoint_path,
+        weights_only=False,
+    ).eval()
+    assert model.sketch_tokens is not None
+    batch = {
+        "mel": torch.randn(1, 2, 8, 8),
+        "sketch_ctrl": torch.rand(1, model.sketch_tokens.layout.num_controls, 8),
+    }
+
+    export_dir = tmp_path / "export"
+    export_flow_onnx(model, batch, export_dir)
+    session = ort.InferenceSession(str(export_dir / "conditioning.onnx"))
+    encoded = session.run(None, _all_groups_feed(batch))
+    actual_controls = encoded[1]
+    assert isinstance(actual_controls, np.ndarray)
+    with torch.no_grad():
+        expected_controls = model.sketch_tokens(
+            batch["sketch_ctrl"],
+            torch.ones(1, 3, dtype=torch.bool),
+        )
+    np.testing.assert_allclose(
+        actual_controls,
+        expected_controls.numpy(),
+        rtol=2e-5,
+        atol=2e-5,
+    )
+
+    x = torch.randn(1, 92)
+    t = torch.tensor([[0.3]])
+    weights = np.array(branch_weights("both", 2.0, 3.0), dtype=np.float32)
+    field = ort.InferenceSession(str(export_dir / "velocity.onnx"))
+    actual_velocity = field.run(
+        None,
+        {
+            "x": x.numpy(),
+            "t": t.numpy(),
+            "conditioning": encoded[0],
+            "controls": encoded[1],
+            "null_controls": encoded[2],
+            "branch_weights": weights,
+        },
+    )[0]
+    with torch.no_grad():
+        expected_velocity = model._velocity_field(
+            model.encoder(batch["mel"]),
+            2.0,
+            model._control_token_branches_from_batch({"sketch_ctrl": batch["sketch_ctrl"]}),
+            sketch_cfg_strength=3.0,
+        )(x, t)
+    assert isinstance(actual_velocity, np.ndarray)
+    np.testing.assert_allclose(
+        actual_velocity,
+        expected_velocity.numpy(),
+        rtol=2e-5,
+        atol=2e-5,
+    )
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf")])
@@ -399,9 +562,7 @@ def test_exported_velocity_mel_only_weights_ignore_sketch_tokens(
         :param sketch_ctrl: Sketch controls fed to the conditioning graph.
         :returns: Guided velocity row.
         """
-        encoded = encoder.run(
-            None, {"mel": batch["mel"].numpy(), "sketch_ctrl": sketch_ctrl.numpy()}
-        )
+        encoded = encoder.run(None, _all_groups_feed({**batch, "sketch_ctrl": sketch_ctrl}))
         (velocity,) = field.run(
             None,
             {

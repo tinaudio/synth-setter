@@ -67,6 +67,31 @@ class LanceDatasetCard(BaseModel):
     selected_attempts: tuple[SelectedLanceAttempt, ...]
 
 
+class LanceStatsProvenance(BaseModel):
+    """Train attempts the estimated statistics in the same ``stats.npz`` were derived from.
+
+    Travels inside the statistics archive rather than beside it, so the
+    statistics and the identity they belong to can never be published apart.
+
+    .. attribute :: model_config
+
+        Pydantic model config sentinel — see ``ConfigDict(...)`` below for active settings.
+
+    .. attribute :: schema_version
+
+        Provenance schema version; bump on any layout change.
+
+    .. attribute :: train_attempts
+
+        The winning attempt per training shard, in ``shard_id`` order.
+    """
+
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+
+    schema_version: Literal[1]
+    train_attempts: tuple[SelectedLanceAttempt, ...]
+
+
 class LanceFragmentSidecar(BaseModel):
     """Per-attempt Lance fragment sidecar (``{worker}-{attempt}.fragment.json``).
 

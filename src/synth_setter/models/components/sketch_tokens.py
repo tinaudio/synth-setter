@@ -1,5 +1,7 @@
 """Zero-initialized sketch-control tokenizer for concat conditioning (#2612)."""
 
+import math
+
 import torch
 import torch.nn.functional as F
 from beartype import beartype
@@ -10,10 +12,16 @@ from synth_setter.conditioning import (
     SKETCH_STORAGE_FRAMES,
     SketchControlLayout,
     SketchControlProfile,
+    SketchTemporalResampling,
+    effective_median_filter_max_kernel_size,
     sketch_control_layout,
 )
 from synth_setter.models.components.embed_pool import make_sin_pos_enc
-from synth_setter.sketch import pool_sketch_controls
+from synth_setter.sketch import (
+    prepare_music_tiv_tokens,
+    random_median_filter_sketch_controls,
+    resample_sketch_controls,
+)
 
 _MUSIC_LAYOUT = sketch_control_layout("music")
 # Compatibility export for callers that construct music-profile masks directly.
@@ -23,8 +31,9 @@ CONTROL_GROUPS = _MUSIC_LAYOUT.group_names
 class SketchControlTokens(nn.Module):
     """Resample sketch controls to control tokens carrying a temporal PE.
 
-    Each control group is zeroed unless kept, pooled to ``num_control_tokens``
-    bins, and passed through a zero-initialized bias-free projection. Control
+    Each control group is resampled to ``num_control_tokens`` bins, optionally
+    median-filtered during training, zeroed unless kept, and passed through a
+    zero-initialized bias-free projection. Control
     extraction and per-group projection follow FlashFoley/Sketch2Sound; the
     concat-and-slice injection is U-ViT-style in-context conditioning. The fixed
     temporal encoding stays on control tokens so parameter tokens remain
@@ -43,13 +52,22 @@ class SketchControlTokens(nn.Module):
         d_model: int,
         num_control_tokens: int = 32,
         profile: SketchControlProfile = "music",
+        median_filter_max_kernel_size: int = 1,
+        median_filter_max_window_fraction: float | None = None,
+        temporal_resampling: SketchTemporalResampling = "average",
     ) -> None:
         """Build the profile projections and fixed temporal encoding.
 
         :param d_model: Vector-field token width the controls project into.
         :param num_control_tokens: Control tokens retained along the time axis.
         :param profile: Channel grouping and temporal processing contract.
-        :raises ValueError: The reverb profile receives a noncanonical token count.
+        :param median_filter_max_kernel_size: Largest literal training-time music-control median
+            window; one disables augmentation.
+        :param median_filter_max_window_fraction: Optional token-grid fraction used to derive the
+            largest training-time median window.
+        :param temporal_resampling: Music-control reduction before projection.
+        :raises ValueError: The token count, resampling, or median-filter policy violates the
+            profile.
         """
         super().__init__()
         self.layout: SketchControlLayout = sketch_control_layout(profile)
@@ -57,6 +75,33 @@ class SketchControlTokens(nn.Module):
             raise ValueError(
                 f"pyfdn_reverb sketch requires {SKETCH_STORAGE_FRAMES} control tokens"
             )
+        if median_filter_max_kernel_size <= 0:
+            raise ValueError("median_filter_max_kernel_size must be positive")
+        if median_filter_max_kernel_size > num_control_tokens:
+            raise ValueError("median_filter_max_kernel_size cannot exceed num_control_tokens")
+        if median_filter_max_window_fraction is not None:
+            if not math.isfinite(median_filter_max_window_fraction) or not (
+                0.0 < median_filter_max_window_fraction <= 1.0
+            ):
+                raise ValueError("median_filter_max_window_fraction must be finite and in (0, 1]")
+            if median_filter_max_kernel_size != 1:
+                raise ValueError(
+                    "median_filter_max_window_fraction requires median_filter_max_kernel_size=1"
+                )
+        if profile not in ("music", "music_tiv") and (
+            median_filter_max_kernel_size != 1 or median_filter_max_window_fraction is not None
+        ):
+            raise ValueError("median filtering is supported only for music sketch controls")
+        if profile not in ("music", "music_tiv") and temporal_resampling != "average":
+            raise ValueError("nondefault temporal resampling is supported only for music controls")
+        self.median_filter_max_kernel_size = median_filter_max_kernel_size
+        self.median_filter_max_window_fraction = median_filter_max_window_fraction
+        self.temporal_resampling: SketchTemporalResampling = temporal_resampling
+        self.effective_median_filter_max_kernel_size = effective_median_filter_max_kernel_size(
+            median_filter_max_kernel_size,
+            median_filter_max_window_fraction,
+            num_control_tokens,
+        )
         projections = {
             group: nn.Linear(width, d_model, bias=False)
             for group, width in zip(self.layout.group_names, self.layout.group_widths, strict=True)
@@ -83,14 +128,30 @@ class SketchControlTokens(nn.Module):
     ) -> Float[torch.Tensor, "batch tokens d_model"]:
         """Tokenize a stored sketch-control batch.
 
-        :param controls: Profile channels arranged as ``(batch, channels, frames)``.
+        :param controls: Profile channels as ``(batch, channels, frames)``; ``music_tiv``
+            carries normalized chroma in its final channels until token preprocessing.
         :param keep: Positive per-group keep state in layout order.
         :returns: Control tokens with the temporal encoding added.
         """
         self._validate_inputs(controls, keep)
-        keep_values = keep.to(controls.dtype)
-        if self.layout.profile == "music":
-            temporal_controls = pool_sketch_controls(controls, self.positional_encoding.shape[1])
+        if self.layout.profile in ("music", "music_tiv"):
+            temporal_controls = resample_sketch_controls(
+                controls,
+                self.positional_encoding.shape[1],
+                self.temporal_resampling,
+            )
+            # Sampling can run in inference_mode while the module remains in train mode.
+            max_kernel_size = (
+                self.effective_median_filter_max_kernel_size
+                if self.training and not torch.is_inference_mode_enabled()
+                else 1
+            )
+            if self.layout.profile == "music_tiv":
+                temporal_controls = prepare_music_tiv_tokens(temporal_controls, max_kernel_size)
+            elif max_kernel_size > 1:
+                temporal_controls = random_median_filter_sketch_controls(
+                    temporal_controls, max_kernel_size
+                )
         elif self.layout.profile == "tiv":
             temporal_controls = F.adaptive_avg_pool1d(controls, self.positional_encoding.shape[1])
         else:
@@ -99,8 +160,12 @@ class SketchControlTokens(nn.Module):
         for group_index, (group, channel_slice) in enumerate(
             zip(self.layout.group_names, self.layout.group_slices, strict=True)
         ):
-            channels = temporal_controls[:, channel_slice]
-            channels = channels * keep_values[:, group_index, None, None]
+            # Select rather than multiply: a dropped group may carry NaN/inf (NaN * 0 is NaN).
+            channels = torch.where(
+                keep[:, group_index, None, None],
+                temporal_controls[:, channel_slice],
+                torch.zeros((), dtype=controls.dtype, device=controls.device),
+            )
             tokens = tokens + self.projections[group](channels.transpose(1, 2))
         return tokens
 

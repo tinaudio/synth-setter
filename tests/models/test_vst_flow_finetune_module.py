@@ -550,6 +550,44 @@ def test_finetune_train_step_unequal_column_errors_remain_distinct(tmp_path: Pat
     assert torch.equal(outputs.per_param_endpoint_mse[:4], torch.tensor([0.25, 1.0, 2.25, 0.0]))
 
 
+def test_finetune_train_step_weights_each_row_loss_by_its_own_time_weight(tmp_path: Path) -> None:
+    """Row losses pair with their own time weight, not with every other row's.
+
+    :param tmp_path: Pytest-provided directory for the base checkpoint.
+    """
+    base = _base_module()
+    for parameter in base.parameters():
+        torch.nn.init.zeros_(parameter)
+    module = _finetune(_base_checkpoint(tmp_path, base), control_mode="null")
+    row_weights = torch.tensor([[1.0], [0.25]])
+
+    def fixed_time(batch_size: int, device: torch.device) -> torch.Tensor:
+        return torch.full((batch_size, 1), 0.5, device=device)
+
+    def fixed_weight(t: torch.Tensor) -> torch.Tensor:
+        return row_weights.to(t.device)
+
+    module._sample_time = fixed_time  # pyright: ignore[reportAttributeAccessIssue]
+    module._weight_time = fixed_weight  # pyright: ignore[reportAttributeAccessIssue]
+    # A zeroed base with the null arm predicts zero, so the squared flow error is the
+    # rectified target itself and each row's mean error is its own noise column squared.
+    noise = torch.zeros(_BATCH, _WIDTH)
+    noise[0, 0] = 2.0
+    noise[1, 0] = 1.0
+    batch = {
+        "params": torch.zeros_like(noise),
+        "noise": noise,
+        "audio": torch.zeros(_BATCH, _SIGNAL_LENGTH),
+    }
+    row_errors = torch.tensor([4.0, 1.0]) / _WIDTH
+
+    loss = module._train_step(batch).loss
+
+    paired = (row_errors * row_weights.squeeze(-1)).mean()
+    assert torch.allclose(loss, paired)
+    assert not torch.allclose(loss, row_errors.mean() * row_weights.mean())
+
+
 @pytest.mark.slow
 def test_finetune_fit_from_a_trained_base_moves_only_the_control(tmp_path: Path) -> None:
     """A real fit over a real trained base moves the control and leaves that base untouched.

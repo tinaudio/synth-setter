@@ -844,6 +844,44 @@ def test_materialize_without_txid_source_advance_rejects_stale_cache(
         materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
 
 
+def test_materialize_version_pin_matching_unpinned_cache_reuses_it(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """Pinning the version an unpinned run resolved keeps that run's cache valid.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, _ = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=None, columns=("a",), limit=4)
+    version_after_first = lance.dataset(str(dest)).version
+
+    result = materialize_lance_subset(
+        source, dest, txid=None, version=2, columns=("a",), limit=4
+    )
+
+    assert result == dest
+    assert lance.dataset(str(dest)).version == version_after_first
+
+
+def test_materialize_version_pin_after_source_advance_yields_pinned_rows(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A version pin reads its snapshot even after the source has advanced.
+
+    :param two_version_source: Local two-version source dataset.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, _ = two_version_source
+    lance.write_dataset(pa.table({"a": [6], "b": ["r"]}), source, mode="append")
+    dest = tmp_path / "out" / "train.lance"
+
+    materialize_lance_subset(source, dest, txid=None, version=2, columns=("a",))
+
+    assert lance.dataset(str(dest)).to_table().column("a").to_pylist() == [1, 2, 3, 4, 5]
+
+
 def test_materialize_row_limit_limit_two_row_count_matches(
     two_version_source: tuple[str, str], tmp_path: Path
 ) -> None:
@@ -897,6 +935,53 @@ def test_materialize_writes_sidecar_manifest_fields_match_request(
     assert manifest.materialized_txid == transaction.uuid
     assert manifest.columns == ("a",)
     assert manifest.limit == 2
+
+
+def test_materialize_cache_hit_subset_columns_reuses_superset_without_rewrite(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A narrower projection reuses a valid superset without rewriting it.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a", "b"))
+    manifest_before = sidecar_path(dest).read_bytes()
+    transaction_before = lance.dataset(str(dest)).read_transaction(1)
+
+    result = materialize_lance_subset(source, dest, txid=txid, columns=("a",))
+
+    assert result == dest
+    assert sidecar_path(dest).read_bytes() == manifest_before
+    assert lance.dataset(str(dest)).schema.names == ["a", "b"]
+    assert lance.dataset(str(dest)).scanner(columns=["a"]).to_table()["a"].to_pylist() == [
+        1,
+        2,
+        3,
+    ]
+    assert lance.dataset(str(dest)).read_transaction(1) == transaction_before
+
+
+def test_materialize_cache_hit_reordered_columns_reuses_without_rewrite(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """Column order does not prevent reuse when the requested set is unchanged.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a", "b"))
+    manifest_before = sidecar_path(dest).read_bytes()
+
+    result = materialize_lance_subset(source, dest, txid=txid, columns=("b", "a"))
+
+    assert result == dest
+    assert sidecar_path(dest).read_bytes() == manifest_before
+    assert lance.dataset(str(dest)).schema.names == ["a", "b"]
 
 
 def test_materialize_cache_hit_same_request_returns_without_rewrite(
@@ -1003,6 +1088,55 @@ def test_materialize_legacy_manifest_without_destination_identity_raises(
         materialize_lance_subset(source, dest, txid=txid, columns=("a",))
 
 
+def test_materialize_rerun_different_source_raises(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A matching projection cannot cross source dataset identities.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, txid = two_version_source
+    other_source = tmp_path / "other.lance"
+    other = lance.write_dataset(pa.table({"a": [10], "b": ["other"]}), other_source)
+    other_transaction = other.read_transaction(other.version)
+    assert other_transaction is not None
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=txid, columns=("a", "b"))
+
+    with pytest.raises(ValueError, match="hash"):
+        materialize_lance_subset(
+            str(other_source),
+            dest,
+            txid=other_transaction.uuid,
+            columns=("a",),
+        )
+
+
+def test_materialize_rerun_different_snapshot_raises(
+    two_version_source: tuple[str, str], tmp_path: Path
+) -> None:
+    """A narrower projection cannot cross pinned source snapshots.
+
+    :param two_version_source: Local two-version source dataset and its version-1 txid.
+    :param tmp_path: Pytest fixture providing a fresh test directory.
+    """
+    source, first_txid = two_version_source
+    dataset = lance.dataset(source)
+    second_transaction = dataset.read_transaction(2)
+    assert second_transaction is not None
+    dest = tmp_path / "out" / "train.lance"
+    materialize_lance_subset(source, dest, txid=first_txid, columns=("a", "b"))
+
+    with pytest.raises(ValueError, match="hash"):
+        materialize_lance_subset(
+            source,
+            dest,
+            txid=second_transaction.uuid,
+            columns=("a",),
+        )
+
+
 def test_materialize_rerun_different_limit_raises(
     two_version_source: tuple[str, str], tmp_path: Path
 ) -> None:
@@ -1018,10 +1152,10 @@ def test_materialize_rerun_different_limit_raises(
         materialize_lance_subset(source, dest, txid=txid, columns=("a",), limit=3)
 
 
-def test_materialize_rerun_different_columns_raises(
+def test_materialize_rerun_missing_required_column_raises(
     two_version_source: tuple[str, str], tmp_path: Path
 ) -> None:
-    """A rerun with different columns refuses the stale local subset.
+    """A cache missing a requested column is refused.
 
     :param two_version_source: Local two-version source dataset and its version-1 txid.
     :param tmp_path: Pytest fixture providing a fresh test directory.

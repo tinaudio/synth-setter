@@ -18,9 +18,10 @@ import torch
 from synth_setter.evaluation import browser_flow
 
 _TOKEN = secrets.token_urlsafe(32)
-_BODY = json.dumps({"token": _TOKEN, "params": [0.25, 0.75]})
+_GROUPS = ("loudness", "centroid", "pitch")
+_BODY = json.dumps({"token": _TOKEN, "params": [0.25, 0.75], "sketch_groups": ["pitch"]})
 
-type BrowserSession = tuple[str, HTTPConnection, Future[torch.Tensor]]
+type BrowserSession = tuple[str, HTTPConnection, Future[browser_flow.BrowserResult]]
 
 
 @pytest.fixture
@@ -35,14 +36,19 @@ def browser_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     resource.write_text("{}")
     ready: Queue[str] = Queue()
     monkeypatch.setattr(browser_flow.click, "echo", ready.put)
-    completed: Future[torch.Tensor] = Future()
+    completed: Future[browser_flow.BrowserResult] = Future()
 
     def serve() -> None:
         """Forward the receiver's result or exception to the test thread."""
         try:
             completed.set_result(
                 browser_flow._receive_prediction(
-                    {"/input.json": resource}, token=_TOKEN, width=2, output_dir=tmp_path, port=0
+                    {"/input.json": resource},
+                    token=_TOKEN,
+                    width=2,
+                    group_names=_GROUPS,
+                    output_dir=tmp_path,
+                    port=0,
                 )
             )
         except BaseException as exc:
@@ -101,7 +107,7 @@ def browser_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
             "POST",
             "/prediction",
             {},
-            json.dumps({"token": "wrong", "params": [0.25, 0.75]}),
+            json.dumps({"token": "wrong", "params": [0.25, 0.75], "sketch_groups": []}),
             400,
             id="token",
         ),
@@ -109,7 +115,7 @@ def browser_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
             "POST",
             "/prediction",
             {},
-            json.dumps({"token": _TOKEN, "params": [0.25]}),
+            json.dumps({"token": _TOKEN, "params": [0.25], "sketch_groups": []}),
             400,
             id="width",
         ),
@@ -117,9 +123,27 @@ def browser_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
             "POST",
             "/prediction",
             {},
-            json.dumps({"token": _TOKEN, "params": [1e40, 0.75]}),
+            json.dumps({"token": _TOKEN, "params": [1e40, 0.75], "sketch_groups": []}),
             400,
             id="float32-overflow",
+        ),
+        pytest.param(
+            "POST",
+            "/prediction",
+            {},
+            json.dumps({"token": _TOKEN, "params": [0.25, 0.75], "sketch_groups": ["tempo"]}),
+            400,
+            id="unknown-group",
+        ),
+        pytest.param(
+            "POST",
+            "/prediction",
+            {},
+            json.dumps(
+                {"token": _TOKEN, "params": [0.25, 0.75], "sketch_groups": ["pitch", "pitch"]}
+            ),
+            400,
+            id="duplicate-group",
         ),
     ],
 )
@@ -197,7 +221,29 @@ def test_browser_http_valid_prediction_returns_float32_coordinates(
         },
     )
     connection.getresponse().read()
-    torch.testing.assert_close(completed.result(timeout=3), torch.tensor([[0.25, 0.75]]))
+    received = completed.result(timeout=3)
+    torch.testing.assert_close(received.params, torch.tensor([[0.25, 0.75]]))
+    assert received.sketch_groups == ("pitch",)
+
+
+def test_browser_http_applied_groups_follow_checkpoint_order(
+    browser_server: BrowserSession,
+) -> None:
+    """Page order never leaks into provenance; applied groups use checkpoint layout order.
+
+    :param browser_server: Real receiver and its eventual prediction result.
+    """
+    origin, connection, completed = browser_server
+    connection.request(
+        "POST",
+        "/prediction",
+        json.dumps(
+            {"token": _TOKEN, "params": [0.25, 0.75], "sketch_groups": ["pitch", "loudness"]}
+        ),
+        {"Origin": origin, "Content-Type": "application/json"},
+    )
+    connection.getresponse().read()
+    assert completed.result(timeout=3).sketch_groups == ("loudness", "pitch")
 
 
 @pytest.mark.parametrize("port,suffix", [(80, ""), (443, ":443"), (8765, ":8765")])
@@ -223,5 +269,5 @@ def test_browser_http_occupied_port_raises_actionable_cli_error(tmp_path: Path) 
         port = occupied.getsockname()[1]
         with pytest.raises(click.ClickException, match=f"Cannot bind browser port {port}"):
             browser_flow._receive_prediction(
-                {}, token=_TOKEN, width=2, output_dir=tmp_path, port=port
+                {}, token=_TOKEN, width=2, group_names=_GROUPS, output_dir=tmp_path, port=port
             )

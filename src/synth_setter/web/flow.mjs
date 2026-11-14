@@ -1,7 +1,9 @@
 import * as ort from "./ort/ort.wasm.min.mjs";
 import { integrateRK4 } from "./rk4.mjs";
+import { sketchKeep } from "./sketch_groups.mjs";
 
 export { branchWeights } from "./guidance.mjs";
+export { appliedGroups, sketchKeep } from "./sketch_groups.mjs";
 
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.wasmPaths = new URL("./ort/", import.meta.url).href;
@@ -10,12 +12,17 @@ function tensor(value) {
   return new ort.Tensor("float32", Float32Array.from(value.data), value.shape);
 }
 
-export async function sampleFlow(payload, onStep) {
+export async function sampleFlow(payload, onStep, enabledGroups = payload.sketch_groups.enabled) {
   const encoder = await ort.InferenceSession.create("conditioning.onnx", { executionProviders: ["wasm"] });
   let velocity;
   try {
     velocity = await ort.InferenceSession.create("velocity.onnx", { executionProviders: ["wasm"] });
-    const encoded = await encoder.run({ mel: tensor(payload.mel), sketch_ctrl: tensor(payload.sketch_ctrl) });
+    const keep = sketchKeep(payload.sketch_groups.names, enabledGroups);
+    const encoded = await encoder.run({
+      mel: tensor(payload.mel),
+      sketch_ctrl: tensor(payload.sketch_ctrl),
+      sketch_keep: new ort.Tensor("float32", keep, [1, keep.length]),
+    });
     const weights = new ort.Tensor("float32", Float32Array.from(payload.branch_weights), [4]);
     return await integrateRK4({
       noise: Float32Array.from(payload.noise),

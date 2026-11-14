@@ -22,6 +22,8 @@ pytestmark = pytest.mark.infra
 # Bound subprocess calls so a hung git/make can't wedge the suite.
 _TIMEOUT_S = 60
 
+_RESOLVE_LINK_REL = Path("scripts") / "dev" / "resolve-link.sh"
+
 for _tool in ("git", "make"):
     if shutil.which(_tool) is None:
         pytest.skip(f"{_tool} not on PATH", allow_module_level=True)
@@ -68,7 +70,12 @@ def _init_primary_repo(path: Path) -> None:
     _git(path, "config", "user.email", "test@example.com")
     _git(path, "config", "user.name", "test")
     shutil.copy(PROJECT_ROOT / "Makefile", path / "Makefile")
-    _git(path, "add", "Makefile")
+    # The link targets shell out to this helper, so a Makefile-only fixture would
+    # exercise the missing-helper path instead of the link comparison.
+    resolver = path / _RESOLVE_LINK_REL
+    resolver.parent.mkdir(parents=True)
+    shutil.copy(PROJECT_ROOT / _RESOLVE_LINK_REL, resolver)
+    _git(path, "add", "Makefile", str(_RESOLVE_LINK_REL))
     _git(path, "commit", "-qm", "init")
 
 
@@ -249,3 +256,42 @@ def test_link_thoughts_symlink_is_gitignored(tmp_path: Path) -> None:
     ).stdout
     assert (worktree / "thoughts").is_symlink()
     assert "thoughts" not in status, f"symlink should be gitignored; git status: {status!r}"
+
+
+def test_link_thoughts_reports_already_linked_through_a_symlinked_checkout(tmp_path: Path) -> None:
+    """Reaching the worktree through a symlinked path still recognizes its own central link.
+
+    The link text and the target both have to land in the same namespace; comparing a resolved link
+    against an unresolved central path re-links on every run instead of reporting the existing one
+    (#3297).
+
+    :param tmp_path: holds the real checkout tree and the symlink pointing at it.
+    """
+    real = tmp_path / "real"
+    real.mkdir()
+    primary = real / "primary"
+    _init_primary_repo(primary)
+    _git(primary, "worktree", "add", "--detach", "-q", str(real / "wt"))
+    alias = tmp_path / "alias"
+    alias.symlink_to(real)
+
+    _make_link_thoughts(alias / "wt")
+    stdout = _make_link_thoughts(alias / "wt")
+
+    assert "already linked" in stdout
+
+
+def test_link_thoughts_fails_when_the_link_resolver_is_missing(tmp_path: Path) -> None:
+    """A missing resolver aborts the target rather than silently re-linking every run.
+
+    :param tmp_path: holds the primary checkout whose resolver is removed.
+    """
+    primary = tmp_path / "primary"
+    _init_primary_repo(primary)
+    worktree = tmp_path / "wt"
+    _git(primary, "worktree", "add", "--detach", "-q", str(worktree))
+    _make_link_thoughts(worktree)
+    (worktree / _RESOLVE_LINK_REL).unlink()
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _make_link_thoughts(worktree)

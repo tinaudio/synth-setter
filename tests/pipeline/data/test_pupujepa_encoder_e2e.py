@@ -28,6 +28,8 @@ from synth_setter.pipeline.data.lance_shard import (
     write_lance_dataset,
 )
 from synth_setter.pipeline.schemas.shard_metadata import ShardMetadata
+from tests.helpers.numeric_parity import assert_float32_parity
+
 from synth_setter.pupujepa import (
     PUPUJEPA_LARGE_EMBEDDING_DIM,
     PUPUJEPA_TINY_EMBEDDING_DIM,
@@ -192,10 +194,20 @@ def test_real_pupujepa_weights_add_embeddings_and_online_consumers_match(
     assert offline_sequence.shape == (2, embedding_dim, 100)
     assert np.isfinite(offline_sequence).all()
     assert not np.array_equal(offline_sequence[0], offline_sequence[1])
-    np.testing.assert_allclose(offline_sequence, online_sequence.numpy(), rtol=1e-5, atol=1e-5)
+    # The CLI encodes one row per batch and the online encoder both at once, so the two
+    # accumulate in different orders; the large teacher measures 1.6e-5 of scale (#2834).
+    assert_float32_parity(online_sequence.numpy(), offline_sequence, name="embedding sequence")
+    # Control on the real embeddings: the two rows hold different pitches, so comparing them
+    # crossed has to fail — a tolerance wide enough to pass that would prove nothing.
+    with pytest.raises(AssertionError):
+        assert_float32_parity(
+            online_sequence.numpy()[::-1], offline_sequence, name="embedding sequence"
+        )
     np.testing.assert_allclose(offline_vector, offline_sequence.mean(axis=-1), rtol=1e-5, atol=1e-6)
     assert online_conditioning.shape == cached_conditioning.shape == (2, 8, 512)
     assert torch.isfinite(online_conditioning).all()
     assert torch.isfinite(cached_conditioning).all()
     assert not torch.equal(online_conditioning[0], online_conditioning[1])
-    torch.testing.assert_close(online_conditioning, cached_conditioning, rtol=1e-5, atol=1e-5)
+    assert_float32_parity(
+        cached_conditioning.numpy(), online_conditioning.numpy(), name="conditioning"
+    )

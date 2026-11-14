@@ -261,14 +261,17 @@ def test_workflow_invokes_make_target(project_root: Path, workflow: str, target:
 
 @pytest.mark.infra
 def test_ci_workflow_fast_lane_exceeds_wall_clock_limit_terminates(project_root: Path) -> None:
-    """CI terminates the fast lane at its configured budget.
+    """CI bounds the fast lane with an uncatchable wall-clock timeout.
 
     :param project_root: Session fixture locating the workflow.
     """
     text = (project_root / ".github" / "workflows" / "test.yml").read_text()
 
     assert 'budget_seconds="$(make --no-print-directory -s fast-test-budget)"' in text
-    assert 'timeout --signal=KILL "${budget_seconds}s" make test-fast' in text
+    # The seconds expression is deliberately unpinned: how far the kill sits
+    # above the in-process budget is asserted in test_test_lane_session_budgets
+    # (#3344), and pinning it here fails any correct change to that margin.
+    assert re.search(r'timeout --signal=KILL "[^"]+" make test-fast', text) is not None
 
 
 @pytest.mark.infra

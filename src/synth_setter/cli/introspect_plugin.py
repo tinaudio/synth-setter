@@ -518,6 +518,16 @@ def _exit_due_to_plugin_load_timeout(message: str) -> None:
     os._exit(_LOAD_TIMEOUT_EXIT_CODE)
 
 
+def _heartbeat_wait_seconds(remaining: float, heartbeat_seconds: float) -> float:
+    """Clamp the next heartbeat wait so it cannot outlast the load budget.
+
+    :param remaining: Seconds left before the soft timeout fires.
+    :param heartbeat_seconds: Interval the operator asked heartbeats to be spaced by.
+    :returns: The wait the watchdog should request next.
+    """
+    return min(heartbeat_seconds, remaining)
+
+
 def _load_plugin_loudly[PluginT](
     plugin_path: str,
     plugin_name: str | None,
@@ -555,9 +565,12 @@ def _load_plugin_loudly[PluginT](
     timed_out = threading.Event()
     timeout_messages: list[str] = []
 
+    # Read on the caller thread: the budget bounds the load, not the scheduler's
+    # delay in getting the watchdog running (#3562).
+    started = time.monotonic()
+
     def _watchdog() -> None:
         """Emit heartbeats until ``loader`` finishes or the timeout path wins."""
-        started = time.monotonic()
         while True:
             elapsed = time.monotonic() - started
             remaining = timeout_seconds - elapsed
@@ -568,7 +581,7 @@ def _load_plugin_loudly[PluginT](
                 if not finished.wait(timeout=hard_timeout_grace_seconds):
                     hard_timeout_handler(message)
                 return
-            if finished.wait(timeout=min(heartbeat_seconds, remaining)):
+            if finished.wait(timeout=_heartbeat_wait_seconds(remaining, heartbeat_seconds)):
                 return
             elapsed = time.monotonic() - started
             if elapsed >= timeout_seconds:
@@ -590,6 +603,10 @@ def _load_plugin_loudly[PluginT](
         watchdog.join(timeout=max(heartbeat_seconds, hard_timeout_grace_seconds))
     if timed_out.is_set():
         raise click.UsageError(timeout_messages[0])
+    # Judged here too: a watchdog woken only after the load returned never saw the overrun (#3705).
+    elapsed = time.monotonic() - started
+    if elapsed >= timeout_seconds:
+        raise click.UsageError(_plugin_load_timeout_message(plugin_path, timeout_seconds, elapsed))
     error = outcome.get("error")
     if isinstance(error, ValueError):
         raise click.UsageError(str(error)) from error

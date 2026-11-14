@@ -32,6 +32,8 @@ _BATCH_AUDIO_SHAPE: Final = "batch ... samples"
 _BATCH_GRID_SHAPE: Final = "batch 1 mels frames"
 _BATCH_QUEFRENCY_SHAPE: Final = "batch 1 quefrencies frames"
 _BATCH_ANY_SHAPE: Final = "batch ..."
+_FRONTEND_GRID_SHAPE: Final = "batch channels bins frames"
+_BACKBONE_GRID_SHAPE: Final = "batch backbone_channels bins frames"
 
 
 class LogMelFrontend(nn.Module):
@@ -392,12 +394,17 @@ class SpecEncoder(nn.Module):
     def __init__(self, *, frontend: nn.Module, backbone: nn.Module) -> None:
         """Pair a front end with the backbone that consumes its feature grid.
 
+        A backbone declaring ``input_channels`` is given exactly that many; a mono grid
+        is cloned up to it, so one backbone geometry serves both the stored stereo mel
+        and a mono online render (#2751).
+
         :param frontend: Waveform-in module emitting ``(batch, channels, mels, frames)``.
         :param backbone: Spectrogram-in module producing the conditioning tensor.
         """
         super().__init__()
         self.frontend = frontend
         self.backbone = backbone
+        self._backbone_channels: int | None = getattr(backbone, "input_channels", None)
 
     @jaxtyped(typechecker=beartype)
     def forward(self, x: Float[Tensor, _BATCH_AUDIO_SHAPE]) -> Float[Tensor, _BATCH_ANY_SHAPE]:
@@ -406,4 +413,25 @@ class SpecEncoder(nn.Module):
         :param x: Waveforms shaped ``(batch, samples)``.
         :returns: Whatever the backbone emits for the front end's feature grid.
         """
-        return self.backbone(self.frontend(x))
+        return self.backbone(self._match_backbone_channels(self.frontend(x)))
+
+    @jaxtyped(typechecker=beartype)
+    def _match_backbone_channels(
+        self, grid: Float[Tensor, _FRONTEND_GRID_SHAPE]
+    ) -> Float[Tensor, _BACKBONE_GRID_SHAPE]:
+        """Clone a mono feature grid up to the channel count the backbone was built for.
+
+        :param grid: Feature grid shaped ``(batch, channels, bins, frames)``.
+        :returns: The grid, expanded along the channel axis when the backbone needs it.
+        :raises ValueError: The grid has neither one channel nor the backbone's count,
+            so cloning cannot reach it and the projection would be mis-shaped.
+        """
+        channels = self._backbone_channels
+        if channels is None or grid.shape[1] == channels:
+            return grid
+        if grid.shape[1] != 1:
+            raise ValueError(
+                f"front end emits {grid.shape[1]} channels and the backbone takes "
+                f"{channels}; only a mono grid can be cloned up"
+            )
+        return grid.expand(-1, channels, -1, -1)

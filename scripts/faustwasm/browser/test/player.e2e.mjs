@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { createServer } from "node:http";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { exportBrowserBundle } from "../export-browser.mjs";
+import { createStaticServer } from "./static-server.mjs";
 
 const artifactDirectory = process.env.FAUSTWASM_E2E_ARTIFACT;
 const monoArtifactDirectory = process.env.FAUSTWASM_MONO_E2E_ARTIFACT;
@@ -17,15 +17,6 @@ let baseUrl;
 let server;
 let siteDirectory;
 let temporaryDirectory;
-
-function contentType(filePath) {
-  if (filePath.endsWith(".html")) return "text/html";
-  if (filePath.endsWith(".js") || filePath.endsWith(".mjs")) return "text/javascript";
-  if (filePath.endsWith(".json")) return "application/json";
-  if (filePath.endsWith(".wasm")) return "application/wasm";
-  if (filePath.endsWith(".css")) return "text/css";
-  return "application/octet-stream";
-}
 
 function rms(samples) {
   return Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
@@ -54,19 +45,7 @@ test.beforeEach(async ({}, testInfo) => {
     runtimePath,
   });
 
-  server = createServer(async (request, response) => {
-    try {
-      const requestPath = new URL(request.url, "http://localhost").pathname;
-      const relativePath = requestPath === "/" ? "index.html" : requestPath.slice(1);
-      const filePath = path.resolve(siteDirectory, relativePath);
-      if (!filePath.startsWith(`${siteDirectory}${path.sep}`)) throw new Error("Invalid path");
-      response.writeHead(200, { "Content-Type": contentType(filePath) });
-      response.end(await readFile(filePath));
-    } catch {
-      response.writeHead(404);
-      response.end("Not found");
-    }
-  });
+  server = createStaticServer(siteDirectory);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 });

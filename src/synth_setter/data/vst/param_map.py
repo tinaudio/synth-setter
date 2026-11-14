@@ -44,6 +44,23 @@ class SurgePyParamRef(BaseModel):  # noqa: DOC601, DOC603
     name: str
 
 
+class KR106NativeParamRef(BaseModel):
+    """DSP-side identifier and display name from the pinned KR106 extension.
+
+    .. attribute :: model_config
+        Strict immutable identity schema.
+    .. attribute :: native_id
+        Engine dispatch identifier.
+    .. attribute :: name
+        Name checked against the compiled engine's metadata.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid", frozen=True)
+
+    native_id: int
+    name: str
+
+
 class BackendSnapshot(BaseModel):  # noqa: DOC601, DOC603
     """Plugin version and enumeration size observed in one host."""
 
@@ -62,6 +79,7 @@ class ParamIdentity(BaseModel):  # noqa: DOC601, DOC603
     clap: ClapParamRef | None
     dawdreamer: DawDreamerParamRef
     surgepy: SurgePyParamRef | None = None
+    kr106_native: KR106NativeParamRef | None = None
 
 
 class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
@@ -79,6 +97,9 @@ class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
     surgepy_preset_resource: str | None = None
     surgepy_preset_sha256: str | None = None
     surgepy: BackendSnapshot | None = None
+    kr106_native: BackendSnapshot | None = None
+    kr106_native_preset_resource: str | None = None
+    kr106_native_preset_sha256: str | None = None
     params: dict[str, ParamIdentity]
 
     @model_validator(mode="after")
@@ -115,6 +136,42 @@ class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
             raise ValueError("duplicate surgepy synth-side parameter IDs")
         return self
 
+    @model_validator(mode="after")
+    def _validate_kr106_native(self) -> SynthParamMap:
+        """Require complete native identities and baseline provenance.
+
+        :returns: This validated map.
+        :raises ValueError: Native provenance is incomplete or identities alias.
+        """
+        provenance = (
+            self.kr106_native,
+            self.kr106_native_preset_resource,
+            self.kr106_native_preset_sha256,
+        )
+        identities = [identity.kr106_native for identity in self.params.values()]
+        if not any(value is not None for value in (*provenance, *identities)):
+            return self
+        if any(value is None for value in (*provenance, *identities)):
+            raise ValueError("KR106-native identities and baseline provenance must be complete")
+        ids = [identity.native_id for identity in identities if identity is not None]
+        if len(ids) != len(set(ids)):
+            raise ValueError("duplicate KR106-native parameter IDs")
+        return self
+
+    def kr106_native_params(self) -> dict[str, KR106NativeParamRef]:
+        """Project repository names onto verified KR106 engine identities.
+
+        :returns: Native references keyed by repository parameter name.
+        :raises ValueError: The map has no KR106-native provenance.
+        """
+        if self.kr106_native is None:
+            raise ValueError("parameter map has no KR106-native provenance")
+        return {
+            name: identity.kr106_native
+            for name, identity in self.params.items()
+            if identity.kr106_native is not None
+        }
+
     def clap_projection(self) -> PluginFormatMap:
         """Return the legacy CLAP-only view used by capture CSV conversion.
 
@@ -129,7 +186,9 @@ class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
         return PluginFormatMap(
             plugin=self.plugin,
             version=self.clap.plugin_version,
-            params={name: identity.clap for name, identity in self.params.items() if identity.clap},
+            params={
+                name: identity.clap for name, identity in self.params.items() if identity.clap
+            },
         )
 
     def dawdreamer_indices(self) -> dict[str, int]:
@@ -147,7 +206,9 @@ class SynthParamMap(BaseModel):  # noqa: DOC601, DOC603
         """
         if self.surgepy is None:
             raise ValueError("parameter map has no SurgePy snapshot")
-        missing = sorted(name for name, identity in self.params.items() if identity.surgepy is None)
+        missing = sorted(
+            name for name, identity in self.params.items() if identity.surgepy is None
+        )
         if missing:
             raise ValueError(f"parameters missing SurgePy identities: {', '.join(missing)}")
         return {

@@ -1,0 +1,36 @@
+name: Studiorack Lock Drift
+
+# Reports drift between the Studiorack locks and the live open-audio-stack
+# registry. Without this, drift surfaces only as a red image build on every
+# branch, which is how #3623 was found. Absent or re-digested artifacts fail
+# the job; upstream additions are reported without failing it.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # Weekly on Monday at 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Compare locks against the live registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12.13"
+
+      # The checker imports no third-party packages, so this job needs neither
+      # `uv sync` nor a torch install; a test pins that so it stays cheap.
+      - name: Report lock drift
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m synth_setter.pipeline.ci.studiorack_lock_drift \
+            --lock studiorack.lock.json \
+            --lock studiorack-cardinal.lock.json

@@ -1,8 +1,12 @@
 """Behavioral tests for sketch-control extraction (loudness, centroid, pitch)."""
 
+import warnings
+
+import librosa
 import numpy as np
 import pytest
 import torch
+from jaxtyping import TypeCheckError
 
 from synth_setter.data.vst.shapes import mel_hop_length
 from synth_setter.features import sketch_controls
@@ -20,7 +24,12 @@ from synth_setter.features.sketch_controls import (
     sketch_num_frames,
     spectral_centroid_track,
 )
-from synth_setter.sketch import pool_sketch_controls
+from synth_setter.sketch import (
+    median_filter_sketch_controls,
+    pool_sketch_controls,
+    random_median_filter_sketch_controls,
+    resample_sketch_controls,
+)
 from tests.helpers.run_if import RunIf
 
 _SAMPLE_RATE = 44100
@@ -54,6 +63,109 @@ def test_sketch_num_frames_one_second_matches_mel_grid() -> None:
     """Frame counts agree with the mel hop grid."""
     samples = int(_SAMPLE_RATE * _DURATION_S)
     assert sketch_num_frames(samples, _SAMPLE_RATE) == samples // mel_hop_length(_SAMPLE_RATE) + 1
+
+
+def test_median_filter_sketch_controls_odd_kernel_zero_pads_boundaries() -> None:
+    """A centered odd window suppresses a one-frame edge transient against zero padding."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 5)
+    controls[0, SKETCH_PITCH_SLICE.start, 0] = 1.0
+
+    filtered = median_filter_sketch_controls(controls, kernel_size=3)
+
+    assert filtered.shape == controls.shape
+    assert filtered.dtype == controls.dtype
+    assert filtered.device == controls.device
+    torch.testing.assert_close(filtered, torch.zeros_like(controls), rtol=0, atol=0)
+
+
+def test_median_filter_sketch_controls_even_kernel_uses_trailing_lower_median() -> None:
+    """An even window follows FlashFoley's left-padded lower-median alignment."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 4)
+    controls[0, SKETCH_LOUDNESS_ROW] = torch.tensor((1.0, 0.0, 1.0, 0.0))
+
+    filtered = median_filter_sketch_controls(controls, kernel_size=2)
+
+    torch.testing.assert_close(filtered, torch.zeros_like(controls), rtol=0, atol=0)
+
+
+def test_random_median_filter_sketch_controls_seed_repeats_per_row_windows() -> None:
+    """A Torch seed reproduces one shared control-window draw per batch row."""
+    controls = torch.zeros(4, NUM_SKETCH_CONTROLS, 5)
+    controls[:, SKETCH_LOUDNESS_ROW, 2] = 1.0
+    controls[:, SKETCH_CENTROID_ROW, 2] = 1.0
+    controls[:, SKETCH_PITCH_SLICE.start, 2] = 1.0
+
+    torch.manual_seed(0)
+    first = random_median_filter_sketch_controls(controls, max_kernel_size=5)
+    torch.manual_seed(0)
+    second = random_median_filter_sketch_controls(controls, max_kernel_size=5)
+
+    expected = torch.zeros_like(controls)
+    expected[3] = controls[3]
+    torch.testing.assert_close(first, expected, rtol=0, atol=0)
+    torch.testing.assert_close(second, expected, rtol=0, atol=0)
+
+
+def test_resample_sketch_controls_average_and_linear_have_distinct_values() -> None:
+    """Average and linear modes preserve their documented temporal semantics."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 4)
+    controls[:, SKETCH_LOUDNESS_ROW] = torch.tensor((0.0, 1.0, 1.0, 0.0))
+
+    averaged = resample_sketch_controls(controls, output_frames=8, mode="average")
+    linear = resample_sketch_controls(controls, output_frames=8, mode="linear")
+
+    torch.testing.assert_close(
+        averaged[0, SKETCH_LOUDNESS_ROW],
+        torch.tensor((0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0)),
+        rtol=0,
+        atol=0,
+    )
+    torch.testing.assert_close(
+        linear[0, SKETCH_LOUDNESS_ROW],
+        torch.tensor((0.0, 0.25, 0.75, 1.0, 1.0, 0.75, 0.25, 0.0)),
+        rtol=0,
+        atol=1e-6,
+    )
+
+
+def test_resample_sketch_controls_linear_downsampling_keeps_short_events() -> None:
+    """Linear reduction low-passes before sampling, so no source frame is skipped."""
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 5)
+    controls[:, SKETCH_LOUDNESS_ROW, 2] = 4.0
+
+    linear = resample_sketch_controls(controls, output_frames=2, mode="linear")
+
+    assert (linear[0, SKETCH_LOUDNESS_ROW] > 0).all()
+
+
+def test_resample_sketch_controls_linear_downsampling_preserves_constant_tracks() -> None:
+    """Anti-aliased reduction keeps unit DC gain across the whole output grid."""
+    controls = torch.full((1, NUM_SKETCH_CONTROLS, 11), 0.5)
+
+    linear = resample_sketch_controls(controls, output_frames=4, mode="linear")
+
+    torch.testing.assert_close(linear, torch.full((1, NUM_SKETCH_CONTROLS, 4), 0.5))
+
+
+def test_resample_sketch_controls_equal_frames_returns_independent_clone() -> None:
+    """An unchanged grid preserves values without sharing writable storage."""
+    controls = torch.randn(1, NUM_SKETCH_CONTROLS, 4)
+
+    resampled = resample_sketch_controls(controls, output_frames=4, mode="linear")
+    resampled.zero_()
+
+    assert torch.count_nonzero(controls) > 0
+
+
+@pytest.mark.parametrize("mode", ["nearest", "cubic"])
+def test_resample_sketch_controls_unknown_mode_rejected(mode: str) -> None:
+    """Only the checkpointed average and linear policies are accepted.
+
+    :param mode: Unsupported mode under test.
+    """
+    controls = torch.zeros(1, NUM_SKETCH_CONTROLS, 4)
+    with pytest.raises(TypeCheckError, match="SketchTemporalResampling"):
+        resample_sketch_controls(controls, output_frames=2, mode=mode)  # type: ignore[arg-type]
 
 
 def test_pool_sketch_controls_averages_tracks_and_pitch() -> None:
@@ -244,6 +356,17 @@ def test_extract_sketch_controls_batch_rows_match_single_clip_extraction() -> No
     assert np.allclose(batch[1].numpy(), single.numpy(), atol=1e-5)
 
 
+def test_loudness_front_end_is_cached_per_rate_and_device() -> None:
+    """Per-step extraction reuses one resampler and window instead of rebuilding them."""
+    cpu = torch.device("cpu")
+    first = sketch_controls._loudness_front_end(_SAMPLE_RATE, cpu, torch.float32)
+    second = sketch_controls._loudness_front_end(_SAMPLE_RATE, cpu, torch.float32)
+    other_rate = sketch_controls._loudness_front_end(48_000, cpu, torch.float32)
+
+    assert first is second
+    assert other_rate is not first
+
+
 def test_extract_sketch_controls_repeat_calls_are_deterministic() -> None:
     """Two extractions of the same clip are bitwise identical."""
     audio = _sine(440.0)
@@ -296,13 +419,90 @@ def test_extract_sketch_controls_batch_on_cuda_predicts_the_same_pitch_bins() ->
     assert torch.allclose(cpu_pitch, cuda_pitch, atol=5e-3)
 
 
+@RunIf(min_gpus=1)
+def test_load_pesto_model_returns_weights_on_the_requested_device_after_an_external_move() -> None:
+    """A device request is honoured even after a caller moved the shared module.
+
+    The cache hands out one process-wide module, so any caller can move it; the next request must
+    still place the weights where it asked.
+    """
+    load_pesto_model(device="cuda").to("cpu")
+    model = load_pesto_model(device="cuda")
+    assert next(model.parameters()).device.type == "cuda"
+
+
+def test_load_pesto_model_reasserts_frozen_eval_state() -> None:
+    """Every cache retrieval restores the extractor's immutable inference state."""
+    model = load_pesto_model(device="cpu")
+    model.train()
+    next(model.parameters()).requires_grad_(True)
+
+    restored = load_pesto_model(device="cpu")
+
+    assert restored is model
+    assert restored.training is False
+    assert all(not parameter.requires_grad for parameter in restored.parameters())
+
+
 def test_load_pesto_model_without_a_device_defaults_to_cpu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A first load that names no device holds its weights on CPU.
 
-    :param monkeypatch: Clears the cached device so this is a first load.
+    :param monkeypatch: Drops the cached model so this is a first load.
     """
-    monkeypatch.setattr(sketch_controls, "_pesto_device", None)
+    monkeypatch.setattr(sketch_controls, "_pesto_model", None)
     model = load_pesto_model()
     assert next(model.parameters()).device.type == "cpu"
+
+
+def test_loudness_track_extraction_emits_no_divide_by_zero_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DC FFT bin must not push librosa's A-weighting through ``log10(0)``.
+
+    :param monkeypatch: Clears the per-process weight cache so the curve is rebuilt here.
+    """
+    sketch_controls._a_weighting_db.cache_clear()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        track = loudness_track(_sine(440.0), _SAMPLE_RATE)
+
+    assert [str(w.message) for w in caught if "divide by zero" in str(w.message)] == []
+    assert torch.isfinite(track).all()
+
+
+def test_a_weighting_curve_matches_librosa_above_the_dc_bin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skipping the DC bin must not perturb any audible weight.
+
+    :param monkeypatch: Clears the per-process weight cache so the curve is rebuilt here.
+    """
+    sketch_controls._a_weighting_db.cache_clear()
+    freqs = librosa.fft_frequencies(
+        sr=sketch_controls._LOUDNESS_SAMPLE_RATE, n_fft=sketch_controls._LOUDNESS_N_FFT
+    )
+    expected = librosa.A_weighting(freqs[1:], min_db=None) - sketch_controls._LOUDNESS_REF_DB
+
+    curve = sketch_controls._a_weighting_db(torch.device("cpu"))
+
+    np.testing.assert_allclose(curve[1:, 0].numpy(), expected, rtol=0, atol=1e-5)
+
+
+def test_dc_a_weighting_bin_floors_its_loudness_contribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A-weighting is inaudible at DC, so that bin contributes the loudness floor.
+
+    :param monkeypatch: Clears the per-process weight cache so the curve is rebuilt here.
+    """
+    sketch_controls._a_weighting_db.cache_clear()
+
+    dc_weight = sketch_controls._a_weighting_db(torch.device("cpu"))[0, 0]
+
+    loudest_db = torch.tensor(sketch_controls._LOUDNESS_MAX_DB)
+    assert float((loudest_db + dc_weight).clamp_min(sketch_controls._LOUDNESS_MIN_DB)) == (
+        sketch_controls._LOUDNESS_MIN_DB
+    )

@@ -1,8 +1,9 @@
 # Design Doc: Training Pipeline
 
-> **Status**: Draft
+> **Status**: Approved
 > **Author**: ktinubu@
-> **Last Updated**: 2026-05-13
+> **Created**: 2026-03-20
+> **Last Updated**: 2026-11-10
 > **Tracking**: #107
 > **Issue tracking**: [github-taxonomy.md](github-taxonomy.md)
 
@@ -62,13 +63,13 @@ Training is operationally different from the data pipeline:
 
 ### Current Gaps
 
-| Gap                                         | Impact                                                                                                                                                                                                                                                                                                |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hardcoded dataset paths in configs          | Fixed by shared config cleanup work                                                                                                                                                                                                                                                                   |
-| ~~No durable cloud checkpoint persistence~~ | ~~Pod death loses progress~~ — **Resolved:** at train end the best checkpoint is uploaded to R2 and the `model-{config_id}` artifact references it ([#92](https://github.com/tinaudio/synth-setter/issues/92)). Intermediate checkpoints are not synced, so pod death before train end loses progress |
-| No RunPod training launcher                 | Manual cloud startup                                                                                                                                                                                                                                                                                  |
-| No training-focused Docker image            | Hard to reproduce cloud/local parity                                                                                                                                                                                                                                                                  |
-| ~~Hardcoded W&B identity~~                  | ~~Wrong defaults for new ownership~~ — **Resolved:** entity/project now env-var driven via `oc.env` resolver                                                                                                                                                                                          |
+| Gap                                         | Impact                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hardcoded dataset paths in configs          | Fixed by shared config cleanup work                                                                                                                                                                                                                                                                                                                                                                         |
+| ~~No durable cloud checkpoint persistence~~ | ~~Pod death loses progress~~ — **Resolved:** at train end the best checkpoint is uploaded to R2 and the `model-{config_id}` artifact references it ([#92](https://github.com/tinaudio/synth-setter/issues/92)). Intermediate checkpoints stay local by default; `training.upload_checkpoints_during_training=true` (set by the shipped RunPod train configs) also mirrors `last.ckpt` to R2 during training |
+| ~~No RunPod training launcher~~             | ~~Manual cloud startup~~ — **Resolved:** `.github/workflows/train.yml` dispatches `synth-setter-train` to RunPod through the SkyPilot launcher (`synth_setter.pipeline.skypilot_launch`)                                                                                                                                                                                                                    |
+| No training-focused Docker image            | Hard to reproduce cloud/local parity                                                                                                                                                                                                                                                                                                                                                                        |
+| ~~Hardcoded W&B identity~~                  | ~~Wrong defaults for new ownership~~ — **Resolved:** entity/project now env-var driven via `oc.env` resolver                                                                                                                                                                                                                                                                                                |
 
 ______________________________________________________________________
 
@@ -200,18 +201,19 @@ Training is a **single long-running job**. Durable outputs flow through W&B (met
 3. **Local checkpoints → local disk** (Lightning default, ephemeral on cloud pods)
 
 ```
-┌──────────────┐     ┌────────────────────────┐      ┌────────────────────┐
-│ Dataset      │────►│       TRAIN JOB        │─────►│  Local checkpoints │
-│ local or R2  │     │  python -m synth_setter.cli.train   │      │  last.ckpt         │
-└──────────────┘     │                        │      │  best.ckpt         │
-                     │  Lightning + Hydra     │      └────────────────────┘
-                     │  W&B + CSV logger      │
-                     └──────────┬─────────────┘
-                                │
-                                ▼
-                         W&B training run
-                         model artifact (s3:// ref → R2)
-                         metrics / lineage
+┌──────────────┐     ┌──────────────────────────┐      ┌────────────────────┐
+│ Dataset      │────►│        TRAIN JOB         │─────►│  Local checkpoints │
+│ local or R2  │     │  python -m               │      │  last.ckpt         │
+└──────────────┘     │  synth_setter.cli.train  │      │  best.ckpt         │
+                     │                          │      └────────────────────┘
+                     │  Lightning + Hydra       │
+                     │  W&B + CSV logger        │
+                     └───────────┬──────────────┘
+                                 │
+                                 ▼
+                          W&B training run
+                          model artifact (s3:// ref → R2)
+                          metrics / lineage
 ```
 
 The best checkpoint is uploaded to R2 at train end and referenced by the model artifact ([#92](https://github.com/tinaudio/synth-setter/issues/92)). See §10.
@@ -312,10 +314,10 @@ Behavior:
 - Local-only by default; no hidden default R2 fetch
 - If `download_dataset_root_uri` is specified, every split is rematerialized locally as a projected copy via `materialize_lance_subset` (see `docs/design/data-pipeline.md`) — only the columns the loaders read cross the wire — the projection is derived by `VSTDataModule._loader_columns` (`param_array`, the conditioning column, the sketch-control struct when configured, plus `audio` for the split serving prediction), never user-configured. There is no whole-dataset copy mode; only non-Lance sidecars still download via `download_dir_no_overwrite`
 - The source must expose `dataset.complete` plus the `train`/`val`/`test` `.lance` split layout. Hydration checks the finalize marker before writing any local split; an incomplete root is a hard failure, not a fallback to a raw copy
-- Splits land in `dataset_root/<prefix>-<digest>/`, where `<prefix>` is the conditioning column truncated to `_DIRNAME_PREFIX_CHARS` and the digest covers the source URI, txids, per-split projection, and row limit (see `subset_dirname` in `lance_materialize.py`). The name is derivable from configuration alone so rank-0 `prepare_data` and all-rank `setup` agree without a source read, and changing conditioning hydrates a sibling subset instead of colliding with the old one. `predict_file` naming the configured root rebases onto the subset
+- Splits land in `dataset_root/<prefix>-<digest>/`, where `<prefix>` is the conditioning column truncated to `_DIRNAME_PREFIX_CHARS` and the digest covers the source URI, txids, per-split projection, and row limit (see `subset_dirname` in `lance_materialize.py`). The exact config-derived path remains the first choice. When it is absent, hydration deterministically reuses the first complete sibling whose per-split manifests cover the requested columns and match every source, snapshot, row-limit, and destination-integrity check. The narrower path becomes an atomic symlink to that sibling so rank-0 `prepare_data` and all-rank `setup` resolve the same root without rewriting the larger cache. Incomplete stage-scoped siblings are not reused, because adding a narrower missing split would make their broader projection inconsistent. `predict_file` naming the configured root rebases onto the resolved subset
 - Nothing reclaims stale subsets yet; a persistent `dataset_root` accumulates one per distinct request (#2569)
 - `download_dataset_txids` pins per-split source snapshots; without them hydration uses each split's latest version, resolved independently — there is no atomic cross-split snapshot. That is accepted: reproducible or resumable runs supply txids
-- Each staged subset contains its request manifest, so one directory rename atomically publishes the Lance data and matching local transaction identity; concurrent identical writers converge on that winner. Cache hits retry transient metadata reads, verify that identity, and run Lance's structural validation. Unpinned caches additionally require the source to reopen and retain the same snapshot identity; legacy or unverifiable caches fail closed
+- Each staged subset contains its request manifest, so one directory rename atomically publishes the Lance data and matching local transaction identity; concurrent identical writers converge on that winner. Cache hits retry transient metadata reads, verify that identity, and run Lance's structural validation. A request may reuse a manifest with an equal or larger column set (column order is irrelevant); the stored manifest hash is still recomputed exactly, and missing columns or any non-column mismatch fail closed. Unpinned caches additionally require the source to reopen and retain the same snapshot identity; legacy or unverifiable caches fail closed
 - `download_dataset_row_limit` accepts only positive first-N row caps for disposable smoke/tuning runs
 - `datamodule.high_memory_materialization` defaults to `false`, retaining Lance's I/O-buffer and read-ahead defaults; full-data RunPod launches enable it alongside a compute option with a 128 GB RAM floor. The setting affects only cold writes: identical cached subsets remain reusable because their data contract is unchanged
 
@@ -473,11 +475,11 @@ ______________________________________________________________________
 | Issue | Type  | Description                           | Parent  |
 | ----- | ----- | ------------------------------------- | ------- |
 | #107  | Epic  | Training pipeline & ops               | —       |
-| TBD   | Phase | Phase 1: Portable Training Foundation | #107    |
-| TBD   | Phase | Phase 2: W&B Checkpoint Durability    | #107    |
-| TBD   | Phase | Phase 3: RunPod Launcher              | #107    |
-| TBD   | Phase | Phase 4: Docker & CI                  | #107    |
-| TBD   | Phase | Phase 5: Documentation                | #107    |
+| #253  | Phase | Phase 1: Portable Training Foundation | #107    |
+| #254  | Phase | Phase 2: W&B Checkpoint Durability    | #107    |
+| #255  | Phase | Phase 3: RunPod Launcher              | #107    |
+| #256  | Phase | Phase 4: Docker & CI                  | #107    |
+| #257  | Phase | Phase 5: Documentation                | #107    |
 | TBD   | Task  | Task 1.1: Config Cleanup for Training | Phase 1 |
 | TBD   | Task  | Task 1.2: W&B Config Cleanup          | Phase 1 |
 | #92   | Task  | Task 2.2: Resume From W&B Artifact    | Phase 2 |
@@ -555,13 +557,13 @@ ______________________________________________________________________
 
 ## 11. Open Questions & Risks
 
-| #   | Question / Risk                                                           | Impact                   | Status                                                                         |
-| --- | ------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------ |
-| 1   | Should RunPod pods auto-terminate after training exits?                   | Cloud cost / orphan pods | Open                                                                           |
-| 2   | ~~Should R2 mirror every checkpoint or only best + last?~~                | ~~Storage growth~~       | Resolved — best at train end; opt-in launch-scoped `last.ckpt` during training |
-| 3   | Is single-GPU sufficient for next-generation models?                      | Future scaling           | Accepted for now                                                               |
-| 4   | How should stale mid-run recovery checkpoints be garbage-collected in R2? | Storage cost             | Open — launch-scoped recovery objects require an explicit retention policy     |
-| 5   | ~~Do we keep both W&B and R2 checkpoint copies?~~                         | ~~Cost~~                 | Resolved — bytes live in R2; W&B holds only an `s3://` reference               |
+| #   | Question / Risk                                                           | Impact                       | Status                                                                                            |
+| --- | ------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| 1   | ~~Should RunPod pods auto-terminate after training exits?~~               | ~~Cloud cost / orphan pods~~ | Resolved — training launches as a SkyPilot managed job, which releases the pod at terminal status |
+| 2   | ~~Should R2 mirror every checkpoint or only best + last?~~                | ~~Storage growth~~           | Resolved — best at train end; opt-in launch-scoped `last.ckpt` during training                    |
+| 3   | Is single-GPU sufficient for next-generation models?                      | Future scaling               | Accepted for now                                                                                  |
+| 4   | How should stale mid-run recovery checkpoints be garbage-collected in R2? | Storage cost                 | Open — launch-scoped recovery objects require an explicit retention policy                        |
+| 5   | ~~Do we keep both W&B and R2 checkpoint copies?~~                         | ~~Cost~~                     | Resolved — bytes live in R2; W&B holds only an `s3://` reference                                  |
 
 ______________________________________________________________________
 
@@ -588,13 +590,13 @@ ______________________________________________________________________
 
 ## Appendix B: Current File Inventory
 
-| File                                         | Current role                                                                         | Gap                               |
-| -------------------------------------------- | ------------------------------------------------------------------------------------ | --------------------------------- |
-| `src/synth_setter/cli/train.py`              | Main training entry point                                                            | —                                 |
-| `src/synth_setter/configs/logger/wandb.yaml` | W&B config (`log_model: False` — no checkpoint files to W&B, env-var entity/project) | —                                 |
-| `src/synth_setter/configs/datamodule/*.yaml` | Dataset paths                                                                        | Shared portability cleanup needed |
-| `docker/*`                                   | Existing container setup                                                             | Training-specific image needed    |
-| `scripts/runpod_*.py`                        | Data-pipeline-focused launchers                                                      | No training launcher              |
+| File                                           | Current role                                                                            | Gap                               |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------- |
+| `src/synth_setter/cli/train.py`                | Main training entry point                                                               | —                                 |
+| `src/synth_setter/configs/logger/wandb.yaml`   | W&B config (`log_model: False` — no checkpoint files to W&B, env-var entity/project)    | —                                 |
+| `src/synth_setter/configs/datamodule/*.yaml`   | Dataset paths                                                                           | Shared portability cleanup needed |
+| `docker/*`                                     | Existing container setup                                                                | Training-specific image needed    |
+| `src/synth_setter/pipeline/skypilot_launch.py` | Generic SkyPilot launcher; `.github/workflows/train.yml` dispatches training through it | —                                 |
 
 ## Appendix C: Checkpoint Policy
 

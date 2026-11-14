@@ -28,6 +28,9 @@ import tomllib
 # <type>(<optional-scope>)<optional-!>: <description> — type group only.
 _TYPE_RE = re.compile(r"^([A-Za-z][A-Za-z-]*)(?:\([^)]*\))?!?: ")
 _METACHARS = frozenset({"&&", "||", ";", "|", "&", "(", ")", "\n"})
+# shlex's default punctuation set plus "\n", so a newline lexes as a command
+# separator instead of being swallowed as whitespace.
+_PUNCTUATION_CHARS = "();<>|&\n"
 # Benign single-token prefixes that keep `gh` the effective command word.
 _PREFIXES = frozenset({"command", "env", "exec", "nice", "nohup", "setsid", "sudo", "time"})
 # Regex-level mention check for the fail-closed path when shlex cannot lex.
@@ -117,7 +120,8 @@ def _segments(command: str) -> list[list[str]]:  # noqa: DOC502 -- ValueError ra
     :returns: Token lists, one per simple command.
     :raises ValueError: When the text cannot be lexed (unbalanced quotes).
     """
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=_PUNCTUATION_CHARS)
+    lexer.whitespace = lexer.whitespace.replace("\n", "")
     lexer.whitespace_split = True
     segments: list[list[str]] = [[]]
     for token in lexer:

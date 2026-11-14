@@ -93,7 +93,9 @@ jobs:
   validate-shard:
     name: Validate shards
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # A cold container `uv sync` builds SurgePy from source (~3 min), which left
+    # under 7 s of headroom at 10 (#3466); validation itself takes seconds.
+    timeout-minutes: 20
     env:
       IMAGE: tinaudio/synth-setter:${{ inputs.image_tag }}
     steps:

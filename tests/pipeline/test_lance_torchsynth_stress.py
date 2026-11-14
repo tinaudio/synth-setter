@@ -318,6 +318,8 @@ def _assert_map_loader_round_trip(
         param_spec_name=param_spec_name,
         batch_size=4,
         num_workers=0,
+        sample_rate=_SAMPLE_RATE,
+        signal_length=round(_SAMPLE_RATE * _DURATION_SECONDS),
     )
     datamodule.setup()
     encoded_width = len(resolve_param_spec(param_spec_name))

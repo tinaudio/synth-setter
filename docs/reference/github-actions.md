@@ -153,8 +153,10 @@ After that limit, `ktinubu` can request another review by commenting
 the review secrets; never convert this workflow to `pull_request_target`.
 GitHub Actions runs follow-up synchronously so the job cannot report success
 while deferred passes remain. It waits up to 15 minutes for foreground-owned
-reports before failing closed rather than launching duplicate reviewers. Local
-launcher calls keep detached follow-up.
+reports, then relaunches the unfinished passes because the launcher only starts
+follow-up after the foreground Pi host has exited. Without that guarantee it
+fails closed rather than launching duplicate reviewers. Local launcher calls
+keep detached follow-up.
 The `.agent-reviews/` audit is retained as a repository-private artifact for
 seven days.
 

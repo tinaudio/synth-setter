@@ -67,9 +67,24 @@ class TestForwardContract:
         centered = torch.full((2, 128, 401), 2.0)
 
         with torch.no_grad():
-            mixed = encoder(torch.stack((left_heavy, centered)))
+            # One batch per pair: rows of a single batched matmul are not
+            # bit-reproducible against each other, which is not what this asserts.
+            mixed = encoder(left_heavy.unsqueeze(0))
+            reference = encoder(centered.unsqueeze(0))
 
-        torch.testing.assert_close(mixed[0], mixed[1], rtol=1e-5, atol=1e-6)
+        assert torch.equal(mixed, reference)
+
+    def test_forward_channel_mix_separates_pairs_with_different_means(self) -> None:
+        """A different channel mean moves the conditioning, so the mix is not constant."""
+        encoder = _tiny_encoder().eval()
+        centered = torch.full((2, 128, 401), 2.0)
+        louder = torch.full((2, 128, 401), 3.0)
+
+        with torch.no_grad():
+            reference = encoder(centered.unsqueeze(0))
+            shifted = encoder(louder.unsqueeze(0))
+
+        assert (shifted - reference).abs().max() > 1e-3
 
     def test_forward_is_trainable_end_to_end_by_default(self) -> None:
         """Unfrozen construction backpropagates through the backbone."""

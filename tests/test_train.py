@@ -32,8 +32,8 @@ import wandb
 from hydra.core.global_hydra import GlobalHydra
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import instantiate
-from lightning.pytorch import Trainer
-from omegaconf import DictConfig, OmegaConf, open_dict
+from lightning.pytorch import Callback, LightningModule, Trainer
+from omegaconf import DictConfig, open_dict
 from omegaconf.errors import InterpolationKeyError
 from PIL import Image
 
@@ -80,6 +80,7 @@ from tests.conftest import (
     _SURGE_FIXTURE_CHANNELS,
     _SURGE_FIXTURE_DURATION_SECONDS,
     _SURGE_FIXTURE_SAMPLE_RATE,
+    EMBEDDING_E2E_KEYS,
     FAKE_VST_VARIANTS,
     NUM_FIXTURE_SAMPLES,
     REAL_VST_VARIANTS,
@@ -114,6 +115,30 @@ from tests.helpers.recording_wandb_logger import RecordingWandbLogger as _Record
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_artifacts import publish_checkpoint_artifact
 from tests.helpers.wandb_offline import read_history_rows
+
+
+class _SketchProjectionSnapshot(Callback):
+    """Capture one sketch projection immediately before training starts."""
+
+    def __init__(self, group: str) -> None:
+        """Select the projection to snapshot.
+
+        :param group: Sketch-control group owning the learned projection.
+        """
+        super().__init__()
+        self.group = group
+        self.before: torch.Tensor | None = None
+
+    def on_train_start(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Snapshot the configured learned projection.
+
+        :param trainer: Active trainer; unused.
+        :param pl_module: Online-sketch model entering its first optimization step.
+        """
+        del trainer
+        sketch_tokens = getattr(pl_module, "sketch_tokens")
+        self.before = sketch_tokens.projections[self.group].weight.detach().clone()
+
 
 NUM_STEREO_AUDIO_METRICS = 6
 
@@ -294,25 +319,25 @@ def test_train_pyfdn_stored_mel_ast_one_step_writes_checkpoint(
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "synth", ["pyfdn_n8_mono_householder", "pyfdn_n8_mono_householder_vector"]
+    "cfg_dataset_pyfdn_householder",
+    ["pyfdn_n8_mono_householder", "pyfdn_n8_mono_householder_vector"],
+    indirect=True,
 )
 def test_train_flamo_real_pyfdn_dataset_checkpoint_evaluates(
     cfg_dataset_pyfdn_householder: DictConfig,
     tmp_path: Path,
-    synth: str,
 ) -> None:
     """Generate pyFDN data, train through FLAMO, then reload and evaluate its checkpoint.
 
-    :param cfg_dataset_pyfdn_householder: Real local pyFDN producer configuration.
+    :param cfg_dataset_pyfdn_householder: Real local pyFDN producer configuration, composed at the
+        feedback topology shared by data generation and differentiable training.
     :param tmp_path: Root for generated, checkpoint, metric, and audio artifacts.
-    :param synth: Feedback topology shared by data generation and differentiable training.
     """
     from synth_setter.data.vst.writers import make_lance_dataset
     from synth_setter.pipeline.data.stats import finalize, fold_lance_shard_into_welford
 
+    synth = cfg_dataset_pyfdn_householder.synth.name
     with open_dict(cfg_dataset_pyfdn_householder):
-        cfg_dataset_pyfdn_householder.synth.name = synth
-        cfg_dataset_pyfdn_householder.synth.param_spec_name = synth
         cfg_dataset_pyfdn_householder.train_val_test_sizes = [2, 2, 2]
         cfg_dataset_pyfdn_householder.render.samples_per_shard = 2
         cfg_dataset_pyfdn_householder.render.min_loudness = -100.0
@@ -748,6 +773,52 @@ def test_train_torchsynth_experiment_renders_audio_online(
     assert torch.isfinite(audio).all()
     assert torch.pi == math.pi
     assert isinstance(object_dict["model"].net.encoder, SpecEncoder)
+
+
+@pytest.mark.slow
+def test_train_torchsynth_val_audio_probe_scores_online_renders(
+    cfg_torchsynth_train: DictConfig,
+) -> None:
+    """The probe scores a torchsynth arm's online renders instead of failing silently.
+
+    ``ValAudioProbe`` swallows its own failures by design, so a probe that never
+    scores anything shows up as absent ``val_audio/*`` metrics and nothing goes
+    red. That is how a row-width mismatch went unnoticed on every torchsynth
+    validation until #2639; this asserts the probe's real return value.
+
+    :param cfg_torchsynth_train: Composed CPU TorchSynth smoke configuration.
+    """
+    import concurrent.futures
+
+    from synth_setter.utils.callbacks import ValAudioProbe
+
+    with open_dict(cfg_torchsynth_train):
+        cfg_torchsynth_train.training.val_audio_probe = True
+        cfg_torchsynth_train.training.val_audio_probe_samples = 1
+        cfg_torchsynth_train.trainer.val_check_interval = 1
+        cfg_torchsynth_train.trainer.num_sanity_val_steps = 0
+    HydraConfig().set_config(cfg_torchsynth_train)
+
+    _, object_dict = train(cfg_torchsynth_train)
+
+    probes = [cb for cb in object_dict["trainer"].callbacks if isinstance(cb, ValAudioProbe)]
+    assert len(probes) == 1, "val_audio_probe=true did not wire exactly one ValAudioProbe"
+    probe = probes[0]
+    assert probe._future is not None, "validation ran but no probe was launched"
+    concurrent.futures.wait([probe._future], timeout=600)
+    metrics = probe._future.result()
+
+    stereo_only = ("mldr_mid_side",) if cfg_torchsynth_train.render.channels == 2 else ()
+    expected = {
+        f"val_audio/{name}" for name in ("mss", "wmfcc", "sot", "rms", "mldr", *stereo_only)
+    }
+    # One staged sample leaves every ``_std`` undefined, so the means carry the signal.
+    assert {key.removesuffix("_mean") for key in metrics if key.endswith("_mean")} == expected
+    assert all(
+        torch.isfinite(torch.as_tensor(value)).all()
+        for key, value in metrics.items()
+        if key.endswith("_mean")
+    )
 
 
 @pytest.mark.slow
@@ -1337,6 +1408,46 @@ def test_train_file_uri_hydrates_marker_staged_local_dataset_root(
     assert torch.isfinite(metric_dict["train/loss"])
     hydrated_root = object_dict["datamodule"].dataset_root
     assert (hydrated_root / ".synth-setter-stage-complete").is_file()
+
+
+@pytest.mark.slow
+def test_train_narrower_hydration_reuses_complete_superset_cache(
+    cfg_train_lance: DictConfig, tmp_path: Path
+) -> None:
+    """The train entrypoint consumes a compatible broader hydration cache.
+
+    :param cfg_train_lance: Composed Lance training configuration and source dataset.
+    :param tmp_path: Parent of the shared local hydration destination.
+    """
+    source = Path(cfg_train_lance.datamodule.dataset_root)
+    destination = tmp_path / "local-dataset"
+    broad = instantiate(
+        cfg_train_lance.datamodule,
+        dataset_root=str(destination),
+        download_dataset_root_uri=source.as_uri(),
+        predict_file=None,
+    )
+    broad.prepare_data()
+    broad_manifest = (broad.dataset_root / "test.lance" / "_materialize.json").read_bytes()
+    with open_dict(cfg_train_lance):
+        cfg_train_lance.datamodule.dataset_root = str(destination)
+        cfg_train_lance.datamodule.download_dataset_root_uri = source.as_uri()
+        cfg_train_lance.datamodule.predict_file = str(tmp_path / "external" / "predict.lance")
+        cfg_train_lance.test = False
+
+    HydraConfig().set_config(cfg_train_lance)
+    metric_dict, object_dict = train(cfg_train_lance)
+
+    hydrated = object_dict["datamodule"]
+    assert hydrated.dataset_root == broad.dataset_root
+    assert object_dict["trainer"].global_step > 0
+    assert torch.isfinite(metric_dict["train/loss"])
+    assert (broad.dataset_root / "test.lance" / "_materialize.json").read_bytes() == broad_manifest
+    assert lance.dataset(str(broad.dataset_root / "test.lance")).schema.names == [
+        "param_array",
+        "mel_spec",
+        "audio",
+    ]
 
 
 @pytest.mark.slow
@@ -2227,22 +2338,64 @@ def test_train_flow_sketch_cfg_ablation_returns_finite_loss(
     assert cfg_train_sketch_lance.consumed_train_config_id == "flow_sketch_prelim"
 
 
-@pytest.mark.parametrize("profile", ["tiv_online_gpu", "tiv_online_cpu"])
-def test_train_fast_dev_run_tiv_online_extracts_audio_controls(
+@pytest.mark.parametrize(
+    ("profile", "expected_profile", "expected_group"),
+    [
+        # Loudness is never zero-binned, so its zero-initialised projection always
+        # receives a nonzero gradient; pitch bins under the threshold can leave it exactly 0.
+        ("music_online", "music", "loudness"),
+        ("music_online_tiv", "music_tiv", "tiv"),
+        ("tiv_online_gpu", "tiv", "tiv"),
+        ("tiv_online_cpu", "tiv", "tiv"),
+    ],
+)
+def test_train_fast_dev_run_online_sketch_extracts_audio_controls(
     cfg_train_sketch_lance: DictConfig,
     profile: str,
+    expected_profile: str,
+    expected_group: str,
 ) -> None:
-    """Run both online TIV configurations through real training on Lance audio.
+    """Run online sketch configurations through real training on Lance audio.
 
     :param cfg_train_sketch_lance: Tiny real Lance flow-training configuration.
     :param profile: User-selectable sketch configuration to train.
+    :param expected_profile: Parsed sketch profile expected by the datamodule.
+    :param expected_group: Learned control projection that must receive an update.
     """
     if profile == "tiv_online_cpu":
         pytest.importorskip("essentia")
-    sketch_config = OmegaConf.load(
-        Path(__file__).parents[1] / "src/synth_setter/configs/sketch" / f"{profile}.yaml"
-    )
+    if expected_profile in ("music", "music_tiv"):
+        from tests.helpers.lance_fixtures import write_lance_shard
+
+        dataset_root = Path(cfg_train_sketch_lance.datamodule.dataset_root)
+        for seed, split in enumerate(("train", "val", "test")):
+            rng = np.random.default_rng(seed)
+            split_path = dataset_root / f"{split}.lance"
+            shutil.rmtree(split_path)
+            write_lance_shard(
+                split_path,
+                {
+                    # One second satisfies music_online's 96-frame grid (10 ms frames).
+                    "audio": rng.uniform(-1.0, 1.0, (4, 2, 44_100)).astype(np.float32),
+                    "param_array": rng.random((4, len(param_specs["surge_4"]))).astype(np.float32),
+                    "m2l": rng.standard_normal((4, 128, 42)).astype(np.float32),
+                },
+            )
+    with hydra.initialize_config_dir(
+        config_dir=str(Path(__file__).parents[1] / "src/synth_setter/configs"),
+        version_base="1.3",
+    ):
+        sketch_config = hydra.compose(
+            config_name="train.yaml",
+            overrides=["experiment=surge/flow_sketch_prelim", f"sketch={profile}"],
+        )
     cfg_train_sketch_lance.model.sketch_controls = sketch_config.model.sketch_controls
+    if expected_profile in ("music", "music_tiv"):
+        with open_dict(cfg_train_sketch_lance.callbacks):
+            cfg_train_sketch_lance.callbacks.projection_snapshot = {
+                "_target_": "tests.test_train._SketchProjectionSnapshot",
+                "group": expected_group,
+            }
     HydraConfig().set_config(cfg_train_sketch_lance)
 
     metric_dict, object_dict = train(cfg_train_sketch_lance)
@@ -2250,16 +2403,33 @@ def test_train_fast_dev_run_tiv_online_extracts_audio_controls(
     datamodule = object_dict["datamodule"]
     model = object_dict["model"]
     trainer = object_dict["trainer"]
-    assert datamodule.sketch_controls.profile == "tiv"
+    assert datamodule.sketch_controls.profile == expected_profile
     assert "audio" in datamodule.projection["train"]
     assert "audio" in datamodule.projection["val"]
     assert "audio" in datamodule.projection["test"]
     assert "sketch" not in datamodule.projection["train"]
     assert "sketch" not in datamodule.projection["val"]
     assert "sketch" not in datamodule.projection["test"]
-    assert model.sketch_tokens.layout.num_controls == 12
-    assert torch.count_nonzero(model.sketch_tokens.projections["tiv"].weight) > 0
+    projection = model.sketch_tokens.projections[expected_group].weight.detach()
+    if expected_profile in ("music", "music_tiv"):
+        snapshot = next(
+            callback
+            for callback in trainer.callbacks
+            if isinstance(callback, _SketchProjectionSnapshot)
+        )
+        assert snapshot.before is not None
+        assert not torch.equal(projection.cpu(), snapshot.before.cpu())
+    assert all("pesto" not in key.lower() for key in model.state_dict())
     assert torch.isfinite(metric_dict["train/loss"])
+    if expected_profile in ("music", "music_tiv"):
+        checkpoint = Path(cfg_train_sketch_lance.paths.output_dir) / "online-music.ckpt"
+        trainer.save_checkpoint(checkpoint)
+        state = torch.load(checkpoint, map_location="cpu", weights_only=False)["state_dict"]
+        restored = instantiate(cfg_train_sketch_lance.model)
+        restored.load_state_dict(state)
+        restored.eval()
+        assert restored.training is False
+        assert all("pesto" not in key.lower() for key in state)
 
     datamodule.setup("fit")
     try:
@@ -2270,6 +2440,25 @@ def test_train_fast_dev_run_tiv_online_extracts_audio_controls(
     controls = transferred["sketch_ctrl"]
     assert isinstance(controls, torch.Tensor)
     assert torch.count_nonzero(controls) > 0
+
+    if expected_profile in ("music", "music_tiv"):
+        with open_dict(cfg_train_sketch_lance):
+            cfg_train_sketch_lance.ckpt_path = str(checkpoint)
+            cfg_train_sketch_lance.trainer.fast_dev_run = False
+            cfg_train_sketch_lance.trainer.max_steps = 2
+            cfg_train_sketch_lance.trainer.min_steps = 2
+            cfg_train_sketch_lance.trainer.limit_train_batches = 1
+            cfg_train_sketch_lance.trainer.limit_val_batches = 1
+            cfg_train_sketch_lance.trainer.num_sanity_val_steps = 0
+            cfg_train_sketch_lance.trainer.val_check_interval = 1
+            cfg_train_sketch_lance.test = False
+        HydraConfig().set_config(cfg_train_sketch_lance)
+
+        resumed_metrics, resumed_objects = train(cfg_train_sketch_lance)
+
+        assert resumed_objects["trainer"].global_step == 2
+        assert torch.isfinite(resumed_metrics["train/loss"])
+        assert all("pesto" not in key.lower() for key in resumed_objects["model"].state_dict())
 
 
 def test_train_fast_dev_run_sketch_tokens_lance_routes_sketch_cfg_strength(
@@ -2961,9 +3150,12 @@ def test_train_surge_xt_val_audio_probe_renders_scores_and_uploads(
             rendered_params.at["a_amp_eg_attack", "target"]
         )
 
+    # compute_audio_metrics scores mid/side only for stereo pairs, so the expected key
+    # set follows the render's channel count rather than a frozen literal (#3328).
+    stereo_only = ("mldr_mid_side",) if cfg_surge_real_train.render.channels == 2 else ()
     assert set(metrics) == {
         f"val_audio/{name}_{stat}"
-        for name in ("mss", "wmfcc", "sot", "rms", "mldr")
+        for name in ("mss", "wmfcc", "sot", "rms", "mldr", *stereo_only)
         for stat in ("mean", "std")
     }
     bounds = ORACLE_AUDIO_METRIC_BOUNDS
@@ -3446,18 +3638,6 @@ def test_train_resume_auto_hydra_evidence_sibling_resumes_with_fresh_run_id(
     assert second_logger_cfg.resume is None
 
 
-_ALL_EMBEDDING_CONDITIONING_PROFILES = (
-    "clap",
-    "m2l",
-    "same_s",
-    "same_l",
-    "ssondo",
-    "t5gemma",
-    "matpac_plus",
-    "meanaudio_16k",
-)
-
-
 def _assert_conditioning_checkpoint_validates(cfg: DictConfig, output_dir: Path) -> None:
     """Validate a trained embedding-conditioned checkpoint.
 
@@ -3782,7 +3962,7 @@ def test_train_all_embedding_conditioning_and_eval_real_e2e(
     )
     assert_embedding_columns(dataset_root)
 
-    for conditioning in _ALL_EMBEDDING_CONDITIONING_PROFILES:
+    for conditioning in EMBEDDING_E2E_KEYS:
         cfg = build_surge_xt_embedding_train_cfg(
             tmp_path / conditioning,
             dataset_root,

@@ -46,22 +46,6 @@ type RenderFn = Callable[[Float[Tensor, _BATCH_PARAMS_SHAPE]], Float[Tensor, _BA
 
 
 @jaxtyped(typechecker=beartype)
-def _match_target_clamping(
-    rendered: Float[Tensor, _BATCH_AUDIO_SHAPE],
-) -> Float[Tensor, _BATCH_AUDIO_SHAPE]:
-    """Clamp a render into the range stored targets were written in, keeping its gradient.
-
-    ``render_torchsynth`` hard-clamps what it stores, so an unclamped estimate scored against
-    a clamped target lets clipping the target can never exhibit dominate the residual on
-    exactly the loudest rows. Straight-through, so a clipped row still receives gradient.
-
-    :param rendered: Audio straight from the simulator.
-    :returns: Audio clamped to ``[-1, 1]`` in the forward pass only.
-    """
-    return rendered + (rendered.clamp(-1.0, 1.0) - rendered).detach()
-
-
-@jaxtyped(typechecker=beartype)
 def gradient_control_signal(
     *,
     theta_hat: Float[Tensor, _BATCH_PARAMS_SHAPE],
@@ -88,7 +72,7 @@ def gradient_control_signal(
     if not theta_hat.requires_grad:
         raise ValueError("theta_hat must require grad for a gradient control signal")
     with torch.enable_grad():
-        per_sample = cost(_match_target_clamping(render(theta_hat)), target_audio.detach())
+        per_sample = cost(render(theta_hat), target_audio.detach())
         # create_graph=False: the signal is an input, and a graph here would silently make the
         # finetune second-order.
         (gradient,) = torch.autograd.grad(per_sample.sum(), theta_hat, create_graph=False)
@@ -142,7 +126,7 @@ def learned_control_signal(
     :raises ValueError: Renderer and target geometries differ.
     """
     with torch.no_grad():
-        rendered = canonical_audio(_match_target_clamping(render(theta_hat.detach())))
+        rendered = canonical_audio(render(theta_hat.detach()))
         target_audio = canonical_audio(target_audio)
     if rendered.shape != target_audio.shape:
         raise ValueError("rendered and target audio must have matching channel/sample shapes")

@@ -18,6 +18,10 @@ import numpy as np
 
 from synth_setter.renderer_backend import RendererBackend
 
+# git never abbreviates below seven digits, so a shorter stamp cannot name a commit.
+_MIN_ABBREVIATED_COMMIT = 7
+_HEX_DIGITS = frozenset("0123456789abcdef")
+
 
 class SurgePyParameterId(Protocol):
     """Stable synth-side parameter identifier exposed by SurgePy."""
@@ -140,6 +144,40 @@ def import_surgepy() -> SurgePyModule:
         ) from exc
 
 
+def _is_abbreviated_commit(component: str) -> bool:
+    """Judge whether a version component identifies a commit.
+
+    :param component: Trailing dot-separated component of a version stamp.
+    :returns: Whether the component is a lowercase hex abbreviation git would emit.
+    """
+    return len(component) >= _MIN_ABBREVIATED_COMMIT and all(
+        character in _HEX_DIGITS for character in component
+    )
+
+
+def surgepy_version_matches(actual: str, configured: str) -> bool:
+    """Judge whether two SurgePy stamps name the same build.
+
+    Surge bakes ``git rev-parse --short`` into the extension at build time, and that
+    abbreviation widens with the object count of whichever clone produced the wheel,
+    so one pinned commit reaches us as both ``f7b97c68`` and ``f7b97c682``.
+
+    :param actual: Stamp reported by the installed extension.
+    :param configured: Stamp pinned by the synth identity group.
+    :returns: Whether both stamps identify the same Surge build.
+    """
+    if actual == configured:
+        return True
+    actual_release, _, actual_commit = actual.rpartition(".")
+    configured_release, _, configured_commit = configured.rpartition(".")
+    if not actual_release or actual_release != configured_release:
+        return False
+    if not (_is_abbreviated_commit(actual_commit) and _is_abbreviated_commit(configured_commit)):
+        return False
+    shorter, longer = sorted((actual_commit, configured_commit), key=len)
+    return longer.startswith(shorter)
+
+
 def ensure_surgepy_runtime(
     renderer_backend: RendererBackend,
     renderer_version: str | None = None,
@@ -153,7 +191,7 @@ def ensure_surgepy_runtime(
     if renderer_backend != "surgepy":
         return
     actual = import_surgepy().getVersion()
-    if renderer_version and actual != renderer_version:
+    if renderer_version and not surgepy_version_matches(actual, renderer_version):
         raise RuntimeError(
             f"SurgePy version {actual!r} does not match configured {renderer_version!r}"
         )

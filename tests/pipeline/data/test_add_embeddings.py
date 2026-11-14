@@ -125,6 +125,7 @@ from synth_setter.same import (
 from synth_setter.sketch import pool_sketch_controls
 from synth_setter.workspace import operator_workspace
 from tests.helpers.finalize_shards import build_lance_smoke_spec, write_minimal_lance_shard
+from tests.helpers.ann import ANN_SELF_QUERY_REFINE_FACTOR
 from tests.helpers.lance_fixtures import write_lance_shard
 from tests.helpers.run_if import RunIf
 from tests.helpers.wandb_offline import read_run_config, read_run_exit_code, read_run_project
@@ -555,7 +556,7 @@ def test_add_embeddings_config_composition_surfaces_registry_defaults() -> None:
         assert cfg.num_sub_vectors is None
         assert cfg.metric == "cosine"
         assert cfg.resume_cache is None
-        assert cfg.debug is False
+        assert cfg.debug_logging is False
         assert cfg.logger.wandb._target_ == "lightning.pytorch.loggers.wandb.WandbLogger"
         assert AddEmbeddingsConfig.from_hydra_cfg(cfg) == AddEmbeddingsConfig(lance_uri=_LANCE_URI)
     finally:
@@ -1383,7 +1384,7 @@ def test_write_columns_with_debug_logs_progress_and_versions(
             lance.dataset(str(uri)),
             [_fake_spec("m2l")],
             _SAMPLE_RATE,
-            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), lance_batch_size=2, debug=True),
+            AddEmbeddingsConfig(lance_uri=str(uri), embeddings=("m2l",), lance_batch_size=2, debug_logging=True),
         )
 
     progress = [entry for entry in logs if entry["event"] == "embedding_progress"]
@@ -2805,19 +2806,19 @@ def test_load_same_audio_encoder_uses_sa3_factory_and_preserves_inference_contra
     _install_sa3_factory(monkeypatch, factory)
     _write_same_checkpoint(tmp_path, model.state_dict())
     encode = load_same_audio_encoder(str(tmp_path), device="cpu")
-    audio = np.ones((17, 2, 8), dtype=np.float32)
+    audio = np.ones((257, 2, 8), dtype=np.float32)
 
     latents = encode(audio)
 
     assert factory_calls == [({"family": "same"}, SAME_SAMPLE_RATE)]
-    assert model.chunk_sizes == [16, 1]
-    assert model.grad_enabled == [False, False]
-    assert model.training_states == [False, False]
-    assert model.parameter_grad_states == [False, False]
+    assert model.chunk_sizes == [257]
+    assert model.grad_enabled == [False]
+    assert model.training_states == [False]
+    assert model.parameter_grad_states == [False]
     assert next(model.parameters()).device.type == "cpu"
-    assert latents.shape == (17, 1, 8)
+    assert latents.shape == (257, 1, 8)
     assert latents.dtype == np.float32
-    np.testing.assert_array_equal(latents, np.full((17, 1, 8), 2.0, dtype=np.float32))
+    np.testing.assert_array_equal(latents, np.full((257, 1, 8), 2.0, dtype=np.float32))
 
 
 def test_load_same_audio_encoder_with_incompatible_state_raises(
@@ -2910,7 +2911,7 @@ def test_add_embeddings_threads_device_and_debug_to_loaders_and_progress(
 
     with capture_logs() as logs:
         add_embeddings(
-            AddEmbeddingsConfig(lance_uri=str(uri), device="mps", debug=True, build_index=False)
+            AddEmbeddingsConfig(lance_uri=str(uri), device="mps", debug_logging=True, build_index=False)
         )
 
     assert selected == [("clap", "mps"), ("m2l", "mps")]
@@ -4166,7 +4167,12 @@ def test_build_index_on_nested_vec_child_serves_ann_self_query(tmp_path: Path) -
     assert [SKETCH_VEC_COLUMN] in index_fields
     target_row = 137
     hits = dataset.to_table(
-        nearest={"column": SKETCH_VEC_COLUMN, "q": vectors[target_row], "k": 1},
+        nearest={
+            "column": SKETCH_VEC_COLUMN,
+            "q": vectors[target_row],
+            "k": 1,
+            "refine_factor": ANN_SELF_QUERY_REFINE_FACTOR,
+        },
         columns=["row"],
     )
     assert hits.column("row")[0].as_py() == target_row

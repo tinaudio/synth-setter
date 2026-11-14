@@ -9,11 +9,13 @@ its budget instead of quietly crawling; enforcement lives in
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -103,3 +105,68 @@ def test_fast_budget_target_prints_two_minute_limit() -> None:
     )
 
     assert result.stdout == "120\n"
+
+
+@pytest.mark.infra
+def test_ci_fast_tier_kill_timeout_leaves_the_session_budget_room_to_report() -> None:
+    """CI's outer ``timeout`` is a hang backstop, not a second budget.
+
+    The in-process check fires at ``pytest_sessionfinish``, while the outer
+    timer also covers ``make`` startup, interpreter boot and collection. Given
+    the same number of seconds the ``SIGKILL`` always lands first, costing the
+    ``session budget exceeded`` diagnostic, the test report and coverage, and
+    leaving only exit 137 — #3344.
+    """
+    workflow = yaml.safe_load(
+        (_PROJECT_ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["run_tests_ubuntu"]["steps"]
+    run = next(step["run"] for step in steps if "fast-test-budget" in step.get("run", ""))
+
+    timeout_arg = re.search(r'timeout --signal=KILL "([^"]+)s"', run)
+    assert timeout_arg is not None, f"fast-tier step no longer wraps make in timeout:\n{run}"
+    multiplier = re.fullmatch(r"\$\(\(budget_seconds \* (\d+)\)\)", timeout_arg.group(1))
+    assert multiplier is not None, (
+        f"kill timeout must scale from the lane budget, got {timeout_arg.group(1)!r}"
+    )
+    assert int(multiplier.group(1)) > 1, "kill timeout must exceed the in-process session budget"
+
+
+def _jobs_running_budgeted_lanes() -> list[tuple[str, str, str, int]]:
+    """Return every workflow job that invokes a budgeted lane.
+
+    :returns: ``(workflow file name, job id, make target, lane budget seconds)``
+        for each job whose steps run one of :data:`_LANE_BUDGETS`' targets.
+    """
+    found: list[tuple[str, str, str, int]] = []
+    for path in sorted((_PROJECT_ROOT / ".github" / "workflows").glob("*.yml")):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for job_id, job in (workflow.get("jobs") or {}).items():
+            runs = " ".join(step.get("run", "") for step in job.get("steps") or [])
+            for target, budget in _LANE_BUDGETS.items():
+                if re.search(rf"make\s+{re.escape(target)}(?!\S)", runs):
+                    found.append((path.name, job_id, target, budget))
+    return found
+
+
+@pytest.mark.infra
+def test_budgeted_lane_jobs_cap_above_their_own_session_budget() -> None:
+    """A job's ``timeout-minutes`` must outlast the lane budget it runs.
+
+    Below it the runner cancels the job before ``pytest_sessionfinish`` can
+    report, so the lane produces no verdict at all — no ``FAILED`` lines, no
+    summary, only ``cancelled``. The nightly spent six nights that way — #3653.
+    """
+    jobs = _jobs_running_budgeted_lanes()
+    assert jobs, "no workflow job invokes a budgeted lane — the scan is broken"
+
+    for workflow_name, job_id, target, budget in jobs:
+        workflow = yaml.safe_load(
+            (_PROJECT_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+        )
+        cap = workflow["jobs"][job_id].get("timeout-minutes")
+        assert cap is not None, f"{workflow_name}:{job_id} runs {target} with no timeout-minutes"
+        assert cap * 60 > budget, (
+            f"{workflow_name}:{job_id} caps at {cap}m but {target} budgets "
+            f"{budget}s ({budget / 60:.0f}m) — the job dies before it can report"
+        )

@@ -28,7 +28,7 @@ on:
       - "uv.lock"
 
 concurrency:
-  group: meanaudio-encoder-${{ github.ref }}
+  group: meanaudio-encoder-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 permissions:

@@ -1,18 +1,28 @@
 # Implementation Plan: Distributed Data Pipeline
 
 > **Status**: PARTIALLY IMPLEMENTED — Phase 1 (Foundation) is complete. Phase 2
-> (Pipeline Core) is partially complete: schemas (`config.py`, `spec.py`,
-> `prefix.py`, `image_config.py`) exist but `report.py`, `card.py`, `sample.py`
-> are not yet created. Phases 3-6 are not started. Storage layer, validation,
-> reconciliation, compute backend, and CLI modules do not exist yet.
+> (Pipeline Core) is partially complete: schemas (`spec.py`, `prefix.py`,
+> `image_config.py`) exist but `report.py`, `card.py`, `sample.py` are not yet
+> created. The Phase 3 (Docker Infrastructure) files exist. The Phase 2 and 4-6
+> modules planned below (`pipeline/storage.py`, `validation.py`, `reconcile.py`,
+> `backends/`, `cli.py`) do not exist under those names; storage, shard
+> validation, staged-attempt reconciliation, compute launch, and the
+> generate / finalize entrypoints are implemented in `src/synth_setter/pipeline/`
+> (`r2_io.py`, `schemas/r2_location.py`, `ci/validate_shard.py`,
+> `data/lance_staging.py`, `data/lance_finalize.py`, `skypilot_launch.py`) and
+> `src/synth_setter/cli/` (`generate_dataset.py`, `finalize_dataset.py`). The
+> `status` and `cleanup` commands do not exist.
 >
-> **`metadata/workers/` + finalize are future state.** Every reference to the
-> `metadata/workers/` staging prefix, the shard-lifecycle markers
-> (`.rendering` / `.valid` / `.invalid` / `.promoted`), and the
-> `pipeline.cli finalize` promotion step in this document describes the target
-> architecture, not current behavior. The MVP worker
-> (`src/synth_setter/cli/generate_dataset.py`) writes shards directly to
-> `data/<task_name>/<run_id>/` with no staging or finalize. Tracked in
+> **`metadata/workers/` staging + finalize are implemented; `.promoted` and
+> `quarantine/` are future state.** The worker
+> (`src/synth_setter/cli/generate_dataset.py`) writes a `.rendering` marker,
+> then stages each shard attempt under `metadata/workers/shards/` with `.valid`
+> last (`src/synth_setter/pipeline/data/lance_staging.py`);
+> `synth-setter-finalize-dataset` (`src/synth_setter/cli/finalize_dataset.py`)
+> commits the staged winners into the split datasets. Every reference to the
+> `.promoted` marker, the `quarantine/` prefix, and the `python -m pipeline`
+> command names in this document describes the target architecture, not
+> current behavior. Tracked in
 > [#406](https://github.com/tinaudio/synth-setter/issues/406) (CLAUDE.md /
 > design-doc reconciliation) and [#72](https://github.com/tinaudio/synth-setter/issues/72)
 > (Phase 5 Pipeline CLI).
@@ -22,7 +32,8 @@
 > **Issue tracking:** [github-taxonomy.md](github-taxonomy.md)
 > **Storage conventions:** [storage-provenance-spec.md](storage-provenance-spec.md)
 > **Builds on:** Generation infrastructure by benhayes@ (see design doc §1)
-> **Last Updated:** 2026-03-31
+> **Created:** 2026-03-20
+> **Last Updated:** 2026-11-10
 
 ______________________________________________________________________
 
@@ -90,6 +101,7 @@ ______________________________________________________________________
 - `src/synth_setter/data/vst/generate_vst_dataset.py` — VST audio generation (worker calls this)
 - Basic `Makefile` (help/clean targets only)
 - All model/training code, configs, notebooks
+- `.devcontainer/`, `.github/copilot-instructions.md`
 
 ### NOT ported (stays on `experiment`)
 
@@ -99,8 +111,8 @@ ______________________________________________________________________
   `run_dataset_pipeline.py`, `reshard_data_dynamic_shard.py` + all their tests
 - `tests/test_entrypoint.bats`
 - `scripts/setup-dev.sh`, `scripts/setup-rclone.sh`
-- `.devcontainer/`, `docs/pipeline.md`
-- `.github/copilot-instructions.md`, `.github/workflows/data-pipeline.yml`
+- `docs/pipeline.md`
+- `.github/workflows/data-pipeline.yml`
 
 ______________________________________________________________________
 
@@ -231,8 +243,8 @@ know which credentials are needed without exposing real values.
 
 **Files to create:**
 
-- `.env.example` — template with placeholder values for `RCLONE_CONFIG_R2_ACCESS_KEY_ID`,
-  `RCLONE_CONFIG_R2_SECRET_ACCESS_KEY`, `RCLONE_CONFIG_R2_ENDPOINT`, `WANDB_API_KEY`, `RUNPOD_API_KEY`
+- ~~`.env.example`~~ ✅ — template with placeholder values for `SYNTH_SETTER_STORAGE_ACCESS_KEY_ID`,
+  `SYNTH_SETTER_STORAGE_SECRET_ACCESS_KEY`, `SYNTH_SETTER_STORAGE_ENDPOINT_URL`, `WANDB_API_KEY`, `RUNPOD_API_KEY`
 
 **Verification:** File exists, `.env` is in `.gitignore`, no real credentials committed.
 
@@ -275,7 +287,7 @@ Sub-issues: [#18](https://github.com/tinaudio/synth-setter/issues/18) (config-dr
   `shard_id` is int in schema; formatted to string for paths via `shard_dir_name(shard_id) -> str`.
   Current row-level seed derivation is documented in
   [deterministic-seeding.md](deterministic-seeding.md).
-  **Note:** As implemented, `ShardSpec` has only `shard_id`, `filename`, `seed`.
+  **Note:** As implemented, `ShardSpec` has only `shard_id`, `filename`, `seed`, `sample_offset`.
   Fields `row_start`, `row_count`, `expected_datasets`, `audio_shape`, `mel_shape`,
   `param_shape` from the original plan are not yet implemented.
 - `ShardResult` (inside `WorkerReport`): `shard_id: int`, `filename: str`, `rows: int`,
@@ -459,9 +471,9 @@ Sub-issue: [#7](https://github.com/tinaudio/synth-setter/issues/7) (buildx TARGE
 
 **Files to port from `experiment`:**
 
-- `docker/ubuntu22_04/Dockerfile` — multi-stage build with BuildKit secrets
-- `src/synth_setter/scripts/run-linux-vst-headless.sh` — Xvfb wrapper for headless VST
-- `Makefile` additions — `docker-build-dev-snapshot`
+- ~~`docker/ubuntu22_04/Dockerfile`~~ ✅ — multi-stage build
+- ~~`src/synth_setter/scripts/run-linux-vst-headless.sh`~~ ✅ — Xvfb wrapper for headless VST
+- ~~`Makefile` additions~~ ✅ — `docker-build-dev-snapshot`
 
 **Verification:**
 
@@ -870,7 +882,8 @@ These tests are written incrementally as each PR lands.
 
 ### Dataset ID & Run ID Conventions ([#120](https://github.com/tinaudio/synth-setter/issues/120))
 
-Define `dataset_id`, `run_id` naming conventions and W&B artifact provenance chain.
+`dataset_config_id` / `run_id` naming conventions and the W&B artifact provenance chain are
+defined in [storage-provenance-spec.md](storage-provenance-spec.md) §1, §4, and §5.
 
 ### Align R2 Root Datapaths ([#121](https://github.com/tinaudio/synth-setter/issues/121))
 
@@ -878,7 +891,8 @@ Ensure R2 root datapaths are consistent across data pipeline, eval pipeline, and
 
 ### Centralized Provenance & Storage Design Doc ([#122](https://github.com/tinaudio/synth-setter/issues/122))
 
-Write a design doc that unifies provenance and storage conventions across all pipelines.
+[storage-provenance-spec.md](storage-provenance-spec.md) unifies provenance and storage
+conventions across all pipelines.
 
 ______________________________________________________________________
 

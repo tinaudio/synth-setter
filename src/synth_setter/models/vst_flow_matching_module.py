@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Iterator, Mapping, MutableMapping
+import numbers
+from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import copyfileobj
@@ -35,6 +36,7 @@ from synth_setter.metrics import (
 from synth_setter.model_cache import retry_external_io
 from synth_setter.models.components.pretrained_encoder import PretrainedConditioningEncoder
 from synth_setter.models.components.sketch_tokens import CONTROL_GROUPS, SketchControlTokens
+from synth_setter.models.dynamo_typecheck import install_dynamo_typecheck_bypass
 from synth_setter.param_spec_name import (
     LEGACY_NOTE_TIMING,
     NoteTimingParameterization,
@@ -66,6 +68,36 @@ _ENDPOINT_TIME_WEIGHTINGS: frozenset[str] = frozenset(("flowmol3", "uniform"))
 _PARAMETERIZATIONS: frozenset[str] = frozenset(("endpoint", "velocity"))
 _EVAL_BATCH_SEED_STRIDE = 2**16
 _EVAL_SEED_MODULUS = 2**63 - 1
+
+
+@jaxtyped(typechecker=beartype)
+def _normalize_cfg_strength(value: object, name: str) -> float:
+    """Widen a composed guidance scale to the ``float`` the jaxtyped sampling boundary requires.
+
+    Hydra composes a bare CLI ``0``/``1``/``2`` as ``int``, which then reaches sampling
+    unchanged and fails the first validation batch rather than the override (#3023).
+
+    :param value: Composed guidance scale.
+    :param name: Hyperparameter name, quoted in the error.
+    :returns: ``value`` as a float.
+    :raises TypeError: If ``value`` is boolean or not a real number.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise TypeError(f"{name} must be a real number, got {value!r}")
+    return float(value)
+
+
+@jaxtyped(typechecker=beartype)
+def _normalize_optional_cfg_strength(value: object, name: str) -> float | None:
+    """Widen a composed guidance scale that may be left unset.
+
+    :param value: Composed guidance scale, or ``None`` to inherit the content scale.
+    :param name: Hyperparameter name, quoted in the error.
+    :returns: ``value`` as a float, or ``None`` when unset.
+    """
+    return None if value is None else _normalize_cfg_strength(value, name)
+
+
 _EVAL_TEST_SEED_OFFSET = 1_000_003
 _FIXED_TIME_PERCENT_CENTERS = tuple(range(5, 100, 10))
 _CHECKPOINT_SPOOL_BYTES = 64 * 1024**2
@@ -729,6 +761,17 @@ class VSTFlowMatchingModule(LightningModule):
                 "endpoint_time_weighting='flowmol3' requires parameterization='endpoint'"
             )
 
+        validation_cfg_strength = _normalize_cfg_strength(
+            validation_cfg_strength, "validation_cfg_strength"
+        )
+        validation_sketch_cfg_strength = _normalize_optional_cfg_strength(
+            validation_sketch_cfg_strength, "validation_sketch_cfg_strength"
+        )
+        test_cfg_strength = _normalize_cfg_strength(test_cfg_strength, "test_cfg_strength")
+        test_sketch_cfg_strength = _normalize_optional_cfg_strength(
+            test_sketch_cfg_strength, "test_sketch_cfg_strength"
+        )
+
         # Saving hyperparameters deep-copies them, which a weight-normalized frozen encoder
         # inside the audio term cannot survive; the term is training-time only, so it is not
         # reconstructed from hparams either.
@@ -745,6 +788,13 @@ class VSTFlowMatchingModule(LightningModule):
                 d_model=vector_field.d_model,
                 num_control_tokens=self._sketch_controls.num_control_tokens,
                 profile=self._sketch_controls.profile,
+                median_filter_max_kernel_size=(
+                    self._sketch_controls.median_filter_max_kernel_size
+                ),
+                median_filter_max_window_fraction=(
+                    self._sketch_controls.median_filter_max_window_fraction
+                ),
+                temporal_resampling=self._sketch_controls.temporal_resampling,
             )
             if self._sketch_controls is not None
             else None
@@ -1003,12 +1053,97 @@ class VSTFlowMatchingModule(LightningModule):
         return z, self.sketch_tokens(batch["sketch_ctrl"], keep.sketch_groups), keep
 
     @jaxtyped(typechecker=beartype)
+    def resolve_enabled_sketch_groups(
+        self, enabled_sketch_groups: Sequence[str] | None
+    ) -> tuple[str, ...]:
+        """Validate and resolve an inference-time sketch-group selector.
+
+        :param enabled_sketch_groups: Group names to retain, ``None`` for every checkpoint group,
+            or an empty sequence for PE-only sketch conditioning.
+        :returns: Enabled names in checkpoint layout order.
+        :raises TypeError: The selector is a bare string.
+        :raises ValueError: Names are duplicated or unknown, or any explicit selector (including an
+            empty one) targets a checkpoint without sketch support.
+        """
+        if isinstance(enabled_sketch_groups, str):
+            raise TypeError("enabled_sketch_groups must be a sequence of names, not a string")
+        requested = () if enabled_sketch_groups is None else tuple(enabled_sketch_groups)
+        if self.sketch_tokens is None:
+            # An explicit selector (even an empty one) would be a silent no-op here.
+            if enabled_sketch_groups is not None:
+                raise ValueError("checkpoint does not configure sketch controls")
+            return ()
+        valid = self.sketch_tokens.layout.group_names
+        if enabled_sketch_groups is None:
+            return valid
+        seen: set[str] = set()
+        for name in requested:
+            if name in seen:
+                raise ValueError(f"duplicate enabled sketch group {name!r}")
+            if name not in valid:
+                raise ValueError(
+                    f"unknown enabled sketch group {name!r}; valid groups: {', '.join(valid)}"
+                )
+            seen.add(name)
+        return tuple(name for name in valid if name in seen)
+
+    @jaxtyped(typechecker=beartype)
+    def sketch_keep_mask(
+        self,
+        enabled_sketch_groups: tuple[str, ...] | None,
+        *,
+        batch_size: int,
+        device: torch.device,
+    ) -> Bool[torch.Tensor, "batch groups"]:
+        """Expand a resolved group selector into the tokenizer's per-row keep mask.
+
+        :param enabled_sketch_groups: Names already passed through
+            :meth:`resolve_enabled_sketch_groups`; ``None`` keeps every group.
+        :param batch_size: Rows the mask is broadcast over.
+        :param device: Device of the controls the mask will gate.
+        :returns: Boolean ``(batch_size, groups)`` mask in checkpoint layout order.
+        :raises ValueError: The checkpoint has no sketch controls.
+        """
+        if self.sketch_tokens is None:
+            raise ValueError("checkpoint does not configure sketch controls")
+        group_names = self.sketch_tokens.layout.group_names
+        enabled = group_names if enabled_sketch_groups is None else enabled_sketch_groups
+        return torch.tensor(
+            [name in enabled for name in group_names], dtype=torch.bool, device=device
+        ).expand(batch_size, -1)
+
+    @jaxtyped(typechecker=beartype)
+    def _control_token_branches(
+        self,
+        controls: Float[torch.Tensor, "batch channels frames"],
+        keep: Bool[torch.Tensor, "batch groups"],
+    ) -> ControlTokenBranches:
+        """Build masked full-sketch and PE-only control branches from an explicit mask.
+
+        :param controls: Sketch controls on the checkpoint frame grid.
+        :param keep: Per-row, per-group keep mask in checkpoint layout order.
+        :returns: Both control-token branches.
+        :raises ValueError: The checkpoint has no sketch controls.
+        """
+        if self.sketch_tokens is None:
+            raise ValueError("checkpoint does not configure sketch controls")
+        return ControlTokenBranches(
+            conditional=self.sketch_tokens(controls, keep),
+            unconditional=self.sketch_tokens.unconditional(controls.shape[0]),
+        )
+
+    @jaxtyped(typechecker=beartype)
     def _control_token_branches_from_batch(
-        self, batch: _SampleBatch
+        self,
+        batch: _SampleBatch,
+        *,
+        enabled_sketch_groups: tuple[str, ...] | None = None,
     ) -> ControlTokenBranches | None:
-        """Build complete full-sketch and PE-only control branches for inference.
+        """Build masked full-sketch and PE-only control branches for inference.
 
         :param batch: Model batch carrying sketch controls when configured.
+        :param enabled_sketch_groups: Names already passed through
+            :meth:`resolve_enabled_sketch_groups`; ``None`` keeps every group.
         :returns: Both control-token branches, or ``None`` without sketch support.
         :raises ValueError: The active sketch-control field is ``None``.
         """
@@ -1017,16 +1152,10 @@ class VSTFlowMatchingModule(LightningModule):
         controls = batch["sketch_ctrl"]
         if controls is None:
             raise ValueError("batch sketch_ctrl field must contain a tensor")
-        keep = torch.ones(
-            controls.shape[0],
-            len(self.sketch_tokens.layout.group_names),
-            dtype=torch.bool,
-            device=controls.device,
+        keep = self.sketch_keep_mask(
+            enabled_sketch_groups, batch_size=controls.shape[0], device=controls.device
         )
-        return ControlTokenBranches(
-            conditional=self.sketch_tokens(controls, keep),
-            unconditional=self.sketch_tokens.unconditional(controls.shape[0]),
-        )
+        return self._control_token_branches(controls, keep)
 
     @jaxtyped(typechecker=beartype)
     def _is_trainer_logging_step(self) -> bool:
@@ -1315,6 +1444,7 @@ class VSTFlowMatchingModule(LightningModule):
         content_cfg_strength: float,
         sketch_cfg_strength: float,
         sample_steps: int | None = None,
+        enabled_sketch_groups: Sequence[str] | None = None,
     ) -> Float[torch.Tensor, "batch params"]:
         """Sample model-space parameters from explicit reusable noise.
 
@@ -1323,9 +1453,12 @@ class VSTFlowMatchingModule(LightningModule):
         :param content_cfg_strength: Non-negative content guidance scale.
         :param sketch_cfg_strength: Non-negative sketch guidance scale.
         :param sample_steps: Positive integration steps, or the checkpoint test default.
+        :param enabled_sketch_groups: Group names to retain, all groups when omitted, or none for
+            an empty sequence.
         :returns: Sampled model-space parameter rows.
-        :raises ValueError: Noise, guidance, or integration steps violate the checkpoint contract.
+        :raises ValueError: Noise, guidance, steps, or sketch groups violate the checkpoint contract.
         """
+        enabled = self.resolve_enabled_sketch_groups(enabled_sketch_groups)
         conditioning = self._get_conditioning_from_batch(batch)
         expected_shape = (conditioning.shape[0], self.hparams.num_params)
         if tuple(noise.shape) != expected_shape:
@@ -1352,7 +1485,9 @@ class VSTFlowMatchingModule(LightningModule):
             steps,
             content_cfg_strength,
             sketch_cfg_strength=sketch_cfg_strength,
-            control_tokens=self._control_token_branches_from_batch(batch),
+            control_tokens=self._control_token_branches_from_batch(
+                batch, enabled_sketch_groups=enabled
+            ),
         )
 
     @jaxtyped(typechecker=beartype)
@@ -1641,6 +1776,7 @@ class VSTFlowMatchingModule(LightningModule):
 
     def setup(self, stage: str) -> None:
         if self.hparams.compile and stage == "fit":
+            install_dynamo_typecheck_bypass()
             self.vector_field.compile()
             self.encoder.compile()
 

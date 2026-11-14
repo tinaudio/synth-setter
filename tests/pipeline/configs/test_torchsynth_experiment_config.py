@@ -326,9 +326,9 @@ def test_clap_online_conditioning_composes_frozen_backbone_and_projection_head()
 def test_ast_online_shares_the_vst_backbone_definition() -> None:
     """The online profile reuses the stored-mel AST rather than restating its geometry.
 
-    Parity is the point of the split: only the mel's source (computed vs stored) and the
-    channel count may differ, so a hyperparameter that drifts between the two paths means
-    the online arm is no longer comparable to the VST arm.
+    Parity is the point of the split: only the mel's source (computed vs stored) may
+    differ, so a hyperparameter that drifts between the two paths means the online arm
+    is no longer comparable to the VST arm.
     """
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         stored = compose(
@@ -341,12 +341,8 @@ def test_ast_online_shares_the_vst_backbone_definition() -> None:
 
     stored_ast = OmegaConf.to_container(stored.model.encoder, resolve=True)
     online_ast = OmegaConf.to_container(online.model.encoder.backbone, resolve=True)
-    assert isinstance(stored_ast, dict) and isinstance(online_ast, dict)
-    # Only the mel's channel count may differ; #2751 tracks collapsing that too.
-    differing = {"input_channels"}
-    assert {k: v for k, v in stored_ast.items() if k not in differing} == {
-        k: v for k, v in online_ast.items() if k not in differing
-    }
+
+    assert stored_ast == online_ast
 
 
 def test_ast_online_conditioning_derives_its_spectrogram_shape_from_the_datamodule() -> None:
@@ -365,8 +361,8 @@ def test_ast_online_conditioning_derives_its_spectrogram_shape_from_the_datamodu
     assert cfg.model.conditioning == "audio"
     assert cfg.datamodule.conditioning == "audio"
     assert list(cfg.model.encoder.backbone.spec_shape) == [128, 11]
-    # Online renders are mono; the stored-mel profile's patch embedding takes two channels.
-    assert cfg.model.encoder.backbone.input_channels == 1
+    # Mono renders are cloned up to the stored-mel patch embedding's two channels (#2751).
+    assert cfg.model.encoder.backbone.input_channels == 2
     assert cfg.model.vector_field.conditioning_dim == cfg.model.encoder.backbone.d_model
 
 

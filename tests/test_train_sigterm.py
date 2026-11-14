@@ -1,43 +1,18 @@
 """Process-boundary regression tests for interrupted training."""
 
 import os
-import select
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
 
+from tests.helpers.subprocess_progress import await_ready_signal
+
 _EXCEPTION_MARKER_ENV = "SYNTH_SETTER_TEST_EXCEPTION_MARKER"
 _LOGGER_MARKER_ENV = "SYNTH_SETTER_TEST_LOGGER_MARKER"
 _READY_FIFO_ENV = "SYNTH_SETTER_TEST_READY_FIFO"
-
-
-def _wait_for_fit_start(process: subprocess.Popen[str], ready_fd: int) -> str:
-    """Wait for the callback FIFO while retaining subprocess output for failures.
-
-    :param process: Training subprocess whose stdout is captured.
-    :param ready_fd: Non-blocking callback FIFO descriptor.
-    :returns: Output emitted before fit started.
-    """
-    assert process.stdout is not None
-    output: list[str] = []
-    deadline = time.monotonic() + 60
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            pytest.fail("training did not reach on_train_start within 60 seconds")
-        readable, _, _ = select.select([ready_fd, process.stdout], [], [], remaining)
-        if ready_fd in readable and os.read(ready_fd, 1) == b"1":
-            return "".join(output)
-        if process.stdout in readable:
-            line = process.stdout.readline()
-            if line:
-                output.append(line)
-            elif process.poll() is not None:
-                pytest.fail(f"training exited before on_train_start:\n{''.join(output)}")
 
 
 @pytest.mark.skipif(os.name != "posix", reason="SIGTERM and FIFO synchronization require POSIX")
@@ -103,7 +78,7 @@ def test_train_sigterm_after_fit_starts_exits_nonzero_after_cleanup(tmp_path: Pa
     )
 
     try:
-        output = _wait_for_fit_start(process, ready_fd)
+        output = await_ready_signal(process, ready_fd)
         process.send_signal(signal.SIGTERM)
         remaining_output, _ = process.communicate(timeout=60)
         output += remaining_output

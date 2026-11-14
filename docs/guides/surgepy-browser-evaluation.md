@@ -78,10 +78,11 @@ digest verification; never accept an untrusted checkpoint and matching digest.
 
 The current export supports the standard velocity-parameterized
 `VSTFlowMatchingModule` with mel and sketch conditioning, one input pair per
-browser session, float32 CPU weights/inputs, and sketch frames already on the
-checkpoint's control-token grid. Endpoint models and sampling subclasses are
-rejected rather than silently changing their inference semantics. Exported
-shapes are fixed to the supplied pair.
+browser session, float32 CPU weights/inputs, and sketch controls already prepared
+on the checkpoint's `num_frames` grid with weak pitch zero-binned (the exported
+graph resamples frames to control tokens; it does not threshold pitch). Endpoint
+models and sampling subclasses are rejected rather than silently changing their
+inference semantics. Exported shapes are fixed to the supplied pair.
 
 ## 3. Supply audio, or produce a real SurgePy input
 
@@ -125,7 +126,10 @@ uv run --extra cpu synth-setter-sketch \
 ```
 
 1. Wait for `Browser evaluation: http://127.0.0.1:8765` in the terminal.
-2. Open that exact URL and click **Run flow evaluation**.
+2. Open that exact URL. The page lists the checkpoint's sketch groups as
+   checkboxes, pre-set from `--sketch-group` / `--no-sketch-groups`; untick a
+   group to condition on its positional encoding only. Click **Run flow
+   evaluation**.
 3. The page reports sampling progress, then displays the predicted parameter
    vector. The server validates its session token, width, and finite float32
    values before accepting it.
@@ -158,9 +162,9 @@ logs/browser-demo/evaluation/arms/cfg-c2-s3/
 ├── browser/
 │   ├── conditioning.onnx
 │   ├── velocity.onnx
-│   ├── input.json          # normalized inputs, noise, branch weights, steps
-│   ├── prediction.json     # accepted browser parameter vector
-│   └── provenance.json     # artifact digests, source revision, renderer, seed
+│   ├── input.json          # normalized inputs, noise, branch weights, steps, group names
+│   └── prediction.json     # accepted browser parameter vector and the groups it kept
+├── provenance.json         # artifact digests, source revision, renderer, seed, sketch groups
 ├── sketch.wav
 ├── target.wav
 ├── pred.wav
@@ -168,10 +172,14 @@ logs/browser-demo/evaluation/arms/cfg-c2-s3/
 └── metrics.csv
 ```
 
-`provenance.json` records the producing source checkout's `git_revision`, captured
-before preprocessing. A `-dirty` suffix covers staged, unstaged, and untracked
-changes; installations without their own source checkout report `git-unavailable`
-rather than borrowing the operator's current repository.
+`provenance.json` sits at the arm level for both runtimes. It records the
+producing source checkout's `git_revision`, captured before preprocessing (a
+`-dirty` suffix covers staged, unstaged, and untracked changes; installations
+without their own source checkout report `git-unavailable` rather than borrowing
+the operator's current repository), and `sketch_groups` with the `requested`
+selector (`null` when omitted), the `resolved` group names in checkpoint order,
+and the `applied` names the arm actually conditioned on (the page's checkboxes
+in browser mode, the resolved selector natively).
 
 `metrics.csv` contains MSS, weighted MFCC, spectral optimal transport, RMS
 similarity, MLDR, and mid/side MLDR. Finite metrics and audible output establish
@@ -193,8 +201,8 @@ uv run --extra cpu pytest tests/models/test_flow_onnx.py \
   tests/test_sketch_render.py \
   tests/integration/test_browser_surgepy_e2e.py -v \
   --basetemp=logs/browser-e2e --junitxml=logs/browser-e2e.xml \
-  --cov=synth_setter.evaluation.browser_flow --cov=synth_setter.models.flow_onnx \
-  --cov=synth_setter.cli.sketch_render --cov-report=xml:coverage.xml
+  --cov=src/synth_setter/evaluation --cov=src/synth_setter/models \
+  --cov=src/synth_setter/cli --cov-report=xml:coverage.xml
 ```
 
 The E2E test generates distinct real SurgePy inputs, invokes the installed CLI, drives

@@ -42,6 +42,13 @@ flag_management:
       paths:
         - src/synth_setter/
         - scripts/ci/
+    # The lane must collect whole directories (a dotted `--cov` target makes
+    # coverage import the package root, #3276), so the flag carries its scope.
+    - name: browser-e2e
+      paths:
+        - src/synth_setter/evaluation/browser_flow.py
+        - src/synth_setter/models/flow_onnx.py
+        - src/synth_setter/cli/sketch_render.py
     # Real-weight SA3 parity lane for independently selected SAME-S and SAME-L.
     - name: same-e2e
       paths:

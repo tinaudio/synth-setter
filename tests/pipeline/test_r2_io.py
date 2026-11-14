@@ -149,6 +149,7 @@ class TestRcloneArgv:
             "--contimeout=30s",
             "--timeout=300s",
             "--retries=3",
+            "--s3-no-check-bucket",
             "r2:bucket/key",
             "dest/file",
         ]
@@ -163,6 +164,7 @@ class TestRcloneArgv:
             "--contimeout=30s",
             "--timeout=3h",
             "--retries=3",
+            "--s3-no-check-bucket",
             "src/dir",
             "r2:bucket/p",
         ]
@@ -933,6 +935,23 @@ class TestUploadToUri:
         assert "--contimeout=30s" in args
         assert "--timeout=300s" in args
         assert "--retries=3" in args
+
+    def test_command_never_creates_the_destination_bucket(self, tmp_path: Path) -> None:
+        """Pin ``--s3-no-check-bucket`` on upload.
+
+        Without it rclone opens a destination bucket by issuing ``CreateBucket``,
+        which an object-scoped R2 token answers with ``404 NotFound`` — a failure
+        that repeats on every retry and is indistinguishable from a missing
+        object (#3476). Every bucket this repo writes to is provisioned already.
+
+        :param tmp_path: Pytest tmp dir used for the upload source file.
+        """
+        src = tmp_path / "in.json"
+        src.write_text("{}")
+        with patch.object(r2_io.subprocess, "check_call") as mock_call:
+            r2_io.upload_to_uri(src, "r2://bucket/key.json")
+
+        assert "--s3-no-check-bucket" in mock_call.call_args[0][0]
 
 
 class TestIsR2Reachable:

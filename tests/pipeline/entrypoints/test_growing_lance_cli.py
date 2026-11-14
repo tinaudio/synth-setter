@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import lance
@@ -16,6 +17,7 @@ import pytest
 
 from synth_setter.cli.finalize_dataset import finalize_from_spec
 from synth_setter.cli.growing_lance import main
+from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.data.growing_lance import GrowingPlan
 from synth_setter.pipeline.data.lance_staging import stage_lance_shard_attempt
 from synth_setter.pipeline.schemas.spec import DatasetSpec
@@ -305,6 +307,85 @@ def test_generate_before_first_enqueue_exits_cleanly_without_rendering(
 
     metadata_dir = _remote_metadata_dir(fake_r2_remote, finalized_spec, "g")
     assert not (metadata_dir / "workers").exists()
+
+
+def test_generate_when_pending_cleared_between_probe_and_read_waits_without_failing(
+    fake_r2_remote: Path,
+    finalized_spec: DatasetSpec,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A driver clearing ``pending.json`` mid-read is a wait state, not a crash.
+
+    :param fake_r2_remote: Root the ``r2:`` remote resolves to.
+    :param finalized_spec: Finalized baseline spec.
+    :param tmp_path: Operator work dir root.
+    :param monkeypatch: Pytest fixture used to interleave the driver's delete.
+    """
+    operator = tmp_path / "operator"
+    _init(finalized_spec, operator)
+    _grow(finalized_spec, operator)
+    metadata_dir = _remote_metadata_dir(fake_r2_remote, finalized_spec, "g")
+    real_download = r2_io.download_to_path
+
+    def download_after_driver_clears_pending(r2_uri: str, dest_path: Path) -> None:
+        if r2_uri.endswith("/pending.json"):
+            (metadata_dir / "pending.json").unlink(missing_ok=True)
+        real_download(r2_uri, dest_path)
+
+    monkeypatch.setattr(r2_io, "download_to_path", download_after_driver_clears_pending)
+
+    main(
+        [
+            "generate",
+            finalized_spec.r2.input_spec_uri(),
+            "--branch",
+            "g",
+            "--work-dir",
+            str(tmp_path / "generate"),
+            "--poll-seconds",
+            "0",
+        ]
+    )
+
+    assert not (metadata_dir / "workers").exists()
+
+
+def test_generate_when_pending_read_fails_while_marker_exists_raises(
+    finalized_spec: DatasetSpec, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read failure with the marker still present is a real error, not a wait state.
+
+    :param finalized_spec: Finalized baseline spec.
+    :param tmp_path: Operator work dir root.
+    :param monkeypatch: Pytest fixture used to fail the download.
+    """
+    operator = tmp_path / "operator"
+    _init(finalized_spec, operator)
+    _grow(finalized_spec, operator)
+
+    real_download = r2_io.download_to_path
+
+    def download_failing_on_pending(r2_uri: str, dest_path: Path) -> None:
+        if r2_uri.endswith("/pending.json"):
+            raise subprocess.CalledProcessError(1, ["rclone", "copyto", r2_uri, str(dest_path)])
+        real_download(r2_uri, dest_path)
+
+    monkeypatch.setattr(r2_io, "download_to_path", download_failing_on_pending)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        main(
+            [
+                "generate",
+                finalized_spec.r2.input_spec_uri(),
+                "--branch",
+                "g",
+                "--work-dir",
+                str(tmp_path / "generate"),
+                "--poll-seconds",
+                "0",
+            ]
+        )
 
 
 def _materialize(spec: DatasetSpec, local_root: Path, work_dir: Path) -> None:
