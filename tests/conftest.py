@@ -161,6 +161,7 @@ _R2_AVAILABLE = r2_io.is_r2_reachable()
 # The pinned surgepy wheel builds only on Linux x86_64 (see pyproject markers), so
 # every real-engine test is dependency-gated the way ``requires_vst`` gates plugins.
 _SURGEPY_AVAILABLE = importlib.util.find_spec("surgepy") is not None
+_RESONARIUM_AVAILABLE = importlib.util.find_spec("resonarium") is not None
 
 
 @pytest.hookimpl(trylast=True)
@@ -187,6 +188,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     skip_surgepy = pytest.mark.skip(
         reason="surgepy native extension is unavailable (pinned for Linux x86_64 only)"
     )
+    skip_resonarium = pytest.mark.skip(
+        reason="resonarium extension is unavailable (install with `uv sync --group resonarium`)"
+    )
     for item in items:
         if "requires_vst" in item.keywords and not VST_AVAILABLE:
             item.add_marker(skip_vst)
@@ -194,6 +198,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(skip_r2)
         if "requires_surgepy" in item.keywords and not _SURGEPY_AVAILABLE:
             item.add_marker(skip_surgepy)
+        if "requires_resonarium" in item.keywords and not _RESONARIUM_AVAILABLE:
+            item.add_marker(skip_resonarium)
 
 
 # Bootstraps Xvfb + xsettingsd + dbus for VST3 plugin init; ships inside

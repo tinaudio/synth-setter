@@ -238,6 +238,11 @@ util = [
   "tensorboard",
   "wandb[workspaces]",
 ]
+# Opt-in, never in `runtime`: compiles upstream JUCE and gin from pinned archives (a few
+# minutes) and needs the X11, ALSA, FreeType, fontconfig, OpenGL and libcurl headers.
+resonarium = [
+  "resonarium-native==0.1.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
 runtime = [
   { include-group = "torch" },
   { include-group = "config" },
@@ -366,6 +371,7 @@ explicit = true
 # silently resolves it from PyPI and pins a wheel that mismatches the others.
 [tool.uv.sources]
 kr106-native = { path = "packages/kr106-native" }
+resonarium-native = { path = "packages/resonarium-native" }
 torch = [
   { index = "pytorch-cpu",    extra = "cpu",   marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
   { index = "pytorch-cu128",  extra = "cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
@@ -440,6 +446,7 @@ markers = [
   "dataloader_multiprocess: exercises real DataLoader child processes and must share one xdist resource group",
   "requires_vst: requires a VST plugin binary — auto-skip keys on Surge XT presence; baked-in extra synth tests add per-bundle skips",
   "requires_surgepy: requires the pinned surgepy native extension (auto-skipped off Linux x86_64)",
+  "requires_resonarium: requires the opt-in resonarium-native extension (auto-skipped when absent)",
   "fake_vst: end-to-end tests that swap a duck-typed FakeVST3Plugin in place of a real VST",
   "r2: tests requiring R2/rclone access",
   "integration_r2: end-to-end launcher→R2 integration tests (auto-skipped without R2 creds; run in their own GHA workflow)",

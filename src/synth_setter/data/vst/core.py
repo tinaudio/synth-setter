@@ -22,6 +22,7 @@ from synth_setter.renderer_backend import (
     FAUST_PLUGIN_NAME,
     PEDALBOARD_BLOCK_SIZE,
     PYFDN_PLUGIN_NAME,
+    RESONARIUM_PLUGIN_NAME,
     SURGEPY_PLUGIN_NAME,
     FlushBlocks,
     pedalboard_flush_blocks,
@@ -122,6 +123,8 @@ def extract_renderer_version(plugin_path: Path) -> str:
         return importlib.metadata.version(TORCHSYNTH_PLUGIN_NAME)
     if str(plugin_path) == PYFDN_PLUGIN_NAME:
         return importlib.metadata.version("pyFDN")
+    if str(plugin_path) == RESONARIUM_PLUGIN_NAME:
+        return importlib.metadata.version("resonarium-native")
     if str(plugin_path) == SURGEPY_PLUGIN_NAME:
         from synth_setter.data.vst.surgepy_runtime import import_surgepy
 

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["scikit-build-core>=1.1"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "resonarium-native"
+version = "0.1.1"
+description = "Pinned source build of the upstream Resonarium Python bindings"
+requires-python = ">=3.12"
+dependencies = ["numpy>=1.26"]
+
+[tool.scikit-build]
+cmake.version = ">=3.24"
+cmake.build-type = "Release"
+# The upstream project also defines the VST3/LV2/Standalone plugins; build only the bindings.
+build.targets = ["Resonarium_Python"]
+install.components = ["resonarium_python"]
+wheel.packages = []
+sdist.include = ["resonarium_native/PROVENANCE.md", "resonarium_native/Resonarium-GPL-3.0.txt"]
+
+[tool.scikit-build.cmake.define]
+BUILD_TESTING = "OFF"
+
+[tool.scikit-build.env]
+# Preserve explicit overrides; otherwise let CMake discover the installed compilers
+# instead of the interpreter's build-time `cc`/`c++`, which many images lack.
+CC = { env = "CC" }
+CXX = { env = "CXX" }
+
+[tool.uv]
+# Source pins and packaged provenance must invalidate cached native wheels.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "CMakeLists.txt" },
+    { file = "resonarium_native/*" },
+]

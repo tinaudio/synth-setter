@@ -100,9 +100,10 @@ def test_semantic_release_commits_lock_matching_version_stamp(
     """
     for filename in ("README.md", "pyproject.toml", "uv.lock"):
         shutil.copy2(project_root / filename, tmp_path / filename)
+    # `uv lock` resolves every local path source in pyproject.toml.
     shutil.copytree(
-        project_root / "packages" / "kr106-native",
-        tmp_path / "packages" / "kr106-native",
+        project_root / "packages",
+        tmp_path / "packages",
         ignore=shutil.ignore_patterns(".pytest_cache", "__pycache__", "build", "dist"),
     )
 

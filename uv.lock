@@ -4355,6 +4355,17 @@ wheels = [
 ]
 
 [[package]]
+name = "resonarium-native"
+version = "0.1.1"
+source = { directory = "packages/resonarium-native" }
+dependencies = [
+    { name = "numpy", marker = "sys_platform == 'linux' or (sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-12-synth-setter-cpu' and extra != 'extra-12-synth-setter-cu128') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cpu') or (sys_platform == 'win32' and extra == 'extra-12-synth-setter-cu128') or (extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "numpy", specifier = ">=1.26" }]
+
+[[package]]
 name = "rich"
 version = "14.3.4"
 source = { registry = "https://pypi.org/simple" }
@@ -5215,6 +5226,9 @@ onnx = [
     { name = "onnxruntime" },
     { name = "onnxscript" },
 ]
+resonarium = [
+    { name = "resonarium-native", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine != 'x86_64' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128') or (sys_platform != 'linux' and extra == 'extra-12-synth-setter-cpu' and extra == 'extra-12-synth-setter-cu128')" },
+]
 runtime = [
     { name = "adac" },
     { name = "beartype" },
@@ -5484,6 +5498,7 @@ onnx = [
     { name = "onnxruntime", specifier = ">=1.20" },
     { name = "onnxscript", specifier = ">=0.3" },
 ]
+resonarium = [{ name = "resonarium-native", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", directory = "packages/resonarium-native" }]
 runtime = [
     { name = "adac", specifier = "==0.1.0" },
     { name = "beartype", specifier = ">=0.19" },

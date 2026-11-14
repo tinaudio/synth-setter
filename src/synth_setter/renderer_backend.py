@@ -18,6 +18,7 @@ type RendererBackend = Literal[
     "kr106_native",
     "pedalboard",
     "pyfdn",
+    "resonarium",
     "surgepy",
     "torchsynth",
 ]
@@ -29,6 +30,7 @@ FAUST_PLUGIN_NAME = "faust"
 FAUST_REGISTRY_PREFIX = "registry://faust/"
 PYFDN_PLUGIN_NAME = "pyfdn"
 KR106_NATIVE_PLUGIN_NAME = "kr106_native"
+RESONARIUM_PLUGIN_NAME = "resonarium"
 SURGEPY_PLUGIN_NAME = "surgepy"
 
 KR106_NATIVE_SOURCE_COMMIT = "bc15caee5843ab238a25d0969e68d57db2b1615f"
@@ -111,6 +113,7 @@ IN_PROCESS_PLUGIN_NAMES = frozenset(
         FAUST_PLUGIN_NAME,
         KR106_NATIVE_PLUGIN_NAME,
         PYFDN_PLUGIN_NAME,
+        RESONARIUM_PLUGIN_NAME,
         SURGEPY_PLUGIN_NAME,
     }
 )
