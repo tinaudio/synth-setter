@@ -343,13 +343,23 @@ def default_plugins_dir() -> Path:
     """Return the dedicated Studiorack storage root for synth-setter.
 
     :returns: Environment override or the platform user-data path.
+    :raises RuntimeError: The home directory resolved to the filesystem root.
     """
     override = os.environ.get("STUDIORACK_PLUGINS_DIR")
     if override:
         return Path(override).expanduser()
+    home = Path.home()
+    # An empty (not absent) HOME makes Path.home() the filesystem root, which
+    # turns the user path into an unwritable system one — #2890.
+    if home == home.parent:
+        raise RuntimeError(
+            f"home directory resolved to {home} (HOME={os.environ.get('HOME', '')!r}); "
+            "set HOME to a real directory or point STUDIORACK_PLUGINS_DIR at the "
+            "managed plugin storage root"
+        )
     if sys.platform == "darwin":
-        return Path.home() / "Library/Application Support/synth-setter/studiorack"
-    return Path.home() / ".local/share/synth-setter/studiorack"
+        return home / "Library/Application Support/synth-setter/studiorack"
+    return home / ".local/share/synth-setter/studiorack"
 
 
 def default_system_vst3_dirs() -> tuple[Path, ...]:
