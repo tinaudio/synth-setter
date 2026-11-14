@@ -158,6 +158,21 @@ class FaustWasmRenderer(AudioRenderer):
             ):
                 raise ValueError(f"parameter outside discrete native domain: {address}")
 
+    def _render_request(self, request: dict[str, object], frames: int) -> np.ndarray:
+        """Execute one worker request and validate its channel-major output.
+
+        :param request: JSON-compatible worker request.
+        :param frames: Exact output frame count.
+        :returns: Validated channel-major float32 audio.
+        """
+        directory = Path(self._temporary_directory.name)
+        request_path = directory / "render-request.json"
+        output_path = directory / "audio.f32"
+        request_path.write_text(json.dumps(request))
+        run_faustwasm_render_worker(directory, request_path, output_path)
+        audio = np.fromfile(output_path, dtype="<f4").reshape(self.channels, frames)
+        return _validate_rendered_audio(audio, channels=self.channels, samples=frames)
+
     def render(
         self,
         params: Mapping[str, ParameterValue],
@@ -197,14 +212,41 @@ class FaustWasmRenderer(AudioRenderer):
             "endFrame": end_frame,
             "params": scalar_params,
         }
+        return self._render_request(request, frames)
+
+    def render_with_input(
+        self,
+        params: Mapping[str, ParameterValue],
+        stereo_buffer: np.ndarray,
+    ) -> np.ndarray:
+        """Render an exact-length stereo waveform through a monophonic effect DSP.
+
+        :param params: Complete canonical parameter patch.
+        :param stereo_buffer: Finite input shaped ``(2, frames)`` at the renderer sample rate.
+        :returns: Channel-major float32 audio.
+        :raises ValueError: The DSP or source does not satisfy the stereo effect contract.
+        """
+        scalar_params = require_scalar_synth_params(params)
+        self._validate_patch(scalar_params)
+        frames = int(self.sample_rate * self.signal_duration_seconds)
+        expected_shape = (2, frames)
+        source = np.asarray(stereo_buffer, dtype=np.float32)
+        if self._manifest.inputs != 2 or self._manifest.outputs != 2:
+            raise ValueError("FaustWasm input rendering requires a stereo-input stereo-output DSP")
+        if source.shape != expected_shape:
+            raise ValueError(f"input audio shape {source.shape} != expected {expected_shape}")
+        if not np.isfinite(source).all():
+            raise ValueError("input audio must contain only finite samples")
+
         directory = Path(self._temporary_directory.name)
-        request_path = directory / "render-request.json"
-        output_path = directory / "audio.f32"
-        request_path.write_text(json.dumps(request))
-        run_faustwasm_render_worker(directory, request_path, output_path)
-        audio = np.fromfile(output_path, dtype="<f4").reshape(self.channels, frames)
-        return _validate_rendered_audio(
-            audio,
-            channels=self.channels,
-            samples=frames,
-        )
+        input_path = directory / "input.f32"
+        np.ascontiguousarray(source, dtype="<f4").tofile(input_path)
+        request = {
+            "expectedFaustWasmVersion": self.backend_version,
+            "sampleRate": self.sample_rate,
+            "blockSize": self.block_size,
+            "frames": frames,
+            "params": scalar_params,
+            "inputFile": input_path.name,
+        }
+        return self._render_request(request, frames)

@@ -177,6 +177,9 @@ class _ArtifactManifest(BaseModel):
     .. attribute :: outputs
 
         Native output channel count.
+    .. attribute :: inputs
+
+        Native input channel count; defaults to zero for schema-v1 synth artifacts.
     .. attribute :: parameters
 
         Complete canonical parameter map.
@@ -196,6 +199,7 @@ class _ArtifactManifest(BaseModel):
     mode: Literal["mono", "poly"]
     voices: int
     outputs: int
+    inputs: int = 0
     parameters: list[_ArtifactParameter]
     files: _ArtifactFiles
 
@@ -265,6 +269,7 @@ def _compile_request(synth: SynthSpec, backend_version: str) -> dict[str, object
         "sourceSha256": synth.source_sha256,
         "mode": "poly" if dsp.num_voices else "mono",
         "voices": dsp.num_voices,
+        "expectedInputs": dsp.inputs,
         "expectedOutputs": dsp.outputs,
         "parameters": parameters,
         "reservedWasmAddresses": faustwasm_reserved_addresses(identity),
@@ -331,6 +336,7 @@ def compile_faustwasm_artifact(
         or manifest.sourceSha256 != synth.source_sha256
         or manifest.mode != request["mode"]
         or manifest.voices != request["voices"]
+        or manifest.inputs != request["expectedInputs"]
         or manifest.outputs != request["expectedOutputs"]
         or actual_parameters != expected_parameters
     ):

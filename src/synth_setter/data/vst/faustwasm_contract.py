@@ -56,6 +56,7 @@ _RESERVED_WASM_ADDRESSES = MappingProxyType(
         ),
         ParamSpecName("faust_bubble"): (),
         ParamSpecName("faust_church_organ"): (),
+        ParamSpecName("faust_fdn_effect"): (),
         ParamSpecName("faust_filter_osc"): (),
         ParamSpecName("faust_kronecker_fdn"): (),
     }
@@ -96,6 +97,11 @@ _WASM_ADDRESSES = MappingProxyType(
             "/churchOrgan/gain_lower_octave",
             "/churchOrgan/noise_gain",
             "/churchOrgan/gate",
+        ),
+        ParamSpecName("faust_fdn_effect"): (
+            "/fdnEffect/damping",
+            "/fdnEffect/decay",
+            "/fdnEffect/dryWet",
         ),
         ParamSpecName("faust_filter_osc"): (
             "/SINE_WAVE_OSCILLATOR_oscrs/Amplitude",
