@@ -228,11 +228,22 @@ Same chain in-process from the `synth-setter-eval` CLI: with `mode=predict` and 
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Command** | `python -m synth_setter.cli.eval mode=predict experiment={exp} datamodule={datamodule} ckpt_path={ckpt}`                                                                                                                                                    |
 | **Input**   | Trained checkpoint (`.ckpt`), test dataset (Lance shard)                                                                                                                                                                                                    |
-| **Output**  | `pred-{batch_idx}.pt`, `target-audio-{batch_idx}.pt`, `target-params-{batch_idx}.pt`                                                                                                                                                                        |
+| **Output**  | `pred-{batch_idx}.pt`, `target-audio-{batch_idx}.pt`, `target-params-{batch_idx}.pt`; optionally `predictions.lance` (below)                                                                                                                                |
 | **Compute** | GPU — model forward pass                                                                                                                                                                                                                                    |
 | **Config**  | Hydra composition: `src/synth_setter/configs/eval.yaml` + `src/synth_setter/configs/datamodule/{datamodule}.yaml` + `src/synth_setter/configs/experiment/{exp}.yaml` (+ `src/synth_setter/configs/render/{backend}.yaml` when `evaluation.render_vst=true`) |
 
 The predict stage loads a trained model checkpoint via PyTorch Lightning's `Trainer.predict()`, runs inference on the test split, and writes predicted parameter tensors to disk using a `PredictionWriter` callback.
+
+With `callbacks.prediction_writer.table_param_spec_name=${synth.param_spec_name}` the callback also writes `predictions/predictions.lance` once prediction finishes — one row per sample, in predict order:
+
+| Column                  | Type                       | Meaning                                              |
+| ----------------------- | -------------------------- | ---------------------------------------------------- |
+| `row_id`                | int64                      | Position in the predict split, counting from 0       |
+| `pred_params_raw`       | float32 tensor, spec width | Model output, unmodified                             |
+| `pred_params_effective` | float32 tensor, spec width | The clipped and snapped row a renderer plays         |
+| `target_params`         | float32 tensor, spec width | Ground truth; absent when the split carries no patch |
+
+The table exists only for a completed predict pass, so a reader never sees a partial one; a re-run into the same directory replaces it. It is built from per-batch writes, so `write_interval` must include `batch`. The render and metrics stages still read the tensor files.
 
 **Key behaviors:**
 

@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import Mock
 
+import lance
 import matplotlib.pyplot as plt
 import pytest
 import torch
@@ -432,6 +433,102 @@ def test_prediction_writer_epoch_serializes_torchsynth_signals_as_plain_tensors(
     assert torch.equal(loaded_prediction, prediction)
     assert torch.equal(loaded_audio, audio)
     assert torch.equal(loaded_params, params)
+
+
+def _write_table_batch(writer: PredictionWriter, prediction: torch.Tensor, batch_idx: int) -> None:
+    """Persist one prediction batch whose targets are all zero.
+
+    :param writer: Prediction writer under test.
+    :param prediction: Model-space predictions for the batch.
+    :param batch_idx: Zero-based batch index.
+    """
+    trainer = cast("Trainer", SimpleNamespace(is_global_zero=True, num_predict_batches=[2]))
+    batch = {"audio": torch.zeros(len(prediction), 1), "params": torch.zeros_like(prediction)}
+    writer.write_on_batch_end(
+        trainer, cast("LightningModule", None), (prediction, batch), None, None, batch_idx, 0
+    )
+
+
+def test_prediction_writer_with_table_spec_writes_one_lance_table_at_predict_end(
+    tmp_path: Path,
+) -> None:
+    """Every predict batch lands in one table whose row ids run across batches.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    """
+    width = param_specs["surge_4"].encoded_width
+    writer = PredictionWriter(tmp_path, write_interval="batch", table_param_spec_name="surge_4")
+    _write_table_batch(writer, torch.full((2, width), 0.25), 0)
+    _write_table_batch(writer, torch.full((1, width), -0.5), 1)
+
+    writer.on_predict_end(cast("Trainer", None), cast("LightningModule", None))
+
+    table = lance.dataset(str(tmp_path / "predictions.lance")).to_table()
+    assert table.column("row_id").to_pylist() == [0, 1, 2]
+    raw = table.column("pred_params_raw").combine_chunks().to_numpy_ndarray()
+    assert raw[:, 0].tolist() == [0.25, 0.25, -0.5]
+    assert table.column("target_params").combine_chunks().to_numpy_ndarray().shape == (3, width)
+
+
+def test_prediction_writer_table_is_absent_until_predict_ends(tmp_path: Path) -> None:
+    """An interrupted predict pass leaves no table a reader could mistake for a complete one.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    """
+    width = param_specs["surge_4"].encoded_width
+    writer = PredictionWriter(tmp_path, write_interval="batch", table_param_spec_name="surge_4")
+
+    _write_table_batch(writer, torch.zeros(2, width), 0)
+
+    assert not (tmp_path / "predictions.lance").exists()
+
+
+def test_prediction_writer_without_table_spec_writes_no_lance_table(tmp_path: Path) -> None:
+    """The table is opt-in: the default writer leaves only the tensor files.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    """
+    writer = PredictionWriter(tmp_path, write_interval="batch")
+    _write_table_batch(writer, torch.zeros(2, 3), 0)
+
+    writer.on_predict_end(cast("Trainer", None), cast("LightningModule", None))
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "pred-0.pt",
+        "target-audio-0.pt",
+        "target-params-0.pt",
+    ]
+
+
+def test_prediction_writer_second_predict_pass_replaces_table_rows(tmp_path: Path) -> None:
+    """Re-running predict into the same directory restarts the table instead of extending it.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    """
+    width = param_specs["surge_4"].encoded_width
+    writer = PredictionWriter(tmp_path, write_interval="batch", table_param_spec_name="surge_4")
+    trainer, module = cast("Trainer", None), cast("LightningModule", None)
+    writer.on_predict_start(trainer, module)
+    _write_table_batch(writer, torch.zeros(2, width), 0)
+    writer.on_predict_end(trainer, module)
+
+    writer.on_predict_start(trainer, module)
+    _write_table_batch(writer, torch.zeros(1, width), 0)
+    writer.on_predict_end(trainer, module)
+
+    table = lance.dataset(str(tmp_path / "predictions.lance")).to_table()
+    assert table.column("row_id").to_pylist() == [0]
+
+
+def test_prediction_writer_table_spec_with_epoch_interval_raises_value_error(
+    tmp_path: Path,
+) -> None:
+    """The table is built from per-batch writes, so an epoch-only writer cannot produce it.
+
+    :param tmp_path: Pytest-provided directory for callback artifacts.
+    """
+    with pytest.raises(ValueError, match="write_interval"):
+        PredictionWriter(tmp_path, write_interval="epoch", table_param_spec_name="surge_4")
 
 
 class _RecordingModule:

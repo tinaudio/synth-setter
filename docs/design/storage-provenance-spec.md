@@ -114,7 +114,8 @@ eval/{dataset_config_id}/{dataset_wandb_run_id}/{train_config_id}/{train_wandb_r
 ├── predictions/
 │   ├── pred-{batch_idx}.pt
 │   ├── target-audio-{batch_idx}.pt
-│   └── target-params-{batch_idx}.pt
+│   ├── target-params-{batch_idx}.pt
+│   └── predictions.lance        # opt-in: callbacks.prediction_writer.table_param_spec_name
 ├── audio/
 │   └── {sample_N}/
 │       ├── pred.wav

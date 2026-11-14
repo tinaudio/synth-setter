@@ -1330,6 +1330,20 @@ def test_surge_4_eval_experiment_composes_in_predict_mode() -> None:
     assert "prediction_writer" in cfg.callbacks
 
 
+def test_eval_prediction_table_override_resolves_to_the_synth_spec() -> None:
+    """The prediction table is switched on from the CLI by naming the synth's spec."""
+    cfg = _compose(
+        "eval.yaml",
+        [
+            "experiment=surge/eval_ffn_4",
+            "ckpt_path=dummy.ckpt",
+            "callbacks.prediction_writer.table_param_spec_name=${synth.param_spec_name}",
+        ],
+    )
+
+    assert cfg.callbacks.prediction_writer.table_param_spec_name == "surge_4"
+
+
 def test_flow_simple_440k_experiment_owns_dataset_pin_and_training_cadence() -> None:
     """``surge/flow_simple_440k`` bakes the 440k contract previously spread into launch YAML.
 
