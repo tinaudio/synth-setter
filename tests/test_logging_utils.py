@@ -111,6 +111,89 @@ def test_log_hyperparameters_unlogged_interpolation_does_not_block_logging() -> 
     assert logger.experiment.config["model"]["scheduler"]["T_max"] == 400
 
 
+def _log_cfg(cfg: object) -> RecordingWandbLogger:
+    """Run ``log_hyperparameters`` against a recording logger.
+
+    :param cfg: Config passed as ``object_dict["cfg"]``.
+    :returns: The logger holding the recorded payload.
+    """
+    logger = RecordingWandbLogger()
+    trainer = SimpleNamespace(logger=logger, loggers=[logger])
+    log_hyperparameters({"cfg": cfg, "model": torch.nn.Linear(1, 1), "trainer": trainer})
+    return logger
+
+
+def test_log_hyperparameters_composed_train_config_logs_every_top_level_key() -> None:
+    """Every top-level node of a composed train.yaml reaches the logger (anti-drift guard)."""
+    GlobalHydra.instance().clear()
+    with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
+        cfg = compose(
+            config_name="train.yaml",
+            overrides=["datamodule=torchsynth", "model=ffn", "trainer=cpu"],
+        )
+    GlobalHydra.instance().clear()
+
+    logged = _log_cfg(cfg).experiment.config
+
+    assert set(cfg.keys()) - set(logged) == set()
+
+
+def test_log_hyperparameters_non_template_node_records_resolved_value() -> None:
+    """Project nodes outside the original template allowlist are logged resolved."""
+    cfg = OmegaConf.create(
+        {
+            "training": {"val_audio_probe": True, "init_checkpoint": "${paths.ckpt}"},
+            "paths": {"ckpt": "/ckpts/model.ckpt"},
+        }
+    )
+
+    logged = _log_cfg(cfg).experiment.config
+
+    assert logged["training"] == {"val_audio_probe": True, "init_checkpoint": "/ckpts/model.ckpt"}
+
+
+def test_log_hyperparameters_unresolvable_node_logs_raw_interpolation(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A node that cannot resolve is logged unresolved with a warning instead of aborting.
+
+    :param caplog: Captures the fallback warning.
+    """
+    cfg = OmegaConf.create(
+        {
+            "paths": {"output_dir": "${missing_runtime_value}", "root_dir": "/repo"},
+            "seed": 7,
+        }
+    )
+
+    logged = _log_cfg(cfg).experiment.config
+
+    assert logged["paths"] == {"output_dir": "${missing_runtime_value}", "root_dir": "/repo"}
+    assert logged["seed"] == 7
+    assert "paths" in caplog.text
+
+
+def test_log_hyperparameters_logger_api_key_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Logger credentials resolved from the environment never reach the payload.
+
+    :param monkeypatch: Sets the fake credential environment variable.
+    """
+    monkeypatch.setenv("FAKE_NEPTUNE_API_TOKEN", "sentinel-secret-value")
+    cfg = OmegaConf.create(
+        {
+            "logger": {
+                "neptune": {"api_key": "${oc.env:FAKE_NEPTUNE_API_TOKEN}", "project": "p"},
+                "comet": {"rest_api_key": "also-secret"},
+            }
+        }
+    )
+
+    logged = _log_cfg(cfg).experiment.config
+
+    assert "secret" not in repr(dict(logged))
+    assert logged["logger"]["neptune"]["project"] == "p"
+
+
 # ---------------------------------------------------------------------------
 # Happy-path behavior tests (real subprocess, fake wandb only)
 # ---------------------------------------------------------------------------

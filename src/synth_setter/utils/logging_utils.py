@@ -12,6 +12,7 @@ from hydra.core.hydra_config import HydraConfig
 from lightning.pytorch.loggers import Logger
 from lightning_utilities.core.rank_zero import rank_zero_only
 from omegaconf import DictConfig, OmegaConf
+from omegaconf.errors import OmegaConfBaseException
 
 from synth_setter.utils import pylogger
 
@@ -163,22 +164,56 @@ def record_input_lineage(
         mark_lineage_incomplete(logger_list, missing)
 
 
-def _resolve_logged_config_value(cfg: DictConfig, key: str) -> object:
-    """Resolve one allowlisted config value without traversing unlogged branches.
+#: Config leaf names whose values are credentials (e.g. ``logger/neptune.yaml``'s
+#: ``${oc.env:NEPTUNE_API_TOKEN}``); redacted from the logged payload at any depth.
+_CREDENTIAL_KEYS = frozenset({"api_key", "rest_api_key"})
+_REDACTED = "[redacted]"
+
+
+def _redact_credentials(value: object) -> object:
+    """Return ``value`` with every non-null credential leaf replaced by a placeholder.
+
+    :param value: Plain container or scalar produced by ``OmegaConf.to_container``.
+    :returns: The same structure with credential leaves redacted.
+    """
+    if isinstance(value, dict):
+        return {
+            key: _REDACTED
+            if key in _CREDENTIAL_KEYS and item is not None
+            else _redact_credentials(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_credentials(item) for item in value]
+    return value
+
+
+def _resolve_logged_config_value(cfg: DictConfig, key: str, unresolved: dict[str, Any]) -> object:
+    """Resolve one top-level config node, falling back to its unresolved form.
+
+    A node that cannot resolve (e.g. ``${hydra:runtime.output_dir}`` under a bare
+    ``compose()``) is logged as written rather than aborting the run.
 
     :param cfg: Full Hydra config, retained as the interpolation root.
     :param key: Top-level key included in the logger payload.
-    :returns: Resolved plain container or scalar value.
+    :param unresolved: ``cfg`` as an unresolved plain container, used for fallback.
+    :returns: Resolved plain container or scalar, or the unresolved node on failure.
     """
-    value = cfg.get(key)
-    if OmegaConf.is_config(value):
-        return OmegaConf.to_container(value, resolve=True)
-    return value
+    try:
+        value = cfg.get(key)
+        if OmegaConf.is_config(value):
+            return OmegaConf.to_container(value, resolve=True)
+        return value
+    except OmegaConfBaseException as exc:
+        log.warning(f"Logging config node {key!r} unresolved: {exc}")
+        return unresolved[key]
 
 
 @rank_zero_only
 def log_hyperparameters(object_dict: dict[str, Any]) -> None:
-    """Save resolved config values and model parameter counts to Lightning loggers.
+    """Save every top-level config node, resolved, plus model parameter counts to loggers.
+
+    Unresolvable nodes are logged as written; credential leaves are redacted.
 
     Additionally saves:
         - Number of model parameters
@@ -195,19 +230,12 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
         return
 
     cfg = object_dict["cfg"]
-    hparams = {
-        key: _resolve_logged_config_value(cfg, key)
-        for key in (
-            "callbacks",
-            "ckpt_path",
-            "datamodule",
-            "extras",
-            "model",
-            "seed",
-            "tags",
-            "task_name",
-            "trainer",
-        )
+    # Every top-level node is logged: an allowlist silently drops nodes added later.
+    unresolved = OmegaConf.to_container(cfg, resolve=False)
+    assert isinstance(unresolved, dict)
+    hparams: dict[str, Any] = {
+        key: _redact_credentials(_resolve_logged_config_value(cfg, key, unresolved))
+        for key in unresolved
     }
 
     datamodule = object_dict.get("datamodule")
