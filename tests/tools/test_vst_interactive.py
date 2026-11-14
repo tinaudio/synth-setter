@@ -2450,6 +2450,51 @@ class TestMainParameterReference:
 
         assert applied == vst_interactive.decode_prediction_row(prediction, 0, SURGE_SIMPLE)
 
+    def test_onset_duration_spec_shares_the_base_spec_preset_and_synth_identity(
+        self,
+        vst_interactive: ModuleType,
+        simple_spec_total_length: int,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An onset-duration spec auditions on the preset and synth of the spec it derives from.
+
+        :param vst_interactive: Loaded VST interactive module under test.
+        :param simple_spec_total_length: Encoded width shared by both timing variants.
+        :param tmp_path: Per-test temporary directory.
+        :param monkeypatch: Pytest fixture replacing external plugin operations.
+        """
+        onset_duration_spec = f"{SURGE_SIMPLE}_onset_duration"
+        prediction = torch.zeros((1, simple_spec_total_length))
+        prediction_path = tmp_path / "pred.pt"
+        torch.save(prediction, prediction_path)
+
+        applied = _invoke_cli_and_capture_params(
+            vst_interactive,
+            monkeypatch,
+            [
+                "--plugin-path",
+                "fake.vst3",
+                "--param-spec-name",
+                onset_duration_spec,
+                "--pred",
+                f"{prediction_path}:0",
+                "--session-recording-path",
+                str(tmp_path / "session.wav"),
+            ],
+        )
+        render_cfg = vst_interactive.make_dataset_render_cfg(
+            param_spec_name=onset_duration_spec,
+            plugin_path="fake.vst3",
+            plugin_state_path="presets/surge-simple.vstpreset",
+            synth_version="1.3.4",
+            samples_per_shard=1,
+        )
+
+        assert applied == vst_interactive.decode_prediction_row(prediction, 0, SURGE_SIMPLE)
+        assert render_cfg.synth.name == SURGE_SIMPLE
+        assert render_cfg.param_spec_name == onset_duration_spec
+
     def test_dataset_values_reach_plugin(
         self,
         vst_interactive: ModuleType,

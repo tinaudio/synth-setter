@@ -139,10 +139,10 @@ The draft is a starting point, not a finished spec. Open
 - `AngleArrayParameter(name, shape)` — a fixed-shape array of radians carried as
   one `(cos θ, sin θ)` pair per angle, so `±π` share one encoding and the loss
   is seam-aware; decode projects predictions onto the unit circle.
-- `NoteDurationParameter(name, max_note_duration_seconds)` — encodes an onset
-  plus the held-duration fraction of the remaining render window, with a 1 ms
-  minimum duration; it still decodes to renderer-native `(start, end)` seconds
-  and lives in the `note_params` list.
+- `NoteDurationParameter(name, max_note_duration_seconds)` — samples when the
+  note starts and ends within the audio buffer (not an ADSR envelope); lives in
+  the `note_params` list. Its two encoded columns are independent endpoints; see
+  [Note timing](#note-timing) for the onset-duration alternative.
 
 A `ParamSpec` takes two lists: `synth_params` (the synth's parameters) and
 `note_params` (`pitch`, a `DiscreteLiteralParameter` whose MIDI window the
@@ -171,19 +171,49 @@ parameter into several dimensions, and the note parameters add their own. VST
 model configs resolve this width from the root `synth` group's
 `param_spec_name`; experiments must not repeat it as a `num_params`, `d_out`,
 or `latent_dim` literal.
-
-The persisted `note_timing_parameterization` field distinguishes
-`legacy_endpoints` from `onset_duration` without changing synth or parameter-spec
-identity. Missing metadata means `legacy_endpoints` for old artifacts; newly
-composed synth configs select `onset_duration`. The representations have the same
-width, so checkpoint loading validates this field rather than relying on shape.
-Renderers continue to receive endpoint seconds; TorchSynth converts those
-endpoints to its keyboard duration after decoding, so note timing remains
-parameter-loss-only rather than part of differentiable audio feedback.
-
 See [`surge_xt_param_spec.py`](../../src/synth_setter/data/vst/surge_xt_param_spec.py)
 and [`obxf_param_spec.py`](../../src/synth_setter/data/vst/obxf_param_spec.py)
 for hand-tuned examples.
+
+### Note timing
+
+A spec is authored with `NoteDurationParameter`, whose model predicts the note
+start and end as two independent fractions of the render window, so a prediction
+can reverse or collapse them. Every such spec is therefore also registered under
+`<name>_onset_duration`, a twin that differs only in how the note window is
+encoded (`OnsetDurationParameter`). For encoded `u, v` in `[0, 1]`, render
+horizon `T`, and minimum held duration `d = 1 ms`:
+
+```text
+onset = (T - d) * u
+end   = onset + d + (T - d - onset) * v
+```
+
+Every `(u, v)` decodes to an ordered window at least `d` long inside `[0, T]`;
+encoding rejects a window that violates those bounds instead of repairing it.
+Sampling draws two uniform points on `[0, T - d]`, sorts them, and shifts the
+later one by `d`: the endpoint spec's sorted-uniform prior with windows shorter
+than `d` excluded. Renderers receive `(start, end)` seconds under either spec.
+
+The twin is a separate `param_spec_name`, not a flag, because both encodings
+have the same width and nothing else distinguishes their rows:
+
+- Existing names keep endpoint timing, so existing datasets and checkpoints
+  decode as before.
+- A run opts in per synth with `synth.param_spec_name=<name>_onset_duration`,
+  e.g. `synth=surge_simple synth.param_spec_name=surge_simple_onset_duration`,
+  for dataset generation and for every train, eval, and embedding run over that
+  dataset. The twin shares its base spec's parameter map, preset, and source
+  digests.
+- An onset-duration spec logs `note_onset_mae_seconds` and
+  `note_duration_mae_seconds` in place of `note_timing_mae_seconds`.
+
+Evaluation and render paths still sort and clamp decoded note windows: that
+repair exists for endpoint-timed checkpoints and never changes an onset-duration
+window. The online TorchSynth datamodule and its differentiable renderer decode
+`torchsynth_full` rows only, and they read the note columns detached, so note
+timing is learned from the parameter loss alone and does not take part in
+differentiable audio feedback.
 
 ### Hosts that restore state asynchronously
 

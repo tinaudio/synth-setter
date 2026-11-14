@@ -274,9 +274,7 @@ ULTRAMASTER_KR106_PARAM_SPEC = ParamSpec(
     ],
     [
         DiscreteLiteralParameter(name="pitch", min=48, max=72),
-        NoteDurationParameter(
-            name="note_start_and_end", max_note_duration_seconds=4.0
-        ),
+        NoteDurationParameter(name="note_start_and_end", max_note_duration_seconds=4.0),
     ],
 )
 

@@ -2,7 +2,6 @@
 
 import math
 from collections.abc import Iterator, Mapping, Sequence
-from copy import deepcopy
 from numbers import Integral, Real
 from typing import Literal, TypedDict
 
@@ -659,6 +658,13 @@ class DirectionArrayParameter(Parameter):
 
 
 def _numeric_endpoints(name: str, raw_value: object) -> tuple[float, float]:
+    """Coerce a raw note window to ``(start, end)`` seconds.
+
+    :param name: Parameter name used in the rejection message.
+    :param raw_value: Candidate two-element tuple of real numbers.
+    :returns: Start and end as floats.
+    :raises TypeError: ``raw_value`` is not a pair of numeric endpoints.
+    """
     if not (
         isinstance(raw_value, tuple)
         and len(raw_value) == 2
@@ -668,25 +674,19 @@ def _numeric_endpoints(name: str, raw_value: object) -> tuple[float, float]:
     return float(raw_value[0]), float(raw_value[1])
 
 
-class LegacyEndpointNoteDurationParameter(Parameter):
-    """Legacy note timing encoded as two independent endpoint coordinates."""
+class NoteDurationParameter(Parameter):
+    """A special parameter for sampling note durations."""
 
-    def __init__(self, name: str, max_note_duration_seconds: float) -> None:
-        """Initialize endpoint timing bounds.
-
-        :param name: Raw parameter name.
-        :param max_note_duration_seconds: Exclusive sampling horizon in seconds.
-        """
+    def __init__(self, name: str, max_note_duration_seconds: float):
         super().__init__(name)
         self.max_note_duration_seconds = max_note_duration_seconds
 
-    def __len__(self) -> int:
+    def __len__(self):
         return 2
 
     def sample(self, rng: np.random.Generator) -> tuple[float, float]:
-        start, end = np.sort(
-            rng.uniform(0.0, self.max_note_duration_seconds, size=2)
-        ).tolist()
+        start, end = np.sort(rng.uniform(0.0, self.max_note_duration_seconds, size=2)).tolist()
+
         return start, end
 
     def encode(self, raw_value: object) -> np.ndarray:
@@ -694,16 +694,16 @@ class LegacyEndpointNoteDurationParameter(Parameter):
         return np.array(endpoints, dtype=np.float64) / self.max_note_duration_seconds
 
     def decode(self, encoded: np.ndarray) -> tuple[float, ...]:
-        """Decode endpoint coordinates without changing the legacy width behavior.
-
-        :param encoded: Endpoint fractions, conventionally shaped ``(2,)``.
-        :returns: Endpoint times in seconds.
-        """
         return tuple(float(value) for value in encoded * self.max_note_duration_seconds)
 
 
-class NoteDurationParameter(Parameter):
-    """Note timing encoded as onset plus remaining-window duration fraction."""
+class OnsetDurationParameter(Parameter):
+    """Note window encoded as onset plus the held fraction of the remaining render window.
+
+    Every unit-domain coordinate pair decodes to an ordered ``(start, end)`` window at
+    least ``min_note_duration_seconds`` long, unlike :class:`NoteDurationParameter`,
+    whose independent endpoints can reverse or collapse.
+    """
 
     def __init__(
         self,
@@ -727,13 +727,14 @@ class NoteDurationParameter(Parameter):
             raise ValueError("minimum note duration must be positive and below the maximum")
         self.max_note_duration_seconds = max_note_duration_seconds
         self.min_note_duration_seconds = min_note_duration_seconds
+        # Latest onset that still leaves room for the minimum held duration.
+        self._max_onset_seconds = max_note_duration_seconds - min_note_duration_seconds
 
     def __len__(self) -> int:
         return 2
 
     def sample(self, rng: np.random.Generator) -> tuple[float, float]:
-        available = self.max_note_duration_seconds - self.min_note_duration_seconds
-        onset, shifted_end = np.sort(rng.uniform(0.0, available, size=2)).tolist()
+        onset, shifted_end = np.sort(rng.uniform(0.0, self._max_onset_seconds, size=2)).tolist()
         return onset, shifted_end + self.min_note_duration_seconds
 
     def encoded_names(self) -> tuple[str, ...]:
@@ -741,17 +742,16 @@ class NoteDurationParameter(Parameter):
 
     def encode(self, raw_value: object) -> np.ndarray:
         onset, end = _numeric_endpoints(self.name, raw_value)
-        available = self.max_note_duration_seconds - self.min_note_duration_seconds
+        max_onset = self._max_onset_seconds
         if not np.isfinite((onset, end)).all():
             raise ValueError(f"{self.name} endpoints must be finite")
+        # Absorbs float round-off in sampled or decoded windows, not genuine violations.
         tolerance = np.finfo(np.float64).eps * self.max_note_duration_seconds * 8
-        if onset < -tolerance or onset > available + tolerance:
-            raise ValueError(f"{self.name} onset must be within [0, {available}]")
+        if onset < -tolerance or onset > max_onset + tolerance:
+            raise ValueError(f"{self.name} onset must be within [0, {max_onset}]")
         if end > self.max_note_duration_seconds + tolerance:
-            raise ValueError(
-                f"{self.name} end must not exceed {self.max_note_duration_seconds}"
-            )
-        onset = min(max(onset, 0.0), available)
+            raise ValueError(f"{self.name} end must not exceed {self.max_note_duration_seconds}")
+        onset = min(max(onset, 0.0), max_onset)
         end = min(end, self.max_note_duration_seconds)
         duration = end - onset
         if duration < self.min_note_duration_seconds - tolerance:
@@ -759,14 +759,14 @@ class NoteDurationParameter(Parameter):
                 f"{self.name} duration must be at least {self.min_note_duration_seconds}"
             )
 
-        remaining_duration = available - onset
+        remaining_duration = max_onset - onset
         duration_fraction = (
             0.0
             if remaining_duration == 0.0
             else (duration - self.min_note_duration_seconds) / remaining_duration
         )
         return np.array(
-            [onset / available, min(max(duration_fraction, 0.0), 1.0)],
+            [onset / max_onset, min(max(duration_fraction, 0.0), 1.0)],
             dtype=np.float64,
         )
 
@@ -785,9 +785,9 @@ class NoteDurationParameter(Parameter):
         if np.any((values < 0.0) | (values > 1.0)):
             raise ValueError(f"encoded {self.name} values must be within [0, 1]")
 
-        available = self.max_note_duration_seconds - self.min_note_duration_seconds
-        onset = float(values[0]) * available
-        duration = self.min_note_duration_seconds + (available - onset) * float(values[1])
+        onset = float(values[0]) * self._max_onset_seconds
+        remaining_duration = self._max_onset_seconds - onset
+        duration = self.min_note_duration_seconds + remaining_duration * float(values[1])
         return onset, onset + duration
 
 
@@ -1013,31 +1013,22 @@ class ParamSpec:
         return names
 
 
-def legacy_endpoint_variant(spec: ParamSpec) -> ParamSpec:
-    """Return a copied spec whose onset-duration note window uses legacy endpoints.
+def onset_duration_variant(spec: ParamSpec) -> ParamSpec | None:
+    """Return ``spec`` with every endpoint note window re-encoded as onset and duration.
 
-    :param spec: Current specification containing exactly one onset-duration parameter.
-    :returns: Independent specification with identical native values and encoded width.
-    :raises ValueError: The spec does not contain exactly one onset-duration parameter.
+    :param spec: Specification to convert.
+    :returns: Specification with the same native values and encoded width as ``spec``, or
+        ``None`` when ``spec`` has no :class:`NoteDurationParameter` to re-encode.
     """
-    timing_parameters = [
-        parameter
-        for parameter in spec.note_params
-        if isinstance(parameter, NoteDurationParameter)
-    ]
-    if len(timing_parameters) != 1:
-        raise ValueError("expected exactly one onset-duration timing parameter")
-    timing = timing_parameters[0]
+    if not any(isinstance(parameter, NoteDurationParameter) for parameter in spec.note_params):
+        return None
     note_params = [
-        LegacyEndpointNoteDurationParameter(
-            name=parameter.name,
-            max_note_duration_seconds=parameter.max_note_duration_seconds,
-        )
-        if parameter is timing
-        else deepcopy(parameter)
+        OnsetDurationParameter(parameter.name, parameter.max_note_duration_seconds)
+        if isinstance(parameter, NoteDurationParameter)
+        else parameter
         for parameter in spec.note_params
     ]
-    return ParamSpec(deepcopy(spec.synth_params), note_params)
+    return ParamSpec(list(spec.synth_params), note_params)
 
 
 def spec_quantize_model_output(row: np.ndarray, spec: ParamSpec) -> np.ndarray:

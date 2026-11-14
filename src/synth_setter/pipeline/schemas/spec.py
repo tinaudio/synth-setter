@@ -35,11 +35,7 @@ from pydantic import (
 )
 
 import synth_setter.renderer_backend as renderer_backend_contract
-from synth_setter.param_spec_name import (
-    LEGACY_NOTE_TIMING,
-    NoteTimingParameterization,
-    ValidatedParamSpecName,
-)
+from synth_setter.param_spec_name import ValidatedParamSpecName, base_param_spec_name
 from synth_setter.pipeline.schemas.prefix import (
     DEFAULT_R2_PREFIX_ROOT,
     DatasetConfigId,
@@ -67,7 +63,7 @@ from synth_setter.synth_spec import (
     SYNTHS,
     SynthName,
     SynthSpec,
-    validate_faust_registry_reference,
+    faust_source_identity,
 )
 
 if TYPE_CHECKING:
@@ -570,10 +566,6 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         normalized = data.copy()
         normalized.pop("renderer_version", None)
         synth = normalized.get("synth")
-        if isinstance(synth, dict) and "note_timing_parameterization" not in synth:
-            synth = synth.copy()
-            synth["note_timing_parameterization"] = LEGACY_NOTE_TIMING
-            normalized["synth"] = synth
         if (
             info.mode == "json"
             and normalized.get("render_contract_version", 2) in (1, 2)
@@ -698,14 +690,6 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         :returns: The spec name this render's synth identity points at.
         """
         return self.synth.param_spec_name
-
-    @property
-    def note_timing_parameterization(self) -> NoteTimingParameterization:
-        """Return the timing coordinates persisted with this render contract.
-
-        :returns: Legacy endpoint or onset-duration parameterization.
-        """
-        return self.synth.note_timing_parameterization
 
     @property
     def plugin_path(self) -> str:
@@ -871,12 +855,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         from synth_setter.data.vst.faust_param_spec import FAUST_NOTE_DURATION_SECONDS
         from synth_setter.data.vst.faust_sources import resolve_faust_dsp
 
-        source_identity = (
-            self.param_spec_name
-            if not self.plugin_path
-            else validate_faust_registry_reference(self.plugin_path, self.param_spec_name)
-        )
-        source = resolve_faust_dsp(source_identity)
+        source = resolve_faust_dsp(faust_source_identity(self.plugin_path, self.param_spec_name))
         isolated_backends = {"faustcpp", "faustwasm"}
         if self.renderer_backend in isolated_backends:
             if self.render_contract_version == 1:
@@ -949,7 +928,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             )
         )
         actual_provenance = (
-            self.synth.param_spec_name,
+            base_param_spec_name(self.synth.param_spec_name),
             self.synth.format,
             self.synth.synth_version,
             self.synth.source_sha256,
@@ -990,7 +969,11 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             return self
         if self.plugin_path != SURGEPY_PLUGIN_NAME:
             raise ValueError('surgepy requires plugin_path="surgepy"')
-        if self.param_spec_name not in {"surge_xt", "surge_simple", "surge_4"}:
+        if base_param_spec_name(self.param_spec_name) not in {
+            "surge_xt",
+            "surge_simple",
+            "surge_4",
+        }:
             raise ValueError("surgepy requires a Surge parameter spec")
         if not self.plugin_state_path.casefold().endswith(".fxp"):
             raise ValueError("surgepy requires an .fxp plugin_state_path")
@@ -1115,8 +1098,6 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
             exclude_none=True,
         )
         contract.pop("v1_gui_toggle_cadence_omitted", None)
-        if self.note_timing_parameterization == LEGACY_NOTE_TIMING:
-            contract["synth"].pop("note_timing_parameterization")
         if self.render_contract_version == 1:
             contract.pop("backend_version", None)
             contract.pop("render_contract_version")
@@ -1763,7 +1744,4 @@ class DatasetSpec(BaseModel):
         """
         from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 
-        return resolve_param_spec(
-            self.render.param_spec_name,
-            self.render.note_timing_parameterization,
-        ).encoded_width
+        return resolve_param_spec(self.render.param_spec_name).encoded_width

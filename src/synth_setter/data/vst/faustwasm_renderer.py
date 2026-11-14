@@ -27,7 +27,7 @@ from synth_setter.param_spec_name import ParamSpecName
 from synth_setter.synth_spec import (
     SYNTHS,
     SynthName,
-    validate_faust_registry_reference,
+    faust_source_identity,
 )
 
 
@@ -104,12 +104,7 @@ class FaustWasmRenderer(AudioRenderer):
         """
         if self.plugin_state_path:
             raise ValueError("FaustWasm renderer accepts no preset path")
-        source_identity = self.param_spec_name
-        if self.plugin_path:
-            source_identity = validate_faust_registry_reference(
-                self.plugin_path,
-                self.param_spec_name,
-            )
+        source_identity = faust_source_identity(self.plugin_path, self.param_spec_name)
         if isinstance(self.block_size, bool) or not isinstance(self.block_size, int) or self.block_size < 1:
             raise ValueError("block_size must be a positive integer")
         if not math.isfinite(self.sample_rate) or self.sample_rate <= 0:

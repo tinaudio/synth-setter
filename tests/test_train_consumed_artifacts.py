@@ -382,10 +382,6 @@ def test_train_legacy_dataset_root_leaves_the_wandb_run_unmarked(
     }
     spec_path = Path(cfg_train_lance.datamodule.dataset_root) / "input_spec.json"
     spec_path.write_text(json.dumps(legacy_spec), encoding="utf-8")
-    # A spec without timing metadata resolves to legacy endpoints; the run must match it.
-    with open_dict(cfg_train_lance):
-        cfg_train_lance.synth.note_timing_parameterization = "legacy_endpoints"
-        cfg_train_lance.datamodule.note_timing_parameterization = "legacy_endpoints"
 
     binary = _run_offline_train(cfg_train_lance, tmp_path, monkeypatch)
 

@@ -11,17 +11,9 @@ import numpy as np
 import structlog
 from pydantic import BaseModel, ConfigDict
 
-from synth_setter.data.vst.param_spec import (
-    LegacyEndpointNoteDurationParameter,
-    NoteDurationParameter,
-)
 from synth_setter.data.vst.param_spec_registry import resolve_param_spec
 from synth_setter.model_cache import retry_external_io
-from synth_setter.param_spec_name import (
-    LEGACY_NOTE_TIMING,
-    NoteTimingParameterization,
-    ParamSpecName,
-)
+from synth_setter.param_spec_name import ParamSpecName
 
 PARAM_LANGUAGE_FILENAME = "param_language.npz"
 EMBEDDING_MODEL = "google/embeddinggemma-300m"
@@ -30,40 +22,23 @@ EMBEDDING_REVISION = "57c266a740f537b4dc058e1b0cda161fd15afa75"
 logger = structlog.get_logger(__name__)
 
 
-def describe_fields(
-    param_spec_name: str,
-    synth_name: str,
-    note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING,
-) -> list[str]:
+def describe_fields(param_spec_name: str, synth_name: str) -> list[str]:
     """Describe spec metadata without interpreting renderer-native ranges as physical units.
 
     :param param_spec_name: Registered parameter specification.
     :param synth_name: Synth identity recorded with the dataset.
-    :param note_timing_parameterization: Timing coordinates described by the artifact.
     :returns: Deterministic descriptions in encoded field order.
     """
-    spec = resolve_param_spec(
-        ParamSpecName(param_spec_name), note_timing_parameterization
-    )
+    spec = resolve_param_spec(ParamSpecName(param_spec_name))
     descriptions = []
     for field, span in spec.encoded_slices():
-        field_type = (
-            "NoteDurationParameter"
-            if isinstance(field, LegacyEndpointNoteDurationParameter)
-            else type(field).__name__
-        )
         metadata = {
             "synth": synth_name,
             "spec": param_spec_name,
             "name": field.name,
-            "type": field_type,
+            "type": type(field).__name__,
             "encoded_span": [span.start, span.stop],
         }
-        if (
-            isinstance(field, NoteDurationParameter)
-            and note_timing_parameterization != LEGACY_NOTE_TIMING
-        ):
-            metadata["coordinates"] = ["onset", "duration_fraction"]
         for attribute in ("encoding", "values", "min", "max", "shape"):
             if hasattr(field, attribute):
                 metadata[attribute] = getattr(field, attribute)
@@ -92,18 +67,12 @@ def matryoshka_vectors(embeddings: np.ndarray, dimension: int) -> np.ndarray:
 
 
 def encode_param_language(
-    param_spec_name: str,
-    synth_name: str,
-    *,
-    note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING,
-    device: str = "cpu",
-    batch_size: int = 16,
+    param_spec_name: str, synth_name: str, *, device: str = "cpu", batch_size: int = 16
 ) -> np.ndarray:
     """Encode static descriptions with the pinned EmbeddingGemma document pipeline.
 
     :param param_spec_name: Registered parameter specification.
     :param synth_name: Dataset synth identity.
-    :param note_timing_parameterization: Timing coordinates described by the artifact.
     :param device: Torch inference device.
     :param batch_size: Number of descriptions per inference batch.
     :returns: Native-width float32 embeddings shaped ``(fields, 768)``.
@@ -122,9 +91,7 @@ def encode_param_language(
     model = load_model()
     model.eval()
     model.requires_grad_(False)
-    descriptions = describe_fields(
-        param_spec_name, synth_name, note_timing_parameterization
-    )
+    descriptions = describe_fields(param_spec_name, synth_name)
     embeddings = model.encode_document(
         descriptions, batch_size=batch_size, convert_to_numpy=True, show_progress_bar=False
     )
@@ -166,10 +133,6 @@ class ParamLanguageMetadata(BaseModel):
 
         Dataset synth identity.
 
-    .. attribute :: note_timing_parameterization
-
-        Timing coordinates described by the artifact.
-
     .. attribute :: descriptions
 
         Canonical metadata in logical-field order.
@@ -194,7 +157,6 @@ class ParamLanguageMetadata(BaseModel):
     dimension: Literal[128, 256, 512, 768]
     param_spec_name: str
     synth_name: str
-    note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING
     descriptions: list[str]
     descriptions_sha256: str
     embeddings_sha256: str
@@ -244,11 +206,7 @@ def _validate_unit_norm(embeddings: np.ndarray) -> None:
 
 
 def save_param_language(
-    path: Path,
-    embeddings: np.ndarray,
-    param_spec_name: str,
-    synth_name: str,
-    note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING,
+    path: Path, embeddings: np.ndarray, param_spec_name: str, synth_name: str
 ) -> None:
     """Write a pickle-free embedding table with its spec and encoder identity.
 
@@ -256,12 +214,9 @@ def save_param_language(
     :param embeddings: Float32 field-major matrix from the pinned encoder.
     :param param_spec_name: Registered parameter specification.
     :param synth_name: Dataset synth identity.
-    :param note_timing_parameterization: Timing coordinates described by the artifact.
     :raises ValueError: The embedding matrix is malformed.
     """
-    descriptions = describe_fields(
-        param_spec_name, synth_name, note_timing_parameterization
-    )
+    descriptions = describe_fields(param_spec_name, synth_name)
     if embeddings.ndim != 2:
         raise ValueError("parameter language embeddings must be a matrix")
     _validate_vectors(embeddings, len(descriptions), embeddings.shape[1])
@@ -270,7 +225,6 @@ def save_param_language(
         dimension=embeddings.shape[1],
         param_spec_name=param_spec_name,
         synth_name=synth_name,
-        note_timing_parameterization=note_timing_parameterization,
         descriptions=descriptions,
         descriptions_sha256=_description_digest(descriptions),
         embeddings_sha256=_embedding_digest(embeddings),
@@ -286,30 +240,23 @@ def save_param_language(
 
 
 def load_param_language(
-    path: Path,
-    param_spec_name: str,
-    synth_name: str,
-    note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING,
+    path: Path, param_spec_name: str, synth_name: str
 ) -> tuple[np.ndarray, ParamLanguageMetadata]:
     """Load an artifact only when it agrees with the current spec and extraction contract.
 
     :param path: Pickle-free NPZ artifact.
     :param param_spec_name: Expected registered parameter specification.
     :param synth_name: Expected synth identity.
-    :param note_timing_parameterization: Expected timing coordinates.
     :returns: Float32 field matrix and validated provenance.
     :raises ValueError: Metadata, vectors, or their fingerprints do not match.
     """
     with np.load(path, allow_pickle=False) as archive:
         metadata = ParamLanguageMetadata.model_validate_json(str(archive["metadata"].item()))
         embeddings = archive["embeddings"]
-    expected = describe_fields(
-        param_spec_name, synth_name, note_timing_parameterization
-    )
+    expected = describe_fields(param_spec_name, synth_name)
     if (
         metadata.param_spec_name != param_spec_name
         or metadata.synth_name != synth_name
-        or metadata.note_timing_parameterization != note_timing_parameterization
         or metadata.descriptions != expected
         or metadata.descriptions_sha256 != _description_digest(expected)
     ):
@@ -322,19 +269,13 @@ def load_param_language(
 
 
 def prepare_param_language(
-    work_dir: Path,
-    param_spec_name: str,
-    synth_name: str,
-    *,
-    note_timing_parameterization: NoteTimingParameterization = LEGACY_NOTE_TIMING,
-    dimension: int,
+    work_dir: Path, param_spec_name: str, synth_name: str, *, dimension: int
 ) -> Path:
     """Cache full-width embeddings locally and stage the selected width for finalization.
 
     :param work_dir: Existing finalizer scratch directory.
     :param param_spec_name: Registered parameter specification.
     :param synth_name: Dataset synth identity.
-    :param note_timing_parameterization: Timing coordinates described by the artifact.
     :param dimension: Supported output width.
     :returns: Validated, staged dataset-level NPZ path.
     :raises ValueError: Requested width or freshly encoded vectors are invalid.
@@ -343,37 +284,16 @@ def prepare_param_language(
     embeddings = None
     if cache_path.exists():
         try:
-            embeddings, metadata = load_param_language(
-                cache_path,
-                param_spec_name,
-                synth_name,
-                note_timing_parameterization,
-            )
+            embeddings, metadata = load_param_language(cache_path, param_spec_name, synth_name)
             if metadata.dimension != 768:
                 raise ValueError("parameter language full cache requires native width")
         except (OSError, ValueError, EOFError, zipfile.BadZipFile, KeyError):
             embeddings = None
             logger.warning("param_language_cache_invalid", path=str(cache_path))
     if embeddings is None:
-        embeddings = encode_param_language(
-            param_spec_name,
-            synth_name,
-            note_timing_parameterization=note_timing_parameterization,
-        )
-        save_param_language(
-            cache_path,
-            embeddings,
-            param_spec_name,
-            synth_name,
-            note_timing_parameterization,
-        )
+        embeddings = encode_param_language(param_spec_name, synth_name)
+        save_param_language(cache_path, embeddings, param_spec_name, synth_name)
     output = work_dir / PARAM_LANGUAGE_FILENAME
     selected = matryoshka_vectors(embeddings, dimension)
-    save_param_language(
-        output,
-        selected,
-        param_spec_name,
-        synth_name,
-        note_timing_parameterization,
-    )
+    save_param_language(output, selected, param_spec_name, synth_name)
     return output

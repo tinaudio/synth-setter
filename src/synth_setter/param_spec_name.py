@@ -6,15 +6,34 @@ Use ``ParamSpecName`` for runtime registry keys and
     def resolve(name: ParamSpecName) -> object: ...
 """
 
-from typing import Annotated, Literal, NewType
+from typing import Annotated, NewType
 
 from pydantic import AfterValidator
 
 ParamSpecName = NewType("ParamSpecName", str)
 
-NoteTimingParameterization = Literal["legacy_endpoints", "onset_duration"]
-LEGACY_NOTE_TIMING: NoteTimingParameterization = "legacy_endpoints"
-CURRENT_NOTE_TIMING: NoteTimingParameterization = "onset_duration"
+_ONSET_DURATION_SUFFIX = "_onset_duration"
+
+
+def onset_duration_param_spec_name(name: str) -> ParamSpecName:
+    """Name the onset-duration twin of an endpoint-timed spec.
+
+    :param name: Registry key of a spec whose note window is two independent endpoints.
+    :returns: Registry key of the same spec with onset-duration note timing.
+    """
+    return ParamSpecName(f"{name}{_ONSET_DURATION_SUFFIX}")
+
+
+def base_param_spec_name(name: str) -> ParamSpecName:
+    """Return the name keying a spec's timing-independent artifacts.
+
+    Parameter maps, presets, and source digests describe the synth parameters, which an
+    onset-duration twin shares with the endpoint-timed spec it derives from.
+
+    :param name: Any registry key.
+    :returns: ``name`` itself, or the endpoint-timed spec an onset-duration twin derives from.
+    """
+    return ParamSpecName(name.removesuffix(_ONSET_DURATION_SUFFIX))
 
 
 def _reject_blank(value: ParamSpecName) -> ParamSpecName:

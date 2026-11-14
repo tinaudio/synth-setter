@@ -14,8 +14,8 @@ import pytest
 import synth_setter.data.vst as vst
 import synth_setter.data.vst.param_spec_registry as param_spec_registry
 from synth_setter.data.vst.param_spec import (
-    LegacyEndpointNoteDurationParameter,
     NoteDurationParameter,
+    OnsetDurationParameter,
     ParamSpec,
 )
 from synth_setter.data.vst.param_spec_registry import (
@@ -25,7 +25,12 @@ from synth_setter.data.vst.param_spec_registry import (
     resolve_param_spec,
     resolve_param_spec_width,
 )
-from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.data.vst.surge_xt_param_spec import SURGE_4_PARAM_SPEC
+from synth_setter.param_spec_name import (
+    ParamSpecName,
+    base_param_spec_name,
+    onset_duration_param_spec_name,
+)
 from synth_setter.synth_spec import SYNTHS
 
 if TYPE_CHECKING:
@@ -109,22 +114,39 @@ def test_param_spec_widths_match_known_values() -> None:
     assert param_specs["pyfdn_n8_mono_householder_vector"].encoded_width == 35
 
 
-def test_timing_parameterization_selects_semantics_without_aliasing_identity() -> None:
-    """One spec identity resolves new or legacy timing from persisted metadata."""
-    onset_duration = resolve_param_spec(ParamSpecName("surge_4"), "onset_duration")
-    legacy = resolve_param_spec(ParamSpecName("surge_4"), "legacy_endpoints")
-
-    assert isinstance(onset_duration.note_params[-1], NoteDurationParameter)
-    assert isinstance(legacy.note_params[-1], LegacyEndpointNoteDurationParameter)
-    assert onset_duration.encoded_width == legacy.encoded_width
-    assert "surge_4_onset_duration" not in param_specs
-
-
-def test_resolve_param_spec_missing_timing_metadata_defaults_legacy() -> None:
-    """Untagged artifact lookups retain endpoint decoding compatibility."""
+def test_existing_spec_name_keeps_endpoint_note_timing() -> None:
+    """A name that predates onset-duration timing still decodes independent endpoints."""
     spec = resolve_param_spec(ParamSpecName("surge_4"))
 
-    assert isinstance(spec.note_params[-1], LegacyEndpointNoteDurationParameter)
+    assert spec is SURGE_4_PARAM_SPEC
+    assert isinstance(spec.note_params[-1], NoteDurationParameter)
+
+
+def test_onset_duration_spec_is_registered_under_its_own_name() -> None:
+    """Onset-duration timing is a distinct spec identity with the base spec's width."""
+    spec = resolve_param_spec(ParamSpecName("surge_4_onset_duration"))
+
+    assert isinstance(spec.note_params[-1], OnsetDurationParameter)
+    assert spec.synth_params == SURGE_4_PARAM_SPEC.synth_params
+    assert spec.encoded_width == SURGE_4_PARAM_SPEC.encoded_width
+    assert param_specs["surge_4_onset_duration"] is spec
+
+
+@pytest.mark.parametrize("name", ["pyfdn_n8_mono_householder", "faust_shimmer_fdn"])
+def test_spec_without_note_window_has_no_onset_duration_twin(name: str) -> None:
+    """A spec with no note window has no timing to re-encode.
+
+    :param name: Registered spec that renders without a note window.
+    """
+    with pytest.raises(KeyError):
+        resolve_param_spec(onset_duration_param_spec_name(name))
+
+
+def test_base_param_spec_name_recovers_the_endpoint_spec_name() -> None:
+    """Timing-independent artifacts stay keyed by the spec an onset-duration twin derives from."""
+    assert onset_duration_param_spec_name("surge_4") == "surge_4_onset_duration"
+    assert base_param_spec_name("surge_4_onset_duration") == "surge_4"
+    assert base_param_spec_name("surge_4") == "surge_4"
 
 
 def test_resolve_param_spec_width_returns_encoded_width() -> None:
@@ -169,7 +191,9 @@ def test_every_param_spec_is_used_by_a_registered_synth() -> None:
     ``plugin_state_paths`` is keyed by synth name, which is a superset of the
     spec names since the surgepy rendering variants share their base's spec.
     """
-    assert {synth.param_spec_name for synth in SYNTHS.values()} == set(param_specs)
+    assert {synth.param_spec_name for synth in SYNTHS.values()} == {
+        base_param_spec_name(name) for name in param_specs
+    }
     assert set(plugin_state_paths) == set(SYNTHS)
 
 

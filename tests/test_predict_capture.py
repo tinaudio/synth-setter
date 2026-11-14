@@ -188,7 +188,6 @@ def flow_checkpoint(tmp_path_factory: pytest.TempPathFactory) -> Path:
         num_params=_SURGE_XT_PRED_WIDTH,
         test_sample_steps=2,
         test_cfg_strength=1.0,
-        note_timing_parameterization="onset_duration",
     )
     return _save_real_checkpoint(model, tmp_path_factory.mktemp("ckpt") / "flow.ckpt")
 
@@ -271,7 +270,9 @@ class TestDetectModelClass:
 class TestPackagedMapResolution:
     """Per-spec packaged map lookup backing the CLI's --map default."""
 
-    @pytest.mark.parametrize("spec_name", ["surge_xt", "surge_simple", "surge_4"])
+    @pytest.mark.parametrize(
+        "spec_name", ["surge_xt", "surge_simple", "surge_4", "surge_4_onset_duration"]
+    )
     def test_every_mapped_spec_resolves_to_a_loadable_map(self, spec_name: str):
         """Each packaged map loads and covers exactly its spec's synth params.
 

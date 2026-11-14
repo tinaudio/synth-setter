@@ -168,6 +168,11 @@ encoded width and average every assigned coordinate. Categorical families requir
 matching encodings and category domains, then minimize one decoded mismatch
 vote per logical field rather than reusing the MSE-optimal assignment.
 
+An onset-duration ParamSpec (`<name>_onset_duration`) logs
+`{val,test}/note_onset_mae_seconds/{name}` and
+`{val,test}/note_duration_mae_seconds/{name}` in place of
+`{val,test}/note_timing_mae_seconds/{name}`.
+
 `{val,test}/param_mse_spec_quantized` clips predictions to the ParamSpec domain
 and snaps categorical and integral fields to the values used for rendering
 before scoring them against the targets. `ValAudioProbe`'s keys mirror §2i's `audio/*`

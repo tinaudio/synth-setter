@@ -16,11 +16,11 @@ from synth_setter.data.vst.param_spec import (
     DirectionArrayParameter,
     DiscreteArrayParameter,
     DiscreteLiteralParameter,
-    LegacyEndpointNoteDurationParameter,
     NoteDurationParameter,
+    OnsetDurationParameter,
     ParamSpec,
     decode_model_output,
-    legacy_endpoint_variant,
+    onset_duration_variant,
     require_note_params,
     require_scalar_synth_params,
 )
@@ -692,7 +692,7 @@ def test_param_spec_roundtrip_preserves_mixed_array_scalar_and_note_values() -> 
 
     assert decoded_synth["gain"] == 1.0
     np.testing.assert_array_equal(decoded_synth["matrix"], synth_values["matrix"])
-    assert decoded_note["window"] == pytest.approx(note_values["window"], abs=1e-6)
+    assert decoded_note["window"] == note_values["window"]
 
 
 def test_param_spec_encoded_names_match_encoded_width() -> None:
@@ -722,8 +722,8 @@ def test_param_spec_encoded_names_match_encoded_width() -> None:
         "mode.1",
         "matrix.0.0",
         "matrix.0.1",
-        "window.onset",
-        "window.duration_fraction",
+        "window.0",
+        "window.1",
     ]
     assert len(spec.encoded_names) == spec.encoded_width
 
@@ -950,9 +950,9 @@ def test_categorical_parameter_encode_rejects_nonnumeric_value() -> None:
         parameter.encode("a")
 
 
-def test_legacy_note_duration_golden_encoding_remains_unchanged() -> None:
-    """Preserve legacy endpoint encoding for existing artifact identities."""
-    parameter = LegacyEndpointNoteDurationParameter(
+def test_note_duration_golden_encoding_remains_unchanged() -> None:
+    """Preserve legacy note-duration encoding and decoding behavior."""
+    parameter = NoteDurationParameter(
         name="note_start_and_end",
         max_note_duration_seconds=4.0,
     )
@@ -963,13 +963,36 @@ def test_legacy_note_duration_golden_encoding_remains_unchanged() -> None:
     assert parameter.decode(encoded) == (1.0, 3.0)
 
 
-def test_note_duration_encodes_onset_and_remaining_window_fraction() -> None:
-    """Encode endpoints as onset plus duration bounded by the remaining window."""
+@pytest.mark.parametrize("value", [[1.0, 3.0], (1.0,), (1.0, "end")])
+def test_note_duration_encode_rejects_invalid_endpoint_pair(value: object) -> None:
+    """Note-duration encoding requires exactly two numeric tuple endpoints.
+
+    :param value: Invalid endpoint container or value under test.
+    """
     parameter = NoteDurationParameter(
+        name="note_start_and_end",
+        max_note_duration_seconds=4.0,
+    )
+
+    with pytest.raises(TypeError, match="must be a pair of numeric endpoints"):
+        parameter.encode(value)
+
+
+def _onset_duration_window() -> OnsetDurationParameter:
+    """Build the shipped 4 s render window with its 1 ms minimum held duration.
+
+    :returns: Onset-duration note window under test.
+    """
+    return OnsetDurationParameter(
         name="note_start_and_end",
         max_note_duration_seconds=4.0,
         min_note_duration_seconds=0.001,
     )
+
+
+def test_onset_duration_encodes_onset_and_remaining_window_fraction() -> None:
+    """Endpoints encode as onset plus duration bounded by the remaining window."""
+    parameter = _onset_duration_window()
 
     encoded = parameter.encode((1.0, 3.0))
 
@@ -977,68 +1000,34 @@ def test_note_duration_encodes_onset_and_remaining_window_fraction() -> None:
     assert parameter.decode(encoded) == pytest.approx((1.0, 3.0))
 
 
-def test_note_duration_sample_preserves_truncated_uniform_endpoint_prior() -> None:
+def test_onset_duration_sample_preserves_truncated_uniform_endpoint_prior() -> None:
     """Sampling shifts the sorted upper endpoint by the minimum duration."""
-    parameter = NoteDurationParameter(
-        name="note_start_and_end",
-        max_note_duration_seconds=4.0,
-        min_note_duration_seconds=0.001,
-    )
-
-    sampled = parameter.sample(np.random.default_rng(7))
+    sampled = _onset_duration_window().sample(np.random.default_rng(7))
 
     assert sampled == pytest.approx((2.499756770952063, 3.5889579900773323))
 
 
-def test_note_duration_samples_always_satisfy_renderer_window() -> None:
+def test_onset_duration_samples_always_satisfy_renderer_window() -> None:
     """Repeated sampler draws remain ordered, bounded, and at least 1 ms long."""
-    parameter = NoteDurationParameter(
-        name="note_start_and_end",
-        max_note_duration_seconds=4.0,
-        min_note_duration_seconds=0.001,
-    )
+    parameter = _onset_duration_window()
 
-    samples = np.array(
-        [parameter.sample(np.random.default_rng(seed)) for seed in range(256)]
-    )
+    samples = np.array([parameter.sample(np.random.default_rng(seed)) for seed in range(256)])
 
     assert np.all(samples[:, 0] >= 0.0)
     assert np.all(samples[:, 1] <= 4.0)
     assert np.all(samples[:, 1] - samples[:, 0] >= 0.001)
 
 
-def test_legacy_endpoint_variant_rejects_missing_or_ambiguous_timing() -> None:
-    """A compatibility variant requires one unambiguous current timing field."""
-    timing = NoteDurationParameter("window", 4.0)
-
-    with pytest.raises(ValueError, match="exactly one"):
-        legacy_endpoint_variant(ParamSpec([], []))
-    with pytest.raises(ValueError, match="exactly one"):
-        legacy_endpoint_variant(ParamSpec([], [timing, timing]))
-
-
-def test_note_duration_final_onset_encodes_canonical_duration_fraction() -> None:
+def test_onset_duration_final_onset_encodes_canonical_duration_fraction() -> None:
     """The singular final-onset window has one canonical encoded representation."""
-    parameter = NoteDurationParameter(
-        name="note_start_and_end",
-        max_note_duration_seconds=4.0,
-        min_note_duration_seconds=0.001,
-    )
-
-    encoded = parameter.encode((3.999, 4.0))
+    encoded = _onset_duration_window().encode((3.999, 4.0))
 
     np.testing.assert_array_equal(encoded, np.array([1.0, 0.0]))
 
 
-def test_note_duration_encoded_names_describe_model_coordinates() -> None:
+def test_onset_duration_encoded_names_describe_model_coordinates() -> None:
     """Timing labels distinguish onset from remaining-window duration."""
-    parameter = NoteDurationParameter(
-        name="note_start_and_end",
-        max_note_duration_seconds=4.0,
-        min_note_duration_seconds=0.001,
-    )
-
-    assert parameter.encoded_names() == (
+    assert _onset_duration_window().encoded_names() == (
         "note_start_and_end.onset",
         "note_start_and_end.duration_fraction",
     )
@@ -1051,23 +1040,18 @@ def test_note_duration_encoded_names_describe_model_coordinates() -> None:
         ([0.0, 1.0], (0.0, 4.0)),
         ([1.0, 0.0], (3.999, 4.0)),
         ([1.0, 1.0], (3.999, 4.0)),
+        ([0.6, 0.6], (2.3994, 3.36016)),
     ],
 )
-def test_note_duration_decode_always_returns_valid_window(
+def test_onset_duration_decode_always_returns_valid_window(
     encoded: list[float], expected: tuple[float, float]
 ) -> None:
-    """Every encoded boundary maps to an ordered minimum-length note window.
+    """Every unit-domain coordinate pair maps to an ordered minimum-length window.
 
     :param encoded: Unit-domain onset and duration coordinates.
     :param expected: Renderer-native endpoint pair.
     """
-    parameter = NoteDurationParameter(
-        name="note_start_and_end",
-        max_note_duration_seconds=4.0,
-        min_note_duration_seconds=0.001,
-    )
-
-    assert parameter.decode(np.array(encoded)) == pytest.approx(expected)
+    assert _onset_duration_window().decode(np.array(encoded)) == pytest.approx(expected, abs=1e-6)
 
 
 @pytest.mark.parametrize(
@@ -1076,25 +1060,105 @@ def test_note_duration_decode_always_returns_valid_window(
         [1.0, 3.0],
         (1.0,),
         (1.0, "end"),
-        (-0.1, 1.0),
-        (1.0, 1.0005),
-        (1.0, 4.1),
-        (math.nan, 2.0),
     ],
 )
-def test_note_duration_encode_rejects_invalid_endpoint_pair(value: object) -> None:
-    """Onset-duration encoding rejects malformed or unrenderable windows.
+def test_onset_duration_encode_rejects_malformed_endpoint_pair(value: object) -> None:
+    """Onset-duration encoding requires exactly two numeric tuple endpoints.
 
     :param value: Invalid endpoint container or value under test.
     """
-    parameter = NoteDurationParameter(
-        name="note_start_and_end",
-        max_note_duration_seconds=4.0,
-        min_note_duration_seconds=0.001,
-    )
+    with pytest.raises(TypeError, match="must be a pair of numeric endpoints"):
+        _onset_duration_window().encode(value)
 
-    with pytest.raises((TypeError, ValueError)):
-        parameter.encode(value)
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ((-0.1, 1.0), "onset must be within"),
+        ((1.0, 1.0005), "duration must be at least"),
+        ((3.0, 1.0), "duration must be at least"),
+        ((1.0, 4.1), "end must not exceed"),
+        ((math.nan, 2.0), "must be finite"),
+    ],
+)
+def test_onset_duration_encode_rejects_unrenderable_window(
+    value: tuple[float, float], message: str
+) -> None:
+    """A window the renderer contract forbids fails at encode time instead of being repaired.
+
+    :param value: Reversed, collapsed, out-of-horizon, or non-finite endpoints.
+    :param message: Expected rejection reason.
+    """
+    with pytest.raises(ValueError, match=message):
+        _onset_duration_window().encode(value)
+
+
+@pytest.mark.parametrize("encoded", [[0.5], [0.5, 1.5], [-0.1, 0.5], [math.nan, 0.5]])
+def test_onset_duration_decode_rejects_invalid_coordinates(encoded: list[float]) -> None:
+    """Decoding refuses rows that are truncated, non-finite, or outside the unit domain.
+
+    :param encoded: Invalid encoded coordinates.
+    """
+    with pytest.raises(ValueError, match="encoded note_start_and_end"):
+        _onset_duration_window().decode(np.array(encoded))
+
+
+@pytest.mark.parametrize(
+    ("maximum", "minimum"),
+    [(4.0, 0.0), (4.0, 4.0), (4.0, -0.001), (math.inf, 0.001), (4.0, math.nan)],
+)
+def test_onset_duration_rejects_invalid_duration_bounds(maximum: float, minimum: float) -> None:
+    """The minimum held duration must be finite, positive, and below the render horizon.
+
+    :param maximum: Candidate render horizon in seconds.
+    :param minimum: Candidate minimum held duration in seconds.
+    """
+    with pytest.raises(ValueError, match="note duration"):
+        OnsetDurationParameter("window", maximum, minimum)
+
+
+def test_onset_duration_variant_replaces_only_the_endpoint_note_window() -> None:
+    """The variant keeps every other parameter and the encoded width of its base spec."""
+    gain = ContinuousParameter(name="gain", min=0.0, max=1.0)
+    pitch = DiscreteLiteralParameter(name="pitch", min=48, max=72)
+    base = ParamSpec([gain], [pitch, NoteDurationParameter("window", 4.0)])
+
+    variant = onset_duration_variant(base)
+
+    assert variant is not None
+    window = variant.note_params[1]
+    assert isinstance(window, OnsetDurationParameter)
+    assert (window.name, window.max_note_duration_seconds) == ("window", 4.0)
+    assert variant.synth_params == [gain]
+    assert variant.note_params[0] is pitch
+    assert variant.encoded_width == base.encoded_width
+    assert isinstance(base.note_params[1], NoteDurationParameter)
+
+
+def test_onset_duration_variant_decodes_reversed_predictions_to_a_valid_window() -> None:
+    """A row the endpoint spec decodes to a reversed window decodes to an ordered one."""
+    base = ParamSpec([], [NoteDurationParameter("window", 4.0)])
+    row = np.array([0.5, -0.5], dtype=np.float32)
+
+    variant = onset_duration_variant(base)
+    assert variant is not None
+
+    _, endpoint_note = decode_model_output(row, base)
+    _, onset_note = decode_model_output(row, variant)
+
+    assert endpoint_note["window"] == pytest.approx((3.0, 1.0))
+    assert onset_note["window"] == pytest.approx((2.99925, 3.2501875))
+
+
+@pytest.mark.parametrize("note_params", [[], [OnsetDurationParameter("window", 4.0)]])
+def test_onset_duration_variant_without_endpoint_window_is_none(
+    note_params: list[OnsetDurationParameter],
+) -> None:
+    """A spec with no note window, or an already-converted one, has nothing to re-encode.
+
+    :param note_params: Note parameters holding no endpoint window.
+    """
+    assert onset_duration_variant(ParamSpec([], list(note_params))) is None
 
 
 def test_param2tok_projection_accepts_flat_array_parameter_width() -> None:
@@ -1310,10 +1374,8 @@ class TestDecodeModelOutput:
         _, note_params = decode_model_output(row, _tiny_spec())
 
         assert note_params["pitch"] == 108
-        # Both 0.2 predictions map to encoded 0.6: onset first, then held-duration fraction.
-        assert note_params["note_start_and_end"] == pytest.approx(
-            (2.3994, 3.36016), abs=1e-6
-        )
+        # 0.2 in [-1, 1] rescales to 0.6, then lerps onto the 4 s duration grid.
+        assert note_params["note_start_and_end"] == pytest.approx((2.4, 2.4))
 
     def test_input_row_is_not_mutated(self) -> None:
         """Decoding never mutates the caller's row (callers reuse prediction tensors)."""
@@ -1359,12 +1421,19 @@ class TestDecodeModelOutput:
         with pytest.raises(ValueError):
             decode_model_output(row, _tiny_spec())
 
-    def test_tail_truncated_rows_reject_invalid_note_duration_width(self) -> None:
-        """A row missing a duration coordinate cannot decode to a renderer window."""
+    def test_tail_truncated_rows_corrupt_note_duration_silently(self) -> None:
+        """Current contract: a row missing only tail values decodes without raising.
+
+        The note-duration value comes back malformed (a 1-tuple) — pinned so a
+        future width guard is a deliberate contract change.
+        """
         row = np.array(_ROW[:5], dtype=np.float32)
 
-        with pytest.raises(ValueError, match=r"must have shape \(2,\)"):
-            decode_model_output(row, _tiny_spec())
+        _, note_params = decode_model_output(row, _tiny_spec())
+        note_window = note_params["note_start_and_end"]
+
+        assert isinstance(note_window, tuple)
+        assert len(note_window) == 1
 
 
 class TestModelSpaceConversion:

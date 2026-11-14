@@ -578,15 +578,14 @@ def test_render_torchsynth_out_of_range_note_columns_clamp_instead_of_raising() 
     assert audio.shape == (1, _RENDER_KWARGS["signal_length"])
 
 
-def test_render_torchsynth_note_window_beyond_the_spec_maximum_raises() -> None:
-    """A window longer than the note param's range fails loudly at encode time."""
+def test_render_torchsynth_note_window_beyond_the_spec_maximum_clamps() -> None:
+    """A window longer than the note param's range renders as the longest renderable note."""
     longest = _NOTE_WINDOW_PARAM.max_note_duration_seconds
 
-    with pytest.raises(ValueError, match="end must not exceed"):
-        _encoded_row(0, 60, (0.0, 2 * longest))
-
-    longest_render = render_torchsynth(_encoded_row(0, 60, (0.0, longest)), **_RENDER_KWARGS)
-    assert torch.isfinite(longest_render).all()
+    assert torch.equal(
+        render_torchsynth(_encoded_row(0, 60, (0.0, 2 * longest)), **_RENDER_KWARGS),
+        render_torchsynth(_encoded_row(0, 60, (0.0, longest)), **_RENDER_KWARGS),
+    )
 
 
 def test_render_torchsynth_synth_only_width_raises() -> None:

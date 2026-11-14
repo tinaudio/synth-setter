@@ -404,21 +404,16 @@ def test_flow_matching_validation_without_scalar_pitch_skips_pitch_residuals(
 ) -> None:
     """A registered spec without scalar MIDI pitch retains core validation metrics.
 
-    :param monkeypatch: Registry resolution replacement scoped to this test.
+    :param monkeypatch: Registry projection replacement scoped to this test.
     """
-    import synth_setter.data.vst.param_spec_registry as registry
+    import synth_setter.data.vst as vst
 
     spec_without_pitch = ParamSpec(
         synth_params=[ContinuousParameter(f"param_{index}") for index in range(_NUM_PARAMS)],
         note_params=[],
     )
-    original_resolve = registry.resolve_param_spec
     monkeypatch.setattr(
-        registry,
-        "resolve_param_spec",
-        lambda name, timing: (
-            spec_without_pitch if name == "without_pitch" else original_resolve(name, timing)
-        ),
+        vst, "param_specs", {**vst.param_specs, "without_pitch": spec_without_pitch}
     )
     module = _flow_matching_module(param_spec="without_pitch")
 

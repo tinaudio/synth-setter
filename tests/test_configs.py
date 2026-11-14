@@ -25,6 +25,7 @@ from synth_setter.models.components.rendered_reward import (
     SynthRenderedReward,
 )
 from synth_setter.models.vst_flowvae_module import VSTFlowVAEModule
+from synth_setter.param_spec_name import base_param_spec_name
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.data.meanaudio import MEANAUDIO_EMBEDDING_DIM
 from synth_setter.pipeline.data.t5gemma import T5GEMMA_EMBEDDING_DIM, T5GEMMA_MAX_LENGTH
@@ -981,14 +982,16 @@ def test_vst_model_width_derives_from_active_param_spec(
 
 # Parameterized over the live registry so newly registered synths are covered
 # automatically; one representative width path suffices since path wiring is
-# spec-independent (covered above).
+# spec-independent (covered above). An onset-duration twin has no synth group of its
+# own: a run selects it by overriding the spec name on its base spec's synth.
 @pytest.mark.parametrize("param_spec_name", sorted(param_specs))
 def test_vst_model_width_resolves_for_every_registered_spec(param_spec_name: str) -> None:
     cfg = _compose(
         "train.yaml",
         [
             "datamodule=surge_lance",
-            f"synth={param_spec_name}",
+            f"synth={base_param_spec_name(param_spec_name)}",
+            f"synth.param_spec_name={param_spec_name}",
             "model=vst_ffn",
             "trainer=cpu",
         ],

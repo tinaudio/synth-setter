@@ -922,9 +922,7 @@ SURGE_XT_PARAM_SPEC = ParamSpec(
             min=48,
             max=72,
         ),
-        NoteDurationParameter(
-            name="note_start_and_end", max_note_duration_seconds=4.0
-        ),
+        NoteDurationParameter(name="note_start_and_end", max_note_duration_seconds=4.0),
     ],
 )
 
@@ -1054,9 +1052,7 @@ SURGE_SIMPLE_PARAM_SPEC = ParamSpec(
             min=48,
             max=72,
         ),
-        NoteDurationParameter(
-            name="note_start_and_end", max_note_duration_seconds=4.0
-        ),
+        NoteDurationParameter(name="note_start_and_end", max_note_duration_seconds=4.0),
     ],
 )
 
@@ -1079,8 +1075,6 @@ SURGE_4_PARAM_SPEC = ParamSpec(
             min=48,
             max=72,
         ),
-        NoteDurationParameter(
-            name="note_start_and_end", max_note_duration_seconds=4.0
-        ),
+        NoteDurationParameter(name="note_start_and_end", max_note_duration_seconds=4.0),
     ],
 )

@@ -29,19 +29,6 @@ def test_describe_fields_surge_matches_encoded_field_order() -> None:
     ]
 
 
-def test_describe_fields_uses_persisted_note_timing_semantics() -> None:
-    """Timing metadata changes descriptions without changing the registry identity."""
-    legacy = describe_fields("surge_4", "surge_4")
-    current = describe_fields("surge_4", "surge_4", "onset_duration")
-
-    legacy_timing = json.loads(legacy[-1])
-    current_timing = json.loads(current[-1])
-    assert legacy_timing["type"] == "NoteDurationParameter"
-    assert "coordinates" not in legacy_timing
-    assert current_timing["type"] == "NoteDurationParameter"
-    assert current_timing["coordinates"] == ["onset", "duration_fraction"]
-
-
 def test_matryoshka_truncation_renormalizes_prefix() -> None:
     """Ensure truncation renormalizes each embedding prefix."""
     full = np.ones((2, 768), dtype=np.float32)
@@ -85,55 +72,6 @@ def test_artifact_round_trip_preserves_vectors(tmp_path: Path) -> None:
     assert metadata.descriptions == descriptions
 
 
-def test_legacy_artifact_without_timing_discriminator_still_loads(tmp_path: Path) -> None:
-    """Pre-discriminator language artifacts preserve their endpoint descriptions.
-
-    :param tmp_path: Temporary directory for the artifact.
-    """
-    descriptions = describe_fields("surge_simple", "surge_xt")
-    embeddings = np.full((len(descriptions), 128), 1 / np.sqrt(128), dtype=np.float32)
-    path = tmp_path / "language.npz"
-    save_param_language(path, embeddings, "surge_simple", "surge_xt")
-    with np.load(path, allow_pickle=False) as archive:
-        metadata = json.loads(str(archive["metadata"].item()))
-    metadata.pop("note_timing_parameterization")
-    np.savez(path, embeddings=embeddings, metadata=json.dumps(metadata))
-
-    actual, restored_metadata = load_param_language(path, "surge_simple", "surge_xt")
-
-    np.testing.assert_array_equal(actual, embeddings)
-    assert restored_metadata.note_timing_parameterization == "legacy_endpoints"
-
-
-def test_onset_duration_artifact_round_trip_rejects_legacy_timing(tmp_path: Path) -> None:
-    """Persisted onset-duration vectors cannot be loaded with legacy semantics.
-
-    :param tmp_path: Temporary directory for the artifact.
-    """
-    descriptions = describe_fields("surge_simple", "surge_xt", "onset_duration")
-    embeddings = np.full((len(descriptions), 128), 1 / np.sqrt(128), dtype=np.float32)
-    path = tmp_path / "language.npz"
-
-    save_param_language(
-        path,
-        embeddings,
-        "surge_simple",
-        "surge_xt",
-        "onset_duration",
-    )
-
-    actual, metadata = load_param_language(
-        path,
-        "surge_simple",
-        "surge_xt",
-        "onset_duration",
-    )
-    np.testing.assert_array_equal(actual, embeddings)
-    assert metadata.note_timing_parameterization == "onset_duration"
-    with pytest.raises(ValueError, match="spec"):
-        load_param_language(path, "surge_simple", "surge_xt")
-
-
 def test_artifact_wrong_spec_rejected(tmp_path: Path) -> None:
     """Ensure loading an artifact with the wrong spec fails.
 
@@ -145,6 +83,36 @@ def test_artifact_wrong_spec_rejected(tmp_path: Path) -> None:
     save_param_language(path, embeddings, "surge_simple", "surge_xt")
     with pytest.raises(ValueError, match="spec"):
         load_param_language(path, "surge_4", "surge_xt")
+
+
+def test_describe_fields_endpoint_spec_note_window_description_is_pinned() -> None:
+    """Checkpoints and artifacts persist this text, so an endpoint-timed spec must keep it."""
+    assert describe_fields("surge_4", "surge_4")[-1] == (
+        '{"encoded_span": [5, 7], "name": "note_start_and_end", "spec": "surge_4", '
+        '"synth": "surge_4", "type": "NoteDurationParameter"}'
+    )
+
+
+@pytest.mark.parametrize(
+    ("saved", "loaded"),
+    [("surge_4", "surge_4_onset_duration"), ("surge_4_onset_duration", "surge_4")],
+)
+def test_artifact_of_same_width_note_timing_twin_rejected(
+    tmp_path: Path, saved: str, loaded: str
+) -> None:
+    """Field vectors describing one note-timing encoding never load under the other.
+
+    :param tmp_path: Temporary directory for the artifact.
+    :param saved: Spec the artifact describes.
+    :param loaded: Same-width spec requested at load.
+    """
+    descriptions = describe_fields(saved, "surge_4")
+    path = tmp_path / "language.npz"
+    embeddings = np.full((len(descriptions), 768), 1 / np.sqrt(768), dtype=np.float32)
+    save_param_language(path, embeddings, saved, "surge_4")
+
+    with pytest.raises(ValueError, match="spec"):
+        load_param_language(path, loaded, "surge_4")
 
 
 def test_artifact_non_unit_vectors_rejected_on_save(tmp_path: Path) -> None:

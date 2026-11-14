@@ -284,10 +284,7 @@ def make_lance_dataset(
         seed_debug_array,
     )
 
-    param_spec = resolve_param_spec(
-        render_cfg.param_spec_name,
-        render_cfg.note_timing_parameterization,
-    )
+    param_spec = resolve_param_spec(render_cfg.param_spec_name)
     meta = render_cfg.shard_metadata()
     start_idx = 0
     lance_path = Path(lance_dir)

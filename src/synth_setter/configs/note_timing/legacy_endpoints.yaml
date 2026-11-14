@@ -1,7 +1,0 @@
-# @package _global_
-
-# Pins start/end note timing for endpoints whose default checkpoint predates the
-# onset-duration encoding; a group entry because endpoint configs may not carry a
-# top-level `synth:` field (#3128).
-synth:
-  note_timing_parameterization: legacy_endpoints
