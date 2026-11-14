@@ -19,6 +19,7 @@ from typing import Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pyarrow as pa
 import torch
 from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import BasePredictionWriter, Callback, Checkpoint, ModelCheckpoint
@@ -28,6 +29,11 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 from matplotlib.figure import Figure
 
 from synth_setter.data.vst import param_specs
+from synth_setter.evaluation.prediction_table import (
+    PREDICTION_TABLE_NAME,
+    prediction_rows,
+    write_prediction_table,
+)
 from synth_setter.metrics import (
     categorical_mismatch_metric_families,
     number_group_optimal_assignment_mse_groups,
@@ -542,14 +548,28 @@ class PredictionWriter(BasePredictionWriter):
         self,
         output_dir: str | os.PathLike[str],
         write_interval: Literal["batch", "epoch", "batch_and_epoch"],
+        table_param_spec_name: str | None = None,
     ) -> None:
         """Initialize prediction persistence and progress state.
 
         :param output_dir: Directory receiving prediction tensors.
         :param write_interval: Lightning prediction-writer callback interval.
+        :param table_param_spec_name: Registered spec the predictions are encoded in;
+            when set, a finished predict pass also writes ``predictions.lance`` in
+            ``output_dir``. ``None`` writes no table.
+        :raises ValueError: A table is requested from a writer that skips per-batch writes.
         """
         super().__init__(write_interval)
+        if table_param_spec_name is not None and not self.interval.on_batch:
+            raise ValueError(
+                "table_param_spec_name needs per-batch writes; "
+                f"write_interval={write_interval!r} skips them"
+            )
         self.output_dir = output_dir
+        self._table_spec = (
+            None if table_param_spec_name is None else param_specs[table_param_spec_name]
+        )
+        self._table_batches: list[pa.Table] = []
         self._progress_started_at: dict[int, float] = {}
         self._samples_written: dict[int, int] = {}
         os.makedirs(self.output_dir, exist_ok=True)
@@ -563,6 +583,19 @@ class PredictionWriter(BasePredictionWriter):
         del trainer, pl_module
         self._progress_started_at.clear()
         self._samples_written.clear()
+        self._table_batches.clear()
+
+    def on_predict_end(self, trainer: Trainer, pl_module: LightningModule) -> None:
+        """Write the buffered prediction table, so it exists only for a finished pass.
+
+        :param trainer: Ignored; required by Lightning's callback contract.
+        :param pl_module: Ignored; required by Lightning's callback contract.
+        """
+        del trainer, pl_module
+        if self._table_batches:
+            write_prediction_table(
+                Path(self.output_dir) / PREDICTION_TABLE_NAME, self._table_batches
+            )
 
     def on_predict_batch_start(
         self,
@@ -640,19 +673,24 @@ class PredictionWriter(BasePredictionWriter):
         dataloader_idx: int,
     ) -> None:
         prediction_tensor, persisted_batch = prediction
-        torch.save(
-            _plain_cpu_tensor(prediction_tensor),
-            os.path.join(self.output_dir, f"pred-{batch_idx}.pt"),
+        predictions = _plain_cpu_tensor(prediction_tensor)
+        targets = (
+            _plain_cpu_tensor(persisted_batch["params"]) if "params" in persisted_batch else None
         )
+        torch.save(predictions, os.path.join(self.output_dir, f"pred-{batch_idx}.pt"))
         torch.save(
             _plain_cpu_tensor(persisted_batch["audio"]),
             os.path.join(self.output_dir, f"target-audio-{batch_idx}.pt"),
         )
-
-        if "params" in persisted_batch:
-            torch.save(
-                _plain_cpu_tensor(persisted_batch["params"]),
-                os.path.join(self.output_dir, f"target-params-{batch_idx}.pt"),
+        if targets is not None:
+            torch.save(targets, os.path.join(self.output_dir, f"target-params-{batch_idx}.pt"))
+        if self._table_spec is not None:
+            self._table_batches.append(
+                prediction_rows(
+                    predictions.float().numpy(),
+                    None if targets is None else targets.float().numpy(),
+                    self._table_spec,
+                )
             )
         self._log_progress(trainer, persisted_batch, batch_idx, dataloader_idx=dataloader_idx)
 

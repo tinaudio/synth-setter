@@ -48,6 +48,7 @@ from synth_setter.cli.migrate_checkpoint import main
 from synth_setter.cli.train import train
 from synth_setter.data.pyfdn_param_spec import PYFDN_N8_MONO_HOUSEHOLDER_PARAM_SPEC
 from synth_setter.data.vst import param_specs, plugin_state_paths
+from synth_setter.data.vst.param_spec import decode_model_output, spec_quantize_model_output
 from synth_setter.data.vst.shapes import AUDIO_FIELD, CQT_FIELD
 from synth_setter.models.components.embed_pool import EmbeddingPool
 from synth_setter.models.components.pretrained_encoder import (
@@ -506,16 +507,13 @@ def test_evaluate_without_checkpoint_override_raises_missing_mandatory_value() -
         evaluate(cfg)
 
 
-def test_evaluate_grouped_projection_checkpoint_writes_finite_predictions(
-    tmp_path: Path,
-) -> None:
-    """Load a grouped checkpoint through evaluate and persist real Lance predictions.
+def _save_untrained_checkpoint(cfg: DictConfig, checkpoint: Path) -> Path:
+    """Save the config's freshly initialized model as a Lightning checkpoint.
 
-    :param tmp_path: Isolated dataset, checkpoint, and prediction root.
+    :param cfg: Composed config whose ``model`` node is instantiated.
+    :param checkpoint: Destination checkpoint path.
+    :returns: ``checkpoint``, for chaining into ``cfg.ckpt_path``.
     """
-    cfg = build_grouped_projection_config(tmp_path, config_name="eval.yaml")
-    model = instantiate(cfg.model)
-    checkpoint = tmp_path / "grouped.ckpt"
     checkpoint_trainer = Trainer(
         accelerator="cpu",
         devices=1,
@@ -524,9 +522,20 @@ def test_evaluate_grouped_projection_checkpoint_writes_finite_predictions(
         enable_progress_bar=False,
         enable_model_summary=False,
     )
-    checkpoint_trainer.strategy.connect(model)
+    checkpoint_trainer.strategy.connect(instantiate(cfg.model))
     checkpoint_trainer.save_checkpoint(checkpoint)
-    cfg.ckpt_path = str(checkpoint)
+    return checkpoint
+
+
+def test_evaluate_grouped_projection_checkpoint_writes_finite_predictions(
+    tmp_path: Path,
+) -> None:
+    """Load a grouped checkpoint through evaluate and persist real Lance predictions.
+
+    :param tmp_path: Isolated dataset, checkpoint, and prediction root.
+    """
+    cfg = build_grouped_projection_config(tmp_path, config_name="eval.yaml")
+    cfg.ckpt_path = str(_save_untrained_checkpoint(cfg, tmp_path / "grouped.ckpt"))
     HydraConfig().set_config(cfg)
 
     try:
@@ -542,6 +551,42 @@ def test_evaluate_grouped_projection_checkpoint_writes_finite_predictions(
         param_specs["surge_4"].encoded_width,
     )
     assert torch.isfinite(predictions).all()
+
+
+def test_evaluate_predict_with_table_spec_writes_render_ready_prediction_table(
+    tmp_path: Path,
+) -> None:
+    """Predict mode writes a Lance table whose rows decode to the patch the renderer plays.
+
+    :param tmp_path: Isolated dataset, checkpoint, and prediction root.
+    """
+    cfg = build_grouped_projection_config(tmp_path, config_name="eval.yaml")
+    cfg.ckpt_path = str(_save_untrained_checkpoint(cfg, tmp_path / "grouped.ckpt"))
+    with open_dict(cfg):
+        cfg.callbacks.prediction_writer.table_param_spec_name = "${synth.param_spec_name}"
+    HydraConfig().set_config(cfg)
+
+    try:
+        evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    spec = param_specs["surge_4"]
+    predictions_dir = tmp_path / "predictions"
+    table = lance.dataset(str(predictions_dir / "predictions.lance")).to_table()
+    predictions = torch.load(predictions_dir / "pred-0.pt", weights_only=True).numpy()
+    targets = torch.load(predictions_dir / "target-params-0.pt", weights_only=True).numpy()
+    assert table.column("row_id").to_pylist() == list(range(GROUPED_PROJECTION_DATASET_ROWS))
+    np.testing.assert_array_equal(
+        table.column("pred_params_raw").combine_chunks().to_numpy_ndarray(), predictions
+    )
+    np.testing.assert_array_equal(
+        table.column("target_params").combine_chunks().to_numpy_ndarray(), targets
+    )
+    effective = table.column("pred_params_effective").combine_chunks().to_numpy_ndarray()
+    assert decode_model_output(effective[0], spec) == decode_model_output(
+        spec_quantize_model_output(predictions[0], spec), spec
+    )
 
 
 def _compose_sketch_cfg_eval(

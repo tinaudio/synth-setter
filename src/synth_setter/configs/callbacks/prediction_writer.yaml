@@ -2,3 +2,5 @@ prediction_writer:
   _target_: synth_setter.utils.callbacks.PredictionWriter
   output_dir: ${paths.output_dir}/predictions
   write_interval: batch
+  # Set to `${synth.param_spec_name}` to also write `predictions.lance` (one row per sample).
+  table_param_spec_name: null
