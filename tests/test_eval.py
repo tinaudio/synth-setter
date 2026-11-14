@@ -61,6 +61,7 @@ from synth_setter.models.components.vector_projection import VectorProjection
 from synth_setter.models.slap_module import SLAPModule
 from synth_setter.models.vst_ff_module import VSTFeedForwardModule
 from synth_setter.models.vst_flow_ram_module import VSTFlowRAMModule
+from synth_setter.param_spec_name import base_param_spec_name
 from synth_setter.pipeline.data.cqt import CQT_EMBEDDING_DIM, cqt_num_frames
 from synth_setter.pipeline.data.matpac_plus import MATPAC_PLUS_FRONTEND
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
@@ -1976,11 +1977,17 @@ def _compose_fake_oracle_eval_cfg(
         ``None`` keeps the experiment's default ``surge`` group.
     :returns: Composed eval ``DictConfig`` ready for ``evaluate``.
     """
+    synth_name = base_param_spec_name(param_spec_name)
     with initialize_config_module(version_base="1.3", config_module="synth_setter.configs"):
         cfg = compose(
             config_name="eval.yaml",
             return_hydra_config=True,
-            overrides=["experiment=surge/fake_oracle", f"synth={param_spec_name}", f"mode={mode}"]
+            overrides=[
+                "experiment=surge/fake_oracle",
+                f"synth={synth_name}",
+                f"synth.param_spec_name={param_spec_name}",
+                f"mode={mode}",
+            ]
             + ([f"datamodule={datamodule}"] if datamodule else [])
             + (["render=pyfdn"] if param_spec_name == "pyfdn_n8_mono_householder" else []),
         )
@@ -2006,9 +2013,9 @@ def _compose_fake_oracle_eval_cfg(
             cfg.render = RenderConfig.model_validate(
                 {
                     "synth": {
-                        "name": param_spec_name,
+                        "name": synth_name,
                         "param_spec_name": param_spec_name,
-                        "plugin_state_path": str(plugin_state_paths[param_spec_name]),
+                        "plugin_state_path": str(plugin_state_paths[synth_name]),
                         "plugin_path": "plugins/fake.vst3",
                         "synth_version": "1.3.4",
                     },
@@ -2718,6 +2725,88 @@ def test_evaluate_validate_mode_lance_datamodule_runs_oracle(
     assert isinstance(param_mse, torch.Tensor)
     assert param_mse.item() == 0.0
     assert metric_dict["val/per_param_mse/a_amp_eg_attack"].item() == 0.0
+
+
+@pytest.mark.fake_vst
+@pytest.mark.parametrize("param_spec_name", ["surge_4_onset_duration"], indirect=True)
+def test_evaluate_validate_mode_onset_duration_dataset_reports_onset_and_hold_errors(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+    param_spec_name: str,
+) -> None:
+    """Rows written under an onset-duration spec evaluate under that spec end to end.
+
+    The dataset is rendered by the production writer, so its note columns are real
+    onset-duration encodings; the oracle returns them verbatim.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
+    :param fake_surge_smoke_datasets: Lance smoke dataset rendered with ``param_spec_name``.
+    :param param_spec_name: Onset-duration spec selected for the dataset and the run.
+    """
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        mode="validate",
+        param_spec_name=param_spec_name,
+        datamodule="surge_lance",
+    )
+
+    HydraConfig().set_config(cfg)
+    try:
+        metric_dict, object_dict = evaluate(cfg)
+    finally:
+        GlobalHydra.instance().clear()
+
+    assert_log_per_param_mse_wired(object_dict["trainer"], param_spec_name)
+    assert metric_dict["val/param_mse"].item() == 0.0
+    assert metric_dict["val/note_onset_mae_seconds/note_start_and_end"].item() == 0.0
+    assert metric_dict["val/note_duration_mae_seconds/note_start_and_end"].item() == 0.0
+    assert "val/note_timing_mae_seconds/note_start_and_end" not in metric_dict
+
+
+@pytest.mark.fake_vst
+def test_evaluate_onset_duration_run_over_endpoint_dataset_raises(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+) -> None:
+    """Evaluation refuses equal-width rows encoded with the other note timing.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
+    :param fake_surge_smoke_datasets: Lance smoke dataset rendered with ``surge_4``.
+    """
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        mode="validate",
+        param_spec_name="surge_4_onset_duration",
+        datamodule="surge_lance",
+    )
+
+    with pytest.raises(ValueError, match="param_spec_name='surge_4'"):
+        evaluate(cfg)
+
+
+@pytest.mark.fake_vst
+def test_evaluate_onset_duration_run_over_unverifiable_dataset_raises(
+    tmp_path: Path,
+    fake_surge_smoke_datasets: Path,
+) -> None:
+    """An onset-duration evaluation never decodes rows whose encoding is unrecorded.
+
+    :param tmp_path: Pinned as Hydra ``output_dir`` / ``log_dir``.
+    :param fake_surge_smoke_datasets: Lance smoke dataset whose frozen spec is removed.
+    """
+    (fake_surge_smoke_datasets / "input_spec.json").unlink()
+    cfg = _compose_fake_oracle_eval_cfg(
+        tmp_path,
+        fake_surge_smoke_datasets,
+        mode="validate",
+        param_spec_name="surge_4_onset_duration",
+        datamodule="surge_lance",
+    )
+
+    with pytest.raises(ValueError, match="cannot verify"):
+        evaluate(cfg)
 
 
 def test_evaluate_test_mode_partial_lance_root_returns_metric(

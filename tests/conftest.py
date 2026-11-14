@@ -2,6 +2,7 @@
 
 import copy
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -29,7 +30,7 @@ from synth_setter.conditioning import (
 from synth_setter.data.vst import core, param_specs, plugin_state_paths
 from synth_setter.model_cache import embedding_model_dir
 from synth_setter.models.components.pretrained_encoder import ClapAudioEncoder
-from synth_setter.param_spec_name import ParamSpecName
+from synth_setter.param_spec_name import ParamSpecName, base_param_spec_name
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import DatasetSpec, RenderConfig
 from synth_setter.pipeline.subprocess_stream import scaled_timeout
@@ -1508,16 +1509,17 @@ def _render_smoke_train_subprocess(
 def _smoke_fake_render_cfg(param_spec_name: str) -> RenderConfig:
     """Build the one-shard fake-plugin ``RenderConfig`` for the Lance smoke render.
 
-    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs` and
-        :data:`synth_setter.data.vst.plugin_state_paths` selecting spec and preset.
+    :param param_spec_name: Key into :data:`synth_setter.data.vst.param_specs`; its base
+        spec name selects the synth identity and preset.
     :returns: A CPU ``RenderConfig`` with the GUI toggle disabled.
     """
+    synth_name = base_param_spec_name(param_spec_name)
     return RenderConfig(
         synth=SynthSpec(
-            name=SynthName(param_spec_name),
+            name=SynthName(synth_name),
             param_spec_name=ParamSpecName(param_spec_name),
             plugin_path=PLUGIN_PATH,
-            plugin_state_path=str(plugin_state_paths[param_spec_name]),
+            plugin_state_path=str(plugin_state_paths[synth_name]),
             synth_version=_SURGE_FIXTURE_SYNTH_VERSION,
         ),
         sample_rate=_SURGE_FIXTURE_SAMPLE_RATE,
@@ -1575,6 +1577,11 @@ def _build_surge_smoke_lance_datasets(
 
     render_train_lance(train_lance, param_spec_name)
     _validate_surge_dataset(train_lance, num_samples)
+    # Finalized datasets name the spec their rows are encoded with; train/eval check it.
+    (smoke_dataset_dir / "input_spec.json").write_text(
+        json.dumps({"render": {"synth": {"param_spec_name": param_spec_name}}}),
+        encoding="utf-8",
+    )
 
     # Sibling stats.npz folded straight from the Lance mel rows; mask degenerate
     # bins as the h5 path's --mask-degenerate-bins flag does for fake-plugin data.

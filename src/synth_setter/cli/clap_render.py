@@ -35,6 +35,7 @@ from synth_setter.data.vst.param_spec import (
 from synth_setter.data.vst.param_spec_registry import param_specs
 from synth_setter.model_cache import synth_setter_cache_dir
 from synth_setter.models.vst_flow_matching_module import VSTFlowMatchingModule
+from synth_setter.param_spec_name import require_trained_param_spec
 from synth_setter.pipeline import r2_io
 from synth_setter.pipeline.schemas.spec import RenderConfig
 from synth_setter.renderer_factory import anchor_render_preset, make_audio_renderer
@@ -454,7 +455,8 @@ def _validate_inverse_model(model: VSTFlowMatchingModule, render: RenderConfig) 
 
     :param model: Loaded inverse model.
     :param render: Active Surge renderer identity.
-    :raises ValueError: Conditioning, sketch controls, or output width is incompatible.
+    :raises ValueError: Conditioning, sketch controls, parameter spec, or output width is
+        incompatible.
     """
     conditioning = resolve_embedding_conditioning(model.hparams["conditioning"])
     if (
@@ -467,6 +469,7 @@ def _validate_inverse_model(model: VSTFlowMatchingModule, render: RenderConfig) 
         )
     if model.hparams["sketch_controls"] is not None:
         raise ValueError("text-only rendering does not support sketch-conditioned checkpoints")
+    require_trained_param_spec(model.hparams, render.param_spec_name)
     expected_width = len(param_specs[render.param_spec_name])
     checkpoint_width = model.hparams["num_params"]
     if checkpoint_width != expected_width:

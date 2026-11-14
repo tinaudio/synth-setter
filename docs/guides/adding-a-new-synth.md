@@ -205,6 +205,10 @@ have the same width and nothing else distinguishes their rows:
   for dataset generation and for every train, eval, and embedding run over that
   dataset. The twin shares its base spec's parameter map, preset, and source
   digests.
+- Datasets and checkpoints record the spec name. Training, evaluation,
+  `add_embeddings`, and the render CLIs refuse a dataset or checkpoint that
+  names the other encoding, and an onset-duration run refuses a dataset whose
+  `input_spec.json` does not name it.
 - An onset-duration spec logs `note_onset_mae_seconds` and
   `note_duration_mae_seconds` in place of `note_timing_mae_seconds`.
 

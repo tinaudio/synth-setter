@@ -86,6 +86,7 @@ from synth_setter.pipeline.data.add_embeddings import (
     _load_m2l_spec_encoder,
     _load_same_spec_encoder,
     _load_t5gemma_spec_encoder,
+    _lineage_dataset_root,
     _matching_index_exists,
     _missing_embedding_specs,
     _prepare_resume_cache,
@@ -4237,3 +4238,47 @@ def test_sketch_spec_encoder_with_cuda_config_extracts_on_cuda() -> None:
         controls[:, SKETCH_PITCH_SLICE].argmax(axis=1),
         on_cpu[:, SKETCH_PITCH_SLICE].argmax(axis=1),
     )
+
+
+@pytest.mark.parametrize(
+    ("lance_uri", "expected"),
+    [
+        ("train.lance", "."),
+        ("data/train.lance", "data"),
+        ("/data/root/train.lance", "/data/root"),
+        ("r2://bucket/run/train.lance", "r2://bucket/run"),
+    ],
+)
+def test_lineage_dataset_root_resolves_split_parent(lance_uri: str, expected: str) -> None:
+    """The frozen spec is read from the directory that holds the split.
+
+    :param lance_uri: Split dataset URI under test.
+    :param expected: Dataset-root URI for metadata reads.
+    """
+    assert _lineage_dataset_root(lance_uri) == expected
+
+
+@pytest.mark.parametrize(
+    ("dataset_spec", "message"),
+    [("surge_4", "param_spec_name='surge_4'"), (None, "cannot verify")],
+)
+def test_add_embeddings_param_text_under_other_note_timing_spec_raises(
+    tmp_path: Path, dataset_spec: str | None, message: str
+) -> None:
+    """Param rows are never described under the other same-width note-timing spec.
+
+    :param tmp_path: Dataset root holding the split and its frozen spec.
+    :param dataset_spec: Spec the dataset records, or ``None`` when it records none.
+    :param message: Expected rejection reason.
+    """
+    if dataset_spec is not None:
+        frozen_spec = {"render": {"synth": {"param_spec_name": dataset_spec}}}
+        (tmp_path / "input_spec.json").write_text(json.dumps(frozen_spec), encoding="utf-8")
+    config = AddEmbeddingsConfig(
+        lance_uri=str(tmp_path / "train.lance"),
+        embeddings=("t5gemma",),
+        param_spec_name="surge_4_onset_duration",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        add_embeddings(config)

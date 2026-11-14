@@ -609,6 +609,35 @@ class TestPredictCaptureEndToEnd:
         assert result.exit_code == 0, result.output
         _assert_valid_bridge_csv(prediction_dir / "feedbeefcafe0123" / "params.csv")
 
+    def test_onset_duration_spec_with_endpoint_checkpoint_is_rejected(
+        self, capture_wav: Path, flow_checkpoint: Path, tmp_path: Path
+    ):
+        """A checkpoint is never decoded under the other same-width note-timing spec.
+
+        :param capture_wav: Fixture capture WAV.
+        :param flow_checkpoint: Real flow-matching checkpoint trained without onset-duration
+            timing.
+        :param tmp_path: Pytest fixture providing a fresh test directory.
+        """
+        prediction_dir = tmp_path / "param-prediction-dir"
+
+        result = CliRunner().invoke(
+            main,
+            [
+                str(capture_wav),
+                "--prediction-dir",
+                str(prediction_dir),
+                "--checkpoint",
+                str(flow_checkpoint),
+                "--param-spec-name",
+                "surge_xt_onset_duration",
+            ],
+        )
+
+        assert isinstance(result.exception, ValueError)
+        assert "surge_xt_onset_duration" in str(result.exception)
+        assert not (prediction_dir / "a3f9c2d4e5b60718" / "params.csv").exists()
+
     def test_default_model_class_flow_writes_bridge_artifacts(
         self, capture_wav: Path, flow_checkpoint: Path, tmp_path: Path
     ):

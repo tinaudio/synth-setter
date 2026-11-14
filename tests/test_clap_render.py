@@ -6,6 +6,7 @@ import csv
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import numpy as np
@@ -156,6 +157,60 @@ def test_write_summary_csv_persists_named_statistics(tmp_path: Path) -> None:
 
     with output.open(newline="", encoding="utf-8") as stream:
         assert list(csv.DictReader(stream)) == [{"count": "2", "mean": "0.25"}]
+
+
+def _inverse_model_trained_on(param_spec: str | None) -> SimpleNamespace:
+    """Describe a text-compatible CLAP checkpoint by the hyperparameters validation reads.
+
+    :param param_spec: Spec name the checkpoint records, or ``None`` when it predates recording.
+    :returns: Stand-in exposing the checkpoint hyperparameters.
+    """
+    return SimpleNamespace(
+        hparams={
+            "conditioning": {"column": "clap", "input_shape": [512]},
+            "sketch_controls": None,
+            "param_spec": param_spec,
+            "num_params": 92,
+        }
+    )
+
+
+@pytest.mark.parametrize("param_spec", ["surge_simple", None])
+def test_validate_inverse_model_endpoint_checkpoint_matches_default_render(
+    param_spec: str | None,
+) -> None:
+    """The shipped endpoint-timed render accepts endpoint-timed checkpoints, recorded or not.
+
+    :param param_spec: Spec name the checkpoint records.
+    """
+    render = clap_render._load_settings().render
+
+    clap_render._validate_inverse_model(_inverse_model_trained_on(param_spec), render)  # pyright: ignore[reportArgumentType]
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_spec", "render_spec"),
+    [
+        ("surge_simple_onset_duration", "surge_simple"),
+        ("surge_simple", "surge_simple_onset_duration"),
+        (None, "surge_simple_onset_duration"),
+    ],
+)
+def test_validate_inverse_model_matching_width_other_note_timing_raises(
+    checkpoint_spec: str | None, render_spec: str
+) -> None:
+    """Equal-width checkpoint and render note-timing encodings cannot be exchanged.
+
+    :param checkpoint_spec: Spec name the checkpoint records.
+    :param render_spec: Same-width spec the render would decode predictions with.
+    """
+    default_render = clap_render._load_settings().render
+    render = default_render.model_copy(
+        update={"synth": default_render.synth.model_copy(update={"param_spec_name": render_spec})}
+    )
+
+    with pytest.raises(ValueError, match="checkpoint parameter spec"):
+        clap_render._validate_inverse_model(_inverse_model_trained_on(checkpoint_spec), render)  # pyright: ignore[reportArgumentType]
 
 
 def test_render_wav_descending_predicted_note_coordinates_reaches_renderer_sorted(
