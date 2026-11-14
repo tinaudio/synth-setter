@@ -30,6 +30,10 @@ _MIDI_VELOCITY = 100
 _NOTE_START_SECONDS = 0.05
 _NOTE_DURATION_SECONDS = 0.25
 _MIN_AUDIBLE_PEAK = 1e-4
+_BIRD_IDENTITIES = {
+    "faust_bilateral_syrinx": 100,
+    "faust_single_syrinx": 74,
+}
 _EXPECTED_PARAMETER_ADDRESSES: Mapping[str, list[str]] = {
     "faust_bright_organ": [
         "/Sequencer/DSP1/brightOrgan/Main/volume",
@@ -316,7 +320,7 @@ def _compile_faust(
 
 def test_faust_source_registry_resolves_checked_in_source_strings() -> None:
     """Every v1 registry key resolves to an in-memory Faust program."""
-    assert set(faust_dsps) == set(_EXPECTED_PARAMETER_ADDRESSES)
+    assert set(faust_dsps) == set(_EXPECTED_PARAMETER_ADDRESSES) | set(_BIRD_IDENTITIES)
 
     for name in faust_dsps:
         dsp = resolve_faust_dsp(ParamSpecName(name))
@@ -324,6 +328,19 @@ def test_faust_source_registry_resolves_checked_in_source_strings() -> None:
         assert 'import("stdfaust.lib");' in dsp.source
         assert not hasattr(dsp, "path")
         assert not hasattr(dsp, "uri")
+
+
+@pytest.mark.parametrize("param_spec_name", _BIRD_IDENTITIES)
+def test_birdsong_source_is_autonomous_mono_faust(param_spec_name: str) -> None:
+    """Each bird model embeds its syllable controller and exposes mono output.
+
+    :param param_spec_name: Birdsong source registry identity.
+    """
+    dsp = resolve_faust_dsp(ParamSpecName(param_spec_name))
+
+    assert dsp.num_voices == 0
+    assert dsp.outputs == 1
+    assert 'syl = library("syllable.lib")' not in dsp.source
 
 
 def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
@@ -341,6 +358,7 @@ def test_faust_source_registry_rejects_unknown_param_spec_name() -> None:
         ("faust_filter_osc", 6),
         ("faust_kronecker_fdn", 39),
         ("faust_shimmer_fdn", 27),
+        *sorted(_BIRD_IDENTITIES.items()),
     ],
 )
 def test_faust_param_spec_preserves_exact_addresses_and_encoded_width(
@@ -354,7 +372,8 @@ def test_faust_param_spec_preserves_exact_addresses_and_encoded_width(
     """
     spec = resolve_faust_param_spec(ParamSpecName(param_spec_name))
 
-    assert spec.synth_param_names == _EXPECTED_PARAMETER_ADDRESSES[param_spec_name]
+    if param_spec_name in _EXPECTED_PARAMETER_ADDRESSES:
+        assert spec.synth_param_names == _EXPECTED_PARAMETER_ADDRESSES[param_spec_name]
     assert spec.encoded_width == encoded_width
 
 
@@ -479,6 +498,35 @@ def test_faust_note_conditioning_contract_is_identity_stable(param_spec_name: st
     assert note_window.name == "note_start_and_end"
     assert note_window.max_note_duration_seconds == 4.0
     assert note_window.decode(np.array([0.0, 1.0])) == pytest.approx((0.0, 4.0))
+
+
+@pytest.mark.parametrize("param_spec_name", sorted(_BIRD_IDENTITIES))
+def test_birdsong_param_spec_omits_non_causal_note_coordinates(
+    param_spec_name: str,
+) -> None:
+    """Autonomous birds expose only controls that can affect rendered audio.
+
+    :param param_spec_name: Autonomous birdsong parameter-spec identity.
+    """
+    spec = resolve_faust_param_spec(ParamSpecName(param_spec_name))
+
+    sampled_synth, sampled_note = spec.sample(np.random.default_rng(0))
+    decoded_synth, decoded_note = spec.decode(np.zeros(spec.encoded_width, dtype=np.float32))
+
+    assert spec.note_params == []
+    assert sampled_synth
+    assert decoded_synth
+    assert sampled_note == {"pitch": 60, "note_start_and_end": (0.0, 4.0)}
+    assert decoded_note == sampled_note
+
+
+def test_bilateral_tracheal_return_applies_one_additional_wall_loss() -> None:
+    """A tracheal round trip applies one outbound and one return loss factor."""
+    source = resolve_faust_dsp(ParamSpecName("faust_bilateral_syrinx")).source
+
+    assert "pTup = (pJ - pTp) * gT;" in source
+    assert "*(0 - rB * gT);" in source
+    assert "*(0 - rB * gT * gT);" not in source
 
 
 def test_faust_param_spec_resolution_returns_fresh_specs() -> None:
