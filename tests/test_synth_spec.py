@@ -263,6 +263,7 @@ class TestSynthsTable:
         :param name: Registry key under test.
         """
         assert SYNTHS[SynthName(name)].format in {
+            "dexed",
             "faust",
             "kr106_native",
             "pyfdn",

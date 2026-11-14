@@ -45,6 +45,17 @@ def make_audio_renderer(render_config: RenderConfig) -> AudioRenderer:
     """
     backend = render_config.renderer_backend
     synth_format = render_config.synth.format
+    if backend == "dexed":
+        from synth_setter.data.vst.dexed_renderer import DexedRenderer
+
+        return DexedRenderer(
+            plugin_path=render_config.plugin_path,
+            sample_rate=render_config.sample_rate,
+            channels=render_config.channels,
+            signal_duration_seconds=render_config.signal_duration_seconds,
+            plugin_state_path=render_config.plugin_state_path,
+            synth_version=render_config.synth.synth_version,
+        )
     if backend == "pyfdn":
         from synth_setter.data.pyfdn_instrument import PyFDNRenderer
 

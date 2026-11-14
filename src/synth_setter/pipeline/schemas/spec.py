@@ -48,6 +48,7 @@ from synth_setter.pipeline.schemas.shard_metadata import (
     ShardMetadata,
 )
 from synth_setter.renderer_backend import (
+    DEXED_PLUGIN_NAME,
     FAUST_PLUGIN_NAME,
     FLUSHING_BACKENDS,
     KR106_NATIVE_PLUGIN_NAME,
@@ -837,6 +838,45 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         return self
 
     @model_validator(mode="after")
+    def _validate_dexed_backend(self) -> RenderConfig:
+        """Require the registered native Dexed identity and lifecycle.
+
+        :returns: This config when Dexed identity and lifecycle settings are valid.
+        :raises ValueError: Dexed identity, artifacts, channels, lifecycle, or clip length are
+            incompatible.
+        """
+        dexed_identity = self.synth.format == "dexed" or self.plugin_path == DEXED_PLUGIN_NAME
+        if self.renderer_backend != "dexed":
+            if dexed_identity:
+                raise ValueError("all Dexed identities require renderer_backend='dexed'")
+            return self
+        if self.synth.format != "dexed":
+            return self
+        registered = SYNTHS[SynthName("dexed_py")]
+        if (
+            self.synth.name != registered.name
+            or self.param_spec_name != registered.param_spec_name
+            or self.synth.format != registered.format
+        ):
+            raise ValueError("dexed requires the registered dexed_py synth identity")
+        if self.plugin_path != DEXED_PLUGIN_NAME or self.plugin_state_path:
+            raise ValueError('dexed requires plugin_path="dexed" and no plugin_state_path')
+        if self.channels not in (1, 2):
+            raise ValueError("dexed supports one or two channels")
+        if self.plugin_reload_cadence != "render":
+            raise ValueError('dexed requires plugin_reload_cadence="render"')
+        if self.gui_toggle_cadence != "never":
+            raise ValueError('dexed requires gui_toggle_cadence="never"')
+        from synth_setter.data.vst.dexed_param_spec import DEXED_NOTE_DURATION_SECONDS
+
+        # A sampled note window ending past the clip would raise per draw, failing the shard.
+        if self.signal_duration_seconds < DEXED_NOTE_DURATION_SECONDS:
+            raise ValueError(
+                f"dexed requires signal_duration_seconds>={DEXED_NOTE_DURATION_SECONDS}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_faust_backend(self) -> RenderConfig:
         """Restrict host provenance to checked-in Faust source rendering.
 
@@ -1015,6 +1055,7 @@ class RenderConfig(BaseModel):  # noqa: DOC603 — field descriptions live on Py
         :raises ValueError: The backend and synth format are incompatible.
         """
         allowed = {
+            "dexed": {"dexed"},
             "faust": {"dawdreamer", "faustcpp", "faustwasm"},
             "kr106_native": {"kr106_native"},
             "pyfdn": {"pyfdn"},
