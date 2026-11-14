@@ -43,6 +43,9 @@ jobs:
             patterns:
               - synth_setter.evaluation.joint_transport.*
               - synth_setter.evaluation.response_losses.*
+          - name: evaluation-prediction-table
+            patterns:
+              - synth_setter.evaluation.prediction_table.*
           - name: evaluation-predict-misc
             patterns:
               - synth_setter.evaluation.predict_vst_audio.x_[!_r]*
