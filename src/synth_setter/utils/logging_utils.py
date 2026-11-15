@@ -216,6 +216,10 @@ def log_hyperparameters(object_dict: dict[str, Any]) -> None:
         hparams["source_provenance"] = source_provenance
 
     model = object_dict["model"]
+    for key in ("base_checkpoint_source", "base_checkpoint_sha256"):
+        value = getattr(model, key, None)
+        if value is not None:
+            hparams[key] = value
 
     # save number of model parameters
     hparams["model/params/total"] = sum(p.numel() for p in model.parameters())

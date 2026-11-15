@@ -117,6 +117,51 @@ _SURGE_XT_PREDICTION_WIDTH = 300
 
 
 @pytest.mark.slow
+def test_evaluate_resumed_finetune_logs_saved_base_checkpoint_identity(
+    cfg_torchsynth_flow_train: DictConfig,
+    cfg_torchsynth_flow_finetune_train: DictConfig,
+    tmp_path: Path,
+) -> None:
+    """The eval entrypoint publishes provenance restored from a finetune checkpoint.
+
+    :param cfg_torchsynth_flow_train: Composed tiny production flow config.
+    :param cfg_torchsynth_flow_finetune_train: Matching null-control finetune config.
+    :param tmp_path: Output root for pretraining, finetuning, and evaluation.
+    """
+    with open_dict(cfg_torchsynth_flow_train):
+        cfg_torchsynth_flow_train.paths.output_dir = str(tmp_path / "base")
+        cfg_torchsynth_flow_train.paths.log_dir = str(tmp_path / "base")
+    HydraConfig().set_config(cfg_torchsynth_flow_train)
+    train(cfg_torchsynth_flow_train)
+    base_checkpoint = tmp_path / "base" / "checkpoints" / "last.ckpt"
+
+    with open_dict(cfg_torchsynth_flow_finetune_train):
+        cfg_torchsynth_flow_finetune_train.paths.output_dir = str(tmp_path / "finetune")
+        cfg_torchsynth_flow_finetune_train.paths.log_dir = str(tmp_path / "finetune")
+        cfg_torchsynth_flow_finetune_train.model.base_checkpoint = str(base_checkpoint)
+    HydraConfig().set_config(cfg_torchsynth_flow_finetune_train)
+    train(cfg_torchsynth_flow_finetune_train)
+    finetune_checkpoint = tmp_path / "finetune" / "checkpoints" / "last.ckpt"
+    identity = torch.load(finetune_checkpoint, map_location="cpu", weights_only=False)
+
+    eval_cfg = cfg_torchsynth_flow_finetune_train.copy()
+    with open_dict(eval_cfg):
+        eval_cfg.paths.output_dir = str(tmp_path / "eval")
+        eval_cfg.paths.log_dir = str(tmp_path / "eval")
+        eval_cfg.model.base_checkpoint = None
+        eval_cfg.ckpt_path = str(finetune_checkpoint)
+        eval_cfg.mode = "validate"
+        eval_cfg.trainer.limit_val_batches = 1
+    HydraConfig().set_config(eval_cfg)
+    logger = _RecordingWandbLogger()
+    with patch("synth_setter.cli.eval.instantiate_loggers", return_value=[logger]):
+        evaluate(eval_cfg)
+
+    assert logger.recorded_config["base_checkpoint_source"] == identity["base_checkpoint_source"]
+    assert logger.recorded_config["base_checkpoint_sha256"] == identity["base_checkpoint_sha256"]
+
+
+@pytest.mark.slow
 def test_generic_launcher_runs_workflow_default_eval_entrypoint(tmp_path: Path) -> None:
     """Run workflow-default evaluation through the launcher and headless wrapper.
 
