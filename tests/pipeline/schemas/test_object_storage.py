@@ -162,10 +162,10 @@ class TestStorageSettings:
         assert settings.secret_access_key.get_secret_value() == "legacy-secret-key"
         assert settings.endpoint_url == "https://legacy.example"
 
-    def test_legacy_dotenv_overrides_legacy_process_env(
+    def test_legacy_process_env_overrides_legacy_dotenv(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A legacy dotenv value takes precedence over the same process alias.
+        """A legacy process-env alias takes precedence over the same dotenv key.
 
         :param tmp_path: Pytest fixture providing a temp directory.
         :param monkeypatch: Pytest fixture used to set process env.
@@ -183,9 +183,9 @@ class TestStorageSettings:
 
         settings = storage_settings_from_sources(env_file)
 
-        assert settings.access_key_id.get_secret_value() == "dotenv-access-key"
-        assert settings.secret_access_key.get_secret_value() == "dotenv-secret-key"
-        assert settings.endpoint_url == "https://dotenv.example"
+        assert settings.access_key_id.get_secret_value() == "process-access-key"
+        assert settings.secret_access_key.get_secret_value() == "process-secret-key"
+        assert settings.endpoint_url == "https://process.example"
 
     def test_prefers_canonical_names_over_legacy_rclone_names(
         self, monkeypatch: pytest.MonkeyPatch
@@ -230,10 +230,10 @@ class TestStorageSettings:
             "RCLONE_CONFIG_R2_ENDPOINT": _ENDPOINT,
         }
 
-    def test_env_file_values_override_process_env(
+    def test_process_env_overrides_env_file_values(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Non-blank dotenv values take precedence over process env.
+        """An exported process-env value takes precedence over the dotenv file.
 
         :param tmp_path: Pytest fixture providing a temp directory.
         :param monkeypatch: Pytest fixture used to set process env.
@@ -249,7 +249,7 @@ class TestStorageSettings:
 
         settings = storage_settings_from_sources(env_file)
 
-        assert settings.access_key_id.get_secret_value() == "from-file"
+        assert settings.access_key_id.get_secret_value() == "from-process"
 
     def test_blank_env_file_value_falls_back_to_process_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
