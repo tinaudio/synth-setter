@@ -242,7 +242,27 @@ def _canonicalize_prediction_note_window(
     return signal_duration_seconds - minimum_duration, signal_duration_seconds
 
 
-def _make_render_fn(args: _PredictAudioCliArgs, renderer: AudioRenderer) -> RenderFn:
+def prediction_render_request(
+    effective_row: np.ndarray, spec: ParamSpec, config: RenderConfig
+) -> tuple[Mapping[str, ParameterValue], NoteParams, tuple[float, float]]:
+    """Decode a quantized prediction row into what the renderer is asked to play.
+
+    :param effective_row: Model-space row from :func:`spec_quantize_model_output`.
+    :param spec: Parameter decoder for the row.
+    :param config: Render settings bounding the note window.
+    :returns: Synth params, note params, and the note window canonicalized for rendering.
+    """
+    synth_params, note_values = decode_model_output(effective_row, spec)
+    note_params = require_note_params(note_values)
+    note_window = _canonicalize_prediction_note_window(
+        note_params["note_start_and_end"],
+        signal_duration_seconds=config.signal_duration_seconds,
+        sample_rate=config.sample_rate,
+    )
+    return synth_params, note_params, note_window
+
+
+def _make_render_fn(args: RenderConfig, renderer: AudioRenderer) -> RenderFn:
     """Apply capture-time GUI warm-up cadence to one renderer session.
 
     :param args: Validated renderer lifecycle configuration.
@@ -338,15 +358,8 @@ def _render_prediction_artifacts(
             row_params = pred_params[j].float().numpy()
             synth_params, note_values = decode_model_output(row_params, spec)
             note_params = require_note_params(note_values)
-            effective_row_params = spec_quantize_model_output(row_params, spec)
-            effective_synth_params, effective_note_values = decode_model_output(
-                effective_row_params, spec
-            )
-            effective_note_params = require_note_params(effective_note_values)
-            render_note_window = _canonicalize_prediction_note_window(
-                effective_note_params["note_start_and_end"],
-                signal_duration_seconds=args.signal_duration_seconds,
-                sample_rate=args.sample_rate,
+            effective_synth_params, effective_note_params, render_note_window = (
+                prediction_render_request(spec_quantize_model_output(row_params, spec), spec, args)
             )
             pred_audio = render(
                 effective_synth_params,
@@ -408,26 +421,32 @@ def _render_prediction_artifacts(
         current_offset += pred_params.shape[0]
 
 
+def hold_render_session(config: RenderConfig, body: Callable[[RenderFn], None]) -> None:
+    """Run ``body`` with a row renderer that honors the config's GUI cadence.
+
+    :param config: Validated render configuration.
+    :param body: Receives the row renderer; every render must happen inside it.
+    :raises RuntimeError: An always-on GUI config lacks a cached Pedalboard plugin.
+    """
+    renderer = make_audio_renderer(config)
+    render = _make_render_fn(config, renderer)
+
+    if config.gui_toggle_cadence != "always_on":
+        body(render)
+        return
+    if not isinstance(renderer, PedalboardRenderer) or renderer.plugin is None:
+        raise RuntimeError("always-on GUI rendering requires a cached Pedalboard plugin")
+    run_with_editor_held_open(renderer.plugin, lambda: body(render))
+
+
 def render_prediction_audio(args: _PredictAudioCliArgs) -> None:
     """Render prediction artifacts through the configured production backend.
 
     :param args: Validated render configuration and artifact paths.
-    :raises RuntimeError: An always-on GUI config lacks a cached Pedalboard plugin.
     """
     spec = param_specs[args.param_spec_name]
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    renderer = make_audio_renderer(args)
-    render = _make_render_fn(args, renderer)
-
-    if args.gui_toggle_cadence != "always_on":
-        _render_prediction_artifacts(args, spec, render)
-        return
-    if not isinstance(renderer, PedalboardRenderer) or renderer.plugin is None:
-        raise RuntimeError("always-on GUI rendering requires a cached Pedalboard plugin")
-    run_with_editor_held_open(
-        renderer.plugin,
-        lambda: _render_prediction_artifacts(args, spec, render),
-    )
+    hold_render_session(args, lambda render: _render_prediction_artifacts(args, spec, render))
 
 
 def main(cli_args: list[str] | None = None) -> None:

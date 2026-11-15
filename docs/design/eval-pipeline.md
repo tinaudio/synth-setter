@@ -245,6 +245,21 @@ With `callbacks.prediction_writer.table_param_spec_name=${synth.param_spec_name}
 
 The table exists only for a completed predict pass, so a reader never sees a partial one; a re-run into the same directory replaces it. It is built from per-batch writes, so `write_interval` must include `batch`. The render and metrics stages still read the tensor files.
 
+#### Rendering an eval shard from the table
+
+`python -m synth_setter.evaluation.eval_shard <predictions.lance> <shard.lance> <render flags>` renders one shard of the eval table. The shard's rows are `sample_offset` to `sample_offset + samples_per_shard - 1` of the predictions table, and the flags are the same snake-case render flags the generate-dataset dispatcher passes its shard worker. Each output row is a complete pair:
+
+| Column                                                      | Meaning                                                     |
+| ----------------------------------------------------------- | ----------------------------------------------------------- |
+| `row_id`                                                    | Same key as `predictions.lance`                             |
+| `pred_params_raw`, `pred_params_effective`, `target_params` | Copied from the predictions table                           |
+| `pred_audio`, `target_audio`                                | Render of the effective prediction; re-render of the target |
+| `pred_mel_spec`, `target_mel_spec`                          | Mel spectrogram of each clip                                |
+| `pred_audio_mp3`, `target_audio_mp3`                        | MP3 previews                                                |
+| `pred_non_finite`, `target_non_finite`                      | True when that render produced NaN or infinity              |
+
+No render is rejected. Silent and clipped clips are stored as rendered; a non-finite render is stored as silence with its flag set, so one bad prediction cannot fail its shard. The shard's schema carries the same render metadata as a dataset shard. Nothing dispatches these shards or reads them yet: the eval CLI still runs the serial render stage.
+
 **Key behaviors:**
 
 - Dataset path resolved from `datamodule.dataset_root` (default: `${paths.output_dir}/data`, CLI/experiment override for fixed datasets)

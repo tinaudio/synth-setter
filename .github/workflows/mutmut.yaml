@@ -46,6 +46,7 @@ jobs:
           - name: evaluation-prediction-table
             patterns:
               - synth_setter.evaluation.prediction_table.*
+              - synth_setter.evaluation.eval_shard.*
           - name: evaluation-predict-misc
             patterns:
               - synth_setter.evaluation.predict_vst_audio.x_[!_r]*
